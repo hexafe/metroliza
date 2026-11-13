@@ -1,0 +1,429 @@
+{
+  "schema": "metroliza-synthetic-report-oracle-v2",
+  "status": "PREPARED_PENDING_REAL_SOURCE_ENGINEERING_VALIDATION_NOT_PACKAGE_ACCEPTANCE",
+  "authority": "#1047 final Windows acceptance preparation; independent of the application parser",
+  "fixture_construction": {
+    "base_pdf": {
+      "path": "esrch/tests/fixtures/pdf/cmm_smoke_fixture.pdf",
+      "sha256": "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b",
+      "visible_authored_lines": [
+        "#SMOKE FEATURE",
+        "DIM",
+        "X 10 0.1 -0.1 10.02 0.02 0"
+      ]
+    },
+    "preserved_selected_reports": [
+      {
+        "file_name": "report-1.pdf",
+        "sha256": "315032987a656191260945242c89996976640f3629c4499c428f44ac9b3679ad"
+      },
+      {
+        "file_name": "report-3.pdf",
+        "sha256": "cb801c452d9608c227606a4c10325d19d7d8a095fe80976fa60338fd6bfd0849"
+      }
+    ],
+    "staged_aliases": [
+      {
+        "report_id": 1,
+        "measurement_id": 1,
+        "file_name": "REF001_2024-01-01_1.pdf",
+        "sha256": "315032987a656191260945242c89996976640f3629c4499c428f44ac9b3679ad",
+        "reference": "REF001",
+        "report_date": "2024-01-01",
+        "sample_number": "1",
+        "sample_number_kind": "filename_tail"
+      },
+      {
+        "report_id": 2,
+        "measurement_id": 2,
+        "file_name": "REF001_2024-01-01_3.pdf",
+        "sha256": "cb801c452d9608c227606a4c10325d19d7d8a095fe80976fa60338fd6bfd0849",
+        "reference": "REF001",
+        "report_date": "2024-01-01",
+        "sample_number": "3",
+        "sample_number_kind": "filename_tail"
+      }
+    ],
+    "excluded_file_names": [
+      "report-0.pdf",
+      "report-2.pdf",
+      "report-4.pdf"
+    ],
+    "manual_interpretation": {
+      "row_layout": [
+        "axis",
+        "nominal",
+        "plus_tolerance",
+        "minus_tolerance",
+        "measured",
+        "deviation",
+        "out_of_tolerance"
+      ],
+      "missing_bonus_normalizes_to": 0.0,
+      "unit": null,
+      "unit_reason": "The authored PDF row has no unit token, and report_measurements has no unit column; acceptance must not invent a unit field or value.",
+      "alias_reason": "The preserved names do not meet the actual filename metadata contract. The staged aliases preserve bytes while supplying the independently authored REF001/date/sample identity."
+    }
+  },
+  "persisted_reports": [
+    {
+      "report_id": 1,
+      "measurement_count": 1,
+      "has_nok": 0,
+      "reference": "REF001",
+      "sample_number": "1",
+      "sample_number_kind": "filename_tail",
+      "report_date": "2024-01-01",
+      "measurement": {
+        "measurement_id": 1,
+        "row_order": 1,
+        "header": "SMOKE FEATURE",
+        "section_name": "SMOKE FEATURE",
+        "feature_label": "SMOKE FEATURE",
+        "characteristic_name": "LOC",
+        "characteristic_family": "LOC",
+        "description": "SMOKE FEATURE",
+        "ax": "X",
+        "nominal": 10.0,
+        "tol_plus": 0.1,
+        "tol_minus": -0.1,
+        "bonus": 0.0,
+        "meas": 10.02,
+        "dev": 0.02,
+        "outtol": 0.0,
+        "is_nok": 0,
+        "status_code": "ok"
+      }
+    },
+    {
+      "report_id": 2,
+      "measurement_count": 1,
+      "has_nok": 0,
+      "reference": "REF001",
+      "sample_number": "3",
+      "sample_number_kind": "filename_tail",
+      "report_date": "2024-01-01",
+      "measurement": {
+        "measurement_id": 2,
+        "row_order": 1,
+        "header": "SMOKE FEATURE",
+        "section_name": "SMOKE FEATURE",
+        "feature_label": "SMOKE FEATURE",
+        "characteristic_name": "LOC",
+        "characteristic_family": "LOC",
+        "description": "SMOKE FEATURE",
+        "ax": "X",
+        "nominal": 10.0,
+        "tol_plus": 0.1,
+        "tol_minus": -0.1,
+        "bonus": 0.0,
+        "meas": 10.02,
+        "dev": 0.02,
+        "outtol": 0.0,
+        "is_nok": 0,
+        "status_code": "ok"
+      }
+    }
+  ],
+  "grouping_output": {
+    "projection": {
+      "default_group": "POPULATION",
+      "members": {
+        "POPULATION": {
+          "report_ids": [
+            1,
+            2
+          ],
+          "measurement_ids": [
+            1,
+            2
+          ]
+        }
+      },
+      "metric": {
+        "header": "SMOKE FEATURE - X",
+        "axis": "X",
+        "unit": null,
+        "values": [
+          10.02,
+          10.02
+        ],
+        "n": 2,
+        "mean": 10.02,
+        "nominal": 10.0,
+        "usl": 10.1,
+        "lsl": 9.9
+      }
+    },
+    "group_analysis": {
+      "requested_level": "light",
+      "expected_status": "insufficient_groups",
+      "reason": "One POPULATION group with two equal observations is a membership/export projection, not an inferential analysis acceptance."
+    }
+  },
+  "workbook_output": {
+    "measurement_block": {
+      "sheet_name": "any",
+      "data_header_excel_row": 21,
+      "headers": [
+        "Date",
+        "Sample #",
+        "SMOKE FEATURE - X",
+        "USL",
+        "LSL"
+      ],
+      "rows": [
+        [
+          "2024-01-01",
+          "1",
+          10.02,
+          10.1,
+          9.9
+        ],
+        [
+          "2024-01-01",
+          "3",
+          10.02,
+          10.1,
+          9.9
+        ]
+      ],
+      "static_limits": [
+        [
+          "NOM",
+          10.0
+        ],
+        [
+          "+TOL",
+          0.1
+        ],
+        [
+          "-TOL",
+          -0.1
+        ]
+      ]
+    }
+  },
+  "limits": {
+    "package_execution": "NOT_EXECUTED",
+    "application_parser_execution": "NOT_USED_TO_DERIVE_OR_VALIDATE_THIS_ORACLE",
+    "real_data": "NOT_USED"
+  },
+  "tabular_output": {
+    "schema": "metroliza-w05-tabular-snapshot-v1",
+    "source": "public_tabular_sqlite_consumer",
+    "files": {
+      "finite-source.csv": {
+        "sha256": "de2724bd3b6b55d362016423a2f78168235d3833d7a89298a7fdf4a5ec747938",
+        "row_count": 23,
+        "filters": {
+          "eq_zero": [
+            7,
+            8,
+            9,
+            10
+          ],
+          "ne_zero": [
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            22
+          ]
+        },
+        "source_rows": [
+          [
+            1,
+            "",
+            "str"
+          ],
+          [
+            2,
+            "",
+            "str"
+          ],
+          [
+            3,
+            "",
+            "str"
+          ],
+          [
+            4,
+            "abc",
+            "str"
+          ],
+          [
+            5,
+            "1x",
+            "str"
+          ],
+          [
+            6,
+            "1.2x",
+            "str"
+          ],
+          [
+            7,
+            "0",
+            "str"
+          ],
+          [
+            8,
+            "0.0",
+            "str"
+          ],
+          [
+            9,
+            "-0",
+            "str"
+          ],
+          [
+            10,
+            "+0",
+            "str"
+          ],
+          [
+            11,
+            "1",
+            "str"
+          ],
+          [
+            12,
+            "-1",
+            "str"
+          ],
+          [
+            13,
+            "1.2",
+            "str"
+          ],
+          [
+            14,
+            "+1.2",
+            "str"
+          ],
+          [
+            15,
+            ".5",
+            "str"
+          ],
+          [
+            16,
+            "1.",
+            "str"
+          ],
+          [
+            17,
+            "1e2",
+            "str"
+          ],
+          [
+            18,
+            "2",
+            "str"
+          ],
+          [
+            19,
+            "Inf",
+            "str"
+          ],
+          [
+            20,
+            "-Inf",
+            "str"
+          ],
+          [
+            21,
+            "NaN",
+            "str"
+          ],
+          [
+            22,
+            "+1e2",
+            "str"
+          ],
+          [
+            23,
+            "1e999",
+            "str"
+          ]
+        ]
+      },
+      "integer-precision.csv": {
+        "sha256": "8e2c837472d6465d319b37b4afe09998f9c45680edc27d1a169f33e145a70508",
+        "row_count": 8,
+        "filters": {
+          "9007199254740992": [
+            1
+          ],
+          "9007199254740993": [
+            2
+          ],
+          "9223372036854775807": [
+            3
+          ],
+          "9223372036854775808": [
+            4
+          ],
+          "-123456789012345678": [
+            5
+          ],
+          "-123456789012345679": [
+            6
+          ],
+          "123456789012345678": [
+            7,
+            8
+          ]
+        },
+        "source_rows": [
+          [
+            1,
+            "9007199254740992",
+            "str"
+          ],
+          [
+            2,
+            "9007199254740993",
+            "str"
+          ],
+          [
+            3,
+            "9223372036854775807",
+            "str"
+          ],
+          [
+            4,
+            "9223372036854775808",
+            "str"
+          ],
+          [
+            5,
+            "-123456789012345678",
+            "str"
+          ],
+          [
+            6,
+            "-123456789012345679",
+            "str"
+          ],
+          [
+            7,
+            "+123456789012345678",
+            "str"
+          ],
+          [
+            8,
+            "+123456789012345678",
+            "str"
+          ]
+        ]
+      }
+    }
+  },
+  "tabular_oracle_basis": "Manually transcribed original prepared CSVs and expected-results.json; existing public CSV loader trims outer whitespace (_display_cell_text), preserves lexemes as text; CSV collapses None and empty. No expected value derived from application output."
+}

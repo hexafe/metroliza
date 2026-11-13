@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from metroliza.charts.dashboard_visual_options import normalize_dashboard_visual_settings
+from metroliza.exporting.output_publication import OutputConsent
 from metroliza.tabular.contracts import (
     GroupingAssignments,
     validate_grouping_df,
@@ -38,7 +39,7 @@ class ExportOptions:
     generate_html_dashboard: bool = False
     include_industrial_context: bool = False
     allow_non_essential_chart_skipping: bool = False
-    chart_worker_count: int = 2
+    chart_worker_count: int = 4
     chart_worker_queue_size: int = 4
     group_analysis_level: str = "off"
     group_analysis_scope: str = "auto"
@@ -53,6 +54,8 @@ class ExportRequest:
     options: ExportOptions
     filter_query: str | None = None
     grouping_df: GroupingAssignments | None = None
+    replace_outputs: tuple[OutputConsent, ...] = ()
+    copy_output_from: str | None = None
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -111,6 +114,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         options=validated_options,
         filter_query=request.filter_query,
         grouping_df=validated_grouping_df,
+        replace_outputs=request.replace_outputs,
+        copy_output_from=request.copy_output_from,
     )
 
 

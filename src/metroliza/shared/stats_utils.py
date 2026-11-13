@@ -1,7 +1,5 @@
 import math
 
-from scipy.stats import chi2, norm
-
 
 def _is_valid_number(value):
     return value is not None and isinstance(value, (int, float)) and not math.isnan(value)
@@ -52,6 +50,9 @@ def compute_capability_confidence_intervals(*, sample_size, cp=None, cpk=None, a
     n = int(sample_size or 0)
     if n < 2:
         return {'cp': None, 'cpk': None}
+
+    # scipy.stats is slow to import; defer it until a CI is actually computed.
+    from scipy.stats import chi2, norm
 
     dof = n - 1
     alpha = float(alpha)

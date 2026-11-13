@@ -5,11 +5,15 @@ Keep this file with every packaged release artifact and installed application
 bundle. PyInstaller and Nuitka release builds include this file as
 `THIRD_PARTY_NOTICES.md` next to the executable's bundled data.
 
-The metadata-derived inventory for build `260711` is
-[`docs/release_checks/third_party_inventory_260711.json`](docs/release_checks/third_party_inventory_260711.json).
-It records 77 installed Python distributions and 83 resolved Rust packages from
-the release environment. Packaging also emits this inventory and a SHA-256
-manifest in a visible `.licenses` sidecar beside each distributable artifact.
+The metadata-derived inventory is
+[`docs/release_checks/third_party_inventory.json`](docs/release_checks/third_party_inventory.json).
+It was regenerated on 2026-10-30 from the Windows build environment of 2026.09 RC1
+and records 79 Python distributions (the runtime requirement closure plus every
+distribution whose metadata the package bundles) and 126 Rust packages (the native
+modules and the native launcher). Each Windows candidate build compares this file
+with its own build environment and fails on any package or version difference.
+Packaging also emits this inventory and a SHA-256 manifest in a visible
+`.licenses` sidecar beside each distributable artifact.
 
 This notice is a release compliance aid, not legal advice. Before public or
 commercial distribution, verify the exact package versions in the build
@@ -18,10 +22,12 @@ can preserve them.
 
 ## Header OCR runtime
 
-Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime by default,
-OpenVINO as a selectable CPU acceleration backend, and a small set of vendored
-ONNX model files listed in `src/metroliza/resources/ocr_models/rapidocr/README.md`. The packaged
+Metroliza's packaged header OCR path uses RapidOCR with ONNX Runtime and a small
+set of vendored ONNX model files listed in `src/metroliza/resources/ocr_models/rapidocr/README.md`. The packaged
 application uses local model files and does not download OCR models at runtime.
+OpenVINO is a selectable CPU acceleration backend for benchmarking only: it is
+shipped in explicit benchmark build flavors (`METROLIZA_BUILD_FLAVOR=benchmark`)
+and is not part of user builds.
 
 | Component | License / notice | Project |
 | --- | --- | --- |
@@ -94,6 +100,17 @@ statrs, and rayon. The exact resolved transitive crate versions, sources, and
 declared license metadata are recorded in the build `260711` inventory linked
 above. Preserve all license files emitted by Cargo/wheel tooling in the release
 notice bundle.
+
+## Native launcher
+
+The native Windows launcher (`packaging/launcher`) decodes its embedded loading
+animation for the startup splash with these crates (versions from
+`packaging/launcher/Cargo.lock`).
+
+| Component | License / notice | Project |
+| --- | --- | --- |
+| gif 0.13.3 | MIT OR Apache-2.0 | https://github.com/image-rs/image-gif |
+| weezl 0.1.12 (LZW decoder used by gif) | MIT OR Apache-2.0 | https://github.com/image-rs/weezl |
 
 ## Release packaging obligations
 

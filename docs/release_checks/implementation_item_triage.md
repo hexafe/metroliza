@@ -26,6 +26,12 @@ Record the branch, commit SHA, artifact/build ID, and evidence links in the curr
 
 ## Open-Item Triage Table
 
+The rows below retain the June 2026 RC1 target and its original evidence. They are historical
+cycle records, not the identity of the September RC1 source candidate. Current candidate identity
+and qualification gates are in [release status](release_status.md). The packaging, Windows,
+Google, notices and security obligations remain applicable through the current RC checklist;
+this historical label is not a waiver or a new late-scope approval.
+
 | Implementation item | Gate decision (`must-fix`/`defer`/`informational`/`late-scope exception`) | Owner | Target RC | Evidence / rationale |
 | --- | --- | --- | --- | --- |
 | 2026.06 RC1 realtime industrial tester build | `late-scope exception` | Release owner / Dev | 2026.06 RC1 | User-requested tester build for realtime industrial monitoring and anomaly work. Scope includes append-only realtime sample/event stores, deterministic anomaly detectors, replay/fixtures/benchmarks, bounded polling service tests, realtime dashboard docs, optional ML helpers behind `requirements-anomaly.txt`, CMM probe hardening, parser handoff completeness tests, and industrial diagnostics redaction. Local validation is recorded in [`realtime_industrial_rollout_checklist.md`](./realtime_industrial_rollout_checklist.md): focused changed-slice tests `111 passed`, broader realtime/industrial/anomaly suite `416 passed, 2 skipped`, full local pytest `2065 passed, 289 skipped, 83 subtests passed`, and realtime/anomaly source coverage `89%`. Pushed CI passed in GitHub Actions run [`27506446912`](https://github.com/hexafe/metroliza/actions/runs/27506446912) for commit `307acd16031c5622093ba52a9a64d2b2146d7f02`. Rollback option: revert the realtime/anomaly packages, scripts, fixtures, docs, release metadata bump, and focused test additions if tester feedback or CI exposes a release-blocking regression. |

@@ -131,6 +131,8 @@ group name is prefilled as `REFERENCE-DIMENSION`. For example, after filtering E
 You can also select visible rows in **PART #** directly and press **Enter** or click
 **Create or add**. That is better when one reference contains rows that belong to
 different groups.
+Create or add uses the last active parts pane even after focus moves to its button.
+The name prompt states the selected count and source pane.
 
 ### Simple examples
 
@@ -156,6 +158,8 @@ Custom groups are automatically color-coded so they are easier to distinguish in
 3. Enter the new name.
 
 You can also double-click the group to open the rename flow.
+New and existing names are compared after trimming, with case sensitivity as in Create or add. Renaming
+to an existing name is rejected, including for POPULATION; the same name does nothing.
 
 ### Remove from group
 

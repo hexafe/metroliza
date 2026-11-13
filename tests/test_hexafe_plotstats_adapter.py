@@ -1465,3 +1465,325 @@ def test_render_chart_artifact_png_closes_figures_created_by_real_plotstats() ->
     finally:
         for figure_number in set(plt.get_fignums()) - existing_figure_numbers:
             plt.close(figure_number)
+
+
+@pytest.mark.parametrize("values,expected", [
+    ([], {"bin_count": 3, "method": "minimum", "sample_size": 0}),
+    ([2.0] * 5, {"bin_count": 3, "method": "fallback_sqrt", "sample_size": 5}),
+    (list(range(100)), {"bin_count": 5, "method": "freedman_diaconis", "sample_size": 100}),
+    ([None, "-0", "2", float("inf")], {"bin_count": 3, "method": "freedman_diaconis", "sample_size": 2}),
+])
+def test_histogram_bin_resolution_literal_contract(values, expected):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    assert adapter._resolve_histogram_bin_count(values) == expected
+
+
+@pytest.mark.parametrize("name,x,y,expected", [
+    ("Samples", [1.0, 1.0], [0.0, 1.0], None),
+    ("Mean", [1.0, 1.0], [0.0, 1.0], ("Mean", 1.0)),
+    ("Mean", [0.0, 1.0], [2.0, 2.0], ("Mean", 2.0)),
+    ("Mean", [0.0, 1.0], [2.0, 3.0], ("Mean", None)),
+    ("USL=0.200", [], [], ("USL", 0.2)),
+    ("(A) Mean", [-0.0, -0.0], [1.0, 2.0], ("(A) Mean", -0.0)),
+])
+def test_legend_key_literal_geometry_contract(name, x, y, expected):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    assert adapter._canonical_legend_key({"name": name, "x": x, "y": y}) == expected
+
+
+def test_nonsemantic_legend_retains_user_conversion_callbacks():
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    events = []
+
+    class Value:
+        def __float__(self):
+            events.append("float")
+            return 1.0
+
+    assert adapter._canonical_legend_key({"name": "Samples", "x": [Value(), Value()], "y": []}) is None
+    assert events == ["float", "float"]
+
+
+def test_histogram_resolution_does_not_cache_mutable_payload():
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    payload = {"type": "histogram", "values": [1.0, 2.0], "bin_count": 29}
+    first = adapter._payload_with_resolved_histogram_bin_count(payload)
+    assert first["bin_count"] == 3
+    assert payload["bin_count"] == 29
+    payload["values"][:] = list(range(100))
+    second = adapter._payload_with_resolved_histogram_bin_count(payload)
+    assert second["bin_count"] == 5
+    assert first["bin_count"] == 3
+
+
+def _preview_histogram_payload():
+    from metroliza.charts.dashboard_visual_options import _preview_payload
+
+    return _preview_payload("histogram", labels=["A", "B"])
+
+
+@pytest.mark.parametrize("api", ["dashboard", "plotstats", "artifact"])
+def test_full_analytics_defaults_retain_distribution_fits(monkeypatch, api):
+    import hexafe_plotstats.adapters.metroliza as dependency
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    payload = _preview_histogram_payload()
+    calls = []
+    original = dependency.build_histogram_payload
+
+    def build(*args, **kwargs):
+        calls.append(kwargs["config"].include_fit)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dependency, "build_histogram_payload", build)
+    if api == "dashboard":
+        result = adapter.build_dashboard_plotly_spec(payload, title="Analytics", static=False)
+    elif api == "plotstats":
+        result = adapter.build_plotstats_dashboard_spec(payload, title="Analytics", static=False)
+    else:
+        result = adapter.build_chart_artifact(payload, target="html_dashboard", title="Analytics")
+    assert result
+    assert calls == [True] * len(payload["groups"])
+
+
+def test_actual_preview_discards_fits_and_preserves_full_plotly_result(monkeypatch):
+    import hexafe_plotstats.adapters.metroliza as dependency
+    from metroliza.charts import dashboard_visual_options as preview
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    original_builder = adapter.build_dashboard_plotly_spec
+
+    def full_artifact(*args, **kwargs):
+        kwargs["preview_only"] = False
+        return original_builder(*args, **kwargs)
+
+    with monkeypatch.context() as full:
+        full.setattr(adapter, "build_dashboard_plotly_spec", full_artifact)
+        expected = preview.build_dashboard_visual_preview_spec({}, chart_type="histogram")
+    calls = []
+    original = dependency.build_histogram_payload
+
+    def build(*args, **kwargs):
+        calls.append(kwargs["config"].include_fit)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dependency, "build_histogram_payload", build)
+    actual = preview.build_dashboard_visual_preview_spec({}, chart_type="histogram")
+    assert actual == expected
+    assert preview.build_dashboard_visual_preview_html(actual) == preview.build_dashboard_visual_preview_html(expected)
+    assert not calls
+
+
+@pytest.mark.parametrize("failure", ["missing", "noncallable", "error"])
+def test_preview_dependency_capability_failure_keeps_general_path(monkeypatch, failure):
+    import hexafe_plotstats.adapters.metroliza as dependency
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    payload = _preview_histogram_payload()
+    original = dependency._grouped_histogram_plotly_spec
+    if failure in {"missing", "noncallable"}:
+        if failure == "missing":
+            monkeypatch.delattr(dependency, "_grouped_histogram_plotly_spec")
+        else:
+            monkeypatch.setattr(dependency, "_grouped_histogram_plotly_spec", None)
+        expected = adapter.build_dashboard_plotly_spec(payload, title="Preview", static=False)
+    else:
+        calls = []
+
+        def fail_once(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("unsupported projection")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(dependency, "_grouped_histogram_plotly_spec", fail_once)
+        expected = adapter.build_dashboard_plotly_spec(payload, title="Preview", static=False)
+        calls.clear()
+    actual = adapter.build_dashboard_plotly_spec(payload, title="Preview", static=False, preview_only=True)
+    assert actual == expected
+
+
+def test_preview_projection_error_preserves_general_warning_and_call_counts(monkeypatch):
+    import warnings
+    import hexafe_plotstats.adapters.metroliza as dependency
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append("projection")
+        warnings.warn("projection failed", UserWarning)
+        raise RuntimeError("unsupported projection")
+
+    monkeypatch.setattr(dependency, "_grouped_histogram_plotly_spec", fail)
+    observations = []
+    for preview_only in (False, True):
+        calls.clear()
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            spec = adapter.build_dashboard_plotly_spec(
+                _preview_histogram_payload(), title="Preview", static=False, preview_only=preview_only,
+            )
+        observations.append((spec, calls[:], [(type(w.message), str(w.message)) for w in captured]))
+    assert observations[0] == observations[1]
+    assert calls == ["projection", "projection"]
+
+
+def test_preview_unsupported_numeric_objects_keep_conversion_callbacks():
+    import warnings
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    events = []
+
+    class Value:
+        def __float__(self):
+            events.append("float")
+            warnings.warn("numeric callback", UserWarning)
+            return 6.5
+
+    payload = _preview_histogram_payload()
+    payload["groups"][0]["values"][0] = Value()
+    observations = []
+    for preview_only in (False, True):
+        events.clear()
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            spec = adapter.build_dashboard_plotly_spec(
+                payload, title="Preview", static=False, preview_only=preview_only,
+            )
+        observations.append((spec, events[:], [(type(w.message), str(w.message)) for w in captured]))
+    assert observations[0] == observations[1]
+    assert events
+
+
+@pytest.mark.parametrize("api", ["dashboard", "plotstats"])
+@pytest.mark.parametrize("case", [
+    "plain", "invalid", "stateful_title", "invalid_title", "title_subclass", "title_none", "title_absent",
+    "top_object", "top_subclass", "top_bool", "top_string", "top_none", "top_nan", "top_inf",
+    "top_int", "top_float", "nested_wins", "nested_none_top_object",
+])
+def test_preview_raw_metadata_and_invalid_returns_preserve_observations(monkeypatch, api, case):
+    import warnings
+    import hexafe_plotstats.adapters.metroliza as dependency
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    events, fits = [], []
+
+    class Title:
+        def __str__(self):
+            events.append("title")
+            warnings.warn("title callback", UserWarning)
+            return f"T{len(events)}"
+
+    class TitleSubclass(str):
+        __str__ = Title.__str__
+
+    class Value:
+        def __float__(self):
+            events.append("limit")
+            warnings.warn("limit callback", UserWarning)
+            return float(len(events) % 3) + 0.5
+
+    class ValueSubclass(float):
+        __float__ = Value.__float__
+
+    def payload():
+        result = _preview_histogram_payload()
+        if case in {"stateful_title", "invalid_title", "title_subclass"}:
+            result["title"] = TitleSubclass("Title") if case == "title_subclass" else Title()
+        elif case == "title_none":
+            result["title"] = None
+        elif case == "title_absent":
+            result.pop("title", None)
+        elif case.startswith("top_"):
+            result.pop("limits", None)
+            result.pop("spec_limits", None)
+            result.update(lsl=0.0, nominal=2.0, usl=4.0)
+            result["lsl"] = {
+                "top_object": Value(), "top_subclass": ValueSubclass(0.0), "top_bool": True,
+                "top_string": "0.5", "top_none": None, "top_nan": float("nan"),
+                "top_inf": float("inf"), "top_int": 0, "top_float": 0.5,
+            }[case]
+        elif case in {"nested_wins", "nested_none_top_object"}:
+            result["lsl"] = Value()
+            if case == "nested_none_top_object":
+                result["limits"] = None
+        return result
+
+    original = dependency._grouped_histogram_plotly_spec
+
+    def plotly(*args, **kwargs):
+        events.append("plotly")
+        if case in {"invalid", "invalid_title"}:
+            warnings.warn("invalid grouped return", UserWarning)
+            return {"data": [], "layout": {}, "config": {}, "metadata": {}}
+        return original(*args, **kwargs)
+
+    def histogram(*args, **kwargs):
+        fits.append(kwargs["config"].include_fit)
+        return SimpleNamespace(table_rows=())
+
+    monkeypatch.setattr(dependency, "_grouped_histogram_plotly_spec", plotly)
+    monkeypatch.setattr(dependency, "build_histogram_payload", histogram)
+    monkeypatch.setattr(adapter, "plotstats_export_charts_enabled", lambda: True)
+    observations, fit_counts = [], []
+    for preview_only in (False, True):
+        events.clear()
+        fits.clear()
+        builder = adapter.build_dashboard_plotly_spec if api == "dashboard" else adapter.build_plotstats_dashboard_spec
+        option = "preview_only" if api == "dashboard" else "_preview_only"
+        with warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always")
+            spec = builder(payload(), title="Preview", static=False, **{option: preview_only})
+        observations.append((spec, events[:], [(type(item.message), str(item.message)) for item in captured]))
+        fit_counts.append(len(fits))
+    assert observations[0] == observations[1]
+    if case in {"plain", "title_none", "title_absent", "top_none", "top_int", "top_float", "nested_wins"}:
+        assert fit_counts[0] > 0
+        assert fit_counts[1] == 0
+    elif case not in {"invalid"}:
+        assert fit_counts[0] == fit_counts[1] > 0
+
+
+@pytest.mark.parametrize("location", ["payload", "group", "limits", "spec_limits"])
+def test_histogram_eligibility_checks_key_types_before_lookups(location):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            raise AssertionError("eligibility called a custom key")
+
+    payload = {"type": "histogram", "groups": [{"group": "A", "values": [1.0, 2.0]}]}
+    if location == "payload":
+        payload[Key("type")] = payload.pop("type")
+    elif location == "group":
+        payload["groups"][0][Key("group")] = payload["groups"][0].pop("group")
+    else:
+        payload[location] = {Key("unused"): 1.0}
+    assert adapter._plain_histogram_payload(payload) is False
+
+
+@pytest.mark.parametrize("axis", ["x", "y"])
+def test_nonsemantic_legend_custom_keys_keep_original_lookup_count(axis):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    events = []
+
+    class Key(str):
+        __hash__ = str.__hash__
+
+        def __eq__(self, other):
+            events.append(str(other))
+            return str.__eq__(self, other)
+
+    trace = {"name": "Samples", "x": [1.0, 2.0], "y": [3.0, 4.0]}
+    trace[Key(axis)] = trace.pop(axis)
+    events.clear()
+    assert adapter._canonical_legend_key(trace) is None
+    assert events == [axis]

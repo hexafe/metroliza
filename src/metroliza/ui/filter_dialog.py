@@ -1,5 +1,21 @@
 from metroliza.shared.custom_logger import CustomLogger
-from metroliza.reports.db import execute_with_retry
+from time import monotonic
+try:
+    from metroliza.ui.worker_progress_dialog import (
+        create_delayed_worker_progress_dialog,
+        dismiss_worker_progress_dialog,
+    )
+except ImportError:  # pragma: no cover - lightweight Qt stubs used for query-only tests.
+    def create_delayed_worker_progress_dialog(*args, **kwargs):
+        from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog as factory
+
+        return factory(*args, **kwargs)
+
+    def dismiss_worker_progress_dialog(dialog):
+        if dialog is not None:
+            from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog as dismiss
+
+            dismiss(dialog)
 from metroliza.shared.list_selection_utils import ListSelectionUtils
 from metroliza.ui import ui_theme_tokens
 try:
@@ -157,14 +173,15 @@ class FilterDialog(QDialog):
             self.filter_query = self.parent().get_filter_query()
         else:
             self.filter_query = ""
+        self._choice_scope_query = self.filter_query
 
         self._list_selection_utils = ListSelectionUtils()
         self._discard_gate_active = False
-
-        try:
-            self._ensure_schema_ready()
-        except Exception as e:
-            self.log_and_exit(e)
+        self._value_loader = None
+        self._value_request = 0
+        self._values_loading = False
+        self._values_closed = False
+        self._values_error = False
 
         self.setup_ui()
 
@@ -185,11 +202,11 @@ class FilterDialog(QDialog):
         try:
             self.create_widgets()
             self.arrange_layout()
-            self.populate_list_widgets()
             self._apply_list_theme_styles()
             self.connect_signals()
             self._refresh_filter_summary()
             self._committed_draft_snapshot = self._draft_snapshot()
+            self.populate_list_widgets()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -271,6 +288,11 @@ class FilterDialog(QDialog):
             self.date_to_calendar.setCalendarPopup(True)
             self.date_to_calendar.setDate(QDate.currentDate())
             self.date_to_calendar.setMinimumWidth(100)
+            self.date_error_label = QLabel("")
+            ui_foundation.set_status_variant(self.date_error_label, "danger")
+            self.header_availability_label = QLabel("")
+            self.header_availability_label.setTextFormat(Qt.TextFormat.PlainText)
+            self.header_availability_label.setWordWrap(True)
 
             self.expression_label = QLabel("Advanced expression (optional):")
             self.expression_input = QLineEdit()
@@ -412,6 +434,8 @@ class FilterDialog(QDialog):
             list_widget = getattr(self, list_attr)
             self._set_widget_size_policy(list_widget, min_width=150, min_height=110, expands_vertically=True)
             field_layout.addWidget(list_widget, 1)
+            if list_attr == "selected_headers_list":
+                field_layout.addWidget(self.header_availability_label)
             group_layout.addWidget(field_widget, row, column)
 
         for column in range(max_columns):
@@ -433,7 +457,8 @@ class FilterDialog(QDialog):
         footer_layout.addWidget(self.date_to_label, 2, 0)
         footer_layout.addWidget(self.date_to_calendar, 2, 1)
         footer_layout.addWidget(self.select_today_button, 2, 2)
-        footer_layout.addWidget(self.filter_summary_label, 3, 0, 1, 3)
+        footer_layout.addWidget(self.date_error_label, 3, 0, 1, 3)
+        footer_layout.addWidget(self.filter_summary_label, 4, 0, 1, 3)
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
@@ -486,7 +511,13 @@ class FilterDialog(QDialog):
             self.parser_id_search_input.textChanged.connect(lambda: self.search_list_widgets(self.parser_id_list, self.parser_id_search_input.text()))
             self.template_family_search_input.textChanged.connect(lambda: self.search_list_widgets(self.template_family_list, self.template_family_search_input.text()))
 
-            # Connect the itemSelectionChanged signal of the "HEADER" list to the update_selected_headers method
+            self._dimension_selections = {}
+            for attr_name in self._FILTER_LIST_ATTRS:
+                widget = getattr(self, attr_name)
+                widget.itemSelectionChanged.connect(
+                    lambda lw=widget: self._normalize_dimension_selection(lw)
+                )
+            # Normalize scope before dependent refreshes see the selection.
             self.header_list.itemSelectionChanged.connect(self.update_selected_headers)
             self.reference_list.itemSelectionChanged.connect(self.on_reference_selection_changed)
 
@@ -675,6 +706,9 @@ class FilterDialog(QDialog):
         previous_state = list_widget.blockSignals(True) if hasattr(list_widget, "blockSignals") else False
         try:
             selected_lookup = set(selected_values)
+            # Legacy mixed saved states retain concrete values (the narrower scope).
+            if selected_lookup - {"SELECT ALL"}:
+                selected_lookup.discard("SELECT ALL")
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
                 if item is not None and hasattr(item, "setSelected") and hasattr(item, "text"):
@@ -682,10 +716,22 @@ class FilterDialog(QDialog):
         finally:
             if hasattr(list_widget, "blockSignals"):
                 list_widget.blockSignals(previous_state)
+        if hasattr(self, "_dimension_selections"):
+            self._dimension_selections[list_widget] = selected_lookup
+
+    def _normalize_dimension_selection(self, widget):
+        values = {item.text() for item in widget.selectedItems()}
+        previous = self._dimension_selections.get(widget, set())
+        if "SELECT ALL" in values and len(values) > 1:
+            values = {"SELECT ALL"} if "SELECT ALL" not in previous else values - {"SELECT ALL"}
+            self._set_selected_values(widget, values)
+        self._dimension_selections[widget] = values
 
     def _restore_draft_snapshot(self, snapshot):
         selections, date_from, date_to, has_nok_only, expression = snapshot
         for attr_name, selected_values in selections:
+            if attr_name == "header_list":
+                self._retain_saved_header_choices(selected_values)
             self._set_selected_values(getattr(self, attr_name, None), selected_values)
         if hasattr(self, "date_from_calendar"):
             self.date_from_calendar.setDate(QDate.fromString(date_from, "yyyy-MM-dd"))
@@ -697,6 +743,18 @@ class FilterDialog(QDialog):
             self.expression_input.setText(expression)
         self.update_selected_headers()
         self._refresh_filter_summary()
+        self.on_reference_selection_changed()
+
+    def _retain_saved_header_choices(self, selected_values):
+        if not selected_values or getattr(self, "header_list", None) is None:
+            return
+        available = {self.header_list.item(row).text() for row in range(self.header_list.count())}
+        for value in selected_values:
+            if value != "SELECT ALL" and value not in available:
+                item = QListWidgetItem(value)
+                item.setData(Qt.ItemDataRole.UserRole, "unavailable")
+                item.setToolTip("Unavailable in the loaded choices; retained in the filter")
+                self.header_list.addItem(item)
 
     def _reset_draft(self):
         for attr_name in self._FILTER_LIST_ATTRS:
@@ -729,6 +787,7 @@ class FilterDialog(QDialog):
         if self._discard_gate_active:
             return False
         if not self._is_dirty():
+            self._stop_value_load()
             return True
         if self.isVisible():
             self._discard_gate_active = True
@@ -741,6 +800,7 @@ class FilterDialog(QDialog):
                 self._discard_gate_active = False
             if not allowed:
                 return False
+        self._stop_value_load()
         committed = getattr(self, "_committed_draft_snapshot", None)
         if committed is not None:
             self._restore_draft_snapshot(committed)
@@ -749,13 +809,16 @@ class FilterDialog(QDialog):
     def reject(self):
         if not self._discard_draft_if_allowed():
             return
+        # Discard already cancelled the old draft request. Let the committed
+        # scope refresh finish for this retained dialog, without a hidden duck.
+        self._dismiss_value_progress()
         super().reject()
 
-    def closeEvent(self, event):
-        if not self._discard_draft_if_allowed():
-            event.ignore()
-            return
-        super().closeEvent(event)
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._values_closed or not self._values_loading:
+            self._values_closed = False
+            self.populate_list_widgets()
 
     def _selected_filter_counts(self):
         field_widgets = (
@@ -805,6 +868,21 @@ class FilterDialog(QDialog):
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
+        if not self._validate_date_range():
+            summary_label.setText("Invalid date range: From must be on or before To.")
+            ui_foundation.set_status_variant(summary_label, "danger")
+            self._set_filter_apply_enabled(False)
+            return
+        if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
+            summary_label.setText(
+                "Loading filter values…" if self._values_loading
+                else "Unable to load filter values. Reopen the dialog to retry."
+            )
+            self._set_filter_apply_enabled(False)
+            return
+        self._refresh_active_filter_summary(summary_label)
+
+    def _refresh_active_filter_summary(self, summary_label):
         selected_counts = self._selected_filter_counts()
         active_fields = sum(1 for count in selected_counts.values() if count > 0)
         selected_values = sum(selected_counts.values())
@@ -837,8 +915,14 @@ class FilterDialog(QDialog):
             summary_text += " | NOK only"
         if expression_text:
             summary_text += " | Advanced expression"
+        unavailable_count = sum(
+            item.data(Qt.ItemDataRole.UserRole) == "unavailable"
+            for item in self.header_list.selectedItems()
+        )
+        if unavailable_count:
+            summary_text += f" | Unavailable headers: {unavailable_count} (may return 0 rows)"
         summary_label.setText(summary_text)
-        ui_foundation.set_status_variant(summary_label, "success")
+        ui_foundation.set_status_variant(summary_label, "warning" if unavailable_count else "success")
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
@@ -877,54 +961,134 @@ class FilterDialog(QDialog):
         super().keyPressEvent(event)
 
     def populate_list_widgets(self):
-        try:
-            current_filter_query = self.filter_query
-            self._populate_distinct_values(self.ax_list, "AX", filter_query=current_filter_query)
-            self._populate_distinct_values(self.header_list, "HEADER", filter_query=current_filter_query)
-            self._populate_distinct_values(self.all_headers_list, "HEADER", filter_query=current_filter_query)
-            self._populate_distinct_values(self.reference_list, "REFERENCE", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.part_name_list, "PART_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.revision_list, "REVISION", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.template_variant_list, "TEMPLATE_VARIANT", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.sample_number_list, "SAMPLE_NUMBER", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.operator_name_list, "OPERATOR_NAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.sample_number_kind_list, "SAMPLE_NUMBER_KIND", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.status_code_list, "STATUS_CODE", filter_query=current_filter_query)
-            self._populate_distinct_values(self.filename_list, "FILENAME", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.parser_id_list, "PARSER_ID", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._populate_distinct_values(self.template_family_list, "TEMPLATE_FAMILY", source_view="vw_report_overview", filter_query=current_filter_query)
-            self._refresh_filter_summary()
-        except Exception as e:
-            self.log_and_exit(e)
+        from metroliza.reports.filter_values import FILTER_VALUE_SPECS
+
+        self._start_value_load(FILTER_VALUE_SPECS, self._choice_scope_query)
+
+    def _stop_value_load(self):
+        self._dismiss_value_progress()
+        self._values_closed = True
+        self._value_request += 1
+        loader = self._value_loader
+        self._value_loader = None
+        if loader is not None:
+            loader.requestInterruption()
+            loader.values_ready.disconnect(self._receive_filter_values)
+            loader.load_failed.disconnect(self._filter_values_failed)
+
+    def _start_value_load(self, specs, filter_query):
+        action_started_at = monotonic()
+        from metroliza.ui.filter_values_loader import FilterValuesLoader
+
+        self._stop_value_load()
+        self._values_closed = False
+        self._values_loading = True
+        self._values_error = False
+        self.filter_tabs.setEnabled(False)
+        self.reset_button.setEnabled(False)
+        self._refresh_filter_summary()
+        loader = FilterValuesLoader(self._value_request, self.db_file, filter_query, specs)
+        self._value_loader = loader
+        loader.values_ready.connect(self._receive_filter_values)
+        loader.load_failed.connect(self._filter_values_failed)
+        loader.finished.connect(self._value_load_finished)
+        dialog, _label, bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Loading filter values...",
+            initial_status_text="Loading filter values...\nReading available choices\nETA --",
+            on_cancel=lambda: None, cancellable=False, action_started_at=action_started_at,
+        )
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        bar.setRange(0, 0)
+        self._value_progress_dialog = dialog
+        loader.start()
+        dialog.show()
+
+    def _dismiss_value_progress(self):
+        dismiss_worker_progress_dialog(getattr(self, "_value_progress_dialog", None))
+        self._value_progress_dialog = None
+
+    def _value_load_finished(self):
+        # Interrupted requests emit no result. Drop their wrapper before the
+        # registry deletes it, including during application shutdown.
+        if self.sender() is self._value_loader:
+            self._values_error = True
+            self._finish_value_load()
+
+    def _finish_value_load(self):
+        self._value_loader = None
+        self._values_loading = False
+        self.filter_tabs.setEnabled(True)
+        self.reset_button.setEnabled(True)
+        self._refresh_filter_summary()
+        self._dismiss_value_progress()
+
+    def _receive_filter_values(self, request_id, values):
+        if request_id != self._value_request or self._values_closed:
+            return
+        for attribute, items in values.items():
+            widget = getattr(self, attribute)
+            selected = tuple(item.text() for item in widget.selectedItems())
+            blocked = widget.blockSignals(True)
+            widget.clear()
+            widget.addItem("SELECT ALL")
+            # A database refresh changes available choices, not the user's
+            # conditions. Keep missing selections as ordinary selectable items
+            # until the user explicitly clears them.
+            choices = tuple(items)
+            available = set(choices) | {"SELECT ALL"}
+            choices += tuple(value for value in selected if value not in available)
+            for value in choices:
+                item = QListWidgetItem(value)
+                if attribute == "header_list" and value not in available:
+                    item.setData(Qt.ItemDataRole.UserRole, "unavailable")
+                    item.setToolTip("Unavailable for the current reference; retained in the filter")
+                widget.addItem(item)
+            self._set_selected_values(widget, selected)
+            widget.blockSignals(blocked)
+        self.update_selected_headers()
+        self._finish_value_load()
+        # Full loads restore references with signals blocked. Reapply their
+        # header scope only once; header-only results must not start a loop.
+        if "reference_list" in values and self._selected_value_count(self.reference_list):
+            self.on_reference_selection_changed()
+
+    def _filter_values_failed(self, request_id, exception):
+        if request_id != self._value_request or self._values_closed:
+            return
+        self._values_error = True
+        self._finish_value_load()
+        self.log_and_exit(exception)
 
     def _populate_distinct_values(self, list_widget, column_name, *, source_view="vw_measurement_export", filter_query=None):
-        query = build_distinct_value_query(column_name, source_view=source_view, filter_query=filter_query)
-        values = execute_with_retry(self.db_file, query)
-        list_widget.clear()
-        list_widget.addItem("SELECT ALL")
-        for value in values:
-            item = QListWidgetItem(value[0])
-            list_widget.addItem(item)
+        attribute = next(name for name in self._FILTER_LIST_ATTRS if getattr(self, name) is list_widget)
+        self._start_value_load(((attribute, column_name, source_view),), filter_query)
 
     def search_list_widgets(self, list_widget, search_text):
         try:
-            self._list_selection_utils.preserve_selection_during_filter(list_widget, search_text)
+            self._list_selection_utils.preserve_selection_during_filter(
+                list_widget, search_text, visibility_only=True,
+            )
         except Exception as e:
             self.log_and_exit(e)
 
     def on_reference_selection_changed(self):
         try:
             selected_references = [item.text() for item in self.reference_list.selectedItems()]
-            self.header_list.clear()
-            self.selected_headers_list.clear()
-
             if selected_references and "SELECT ALL" not in selected_references:
                 filter_query = build_measurement_filter_query(reference_values=selected_references)
                 self._populate_distinct_values(self.header_list, "HEADER", filter_query=filter_query)
             else:
-                for row in range(self.all_headers_list.count()):
-                    item = self.all_headers_list.item(row)
-                    self.header_list.addItem(item.text())
+                if getattr(self, "_value_loader", None) is not None:
+                    self._stop_value_load()
+                    self._finish_value_load()
+                self._values_closed = False
+                self._receive_filter_values(self._value_request, {
+                    "header_list": tuple(
+                        self.all_headers_list.item(row).text()
+                        for row in range(self.all_headers_list.count())
+                        if self.all_headers_list.item(row).text() != "SELECT ALL"
+                    ),
+                })
             self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -945,6 +1109,14 @@ class FilterDialog(QDialog):
             for item in selected_header_items:
                 selected_header_item = QListWidgetItem(item.text())
                 self.selected_headers_list.addItem(selected_header_item)
+            unavailable = [item.text() for item in selected_header_items
+                           if hasattr(item, "data") and item.data(Qt.ItemDataRole.UserRole) == "unavailable"]
+            notice = getattr(self, "header_availability_label", None)
+            if notice is not None:
+                notice.setText(
+                    "Unavailable headers retained in filter: " + ", ".join(unavailable)
+                    if unavailable else ""
+                )
             self._refresh_filter_summary()
         except Exception as e:
             self.log_and_exit(e)
@@ -964,6 +1136,11 @@ class FilterDialog(QDialog):
             self.log_and_exit(e)
 
     def apply_filters(self):
+        if not self._validate_date_range():
+            self._set_filter_apply_enabled(False)
+            return
+        if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
+            return
         try:
             # Get the selected values from the list widgets and calendars
             ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]
@@ -1058,8 +1235,25 @@ class FilterDialog(QDialog):
 
             # Hide the filter window
             self.hide()
+            return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _validate_date_range(self):
+        if not hasattr(self, "date_from_calendar") or not hasattr(self, "date_to_calendar"):
+            return True
+        date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
+        date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+        valid = date_from <= date_to
+        label = getattr(self, "date_error_label", None)
+        if label is not None:
+            label.setText("From must be on or before To." if not valid else "")
+        return valid
+
+    def accept(self):
+        """Apply the same scope validation for native and programmatic acceptance."""
+        if self.apply_filters():
+            super().accept()
 
     @staticmethod
     def _call_parent_filter_applied(parent, filter_state):

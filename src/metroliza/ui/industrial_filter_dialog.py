@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from time import monotonic
+
+from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -27,7 +30,12 @@ from metroliza.industrial.industrial_workflow_state import (
     require_identifier,
 )
 from metroliza.reports.report_schema import ensure_report_schema
+from metroliza.ui import detached_threads
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_accessibility,
@@ -39,12 +47,51 @@ from metroliza.ui.ui_foundation import (
 )
 
 
+_DEFAULT_CONNECTION_SCOPE = sqlite_connection_scope
+_DEFAULT_REPORT_SCHEMA = ensure_report_schema
+
+
+def _read_database_reference_rows(db_file):
+    with sqlite_connection_scope(db_file) as conn:
+        ensure_report_schema(db_file, connection=conn)
+        return conn.execute(
+            """
+                    SELECT DISTINCT TRIM(reference)
+                    FROM report_metadata
+                    WHERE TRIM(COALESCE(reference, '')) <> ''
+                    ORDER BY TRIM(reference) COLLATE NOCASE
+                    """
+        ).fetchall()
+
+
+class _ReferenceThread(QThread):
+    def __init__(self, db_file: str, epoch: int):
+        super().__init__()
+        self.db_file = db_file
+        self.epoch = epoch
+        self.references = None
+        self.error = None
+        self.discard_result = False
+
+    def run(self):
+        try:
+            rows = _read_database_reference_rows(self.db_file)
+            self.references = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
+        except Exception as exc:
+            self.error = str(exc)
+
+
 class IndustrialFilterDialog(QDialog):
     """Collect Oznak fetch filters in a separate modal dialog."""
 
     def __init__(self, parent=None, db_file: str | None = None, state: IndustrialFilterState | None = None):
         super().__init__(parent)
         self.db_file = db_file
+        if type(self) is IndustrialFilterDialog:
+            self._reference_thread = None
+            self._reference_progress = None
+            self._reference_epoch = 0
+            self._references_closed = False
         self.state = state or IndustrialFilterState()
         self._committed_state = self.state
         self._discard_gate_active = False
@@ -172,8 +219,16 @@ class IndustrialFilterDialog(QDialog):
         )
 
     def load_database_references(self) -> None:
+        started_at = monotonic()
+        if type(self) is IndustrialFilterDialog and (self._reference_thread is not None or self._discard_gate_active):
+            return
         if not self.db_file:
             QMessageBox.warning(self, "Industrial sync scope", "Select a Metroliza report database first.")
+            return
+        if (type(self) is IndustrialFilterDialog and type(self.db_file) is str
+                and sqlite_connection_scope is _DEFAULT_CONNECTION_SCOPE
+                and ensure_report_schema is _DEFAULT_REPORT_SCHEMA):
+            self._start_reference_load(started_at)
             return
         try:
             with sqlite_connection_scope(self.db_file) as conn:
@@ -195,6 +250,9 @@ class IndustrialFilterDialog(QDialog):
             return
 
         references = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
+        IndustrialFilterDialog._apply_database_references(self, references)
+
+    def _apply_database_references(self, references) -> None:
         self.references_edit.setPlainText("\n".join(references))
         self.source_context_label.setText(
             f"Reference source: {len(references)} value(s) loaded from the open Metroliza "
@@ -203,12 +261,16 @@ class IndustrialFilterDialog(QDialog):
         self._sync_draft_state()
 
     def clear_filter(self) -> None:
+        if type(self) is IndustrialFilterDialog:
+            self._reference_epoch += 1
         self.reference_column_edit.setText("reference")
         self.references_edit.clear()
         self.query_filters_edit.clear()
 
     def _connect_draft_signals(self) -> None:
         self.reference_column_edit.textChanged.connect(self._sync_draft_state)
+        if type(self) is IndustrialFilterDialog:
+            self.references_edit.textChanged.connect(self._invalidate_reference_result)
         self.references_edit.textChanged.connect(self._sync_draft_state)
         self.query_filters_edit.textChanged.connect(self._sync_draft_state)
 
@@ -287,6 +349,8 @@ class IndustrialFilterDialog(QDialog):
         if not self._discard_draft_if_allowed():
             event.ignore()
             return
+        if type(self) is IndustrialFilterDialog:
+            self._references_closed = True
         super().closeEvent(event)
 
     def _confirm_discard(self, title: str, message: str) -> bool:
@@ -300,6 +364,8 @@ class IndustrialFilterDialog(QDialog):
         return answer == QMessageBox.StandardButton.Yes
 
     def _populate_from_state(self, state: IndustrialFilterState) -> None:
+        if type(self) is IndustrialFilterDialog:
+            self._reference_epoch += 1
         self.reference_column_edit.setText(state.reference_column or "reference")
         self.references_edit.setPlainText("\n".join(state.references))
         self.query_filters_edit.setPlainText(format_industrial_query_filters(state.query_filters))
@@ -360,3 +426,66 @@ class IndustrialFilterDialog(QDialog):
         self.state = state
         self._committed_state = state
         self.accept()
+
+    def _invalidate_reference_result(self) -> None:
+        self._reference_epoch += 1
+
+    def _start_reference_load(self, started_at) -> None:
+        thread = None
+        try:
+            self._references_closed = False
+            thread = _ReferenceThread(self.db_file, self._reference_epoch)
+            self._reference_thread = thread
+            detached_threads.register(thread, defer_quit=True, owner=self, on_finished=IndustrialFilterDialog._references_finished)
+            detached_threads.run_when_finished([thread], thread.deleteLater)
+            self._reference_progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                self, window_title="Industrial sync scope", initial_status_text="Loading report references…",
+                on_cancel=lambda: None, action_started_at=started_at, cancellable=False,
+            )
+            bar.setRange(0, 0)
+            self.load_db_references_button.setEnabled(False)
+            self._reference_progress.show()
+            thread.start()
+        except Exception as exc:
+            if thread is None or not thread.isRunning():
+                self._release_references()
+                if thread is not None:
+                    registered = detached_threads.is_registered(thread)
+                    detached_threads.discard(thread)
+                    if not registered:
+                        thread.deleteLater()
+            else:
+                thread.discard_result = True
+            self._reference_error(str(exc))
+
+    def _release_references(self) -> None:
+        self._reference_thread = None
+        dismiss_worker_progress_dialog(self._reference_progress)
+        self._reference_progress = None
+        self.load_db_references_button.setEnabled(bool(self.db_file))
+
+    def _reference_error(self, error) -> None:
+        QMessageBox.warning(
+            self, "Industrial sync scope",
+            f"Could not read references from the selected Metroliza report database: {error}",
+        )
+
+    def _references_finished(self, thread) -> None:
+        if thread is not self._reference_thread:
+            return
+        self._release_references()
+        if (thread is None or thread.discard_result or self._references_closed or self._discard_gate_active
+                or thread.epoch != self._reference_epoch or type(self.db_file) is not str
+                or self.db_file != thread.db_file):
+            return
+        if thread.error is not None:
+            self._reference_error(thread.error)
+        else:
+            self._apply_database_references(thread.references)
+
+    def done(self, result) -> None:
+        if type(self) is IndustrialFilterDialog:
+            self._references_closed = True
+            dismiss_worker_progress_dialog(self._reference_progress)
+            self._reference_progress = None
+        super().done(result)

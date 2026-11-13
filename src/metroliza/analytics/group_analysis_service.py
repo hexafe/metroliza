@@ -34,6 +34,9 @@ _SKIP_REASON_MESSAGES = {
         'Multi-reference group analysis skipped: grouped rows span only one reference.'
     ),
     'insufficient_groups': 'Group Analysis skipped: at least 2 groups are required.',
+    'missing_reference_metadata': (
+        'Group Analysis skipped: reports need reference metadata for grouped comparisons.'
+    ),
     'missing_numeric_meas': 'Group Analysis skipped: no numeric MEAS values are available.',
     'no_eligible_metrics': 'Group Analysis skipped: no eligible metrics are available.',
 }
@@ -137,6 +140,12 @@ def _filter_table(table, predicate) -> RowTable:
         if predicate(row):
             kept_rows.append(row_table.rows[row_index])
     return RowTable(rows=tuple(kept_rows), columns=tuple(row_table.columns))
+
+
+def _filter_known_reference_rows(table) -> RowTable:
+    """Keep reference-specific comparisons clear of unknown report identity."""
+    row_table = _as_row_table(table)
+    return _filter_table(row_table, lambda row: bool(_normalize_text(row.get('REFERENCE'))))
 
 
 def _group_table(table, columns, *, sort=True):
@@ -1546,11 +1555,19 @@ def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_gro
 
 def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None, alias_db_path=None):
     """Check minimum runnable conditions and return skip metadata when unmet."""
-    grouped_table = _as_row_table(grouped_df)
+    original_table = _as_row_table(grouped_df)
+    grouped_table = _filter_known_reference_rows(original_table)
 
     reference_count = int(_nunique(_column_values(grouped_table, 'REFERENCE'), dropna=True))
     effective_scope = resolve_group_analysis_scope(requested_scope, reference_count)
     forced_scope = str(requested_scope or 'auto').strip().lower()
+
+    if original_table.rows and not grouped_table.rows:
+        return {
+            'runnable': False,
+            'effective_scope': effective_scope,
+            'skip_reason': build_group_analysis_skip_reason('missing_reference_metadata'),
+        }
 
     if forced_scope == 'single_reference' and reference_count > 1:
         return {
@@ -1576,7 +1593,7 @@ def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eli
             ),
         }
 
-    working = _normalize_grouped_working_df(grouped_df, alias_db_path=alias_db_path)
+    working = _normalize_grouped_working_df(grouped_table, alias_db_path=alias_db_path)
 
     if working.empty:
         return {
@@ -1880,7 +1897,7 @@ def build_group_analysis_payload(
 ):
     """Assemble metric-level Group Analysis payload for writer modules."""
     default_group_label = normalize_default_group_label(default_group_label)
-    grouped_table = _as_row_table(grouped_df)
+    grouped_table = _filter_known_reference_rows(grouped_df)
 
     _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
     _emit_progress(progress_callback, 'Preparing Group Analysis...')

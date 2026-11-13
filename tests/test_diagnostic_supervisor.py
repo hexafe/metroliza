@@ -1,0 +1,581 @@
+import json
+import os
+import subprocess
+import sys
+import time
+import types
+from dataclasses import asdict
+from pathlib import Path
+
+import pytest
+
+from metroliza.app.diagnostic_supervisor import launch_supervised
+
+ROOT = Path(__file__).resolve().parents[1]
+CHILD = ROOT / "tests" / "fixtures" / "diagnostic_child.py"
+
+
+def _command(scenario):
+    return [sys.executable, str(CHILD), scenario]
+
+
+def _controlled_receiver_rate_window(monkeypatch, *, rollover_every=None):
+    from metroliza.app import diagnostic_supervisor
+
+    receiver_run = diagnostic_supervisor._Receiver._run.__code__
+
+    class ReceiverRateTime:
+        def __init__(self):
+            self.window_time = time.monotonic()
+            self.window_reads = 0
+
+        def monotonic(self):
+            if sys._getframe(1).f_code is receiver_run:
+                self.window_reads += 1
+                if rollover_every and self.window_reads > 1:
+                    if (self.window_reads - 1) % rollover_every == 0:
+                        self.window_time += 1.01
+                return self.window_time
+            return time.monotonic()
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    controlled = ReceiverRateTime()
+    monkeypatch.setattr(diagnostic_supervisor, "time", controlled)
+    return controlled
+
+
+@pytest.mark.parametrize("scenario,code,incident,handshake", [
+    ("normal", 0, False, "accepted"),
+    ("hard_exit", 9, True, "accepted"),
+    ("numeric139", 139, True, "accepted"),
+    ("early_exit", 7, True, "missing"),
+    ("raw_output", 0, False, "accepted"),
+])
+def test_real_child_observation_and_surviving_history(scenario, code, incident, handshake):
+    result = launch_supervised(_command(scenario))
+    assert result.exit_code == code
+    assert result.needs_incident is incident
+    assert result.handshake == handshake
+    assert result.termination == "observed_exit"
+    if handshake == "accepted":
+        assert len(result.history.events) == 1
+        event = json.loads(result.history.events[0])
+        assert event["invocation_id"] == result.session_id
+        assert event["event_code"] == "startup_diagnostic"
+        assert event["outcome"] == "invocation_started"
+    assert "SYNTHETIC_RAW_SECRET" not in repr(asdict(result))
+
+
+def test_missing_child_is_not_a_fabricated_process_exit(tmp_path):
+    result = launch_supervised([str(tmp_path / "missing.exe")])
+    assert result.launch == "failed"
+    assert result.exit_code is None
+    assert result.termination == "not_started"
+    assert result.needs_incident
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows token and pipe contract")
+def test_qualified_nonadmin_token_can_create_its_anonymous_pipe():
+    # A separate child confines impersonation, including an adverse RevertToSelf
+    # result. No application input, raw native error text, SID or ACL is emitted.
+    program = r'''
+import ctypes
+import json
+import os
+from scripts.qualify_windows_diagnostics import _WindowsApi
+
+result = {"baseline": False, "restricted": False, "error_class": None, "stage": "baseline", "cleanup": True}
+api = _WindowsApi()
+api.advapi.ImpersonateLoggedOnUser.argtypes = [api.wintypes.HANDLE]
+api.advapi.ImpersonateLoggedOnUser.restype = api.wintypes.BOOL
+api.advapi.RevertToSelf.argtypes = []
+api.advapi.RevertToSelf.restype = api.wintypes.BOOL
+token = None
+impersonating = False
+def pipe_roundtrip(prefix):
+    pipes = []
+    try:
+        result["stage"] = prefix + "_first_pipe"
+        pipes.append(os.pipe())
+        result["stage"] = prefix + "_second_pipe"
+        pipes.append(os.pipe())
+        for read, write in pipes:
+            os.write(write, b"closed-control")
+            if os.read(read, 14) != b"closed-control":
+                return False
+        return True
+    finally:
+        for read, write in pipes:
+            os.close(write)
+            os.close(read)
+try:
+    result["baseline"] = pipe_roundtrip("baseline")
+    result["stage"] = "token"
+    token = api._restricted_token()
+    result["stage"] = "impersonate"
+    if not api.advapi.ImpersonateLoggedOnUser(token):
+        raise RuntimeError()
+    impersonating = True
+    try:
+        result["restricted"] = pipe_roundtrip("restricted")
+        result["stage"] = "complete"
+    except OSError as error:
+        native = getattr(error, "winerror", None)
+        result["error_class"] = (
+            "access_denied" if native == 5
+            else "access_denied_mapped" if native is None and error.errno == 13
+            else "resource_failure" if native in (8, 14) or error.errno in (12, 24)
+            else "other"
+        )
+except Exception:
+    result["cleanup"] = False
+finally:
+    if impersonating and not api.advapi.RevertToSelf():
+        os._exit(3)
+    if token and not api.kernel.CloseHandle(token):
+        result["cleanup"] = False
+print(json.dumps(result, sort_keys=True))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", program], cwd=ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert result.returncode == 0
+    observation = json.loads(result.stdout)
+    assert observation == {
+        "baseline": True, "restricted": True, "error_class": None,
+        "stage": "complete", "cleanup": True,
+    }
+
+
+@pytest.mark.parametrize("scenario", ["duplicate", "dropped"])
+def test_clean_process_return_cannot_erase_missing_event_evidence(scenario):
+    result = launch_supervised(_command(scenario))
+    assert result.exit_code == 0
+    assert result.clean_terminal_received
+    assert result.channel == "loss_observed"
+    assert result.needs_incident
+
+
+def test_supervisor_does_not_search_path():
+    with pytest.raises(ValueError, match="absolute_child_required"):
+        launch_supervised(["python"])
+
+
+@pytest.mark.parametrize("failure_at", [1, 2])
+def test_partial_channel_allocation_failure_closes_owned_handles(monkeypatch, failure_at):
+    pipe = os.pipe
+    opened = []
+    calls = 0
+    def failing_pipe():
+        nonlocal calls
+        calls += 1
+        if calls == failure_at:
+            raise OSError("SYNTHETIC_RESOURCE_FAILURE")
+        pair = pipe()
+        opened.extend(pair)
+        return pair
+    monkeypatch.setattr(os, "pipe", failing_pipe)
+    result = launch_supervised(_command("normal"))
+    assert result.launch == "failed"
+    assert result.termination == "not_started"
+    assert result.exit_code is None
+    for fd in opened:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.parametrize("scenario,handshake,channel", [
+    ("wrong_peer", "rejected", "invalid"),
+    ("cross_instance", "accepted", "invalid"),
+    ("partial", "accepted", "invalid"),
+    ("stalled", "accepted", "invalid"),
+    ("flood", "accepted", "flooded"),
+    ("dropped_terminal", "accepted", "incomplete"),
+])
+def test_owned_malformed_peer_never_produces_complete_evidence(
+    scenario, handshake, channel, monkeypatch
+):
+    controlled = None
+    if scenario == "flood":
+        controlled = _controlled_receiver_rate_window(monkeypatch)
+    started = time.monotonic()
+    result = launch_supervised([
+        sys.executable, str(CHILD.with_name("diagnostic_protocol_child.py")), scenario,
+    ])
+    assert time.monotonic() - started < 4
+    assert result.handshake == handshake
+    assert result.channel == channel
+    assert not result.clean_terminal_received
+    assert result.needs_incident
+    assert result.history.total_bytes <= 2 * 1024 * 1024
+    if controlled is not None:
+        assert controlled.window_reads >= 2001
+        assert 0 < result.history.loss.sequence_rejected_events < 2000
+    if scenario in {"wrong_peer", "cross_instance"}:
+        assert result.history.events == ()
+
+
+def test_receiver_rate_window_rollover_does_not_become_a_lifetime_cap(monkeypatch):
+    controlled = _controlled_receiver_rate_window(monkeypatch, rollover_every=1000)
+    result = launch_supervised([
+        sys.executable, str(CHILD.with_name("diagnostic_protocol_child.py")), "flood",
+    ])
+    assert controlled.window_reads > 2001
+    assert result.exit_code == 0
+    assert result.handshake == "accepted"
+    assert result.channel == "incomplete"
+    assert not result.clean_terminal_received
+    assert result.needs_incident
+    assert result.history.loss.sequence_rejected_events > 2000
+    assert result.history.total_bytes <= 2 * 1024 * 1024
+
+
+def test_concurrent_real_instances_keep_their_own_event_history():
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(lambda _: launch_supervised(_command("hard_exit")), range(3)))
+    assert len({result.session_id for result in results}) == 3
+    for result in results:
+        assert result.history.events
+        assert {json.loads(event)["invocation_id"] for event in result.history.events} == {
+            result.session_id
+        }
+
+
+def test_contended_source_counter_is_exact_after_clean_terminal():
+    result = launch_supervised(_command("contended"))
+    assert result.exit_code == 0
+    assert result.channel == "loss_observed"
+    assert result.source_loss_known
+    assert result.clean_terminal_received
+    assert result.source_dropped == 1
+
+
+def test_full_slow_pipe_cannot_hold_up_the_product_shutdown(monkeypatch, tmp_path):
+    from metroliza.app import diagnostic_supervisor as supervisor
+    from metroliza.app.diagnostic_supervisor import DRAIN_SECONDS, _Receiver
+    from metroliza.shared.diagnostic_transport import CLOSE_MAX_SECONDS
+
+    # Instrument only the owned child fixture, using the same system monotonic
+    # clock in both processes (including supported Windows CPython 3.11).
+    close_times = tmp_path / "close-times.json"
+    program = '''
+import json, runpy, sys, time
+from pathlib import Path
+fixture, timing_path = sys.argv[1:]
+sys.path.insert(0, str(Path(fixture).resolve().parents[2] / "src"))
+from metroliza.shared.diagnostic_transport import ChildRecorder
+close = ChildRecorder.close
+def measured_close(self, *args, **kwargs):
+    started = time.monotonic()
+    try:
+        return close(self, *args, **kwargs)
+    finally:
+        finished = time.monotonic()
+        Path(timing_path).write_text(json.dumps([started, finished]), encoding="ascii")
+ChildRecorder.close = measured_close
+sys.argv = [fixture, "full_queue"]
+runpy.run_path(fixture, run_name="__main__")
+'''
+    child_exited = []
+    spawn = supervisor._spawn_child
+
+    def measured_spawn(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        wait = child.wait
+
+        def measured_wait():
+            result = wait()
+            child_exited.append(time.monotonic())
+            return result
+
+        monkeypatch.setattr(child, "wait", measured_wait)
+        return child
+
+    monkeypatch.setattr(supervisor, "_spawn_child", measured_spawn)
+    receive = _Receiver._receive
+    receivers = []
+    def slow_receive(self, payload):
+        if self not in receivers:
+            receivers.append(self)
+        time.sleep(0.02)
+        return receive(self, payload)
+    monkeypatch.setattr(_Receiver, "_receive", slow_receive)
+    authenticated = []
+    result = launch_supervised(
+        [sys.executable, "-c", program, str(CHILD), str(close_times)],
+        on_authenticated=lambda _session: authenticated.append(time.monotonic()),
+    )
+    assert len(authenticated) == 1
+    elapsed = time.monotonic() - authenticated[0]
+    for receiver in receivers:
+        receiver.thread.join(3)
+        assert not receiver.thread.is_alive()
+    assert result.exit_code == 0
+    close_started, close_finished = json.loads(close_times.read_text(encoding="ascii"))
+    assert len(child_exited) == 1
+    assert authenticated[0] <= close_started <= close_finished <= child_exited[0]
+    # This deliberately sub-budget reader takes ~5 s for a full queue. The total
+    # bound is the writer byte cap + receiver drain + a separate, enforced 1-s
+    # fixture/process budget: 0.05 s intentional preparation leaves at most 0.95 s
+    # for 1000 enqueues, scheduling, timing-file publication and interpreter exit.
+    # Measure both outside-close phases so the extra second cannot silently cover
+    # a fixture/child-shutdown regression. Windows interpreter startup precedes auth.
+    fixture_process_budget = 1.0
+    fixture_process_elapsed = ((close_started - authenticated[0])
+                               + (child_exited[0] - close_finished))
+    assert fixture_process_elapsed < fixture_process_budget
+    assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + fixture_process_budget
+    # Whether frames are still buffered at the post-exit snapshot depends on the
+    # platform pipe buffer: Linux (64 KiB) leaves frames for the slow reader, while
+    # Windows' small anonymous-pipe buffer is drained to EOF within DRAIN_SECONDS
+    # (observed in Windows core smoke). Either way no terminal arrived, so the
+    # channel stays incomplete. The drain flag itself is covered deterministically
+    # by test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen.
+    assert result.channel == "incomplete"
+    assert not result.clean_terminal_received
+    assert not result.source_loss_known
+    assert result.needs_incident
+    assert result.history.total_bytes <= 2 * 1024 * 1024
+
+
+def test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    entered, release = threading.Event(), threading.Event()
+    receivers = []
+    receive = supervisor._Receiver._receive
+
+    def held_receive(self, payload):
+        receivers.append(self)
+        entered.set()
+        assert release.wait(5)
+        return receive(self, payload)
+
+    monkeypatch.setattr(supervisor._Receiver, "_receive", held_receive)
+    monkeypatch.setattr(supervisor, "DRAIN_SECONDS", 0)
+    try:
+        result = launch_supervised(_command("normal"))
+        assert entered.is_set()
+        assert getattr(result, "receiver_drain_incomplete", False) is True
+        assert result.channel == "incomplete"
+        assert not result.clean_terminal_received
+        assert result.needs_incident
+        assert result.history.events == ()
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
+    assert receivers[0].ring.snapshot(now=time.monotonic()).events == ()
+
+
+def test_finalized_terminal_is_not_misreported_as_pending_receiver_drain(monkeypatch):
+    import threading
+    from metroliza.app import diagnostic_supervisor as supervisor
+
+    release = threading.Event()
+    receivers = []
+    original = supervisor._Receiver._run
+
+    def held_cleanup(self):
+        original(self)
+        receivers.append(self)
+        assert release.wait(5)
+
+    monkeypatch.setattr(supervisor._Receiver, "_run", held_cleanup)
+    try:
+        result = supervisor.launch_supervised(_command("normal"))
+        assert result.channel == "complete"
+        assert result.clean_terminal_received
+        assert result.source_loss_known
+        assert not result.receiver_drain_incomplete
+        assert not result.needs_incident
+    finally:
+        release.set()
+        for receiver in receivers:
+            receiver.thread.join(2)
+            assert not receiver.thread.is_alive()
+
+
+def test_supervisor_loss_does_not_kill_or_replay_child_write(tmp_path):
+    destination = tmp_path / "business-write.txt"
+    command = _command("supervisor_loss") + [str(destination)]
+    supervisor = subprocess.Popen(
+        [sys.executable, "-c", "from metroliza.app.diagnostic_supervisor import launch_supervised; "
+         "import json,sys; launch_supervised(json.loads(sys.argv[1]))", json.dumps(command)],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not destination.with_suffix(".ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert destination.with_suffix(".ready").exists()
+        supervisor.kill()  # Only this test-owned parent; product has no kill policy.
+        supervisor.wait(timeout=3)
+        deadline = time.monotonic() + 5
+        while not destination.with_suffix(".done").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert destination.with_suffix(".done").read_text(encoding="ascii") == "done"
+        assert destination.read_text(encoding="ascii") == "one_commit\n"
+    finally:
+        if supervisor.poll() is None:
+            supervisor.kill()
+            supervisor.wait(timeout=3)
+
+
+def test_platform_observed_status_is_separate_from_numeric_exit139():
+    if os.name == "nt":
+        script = "import os; os._exit(3)"
+        expected = ("observed_exit", 3)
+    else:
+        script = "import os,signal; os.kill(os.getpid(), signal.SIGTERM)"
+        expected = ("posix_signal", -15)
+    result = launch_supervised([sys.executable, "-c", script])
+    assert (result.termination, result.exit_code) == expected
+
+
+@pytest.mark.parametrize("callback_fails", [False, True])
+def test_windows_spawn_temporarily_cleans_and_restores_dll_directory(
+    monkeypatch, callback_fails
+):
+    from metroliza.app import diagnostic_supervisor
+
+    state = {"directory": "C:/synthetic bundle"}
+    transitions: list[str | None] = []
+
+    class Buffer:
+        value = ""
+
+        def __len__(self):
+            return 32_768
+
+    fake_ctypes = types.SimpleNamespace(
+        create_unicode_buffer=lambda _size: Buffer(),
+        get_last_error=lambda: 0,
+        set_last_error=lambda _value: None,
+    )
+
+    def get_directory(_size, buffer):
+        buffer.value = state["directory"] or ""
+        return len(buffer.value)
+
+    def set_directory(value):
+        state["directory"] = value
+        transitions.append(value)
+        return 1
+
+    monkeypatch.setattr(diagnostic_supervisor.os, "name", "nt")
+    monkeypatch.setattr(
+        diagnostic_supervisor,
+        "_windows_dll_directory_api",
+        lambda: (fake_ctypes, get_directory, set_directory),
+    )
+    calls = 0
+
+    def callback():
+        nonlocal calls
+        calls += 1
+        assert state["directory"] is None
+        if callback_fails:
+            raise OSError("synthetic_popen_failure")
+        return "child"
+
+    if callback_fails:
+        with pytest.raises(OSError, match="synthetic_popen_failure"):
+            diagnostic_supervisor._call_with_clean_windows_dll_directory(callback)
+    else:
+        assert diagnostic_supervisor._call_with_clean_windows_dll_directory(callback) == "child"
+    assert calls == 1
+    assert transitions == [None, "C:/synthetic bundle"]
+    assert state["directory"] == "C:/synthetic bundle"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows DLL search state")
+def test_native_windows_spawn_callback_observes_clean_dll_directory_and_restores_state():
+    from metroliza.app import diagnostic_supervisor
+
+    ctypes, get_directory, _set_directory = diagnostic_supervisor._windows_dll_directory_api()
+
+    def current_directory():
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = get_directory(len(buffer), buffer)
+        assert length < len(buffer)
+        return buffer.value if length else None
+
+    before = current_directory()
+
+    def observe_clean():
+        assert current_directory() is None
+        return "observed"
+
+    assert diagnostic_supervisor._call_with_clean_windows_dll_directory(observe_clean) == "observed"
+    assert current_directory() == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native token default DACL control")
+def test_restricted_token_default_dacl_matches_private_explicit_pipe(capfd):
+    result = subprocess.run(
+        [sys.executable, str(CHILD.with_name("windows_restricted_pipe_control.py"))],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=15,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert result.returncode == 0
+    observation = json.loads(result.stdout)
+    assert observation["default_before"] in {"passed", "access_denied"}
+    expected = {
+        "default_before": observation["default_before"], "explicit_private": True,
+        "default_after": True, "medium_integrity": True, "nonadmin": True,
+        "cleanup": True,
+    }
+    assert observation == expected
+    # The successful evidence contains only this closed synthetic schema.
+    with capfd.disabled():
+        print("restricted_pipe_control=" + json.dumps(expected, sort_keys=True), flush=True)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native private-store owner boundary control")
+def test_restricted_store_creation_owner_boundary(tmp_path, capfd):
+    result = subprocess.run(
+        [sys.executable, str(CHILD.with_name("windows_store_owner_control.py")), str(tmp_path)],
+        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20,
+        env=dict(os.environ, PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT)))),
+        check=False,
+    )
+    assert len(result.stdout) <= 4096
+    observation = json.loads(result.stdout)
+    assert result.returncode == 0, observation
+    assert set(observation) == {
+        "schema_version", "cleanup", "control_complete", "medium_integrity", "nonadmin",
+        "parent_create", "parent_owner_is_user", "parent_restricted_publish",
+        "restricted_create_publish", "restricted_owner_is_user", "restricted_host_read",
+        "user_owner_create_publish", "user_owner_is_user", "user_owner_host_read",
+        "ancestor_accessible", "restricted_full_readback", "user_owner_full_readback",
+        "initialized_owner_is_user", "initialized_restricted_publish", "initialized_full_readback",
+    }
+    for key in ("cleanup", "control_complete", "medium_integrity", "nonadmin", "user_owner_is_user",
+                "ancestor_accessible", "user_owner_full_readback", "initialized_owner_is_user",
+                "initialized_full_readback"):
+        assert observation[key] is True, observation
+    for key in ("parent_owner_is_user", "restricted_owner_is_user"):
+        assert type(observation[key]) is bool
+    assert observation["schema_version"] == 1 and type(observation["schema_version"]) is int
+    assert observation["parent_create"] == "available"
+    assert observation["initialized_restricted_publish"] == "saved"
+    assert observation["parent_restricted_publish"] in {"saved", "root_unavailable"}
+    assert observation["restricted_create_publish"] in {"saved", "root_unavailable"}
+    assert observation["restricted_host_read"] == "available"
+    assert observation["restricted_full_readback"] is (observation["restricted_create_publish"] == "saved")
+    assert observation["user_owner_create_publish"] == "saved", observation
+    assert observation["user_owner_host_read"] == "available", observation
+    with capfd.disabled():
+        print("restricted_store_owner_control=" + json.dumps(observation, sort_keys=True), flush=True)

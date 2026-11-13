@@ -66,6 +66,23 @@ def normalize_reference(value) -> str | None:
     return _collapse_spaces(value)
 
 
+def is_missing_reference(value) -> bool:
+    """Return whether a report reference counts as missing.
+
+    This is the single Python definition of a "missing reference": ``None``,
+    a float NaN, or text that is empty after ``str.strip()`` (all Unicode
+    whitespace).  Callers that need the same decision in SQL must not assume
+    ``NULLIF(TRIM(reference), '')`` is equivalent: SQLite ``TRIM`` removes
+    spaces only, so a tab/NBSP-only reference is "missing" here but not there.
+    """
+
+    if value is None:
+        return True
+    if isinstance(value, float) and value != value:
+        return True
+    return not str(value).strip()
+
+
 def _build_date(year: int, month: int, day: int) -> str | None:
     try:
         return date_type(year, month, day).isoformat()

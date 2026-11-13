@@ -123,28 +123,44 @@ def test_build_manifest_validation_rejects_stale_build_identity(
         )
 
 
-def test_startup_log_includes_process_build_and_parser_identity(
+def test_startup_log_contains_only_typed_build_identity(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from uuid import UUID
+
+    from metroliza.app.version import RELEASE_VERSION
+    from metroliza.shared.logging_utils import ManagedSafeFormatter
+
     logger = logging.getLogger("metroliza.provenance-test")
     provenance = BuildProvenance.from_mapping(_manifest_payload())
     monkeypatch.setattr(bootstrap, "load_build_provenance", lambda: provenance)
     monkeypatch.setattr(bootstrap, "runtime_mode", lambda: "frozen")
-    monkeypatch.setenv(bootstrap.PARSER_STRICT_MATCHING_ENV, "0")
 
     with caplog.at_level(logging.INFO, logger=logger.name):
         bootstrap.log_runtime_provenance(logger)
 
     assert len(caplog.records) == 1
-    message = caplog.records[0].getMessage()
-    assert "Runtime provenance pid=" in message
-    assert "executable=" in message
-    assert "mode=frozen" in message
-    assert f"git_sha={provenance.git_sha}" in message
-    assert "dirty=false" in message
-    assert "packager=pyinstaller" in message
-    assert "parser_strict_matching=false" in message
+    assert caplog.records[0].levelno == logging.INFO
+    output = ManagedSafeFormatter().format(caplog.records[0])
+    event = json.loads(output.split(" ", 2)[2])
+    assert event["event_code"] == "runtime_provenance"
+    assert event["release_version"] == RELEASE_VERSION
+    assert event["runtime"] == "frozen"
+    assert event["git_sha"] == "a" * 40
+    assert event["dirty"] is False
+    assert event["packager"] == "pyinstaller"
+    for key in ("invocation_id", "startup_id"):
+        identifier = UUID(hex=event[key])
+        assert identifier.version == 4
+        assert identifier.hex == event[key]
+    assert event["invocation_id"] != event["startup_id"]
+    assert type(event["sequence"]) is int
+    assert event["sequence"] == 1
+    assert set(event) == {
+        "event_code", "invocation_id", "startup_id", "sequence", "release_version",
+        "git_sha", "runtime", "packager", "dirty",
+    }
 
 
 def test_pyinstaller_build_embeds_manifest_and_selects_exact_artifacts() -> None:

@@ -378,6 +378,10 @@ message can include clickable links for the exported workbook, generated dashboa
 output location. Use those links before moving files so you can confirm the workbook,
 dashboard HTML, and dashboard assets were all created.
 
+Reports without a reference can still be exported. Group Analysis omits those measurements
+from comparisons that require a reference and reports the omission. Add a reference to the
+report metadata if those measurements should take part in a reference comparison.
+
 ## Which manual to read next
 
 Use these follow-up pages based on what you need:

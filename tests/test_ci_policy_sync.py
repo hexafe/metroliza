@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import pytest
+
 CI_WORKFLOW_PATH = Path('.github/workflows/ci.yml')
 CI_POLICY_PATH = Path('docs/ci-policy.md')
+FEATURE_CATALOG_PATH = Path('docs/project/feature_catalog.md')
 NATIVE_BUILD_DISTRIBUTION_PATH = Path('docs/native_build_distribution.md')
 RC_CHECKLIST_PATH = Path('docs/release_checks/release_candidate_checklist.md')
 RELEASE_STATUS_PATH = Path('docs/release_checks/release_status.md')
@@ -14,6 +17,239 @@ RELEASE_BRANCHING_PLAYBOOK_PATH = Path('docs/release_checks/release_branching_pl
 BEGINNER_RELEASE_PLAYBOOK_PATH = Path('docs/release_checks/release_playbook_beginner.md')
 GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
+
+
+def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["windows-candidate-acceptance"]
+    assert job["if"] == (
+        "github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' "
+        "&& github.actor == github.repository_owner && github.event.repository.private == false"
+    )
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["run_windows_candidate_acceptance"]["default"] == "0"
+    assert job["timeout-minutes"] == "60"
+    assert job["concurrency"] == {"group": "windows-candidate-acceptance-${{ github.repository }}",
+                                   "cancel-in-progress": "false"}
+    for field in ("group", "cancel-in-progress"):
+        assert "inputs.run_windows_candidate_acceptance == '1'" in workflow["concurrency"][field]
+    steps = job["steps"]
+    checkout = next(step for step in steps if "actions/checkout@" in step.get("uses", ""))
+    assert checkout["with"]["persist-credentials"] == "false"
+    builds = [step for step in steps if "build_windows_exe.ps1" in step.get("run", "")]
+    assert len(builds) == 1 and "-Clean -WithNative -Mode onedir" in builds[0]["run"]
+    host = next(step for step in steps if "pip install" in step.get("run", ""))
+    assert steps.index(host) > steps.index(builds[0])
+    assert "requirements-windows-candidate-host.txt" in host["run"]
+    core = [step for step in steps if "scripts/qualify_windows_candidate_core.py" in step.get("run", "")]
+    assert len(core) == 2
+    assert "foreach ($scale in @('1.0', '1.25', '1.5'))" in core[0]["run"]
+    assert "--native-mode default" in core[0]["run"]
+    assert "--dpi-scale 1.0 --native-mode unavailable" in core[1]["run"]
+    diagnostics = next(step for step in steps if "scripts/qualify_windows_diagnostics.py" in step.get("run", ""))
+    for step in [diagnostics, *core]:
+        assert "--artifact-dir $env:CANDIDATE_PACKAGE" in step["run"]
+        assert "if ($LASTEXITCODE -ne 0) { throw" in step["run"]
+    for step in core:
+        assert "--expected-source-sha $env:GITHUB_SHA" in step["run"]
+    final = next(step for step in steps if "scripts/finalize_windows_candidate_receipts.py" in step.get("run", ""))
+    assert "--expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree" in final["run"]
+    assert "if ($LASTEXITCODE -ne 0) { throw" in final["run"]
+    uploads = [step for step in steps if "actions/upload-artifact@" in step.get("uses", "")]
+    receipts = next(step for step in uploads if step["with"]["name"] == "windows-candidate-acceptance-receipts")
+    receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
+    assert set(receipts["with"]["path"].splitlines()) == {
+        f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")
+    }
+    package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
+    assert receipts["if"] == "always()" and package["if"] == "success()"
+    assert package["with"]["if-no-files-found"] == "error"
+    assert steps.index(core[-1]) < steps.index(final) < steps.index(package)
+    assert "continue-on-error" not in job and all("continue-on-error" not in step for step in steps)
+
+
+def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zip():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["windows-candidate-acceptance"]["steps"]
+
+    def index(fragment: str) -> int:
+        matches = [i for i, step in enumerate(steps) if fragment in step.get("run", "") or fragment in step.get("uses", "")]
+        assert len(matches) == 1, fragment
+        return matches[0]
+
+    build = index("build_windows_exe.ps1 -Clean -WithNative -Mode onedir")
+    inventory = index("scripts/verify_third_party_inventory.py")
+    host = index("requirements-windows-candidate-host.txt")
+    before = index('"CANDIDATE_CONTENT_SHA256=')
+    diagnostics = index("scripts/qualify_windows_diagnostics.py")
+    final = index("scripts/finalize_windows_candidate_receipts.py")
+    unchanged = index("The qualified onedir changed during acceptance")
+    pack = index("build_windows_launcher_exe.ps1")
+    smoke = index("scripts/qualify_windows_portable_onefile.py")
+    zip_gate = index("scripts/release_zip.py verify")
+    enforce = index("Third-party inventory does not match this build")
+    clean = index("dirty after packing")
+    # Inventory evidence comes from the frozen build venv, before host packages are installed into it.
+    assert build < inventory < host < before < diagnostics < final < unchanged < pack < smoke < zip_gate < enforce < clean
+    assert steps[enforce]["if"] == "${{ !cancelled() && env.INVENTORY_EVIDENCE != '' }}"
+    assert "exit 0" in steps[inventory]["run"] and "INVENTORY_EXIT=$code" in steps[inventory]["run"]
+
+    # One application build: the launcher packs the qualified onedir and never rebuilds it.
+    assert steps[pack]["run"] == ".\\build_windows_launcher_exe.ps1 -Supervised -OnedirPath $env:CANDIDATE_PACKAGE"
+    assert sum("build_windows_exe.ps1" in step.get("run", "") or "-BuildOnedir" in step.get("run", "") for step in steps) == 1
+    assert "--kind launcher" in steps[smoke]["run"]
+    for flag in ("--expected-content-sha256 $env:CANDIDATE_CONTENT_SHA256", "--expected-source-sha $env:GITHUB_SHA",
+                 "--expected-exe-sha256 $env:CANDIDATE_LAUNCHER_SHA256", "--source-root $env:GITHUB_WORKSPACE"):
+        assert flag in steps[zip_gate]["run"]
+    assert "if ($LASTEXITCODE -ne 0) { throw 'Release ZIP completeness gate failed' }" in steps[zip_gate]["run"]
+    assert "--generated" in steps[inventory]["run"] and "throw" in steps[inventory]["run"]
+
+    uploads = {step["with"]["name"]: step for step in steps if "actions/upload-artifact@" in step.get("uses", "")}
+    release = uploads["windows-release-zip"]
+    assert release["if"] == "success()" and release["with"]["if-no-files-found"] == "error"
+    assert release["with"]["path"] == "${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip"
+    # Release receipts land below the receipt root, which is uploaded with if: always().
+    assert "Join-Path $env:CANDIDATE_RECEIPTS 'release/release-zip.json'" in steps[zip_gate]["run"]
+
+    # The uploaded artifact is downloaded and verified again in a separate job.
+    job = workflow["jobs"]["windows-candidate-acceptance"]
+    assert job["outputs"]["content_sha256"] == "${{ steps.onedir-content.outputs.sha256 }}"
+    check = workflow["jobs"]["windows-release-zip-download-check"]
+    assert check["needs"] == "windows-candidate-acceptance" and check["if"] == "success()"
+    download = next(step for step in check["steps"] if "actions/download-artifact@" in step.get("uses", ""))
+    assert download["with"]["name"] == "windows-release-zip"
+    verify = next(step for step in check["steps"] if "release_zip.py verify" in step.get("run", ""))
+    assert verify["env"]["CONTENT_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}"
+    assert job["outputs"]["launcher_sha256"] == "${{ steps.launcher-smoke.outputs.sha256 }}"
+    assert verify["env"]["LAUNCHER_SHA256"] == "${{ needs.windows-candidate-acceptance.outputs.launcher_sha256 }}"
+    for flag in ('--expected-content-sha256 "$CONTENT_SHA256"', '--expected-exe-sha256 "$LAUNCHER_SHA256"',
+                 '--expected-source-sha "$GITHUB_SHA"', "--source-root"):
+        assert flag in verify["run"]
+
+
+def test_portable_tester_launcher_upload_keeps_its_notices():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["windows-portable-onefile"]["steps"]
+    upload = next(step for step in steps if step.get("with", {}).get("name") == "windows-supervised-launcher-exe")
+    assert "dist/metroliza_[0-9]*_launcher.exe.licenses/**" in upload["with"]["path"].splitlines()
+
+
+def test_candidate_required_native_contracts_include_actual_closeout_owners():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    step = next(step for step in workflow["jobs"]["windows-core-smoke"]["steps"]
+                if step.get("name") == "Run Windows candidate receipt and ownership contracts")
+    assert step["env"]["QT_QPA_PLATFORM"] == "windows"
+    assert step["env"]["METROLIZA_EXPECT_QT_PLATFORM"] == "windows"
+    assert "Set-DisplayResolution -Width 1920 -Height 1080 -Force" in step["run"]
+    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership"):
+        assert f"tests/test_windows_candidate_{name}.py" in step["run"]
+    assert "if" not in step and "continue-on-error" not in step and " -k " not in step["run"]
+
+
+def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report planner tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
+    assert 'METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080' in step
+    for test in ('model', 'integration', 'geometry'):
+        assert f'tests/test_report_planner_{test}.py' in step
+    assert name in policy
+    assert 'scale factors 1, 1.25, 1.5 and 2' in policy
+    assert 'do not qualify a packaged EXE' in policy
+
+
+def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows report workspace tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080' in step
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
+    assert 'pytest -vv -s' in step
+    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui', 'active_dialog_close_guards'):
+        assert f'tests/test_{test}.py' in step
+    assert name in policy
+
+
+def test_native_windows_realtime_step_keeps_the_complete_dialog_contract() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows realtime dashboard scheduling tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'python -m pytest -vv -s --tb=short --show-capture=no' in step
+    assert 'tests/test_realtime_monitoring_dialog.py' in step
+    parent_node = 'tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::'
+    assert parent_node + 'test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice' in step
+    assert parent_node + 'test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries' in step
+    assert parent_node + 'test_dirty_realtime_source_cancel_never_arms_automatic_root_close' in step
+    assert ' -k ' not in step
+    assert 'continue-on-error' not in step
+    assert 'METROLIZA_EXPECT_PRIVACY_PYTHON: 3.11.9' in step
+    windows = workflow.split('  windows-core-smoke:', 1)[1].split('  windows-startup-benchmark:', 1)[0]
+    assert "python-version: '3.11.9'" in windows
+    assert 'Windows owner/DACL/effective access' in policy
+    assert 'restricted_current_user' in policy
+    assert name in policy
+    assert 'controlled deferred-dispatch' in policy
+    assert 'real QThread/SQLite/HTML' in policy
+
+
+def test_native_windows_grouping_preview_step_keeps_complete_file_and_order() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    name = 'Run native Windows grouping-preview lifecycle tests'
+    ocr_name = 'Run safe OCR diagnostics and native PowerShell contract tests'
+    step = workflow.split(f'- name: {name}', 1)[1].split('- name:', 1)[0]
+    assert 'QT_QPA_PLATFORM: windows' in step
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in step
+    assert 'python -m pytest -vv -s --tb=short --show-capture=no' in step
+    assert 'tests/test_tabular_analytics_grouping_dialog.py' in step
+    assert ' -k ' not in step
+    assert 'continue-on-error' not in step
+    assert 'if:' not in step
+    assert workflow.index(f'- name: {name}') < workflow.index(f'- name: {ocr_name}')
+    assert name in policy
+    assert 'complete `tests/test_tabular_analytics_grouping_dialog.py` file' in policy
+    assert 'independent OCR/PowerShell contract step' in policy
+
+
+def test_native_windows_cache_publication_preserves_required_real_lifecycle() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    publication = workflow.split(
+        '- name: Run native Windows cache publication tests', 1
+    )[1].split('- name:', 1)[0]
+    lifecycle = workflow.split(
+        '- name: Run native Windows cache lifecycle tests', 1
+    )[1].split('  windows-startup-benchmark:', 1)[0]
+    assert 'tests/test_industrial_cache_publication.py' in publication
+    assert 'tests/test_industrial_cache_lifecycle.py' in lifecycle
+    assert 'QT_QPA_PLATFORM: windows' in lifecycle
+    assert 'METROLIZA_EXPECT_QT_PLATFORM: windows' in lifecycle
+    for test in ('save_preserves_copy_before_rebind', 'rebind_cancel_keeps_operator_data',
+                 'archive_cannot_replace_active_database'):
+        assert f'::test_realtime_temp_session_{test}' in lifecycle
+    for step in (publication, lifecycle):
+        assert 'continue-on-error' not in step
+        assert 'if:' not in step
+        assert ' -k ' not in step
+    assert 'Run native Windows cache publication tests' in policy
+    assert 'Run native Windows cache lifecycle tests' in policy
 
 
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
@@ -99,8 +335,22 @@ def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     assert 'name: packaging-smoke-artifacts' in workflow
     assert 'name: packaging-smoke-release-artifact' in workflow
     assert 'python scripts/stage_release_notices.py' in workflow
-    assert 'third_party_inventory_260711.json' in workflow
+    assert 'third_party_inventory.json' in workflow
     assert 'NOTICE_MANIFEST.json' in workflow
+
+
+def test_static_checks_verify_the_pinned_release_docs_ref() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['static-checks']
+    checkout = next(step for step in job['steps'] if step.get('name') == 'Checkout')
+    docs_ref = next(step for step in job['steps'] if step.get('name') == 'Release docs ref is immutable and complete')
+
+    # The pinned commit is only resolvable with full history; the step must not be docs-only gated.
+    assert checkout['with']['fetch-depth'] == '0'
+    assert docs_ref['run'] == 'python scripts/check_release_docs_ref.py'
+    assert 'if' not in docs_ref
 
 
 def test_ci_and_precommit_run_release_hygiene_scan() -> None:
@@ -208,7 +458,10 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     assert all(re.fullmatch(r'[^@]+@[0-9a-f]{40}', ref) for ref in action_refs)
     assert 'permissions:\n  contents: read' in workflow
     assert 'concurrency:' in workflow
-    assert 'cancel-in-progress: true' in workflow
+    assert (
+        "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}"
+    ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
     )
@@ -217,6 +470,121 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
     maturin_builds = [line for line in workflow.splitlines() if 'maturin build' in line]
     assert maturin_builds
     assert all('--locked' in line for line in maturin_builds)
+
+
+def test_supervised_portable_onefile_requires_owner_opt_in_and_native_smoke() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_portable_onefile == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_portable_onefile'][
+        'default'
+    ] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    steps = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'build_windows_portable_exe.ps1' in steps
+    assert 'qualify_windows_portable_onefile.py' in steps
+    assert job['steps'][-1]['if'] == 'success()'
+
+
+def test_portable_onefile_job_records_package_identity_discriminator_after_the_build() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    build = next(i for i, step in enumerate(steps) if 'build_windows_portable_exe.ps1' in step.get('run', ''))
+    record = next(i for i, step in enumerate(steps)
+                  if 'scripts/qualify_package_identity.py' in step.get('run', ''))
+    upload = next(i for i, step in enumerate(steps)
+                  if step.get('with', {}).get('name') == 'windows-package-identity-receipt')
+    smoke = next(i for i, step in enumerate(steps)
+                 if 'qualify_windows_portable_onefile.py' in step.get('run', ''))
+    assert build < record < upload < smoke < len(steps) - 1
+    assert '--receipt' in steps[record]['run'] and 'RUNNER_TEMP' in steps[record]['run']
+    assert 'if ($LASTEXITCODE -ne 0) { throw' in steps[record]['run']
+    assert 'continue-on-error' not in steps[record]
+    assert steps[upload]['uses'].startswith('actions/upload-artifact@')
+    assert steps[upload]['if'] == 'always()'
+    assert steps[upload]['with']['path'].endswith('package-identity-receipt.json')
+
+
+
+def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    assert '.\\build_windows_launcher_exe.ps1 -Supervised' in commands
+    assert commands.index('build_windows_portable_exe.ps1') < commands.index('build_windows_launcher_exe.ps1')
+    # The same qualification script, once per delivery, each against its own EXE name.
+    assert commands.count('qualify_windows_portable_onefile.py') == 2
+    assert '--kind launcher' in commands
+    assert "_launcher\\.exe$" in commands
+    uploads = {
+        step['with']['name']: step['with']['path']
+        for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')
+    }
+    envelope = uploads['windows-supervised-portable-onefile']
+    launcher = uploads['windows-supervised-launcher-exe']
+    # The envelope upload must never pick up the launcher EXE (and vice versa).
+    assert envelope.endswith('_[0-9][0-9][0-9][0-9][0-9][0-9].exe')
+    assert '_launcher.exe' in launcher
+    # User-facing EXEs are retained only from a fully qualified run; diagnostic receipts
+    # (e.g. the #1111 package identity receipt) are uploaded with if: always().
+    exe_uploads = ('windows-supervised-portable-onefile', 'windows-supervised-launcher-exe')
+    assert all(step['if'] == 'success()' for step in steps
+               if step.get('uses', '').startswith('actions/upload-artifact@')
+               and step['with']['name'] in exe_uploads)
+    assert steps[-1]['with']['name'] == 'windows-supervised-launcher-exe'
+    assert steps[-1]['if'] == 'success()'
+    verify = next(i for i, step in enumerate(steps) if 'remains at the exact clean head' in step['name'])
+    assert verify > max(i for i, step in enumerate(steps) if 'qualify' in step['name'].lower())
+
+
+def test_startup_benchmark_measures_the_shipped_route_not_the_legacy_onefile_spec() -> None:
+    import yaml
+
+    text = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    workflow = yaml.load(text, Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-startup-benchmark']
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_startup_benchmark'][
+        'default'
+    ] == '0'
+    assert "inputs.run_windows_startup_benchmark == '1'" in job['if']
+    # An opt-in measurement must not be skipped because an unrelated required job failed (run
+    # 39084988780: "needs: unit-tests" turned a failed unit test into a skipped benchmark).
+    assert 'needs' not in job
+    commands = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert 'build_windows_portable_exe.ps1' in commands
+    assert 'build_windows_launcher_exe.ps1 -Supervised' in commands
+    assert 'scripts/measure_windows_startup_routes.py' in commands
+    for flag in ('--portable', '--launcher', '--runs 3', '--output-dir startup-artifacts'):
+        assert flag in commands
+    # The legacy single-process spec and its measurement are not part of this job any more.
+    assert 'build_windows_exe.ps1' not in commands
+    assert 'measure_windows_startup.ps1' not in commands
+    assert 'onefile.spec' not in commands
+    assert any(
+        step.get('env', {}).get('METROLIZA_BUILD_FLAVOR') == 'user' for step in job['steps']
+    )
+    upload = job['steps'][-1]
+    assert upload['with']['name'] == 'windows-startup-artifacts'
+    assert upload['with']['path'] == 'startup-artifacts'
+    # Packaging smoke still builds the legacy spec; only this job stopped using it.
+    assert 'pyinstaller packaging/metroliza_onefile.spec' in text
+
+
+def test_native_artifacts_runs_the_launcher_crate_tests() -> None:
+    workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
+    assert 'cargo test --locked --manifest-path packaging/launcher/Cargo.toml' in workflow
 
 
 def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
@@ -229,6 +597,285 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert 'tests/test_db_utils.py' in workflow
     assert 'tests/test_packaging_spec_hiddenimports.py' in workflow
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
+
+
+def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['windows-core-smoke']['steps']
+    specialist = next(
+        step for step in steps
+        if step.get('name') == 'Run native Windows specialist geometry tests'
+    )
+
+    assert specialist['env'] == {
+        'PYTHONPATH': 'src;.',
+        'QT_QPA_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_QT_PLATFORM': 'windows',
+        'METROLIZA_EXPECT_INDUSTRIAL_SCREEN': '1920x1080',
+    }
+    assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
+    assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
+
+    ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
+    assert 'Run native Windows specialist geometry tests' in ci_policy
+    assert 'DPR 1, 1.25, 1.5, and 2' in ci_policy
+    assert 'packaged-EXE and clean-machine acceptance remain separate' in ci_policy
+
+    catalog = FEATURE_CATALOG_PATH.read_text(encoding='utf-8')
+    assert 'Corrective quality trackers' in catalog
+    assert '[#1018]' in catalog
+    assert 'supports the existing #940 and #946 capability rows' in catalog
+    assert '#926–#957 inventory and dependency graph remain unchanged' in catalog
+
+
+def test_windows_core_runs_complete_startup_diagnostics_selection() -> None:
+    import shlex
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    assert job['runs-on'] == 'windows-latest'
+    assert job['if'] == "${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}"
+    step_name = 'Run native Windows startup diagnostics tests'
+    steps = [step for step in job['steps'] if step['name'] == step_name]
+    assert len(steps) == 1
+    step = steps[0]
+    assert 'if' not in step
+    assert 'continue-on-error' not in step
+    assert step['env']['PYTHONPATH'] == 'src;.'
+    assert shlex.split(step['run']) == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_bootstrap_startup.py',
+        'tests/test_diagnostic_events.py',
+        'tests/test_logging_utils.py',
+        'tests/test_build_provenance.py',
+    ]
+    assert step_name in CI_POLICY_PATH.read_text(encoding='utf-8')
+
+
+def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-wrapper-diagnostics']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_wrapper_diagnostics == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert 'github.event.repository.private == false' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_wrapper_diagnostics'][
+        'default'
+    ] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert int(job['timeout-minutes']) <= 30
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    assert job['concurrency']['group'] == 'windows-wrapper-discriminator-${{ github.repository }}'
+    assert workflow['permissions'] == {'contents': 'read'}
+    assert workflow['concurrency']['group'] == (
+        "ci-${{ github.workflow }}-${{ github.ref }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}"
+    )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
+    assert workflow['concurrency']['cancel-in-progress'] == (
+        "${{ !(github.event_name == 'workflow_dispatch' && "
+        "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}"
+    )
+    for step in job['steps']:
+        assert 'actions/upload-artifact@' not in step.get('uses', '')
+        assert 'actions/cache@' not in step.get('uses', '')
+        assert 'cache' not in step.get('with', {})
+        if step.get('uses', '').startswith('actions/checkout@'):
+            assert step['with']['persist-credentials'] == 'false'
+    invocation = job['steps'][-1]['run']
+    assert 'timeout=1500' in invocation  # Five minutes remain for owner/job cleanup.
+    assert 'stdout=subprocess.DEVNULL' in invocation
+    assert 'stderr=subprocess.DEVNULL' in invocation
+    assert 'TemporaryDirectory(' in invocation
+    assert "'--basetemp=' + str(root / 'fixtures')" in invocation
+    assert 'sys.exit(result)' in invocation
+    assert "'-x'" in invocation
+    assert invocation.index("'tests/test_windows_ocr_wrapper_completion.py'") < invocation.index(
+        "'tests/test_windows_ocr_powershell.py'"
+    )
+    for path in ('test_windows_ocr_runtime_diagnostics.py',
+                 'test_header_ocr_diagnostics_script.py', 'test_windows_ocr_invoke.py'):
+        assert path in invocation
+    assert 'METROLIZA_WINDOWS_WRAPPER_BASELINE' not in invocation
+
+
+@pytest.mark.parametrize('mutation', ['valid', 'extra', 'domain', 'boolean', 'huge', 'missing',
+                                    'invoke_reason', 'invoke_cleanup', 'invoke_process_exit_code',
+                                    'fixture_phase'])
+def test_windows_wrapper_receipts_reject_uncontrolled_fields(tmp_path, mutation) -> None:
+    import ast
+    import json
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_receipts')
+    namespace = {'json': json}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<receipt-validator>', 'exec'),
+         namespace)
+    value = {'schema_version': 1, 'shell': 'pwsh', 'scenario': 'retained_pipes',
+             'stage': 'completion', 'result': 'bounded_failure', 'reason': 'timeout',
+             'elapsed_ms': 1500, 'shell_exited_before_timeout': True,
+             'stdout_pipe': True, 'stderr_pipe': False,
+             'shell_state': 'exited', 'fixture_stage': 'child_ready',
+             'fixture_phase': 'child_created',
+             'invoke_state': 'unobserved', 'invoke_reason': 'unobserved',
+             'invoke_cleanup': 'unobserved', 'invoke_process_exit_code': None,
+             'cleanup_complete': True, 'outer_exit_code': 1, 'invoke_exit_code': None}
+    if mutation == 'extra':
+        value['raw_output'] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'domain':
+        value['shell'] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'boolean':
+        value['elapsed_ms'] = True
+    elif mutation in {'invoke_reason', 'invoke_cleanup', 'fixture_phase'}:
+        value[mutation] = 'SYNTHETIC_PRIVATE_CANARY'
+    elif mutation == 'invoke_process_exit_code':
+        value[mutation] = True
+    path = tmp_path / 'windows-ocr-wrapper-receipts.jsonl'
+    if mutation != 'missing':
+        path.write_text('x' * 32769 if mutation == 'huge' else json.dumps(value), encoding='utf-8')
+    if mutation == 'valid':
+        assert namespace['safe_receipts'](tmp_path) == [value]
+    else:
+        with pytest.raises(ValueError) as caught:
+            namespace['safe_receipts'](tmp_path)
+        assert 'SYNTHETIC_PRIVATE_CANARY' not in str(caught.value)
+
+
+@pytest.mark.parametrize('failure', ['cleanup', 'timeout'])
+def test_windows_wrapper_lane_never_prints_private_failure_context(
+    tmp_path, monkeypatch, capsys, failure
+) -> None:
+    import subprocess
+    import tempfile
+    from types import SimpleNamespace
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+
+    class PrivateScope:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return str(tmp_path)
+
+        def __exit__(self, *_args):
+            if failure == 'cleanup':
+                raise PermissionError('SYNTHETIC_PRIVATE_CANARY')
+
+    def runner(*_args, **_kwargs):
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(['SYNTHETIC_PRIVATE_CANARY'], 1500)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', PrivateScope)
+    monkeypatch.setattr(subprocess, 'run', runner)
+    with pytest.raises(SystemExit) as caught:
+        exec(compile(code, '<native-lane>', 'exec'), {})
+    assert caught.value.code == 1
+    output = capsys.readouterr()
+    assert 'SYNTHETIC_PRIVATE_CANARY' not in output.out + output.err
+    assert 'private_cleanup_failed' in output.out if failure == 'cleanup' else 'outer_timeout' in output.out
+
+
+@pytest.mark.parametrize('stage,code,expected', [
+    ('invoke_returned', 1, 'bounded_failure'),
+    ('invoke_failed', None, 'bounded_failure'),
+    ('timeout_returned', None, 'bounded_failure'),
+    ('invoke_returned', 0, 'completed'),
+])
+def test_windows_wrapper_receipt_cannot_hide_inner_failure(
+    tmp_path, monkeypatch, stage, code, expected
+):
+    import json
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
+            ready={'stage': 'shell_ready'}, outcome=[{
+                'stage': stage, 'returncode': code, 'reason': 'completed',
+                'cleanup_complete': True, 'tree_empty': True, 'process_returncode': code,
+                'output_limited': False,
+            }], phase='shell_initialized')
+    row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
+    assert row['result'] == expected
+    assert row['outer_exit_code'] == 0 and row['invoke_exit_code'] == code
+
+
+@pytest.mark.parametrize('contradiction', [
+    {'process_returncode': 17}, {'output_limited': True},
+    {'cleanup_complete': False}, {'tree_empty': False},
+])
+def test_windows_wrapper_receipt_rejects_contradictory_success(
+    tmp_path, monkeypatch, contradiction
+):
+    import json
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    outcome = {
+        'stage': 'invoke_returned', 'returncode': 0, 'reason': 'completed',
+        'process_returncode': 0, 'output_limited': False,
+        'cleanup_complete': True, 'tree_empty': True, **contradiction,
+    }
+    _record('pwsh', 'live_shell', OwnedProcessResult(0, 'completed', True, True, False, 2),
+            ready={'stage': 'shell_ready'}, outcome=[outcome], phase='shell_initialized')
+    row = json.loads((tmp_path / 'windows-ocr-wrapper-receipts.jsonl').read_text())
+    assert row['result'] == 'bounded_failure'
+
+
+def test_windows_wrapper_real_receipt_producer_matches_private_lane(tmp_path, monkeypatch):
+    import ast
+    import json
+
+    import yaml
+
+    from tests.test_windows_ocr_wrapper_completion import _record
+    from tests.windows_ocr_process import OwnedProcessResult
+
+    monkeypatch.setenv('METROLIZA_WRAPPER_RECEIPTS', str(tmp_path))
+    _record(
+        'pwsh', 'retained_pipes',
+        OwnedProcessResult(1, 'timeout', True, True, False, 2.0),
+        ready={'stage': 'SYNTHETIC_PRIVATE_CANARY', 'stdout_pipe': True, 'stderr_pipe': False},
+        probe=[{'stage': 'timeout_before_kill', 'shell_state': 'SYNTHETIC_PRIVATE_CANARY'}],
+        outcome=[{'stage': 'SYNTHETIC_PRIVATE_CANARY'}],
+    )
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_receipts')
+    namespace = {'json': json}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<receipt-validator>', 'exec'),
+         namespace)
+    rows = namespace['safe_receipts'](tmp_path)
+    assert len(rows) == 1
+    assert rows[0]['stdout_pipe'] is True and rows[0]['stderr_pipe'] is False
+    assert rows[0]['shell_state'] == rows[0]['fixture_stage'] == rows[0]['invoke_state'] == 'unobserved'
+    assert 'SYNTHETIC_PRIVATE_CANARY' not in json.dumps(rows)
 
 
 def test_perf_benchmark_trend_filters_to_baseline_backed_scenarios() -> None:
@@ -286,7 +933,7 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
     assert 'green CI run does not satisfy this gate' in google_log
 
 
-def test_active_release_docs_use_master_as_current_production_branch() -> None:
+def test_active_release_docs_use_main_dev_rc_roles() -> None:
     docs = {
         BRANCHING_STRATEGY_PATH: BRANCHING_STRATEGY_PATH.read_text(encoding='utf-8'),
         RELEASE_BRANCHING_PLAYBOOK_PATH: RELEASE_BRANCHING_PLAYBOOK_PATH.read_text(encoding='utf-8'),
@@ -295,15 +942,20 @@ def test_active_release_docs_use_master_as_current_production_branch() -> None:
     }
 
     for path, text in docs.items():
-        assert 'git checkout main' not in text, f'{path} still uses main checkout commands'
-        assert 'origin main' not in text, f'{path} still pulls or pushes origin main'
-        assert 'merge into `main`' not in text, f'{path} still documents main as merge target'
+        assert 'git checkout master' not in text, f'{path} still uses master checkout commands'
+        assert 'origin master' not in text, f'{path} still pulls or pushes origin master'
+        assert 'git checkout develop' not in text, f'{path} still uses develop checkout commands'
         assert 'release/2026.03-rc1' not in text, f'{path} still uses stale 2026.03 RC examples'
 
-    assert '`master`: current production-ready branch' in docs[BRANCHING_STRATEGY_PATH]
-    assert 'git checkout master' in docs[RC_CHECKLIST_PATH]
-    assert 'git checkout master' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
-    assert 'git checkout master' in docs[BEGINNER_RELEASE_PLAYBOOK_PATH]
+    strategy = docs[BRANCHING_STRATEGY_PATH]
+    assert '`main`: current production-ready branch' in strategy
+    assert 'Normal Issue branches start from and target `dev`.' in strategy
+    assert '### `rc`' in strategy
+    for path in (RC_CHECKLIST_PATH, RELEASE_BRANCHING_PLAYBOOK_PATH, BEGINNER_RELEASE_PLAYBOOK_PATH):
+        assert 'git checkout main' in docs[path]
+    for path in (RELEASE_BRANCHING_PLAYBOOK_PATH, BEGINNER_RELEASE_PLAYBOOK_PATH):
+        assert 'git checkout rc' in docs[path]
+        assert 'git checkout -b rc' not in docs[path]
 
 
 def test_release_status_keeps_current_release_line_metadata() -> None:
@@ -313,3 +965,257 @@ def test_release_status_keeps_current_release_line_metadata() -> None:
     assert '`RELEASE_VERSION`' in release_status
     assert '`VERSION_DATE`' in release_status
     assert '`CURRENT_RELEASE_HIGHLIGHT`' in release_status
+
+
+def test_windows_incident_qualification_is_bounded_and_native_selection_is_blocking():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-diagnostic-qualification']
+    gate = job['if']
+    assert "github.event_name == 'workflow_dispatch'" in gate
+    assert "inputs.run_windows_diagnostic_qualification == '1'" in gate
+    assert 'github.actor == github.repository_owner' in gate
+    assert 'github.event.repository.private == false' in gate
+    assert workflow['on']['workflow_dispatch']['inputs']['run_windows_diagnostic_qualification']['default'] == '0'
+    assert job['runs-on'] == 'windows-latest'
+    assert int(job['timeout-minutes']) <= 45
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    assert all('continue-on-error' not in step for step in job['steps'])
+    runs = '\n'.join(step.get('run', '') for step in job['steps'])
+    assert '.\\build_windows_exe.ps1 -Clean -WithNative -Mode onedir' in runs
+    assert 'scripts/qualify_windows_diagnostics.py' in runs
+    uploads = [step for step in job['steps']
+               if step.get('uses', '').startswith('actions/upload-artifact@')]
+    assert {path for step in uploads for path in step['with']['path'].splitlines()} == {
+        'diagnostic-qualification-receipts/*.json',
+        'native-identity-receipts/*.json',
+        'diagnostic-qualification-receipts/qualified-windows-development-package.zip',
+    }
+    control_index = next(index for index, step in enumerate(job['steps'])
+                         if '--identity-control-executable' in step.get('run', ''))
+    application_index = next(index for index, step in enumerate(job['steps'])
+                             if step['name'] == 'Qualify actual packaged incident flow with public synthetic inputs')
+    assert control_index < application_index
+    controls = job['steps'][control_index]
+    mode = workflow['on']['workflow_dispatch']['inputs']['diagnostic_mode']
+    assert mode['default'] == 'full'
+    assert mode['options'] == ['full', 'identity', 'startup']
+    assert controls['if'] == "inputs.diagnostic_mode == 'identity'"
+    assert '--onedir --windowed' in controls['run']
+    assert 'scripts/windows_native_identity_control.py' in controls['run']
+    assert 'if ($LASTEXITCODE -ne 0)' in controls['run']
+    assert job['steps'][application_index]['if'] == (
+        "inputs.diagnostic_mode == 'full' || inputs.diagnostic_mode == 'startup'"
+    )
+    assert job['steps'][application_index]['env']['METROLIZA_DIAGNOSTIC_STARTUP_PROBE'] == (
+        "${{ inputs.diagnostic_mode == 'startup' && '1' || '0' }}"
+    )
+    receipt_upload = next(step for step in uploads if 'native-identity-receipts' in step['with']['path'])
+    assert receipt_upload['if'] == 'always()'
+    package_upload = next(step for step in uploads if step['with']['path'].endswith('.zip'))
+    # Neither failure nor an identity-only result can publish a qualified package.
+    assert package_upload['if'] == "success() && inputs.diagnostic_mode == 'full'"
+    assert package_upload['with']['if-no-files-found'] == 'error'
+    selected = [step for step in workflow['jobs']['windows-core-smoke']['steps']
+                if step['name'] == 'Run native Windows supervised incident tests']
+    assert len(selected) == 1
+    assert 'if' not in selected[0] and 'continue-on-error' not in selected[0]
+    assert selected[0]['env']['QT_QPA_PLATFORM'] == 'windows'
+    assert selected[0]['env']['METROLIZA_EXPECT_QT_PLATFORM'] == 'windows'
+    assert selected[0]['run'].split() == [
+        'python', '-m', 'pytest', '-v',
+        'tests/test_diagnostic_wire.py', 'tests/test_diagnostic_ring.py',
+        'tests/test_diagnostic_incident.py', 'tests/test_diagnostic_store.py',
+        'tests/test_diagnostic_transport.py', 'tests/test_diagnostic_supervisor.py',
+        'tests/test_diagnostic_launcher.py', 'tests/test_diagnostic_package.py',
+        'tests/test_workflow_diagnostics.py', 'tests/test_incident_dialog.py',
+        'tests/test_diagnostic_qualification.py', 'tests/test_windows_diagnostic_qualification.py',
+        'tests/test_diagnostic_startup_probe.py',
+        'tests/test_packaging_setuptools_hook.py',
+        'tests/test_windows_runtime_audit.py',
+    ]
+
+
+@pytest.mark.parametrize('outcome', ['absent', 'passed', 'failure', 'error', 'skipped', 'duplicate'])
+def test_windows_primary_thread_receipt_publishes_only_known_node_status(outcome):
+    import ast
+    import xml.etree.ElementTree as ET
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    code = workflow['jobs']['windows-wrapper-diagnostics']['steps'][-1]['run']
+    function = next(node for node in ast.parse(code).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'safe_native_controls')
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), '<native-controls>', 'exec'), namespace)
+    report = ET.Element('testsuite')
+    ET.SubElement(report, 'testcase', {'classname': 'SYNTHETIC_PRIVATE_CANARY',
+                                     'name': 'test_native_resumed_thread_matches_child_initial_thread'})
+    if outcome != 'absent':
+        case = ET.SubElement(report, 'testcase', {
+            'classname': 'tests.test_windows_ocr_wrapper_completion',
+            'name': 'test_native_resumed_thread_matches_child_initial_thread',
+            'file': 'SYNTHETIC_PRIVATE_CANARY',
+        })
+        if outcome in {'failure', 'error', 'skipped'}:
+            ET.SubElement(case, outcome).text = 'SYNTHETIC_PRIVATE_CANARY'
+        if outcome == 'duplicate':
+            report.append(case)
+            with pytest.raises(ValueError, match='duplicate_native_control'):
+                namespace['safe_native_controls'](report)
+            return
+    expected = {'absent': 'unobserved', 'passed': 'passed', 'failure': 'failed',
+                'error': 'failed', 'skipped': 'skipped'}[outcome]
+    assert namespace['safe_native_controls'](report) == {
+        'primary_thread_identity': expected, 'interrupted_creation': 'unobserved',
+    }
+    assert "if result == 0 and set(controls.values()) != {'passed'}:" in code
+
+
+def test_portable_job_requires_frozen_compute_equivalence_receipt():
+    import yaml
+
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
+    job = workflow['jobs']['windows-portable-onefile']
+    steps = job['steps']
+    trial = next(step for step in steps if 'qualify_windows_compute_workers.py' in step.get('run', ''))
+    assert '--artifact-dir $onedir[0].FullName --receipt $receipt' in trial['run']
+    assert "if ($LASTEXITCODE -ne 0) { throw" in trial['run']
+    assert 'continue-on-error' not in trial
+    assert steps.index(trial) > next(i for i, step in enumerate(steps) if '--kind launcher' in step.get('run', ''))
+    receipt = next(step for step in steps if step.get('with', {}).get('name') == 'windows-compute-worker-receipt')
+    assert receipt['if'] == 'always()'
+    assert receipt['with']['path'].endswith('/compute-worker-receipt/compute-workers.json')
+
+
+AUTOMATIC_CHECK_NAMES = {
+    'static-checks': 'Static checks',
+    'unit-tests': 'Unit tests',
+    'native-artifacts': 'Native wheel build and smoke checks',
+    'windows-core-smoke': 'Windows core smoke',
+    'cmm-parser-perf-gate': 'CMM parser perf guardrail',
+    'perf-benchmarks': 'Performance benchmark trend check (non-blocking)',
+}
+FULL_CI_GATE = "${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}"
+
+
+def test_tier_zero_keeps_required_names_and_full_lane_dependencies():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    jobs = workflow['jobs']
+    for job_id, name in AUTOMATIC_CHECK_NAMES.items():
+        job = jobs[job_id]
+        assert job['name'] == name
+        assert 'classify-changes' in job['needs']
+        if job_id == 'static-checks':
+            assert job['if'] == '${{ !cancelled() }}'
+        elif job_id in {'cmm-parser-perf-gate', 'perf-benchmarks'}:
+            assert job['needs'] == ['classify-changes', 'static-checks', 'unit-tests']
+            assert job['if'] == (
+                FULL_CI_GATE[:-3] + " && needs.static-checks.result == 'success'"
+                " && needs.unit-tests.result == 'success' }}"
+            )
+        else:
+            assert job['if'] == FULL_CI_GATE
+        assert ('continue-on-error' in job) is (job_id == 'perf-benchmarks')
+    classifier = jobs['classify-changes']
+    assert classifier['outputs'] == {'docs_only': '${{ steps.classify.outputs.docs_only }}'}
+    assert classifier['steps'][0]['with']['fetch-depth'] == '0'
+    assert classifier['steps'][-1]['run'] == 'python scripts/ci_change_classifier.py'
+    assert classifier['steps'][-1]['id'] == 'classify'
+    assert 'continue-on-error' not in classifier
+    assert workflow['permissions'] == {'contents': 'read'}
+
+
+@pytest.mark.parametrize(('result', 'docs_only', 'expected'), [
+    ('success', 'true', 0), ('success', 'false', 0),
+    ('failure', '', 1), ('skipped', '', 1), ('cancelled', 'true', 1),
+    ('success', '', 1), ('failure', 'true', 1), ('success', 'invalid', 1),
+])
+def test_classifier_failure_cannot_skip_existing_required_static_check(result, docs_only, expected):
+    import os
+    import subprocess
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    guard = workflow['jobs']['static-checks']['steps'][0]
+    assert guard['env'] == {
+        'CLASSIFIER_RESULT': '${{ needs.classify-changes.result }}',
+        'DOCS_ONLY': '${{ needs.classify-changes.outputs.docs_only }}',
+    }
+    assert 'if' not in guard and 'continue-on-error' not in guard
+    completed = subprocess.run(
+        ['bash', '-e', '-c', guard['run']], check=False,
+        env={**os.environ, 'CLASSIFIER_RESULT': result, 'DOCS_ONLY': docs_only},
+    )
+    assert completed.returncode == expected
+
+
+def test_tier_zero_runs_focused_policy_release_and_secret_checks_only():
+    import shlex
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow['jobs']['static-checks']['steps']
+    shared = {'Require a successful classification', 'Checkout', 'Setup Python',
+              'Release metadata consistency', 'Release docs ref is immutable and complete',
+              'Secret scan (diff + repository)', 'Release hygiene scan'}
+    focused = {'Install focused documentation dependencies', 'Focused documentation and policy checks'}
+    for step in steps:
+        if step['name'] in shared:
+            assert 'if' not in step
+        else:
+            op = '==' if step['name'] in focused else '!='
+            assert step['if'] == f"needs.classify-changes.outputs.docs_only {op} 'true'"
+        assert 'continue-on-error' not in step
+    docs = next(step for step in steps if step['name'] == 'Focused documentation and policy checks')
+    selected = set(shlex.split(docs['run']))
+    for name in ('docs_markdown_links', 'docs_policy_repo_metrics_hygiene', 'ci_policy_sync',
+                 'ci_change_classifier', 'release_metadata_sync', 'release_hygiene'):
+        assert f'tests/test_{name}.py' in selected
+    assert 'git diff --check "$base" "$HEAD_REF" --' in docs['run']
+    assert 'git merge-base "$BASE_REF" "$HEAD_REF"' in docs['run']
+    assert docs['env'] == {
+        'EVENT_NAME': '${{ github.event_name }}',
+        'BASE_REF': '${{ github.event.pull_request.base.sha || github.event.before }}',
+        'HEAD_REF': '${{ github.event.pull_request.head.sha || github.event.after }}',
+    }
+    install = next(step for step in steps if step['name'] == 'Install focused documentation dependencies')
+    assert 'requirements' not in install['run']
+    assert all(package in install['run'] for package in ('pytest', 'PyYAML', 'defusedxml'))
+
+
+def test_topic_push_deduplication_preserves_integration_and_dispatch_qualification():
+    from fnmatch import fnmatchcase
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    triggers = workflow['on']
+    assert set(triggers) == {'pull_request', 'push', 'workflow_dispatch'}
+    assert not triggers['pull_request']  # No path/base filter can strand a required check.
+    assert set(triggers['push']) == {'branches'}
+    branches = triggers['push']['branches']
+    assert branches == ['master', 'main', 'develop', 'dev', 'rc2', 'rc', 'integrate/**',
+                        'release/**', 'hotfix/**', 'build/**']
+    for branch in ('main', 'dev', 'rc', 'master', 'develop', 'rc2', 'integrate/2026.09-rc1-into-develop',
+                   'integrate/nested/branch', 'release/2026.09-rc1', 'hotfix/urgent',
+                   'build/onefile-20260927'):
+        assert any(fnmatchcase(branch, pattern) for pattern in branches)
+    for branch in ('ci/1061-docs-only-path', 'docs/example', 'feature/code', 'fix/mixed'):
+        assert not any(fnmatchcase(branch, pattern) for pattern in branches)
+    assert 'paths-ignore' not in CI_WORKFLOW_PATH.read_text()
+    # Manual jobs retain their own opt-in predicates and bypass docs classification.
+    for job_id in ('windows-portable-onefile', 'windows-candidate-acceptance',
+                   'windows-diagnostic-qualification', 'windows-wrapper-diagnostics'):
+        assert 'needs' not in workflow['jobs'][job_id]
+    policy = CI_POLICY_PATH.read_text()
+    for text in ('docs-only', 'README.md', 'CHANGELOG.md', 'tests/fixtures/',
+                 'workflow_dispatch', 'classify-changes', 'neutral', '#1061', '#976',
+                 'build/**', 'Pushes always run the full lane', 'EXECUTABLE_INPUT_DOCS'):
+        assert text in policy

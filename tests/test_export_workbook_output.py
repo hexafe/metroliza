@@ -11,6 +11,7 @@ import posixpath
 from pathlib import Path, PurePosixPath
 from unittest.mock import patch
 
+from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
 from modules.contracts import AppPaths, ExportOptions, ExportRequest  # noqa: E402
 from modules.report_repository import ReportRepository  # noqa: E402
 from modules.report_schema import ensure_report_schema  # noqa: E402
@@ -46,6 +47,12 @@ class _DummyLogger:
 
 
 def _load_export_thread_type():
+    # `patch.dict(sys.modules, ...)` restores the full pre-patch mapping. Keep
+    # the exporter scientific stack's native extension modules in that mapping
+    # so a second inert load does not attempt to initialize them again.
+    configure_headless_matplotlib()
+    for dependency_name in ('numpy', 'pandas', 'matplotlib.pyplot', 'scipy.stats', 'seaborn'):
+        importlib.import_module(dependency_name)
     qtcore_stub = types.ModuleType('PyQt6.QtCore')
     qtcore_stub.QCoreApplication = _DummyCoreApp
     qtcore_stub.QThread = _DummyThread
@@ -252,11 +259,11 @@ class TestExportWorkbookOutput(unittest.TestCase):
                 chart_path = _normalize_package_path(drawing_path, chart_target)
                 chart_xml = workbook_zip.read(chart_path).decode('utf-8')
 
-                self.assertIn('REF-1!$B22:B24', chart_xml)
-                self.assertIn('REF-1!$C22:C24', chart_xml)
-                self.assertIn('REF-1!$D22:D24', chart_xml)
-                self.assertIn('REF-1!$E22:E24', chart_xml)
-                self.assertNotIn('REF-1!$XFB1:XFB2', chart_xml)
+                self.assertIn("'REF-1'!$B22:B24", chart_xml)
+                self.assertIn("'REF-1'!$C22:C24", chart_xml)
+                self.assertIn("'REF-1'!$D22:D24", chart_xml)
+                self.assertIn("'REF-1'!$E22:E24", chart_xml)
+                self.assertNotIn("'REF-1'!$XFB1:XFB2", chart_xml)
 
 
 if __name__ == '__main__':

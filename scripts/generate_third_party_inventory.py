@@ -19,7 +19,7 @@ from packaging.utils import canonicalize_name
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT = REPO_ROOT / "docs/release_checks/third_party_inventory_260711.json"
+DEFAULT_OUTPUT = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
 
 def requirement_roots(paths: Iterable[str | Path]) -> tuple[str, ...]:
@@ -233,8 +233,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     requirement_paths = args.requirements or ["requirements.txt", "requirements-ocr.txt"]
     cargo_manifests = args.cargo_manifest or [
-        str(path.relative_to(REPO_ROOT))
-        for path in sorted((REPO_ROOT / "src/metroliza/native").glob("*/Cargo.toml"))
+        *(str(path.relative_to(REPO_ROOT)) for path in sorted((REPO_ROOT / "src/metroliza/native").glob("*/Cargo.toml"))),
+        "packaging/launcher/Cargo.toml",
     ]
     payload = generate_inventory(
         requirement_paths=requirement_paths,

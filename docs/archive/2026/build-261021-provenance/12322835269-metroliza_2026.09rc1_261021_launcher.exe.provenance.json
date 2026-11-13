@@ -1,0 +1,14 @@
+{
+  "artifact": {
+    "name": "metroliza_2026.09rc1_261021_launcher.exe",
+    "sha256": "b643bb15389674c5010ade05cc6f9ea2a4e300bddcd52272ac9b00c578aaeae9",
+    "size_bytes": 335069504
+  },
+  "built_at_utc": "2026-10-21T04:48:30Z",
+  "dirty": false,
+  "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "packager": "pyinstaller",
+  "python_version": "3.11.9",
+  "release_label": "2026.09rc1(261021)",
+  "schema_version": 1
+}

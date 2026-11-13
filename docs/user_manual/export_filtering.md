@@ -73,6 +73,14 @@ Common expression fields:
 The expression supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `AND`, `OR`, parentheses, and `*` wildcards.
 Field names and operators are not case-sensitive, so `Meas`, `meas`, `AND`, `and`, `IN`, and `in` are interpreted the same way. Text values are also matched without case sensitivity by default.
 
+Numeric comparisons and numeric `IN` accept complete finite numbers, including
+`+1.2`, `.5`, `1.`, `+1e2`, signed zero and surrounding spaces, tabs or line breaks.
+Blank, missing, malformed (for example `1x`), infinite and overflowing values do
+not match positive numeric comparisons. Numeric `!=` and `NOT IN` include those
+invalid values; numeric blank filters include them as well. Text and date filters
+retain their own rules. Integer sources retain their 64-bit precision; decimal
+and exponent forms use floating-point precision.
+
 When you repeat a comparison after `AND`, Metroliza reuses the previous field name. For example, `Meas > 200 and < 150.2` is accepted as `Meas > 200 AND Meas < 150.2`. Because those two limits conflict, the filter is valid but matches zero rows.
 
 Examples:
@@ -175,7 +183,9 @@ In plain language:
 
 This means the header choices are not completely independent from reference choices.
 
-If a header seems to disappear, check the selected references first.
+Selected headers stay in the filter when references change. Headers unavailable for the
+current references are retained and named in a visible notice. Searching changes only
+which choices are visible; it does not clear conditions.
 
 ## Date filtering
 
@@ -185,6 +195,8 @@ The dialog includes two date controls:
 - **MEASUREMENT DATE TO**
 
 These let you limit the export to a date range.
+FROM must be on or before TO; equal dates are valid. A reversed range blocks Apply and
+shows a message beside the dates while preserving both entries.
 
 ### Select today
 
@@ -253,6 +265,8 @@ Use this when `VAL1` exists in multiple references but only the `REF1` measureme
 ### What does SELECT ALL mean?
 
 **SELECT ALL** means “do not narrow by this list.”
+Selecting a concrete value clears **SELECT ALL**, and selecting **SELECT ALL** clears
+concrete values. Older saved drafts containing both retain the concrete values.
 
 If you leave a list on **SELECT ALL**, that dimension stays broad.
 

@@ -189,21 +189,19 @@ class AnomalyEventRepository:
         self.ensure_schema()
 
         def _count(cursor) -> dict[str, int]:
-            params: tuple[Any, ...] = ()
-            where = ""
             if status is not None:
                 _validate_status(status)
-                where = "WHERE status = ?"
-                params = (status,)
-            cursor.execute(
-                f"""
-                SELECT severity, COUNT(*)
-                FROM industrial_anomaly_events
-                {where}
-                GROUP BY severity
-                """,
-                params,
-            )
+            queries = {
+                False: (
+                    "SELECT severity, COUNT(*) FROM industrial_anomaly_events "
+                    "GROUP BY severity"
+                ),
+                True: (
+                    "SELECT severity, COUNT(*) FROM industrial_anomaly_events "
+                    "WHERE status = ? GROUP BY severity"
+                ),
+            }
+            cursor.execute(queries[status is not None], () if status is None else (status,))
             counts = {severity: 0 for severity in ANOMALY_SEVERITIES}
             counts.update({str(row[0]): int(row[1]) for row in cursor.fetchall()})
             return counts
@@ -214,22 +212,19 @@ class AnomalyEventRepository:
         self.ensure_schema()
 
         def _count(cursor) -> dict[str, int]:
-            params: tuple[Any, ...] = ()
-            where = ""
             if status is not None:
                 _validate_status(status)
-                where = "WHERE status = ?"
-                params = (status,)
-            cursor.execute(
-                f"""
-                SELECT detector_key, COUNT(*)
-                FROM industrial_anomaly_events
-                {where}
-                GROUP BY detector_key
-                ORDER BY detector_key ASC
-                """,
-                params,
-            )
+            queries = {
+                False: (
+                    "SELECT detector_key, COUNT(*) FROM industrial_anomaly_events "
+                    "GROUP BY detector_key ORDER BY detector_key ASC"
+                ),
+                True: (
+                    "SELECT detector_key, COUNT(*) FROM industrial_anomaly_events "
+                    "WHERE status = ? GROUP BY detector_key ORDER BY detector_key ASC"
+                ),
+            }
+            cursor.execute(queries[status is not None], () if status is None else (status,))
             return {str(row[0]): int(row[1]) for row in cursor.fetchall()}
 
         return run_transaction_with_retry(self.database, _count, connection=self.connection)

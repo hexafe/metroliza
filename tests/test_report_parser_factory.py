@@ -1867,3 +1867,458 @@ def test_resolve_parser_auto_loads_entry_point_plugins_without_path_env(monkeypa
         PARSER_DETECTORS.update(original_detectors)
         PROBE_RESULT_CACHE.clear()
         PROBE_RESULT_CACHE.update(original_cache)
+
+
+# Literal expectations are established on the unchanged STEP3 base before caching.
+@pytest.mark.parametrize(
+    ("definition", "keyword", "expected"),
+    [
+        ("def callback(value): pass", "value", True),
+        ("def callback(value, /): pass", "value", False),
+        ("def callback(*, value=None): pass", "value", True),
+        ("def callback(*value): pass", "value", True),
+        ("def callback(**value): pass", "missing", True),
+        ("def callback(value, /, **kwargs): pass", "value", True),
+        ("def callback(value=None): pass", "missing", False),
+        ("async def callback(*, value): pass", "value", True),
+    ],
+)
+def test_keyword_inspection_literal_parameter_kinds(definition, keyword, expected):
+    namespace = {}
+    exec(definition, namespace)
+    callback = namespace["callback"]
+    assert factory_module._callable_accepts_keyword(callback, keyword) is expected
+    assert factory_module._callable_accepts_keyword(callback, keyword) is expected
+
+
+def test_keyword_inspection_dynamic_callable_errors_and_raw_keyword():
+    import inspect
+
+    events = []
+
+    class DynamicCallable:
+        @property
+        def __signature__(self):
+            events.append("signature")
+            return inspect.Signature(
+                [inspect.Parameter("value", inspect.Parameter.KEYWORD_ONLY)]
+            )
+
+        def __call__(self, **kwargs):
+            return kwargs
+
+        def __hash__(self):
+            raise AssertionError("callable hashing is not part of inspection")
+
+    class Keyword(str):
+        def __hash__(self):
+            events.append("keyword_hash")
+            return super().__hash__()
+
+    callback = DynamicCallable()
+    assert factory_module._callable_accepts_keyword(callback, Keyword("value")) is True
+    assert factory_module._callable_accepts_keyword(callback, "other") is False
+    assert events == ["signature", "keyword_hash", "signature"]
+
+    for error, handled in [(TypeError, True), (ValueError, True), (RuntimeError, False)]:
+        class RaisingCallable:
+            @property
+            def __signature__(self):
+                raise error("signature failure")
+
+            def __call__(self):
+                pass
+
+        if handled:
+            assert factory_module._callable_accepts_keyword(RaisingCallable(), "x") is False
+        else:
+            with pytest.raises(RuntimeError, match="signature failure"):
+                factory_module._callable_accepts_keyword(RaisingCallable(), "x")
+
+
+def test_keyword_inspection_function_metadata_mutations():
+    import inspect
+
+    def callback(value=None):
+        pass
+
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    callback.__signature__ = inspect.Signature()
+    assert factory_module._callable_accepts_keyword(callback, "value") is False
+    del callback.__signature__
+
+    def replacement(*, other=1):
+        pass
+
+    callback.__code__ = replacement.__code__
+    callback.__defaults__ = None
+    callback.__kwdefaults__ = {"other": 1}
+    assert factory_module._callable_accepts_keyword(callback, "value") is False
+    assert factory_module._callable_accepts_keyword(callback, "other") is True
+    callback.__annotations__["other"] = "changed"
+    callback.__kwdefaults__["other"] = 2
+    assert factory_module._callable_accepts_keyword(callback, "other") is True
+    callback.__wrapped__ = lambda wrapped: None
+    assert factory_module._callable_accepts_keyword(callback, "wrapped") is True
+    assert factory_module._callable_accepts_keyword(callback, "other") is False
+
+
+def test_keyword_inspection_decorators_partials_and_methods():
+    from functools import partial, wraps
+
+    def original(value, *, option=None):
+        pass
+
+    @wraps(original)
+    def decorated(*args, **kwargs):
+        return original(*args, **kwargs)
+
+    class Owner:
+        def method(self, *, value):
+            pass
+
+    for callback, keyword, expected in [
+        (decorated, "value", True),
+        (decorated, "missing", False),
+        (partial(original, 1), "value", False),
+        (partial(original, 1), "option", True),
+        (Owner().method, "value", True),
+        (Owner().method, "self", False),
+        (len, "value", False),
+        (None, "value", False),
+    ]:
+        assert factory_module._callable_accepts_keyword(callback, keyword) is expected
+
+
+def test_keyword_inspection_factory_forwards_full_arguments_and_callback_errors():
+    from types import SimpleNamespace
+
+    context = object()
+    calls = []
+
+    def callback(path, *args, **kwargs):
+        calls.append((path, args, kwargs))
+        return SimpleNamespace()
+
+    for _ in range(2):
+        parser = factory_module.invoke_parser_factory(
+            callback, "report.pdf", "database", source_inspection=context,
+            expected_plugin_id="plugin", expected_registry_generation_id=23, extra="kept",
+        )
+        assert parser.source_inspection_context is context
+    assert calls == [
+        ("report.pdf", ("database",), {
+            "extra": "kept", "source_inspection": context,
+            "expected_plugin_id": "plugin", "expected_registry_generation_id": 23,
+        }),
+    ] * 2
+
+    def broken(path, **kwargs):
+        raise TypeError("callback body failure")
+
+    with pytest.raises(TypeError, match="callback body failure"):
+        factory_module.invoke_parser_factory(broken, "report.pdf", source_inspection=context)
+
+
+def test_keyword_inspection_parallel_plain_functions():
+    def first(*, first=None):
+        pass
+
+    def second(*, second=None):
+        pass
+
+    def query(index):
+        callback = first if index % 2 else second
+        return factory_module._callable_accepts_keyword(callback, "first")
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        assert list(executor.map(query, range(128))) == [bool(index % 2) for index in range(128)]
+
+
+def test_keyword_inspection_metadata_and_inspector_replacement(monkeypatch):
+    import inspect
+
+    def callback(value=None, *, option=1):
+        pass
+
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    assert factory_module._callable_accepts_keyword(callback, "missing") is False
+    callback.__annotations__["value"] = "literal annotation"
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    callback.__kwdefaults__["option"] = 2
+    assert factory_module._callable_accepts_keyword(callback, "option") is True
+    callback.__defaults__ = (3,)
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    callback.__signature__ = inspect.Signature()
+    assert factory_module._callable_accepts_keyword(callback, "value") is False
+    del callback.__signature__
+
+    def replacement(*, other=None):
+        pass
+
+    callback.__code__ = replacement.__code__
+    callback.__defaults__ = None
+    callback.__kwdefaults__ = {"other": None}
+    assert factory_module._callable_accepts_keyword(callback, "other") is True
+    assert factory_module._callable_accepts_keyword(callback, "value") is False
+
+    def failing_inspector(_callback):
+        raise RuntimeError("replaced inspector")
+
+    monkeypatch.setattr(inspect, "signature", failing_inspector)
+    with pytest.raises(RuntimeError, match="replaced inspector"):
+        factory_module._callable_accepts_keyword(callback, "other")
+
+
+def test_keyword_inspection_unsafe_metadata_preserves_callbacks(monkeypatch):
+    import inspect
+
+    events = []
+
+    class Annotations(dict):
+        def keys(self):
+            events.append("keys")
+            return super().keys()
+
+    def callback(value):
+        pass
+
+    callback.__annotations__ = Annotations(value=object())
+    original = inspect.signature
+    for _ in range(2):
+        events.clear()
+        expected = original(callback)
+        expected_events = list(events)
+        events.clear()
+        assert factory_module._callable_accepts_keyword(callback, "value") is True
+        assert events == expected_events
+        assert "value" in expected.parameters
+
+
+def test_keyword_inspection_reentrant_metadata_mutation(monkeypatch):
+    import inspect
+
+    original = inspect._signature_from_function
+    events = []
+
+    def inner(*, inner=None):
+        pass
+
+    def outer(*, outer=None):
+        pass
+
+    def observe(cls, callback, *args, **kwargs):
+        if callback is outer:
+            assert factory_module._callable_accepts_keyword(inner, "inner") is True
+            events.append("inner complete")
+        signature = original(cls, callback, *args, **kwargs)
+        if callback is outer:
+            callback.__signature__ = inspect.Signature()
+        return signature
+
+    monkeypatch.setattr(inspect, "_signature_from_function", observe)
+    assert factory_module._callable_accepts_keyword(outer, "outer") is True
+    assert factory_module._callable_accepts_keyword(outer, "outer") is False
+    assert events == ["inner complete"]
+
+
+def test_keyword_inspection_does_not_retain_plugin_closures():
+    import weakref
+
+
+    class Payload:
+        pass
+
+    def make_callback():
+        payload = Payload()
+
+        def callback(*, value=None):
+            return payload
+
+        return callback, weakref.ref(payload)
+
+    callback, payload_ref = make_callback()
+    callback_ref = weakref.ref(callback)
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    del callback
+    # No forced GC: neither the function nor its closure forms a cycle.
+    assert callback_ref() is None
+    assert payload_ref() is None
+
+
+def test_keyword_inspection_code_swap_during_inspection(monkeypatch):
+    import inspect
+
+    original = inspect._signature_from_function
+    swap_pending = True
+
+    def callback(*, value=None):
+        pass
+
+    def replacement(*, other=None):
+        pass
+
+    def observe(cls, inspected, *args, **kwargs):
+        nonlocal swap_pending
+        if inspected is callback and swap_pending:
+            swap_pending = False
+            code = callback.__code__
+            callback.__code__ = replacement.__code__
+            try:
+                return original(cls, inspected, *args, **kwargs)
+            finally:
+                callback.__code__ = code
+        return original(cls, inspected, *args, **kwargs)
+
+    monkeypatch.setattr(inspect, "_signature_from_function", observe)
+    assert factory_module._callable_accepts_keyword(callback, "other") is True
+    assert factory_module._callable_accepts_keyword(callback, "other") is False
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+
+
+@pytest.mark.parametrize("location", ["annotation", "default", "kwdefault"])
+def test_keyword_inspection_metadata_types_do_not_dispatch_equality(location):
+    events = []
+
+    class Meta(type):
+        def __eq__(cls, _other):
+            events.append("metaclass_eq")
+            raise RuntimeError("metadata equality must not run")
+
+    class Value(metaclass=Meta):
+        pass
+
+    def callback(value=None, *, option=None):
+        pass
+
+    if location == "annotation":
+        callback.__annotations__["value"] = Value()
+    elif location == "default":
+        callback.__defaults__ = (Value(),)
+    else:
+        callback.__kwdefaults__["option"] = Value()
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    assert events == []
+
+
+def test_keyword_inspection_function_dictionary_subclass_keeps_fallback():
+    events = []
+
+    class State(dict):
+        def __bool__(self):
+            events.append("dict_bool")
+            raise RuntimeError("function dictionary truth must not run")
+
+    def callback(*, value=None):
+        pass
+
+    callback.__dict__ = State()
+    assert factory_module._callable_accepts_keyword(callback, "value") is True
+    assert factory_module._callable_accepts_keyword(callback, "missing") is False
+    assert events == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "next_result"),
+    [("signature", False), ("wrapped", False), ("annotation", True), ("dict", True)],
+)
+def test_keyword_inspection_thread_metadata_change(monkeypatch, mutation, next_result):
+    import inspect
+    from threading import Event
+
+    admitted, changed = Event(), Event()
+    events = []
+
+    class Meta(type):
+        def __eq__(cls, _other):
+            events.append("metaclass_eq")
+            raise RuntimeError("metadata equality must not run")
+
+    class Value(metaclass=Meta):
+        pass
+
+    class State(dict):
+        def __bool__(self):
+            events.append("dict_bool")
+            raise RuntimeError("function dictionary truth must not run")
+
+    def callback(*, value=None):
+        pass
+
+    original = inspect._signature_from_function
+
+    def observe(cls, inspected, *args, **kwargs):
+        signature = original(cls, inspected, *args, **kwargs)
+        if inspected is callback and not admitted.is_set():
+            admitted.set()
+            assert changed.wait(5)
+        return signature
+
+    def change():
+        assert admitted.wait(5)
+        if mutation == "signature":
+            callback.__signature__ = inspect.Signature()
+        elif mutation == "wrapped":
+            callback.__wrapped__ = lambda other: None
+        elif mutation == "annotation":
+            callback.__annotations__ = {"value": Value()}
+        else:
+            callback.__dict__ = State()
+        changed.set()
+
+    monkeypatch.setattr(inspect, "_signature_from_function", observe)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(change)
+        assert factory_module._callable_accepts_keyword(callback, "value") is True
+        pending.result(timeout=5)
+    assert factory_module._callable_accepts_keyword(callback, "value") is next_result
+    assert factory_module._callable_accepts_keyword(callback, "value") is next_result
+    assert events == []
+
+
+
+
+@pytest.mark.parametrize("error", [StopIteration, RuntimeError])
+def test_keyword_inspection_preserves_external_errors(monkeypatch, error):
+    def fail(*args, **kwargs):
+        raise error("external inspection or factory error")
+
+    with monkeypatch.context() as replacement:
+        replacement.setattr(factory_module.inspect, "signature", fail)
+        with pytest.raises(error, match="external inspection or factory error"):
+            factory_module._callable_accepts_keyword(lambda value: None, "value")
+    with pytest.raises(error, match="external inspection or factory error"):
+        factory_module.invoke_parser_factory(fail, "report.pdf", source_inspection=object())
+
+
+def test_keyword_inspection_sparse_kwdefaults_preserves_raw_key_callbacks():
+    events = []
+    armed = False
+    sentinel = RuntimeError("sparse copy callback sentinel")
+
+    class Key(str):
+        def __hash__(self):
+            return hash("progress_callback")
+
+        def __eq__(self, other):
+            events.append(type(other).__name__)
+            if armed:
+                raise sentinel
+            return False
+
+    def callback(*, progress_callback=None):
+        pass
+
+    assert factory_module._callable_accepts_keyword(callback, "progress_callback") is True
+    defaults = {"progress_callback": None}
+    defaults[Key("observer")] = None
+    for index in range(1000):
+        defaults["dummy-" + str(index)] = None
+    for index in range(1000):
+        del defaults["dummy-" + str(index)]
+    callback.__kwdefaults__ = defaults
+    events.clear()
+    armed = True
+    assert factory_module._callable_accepts_keyword(callback, "progress_callback") is True
+    assert events == []

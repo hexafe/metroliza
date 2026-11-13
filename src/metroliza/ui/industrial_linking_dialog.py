@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from time import monotonic
 from typing import Any
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QThread, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -25,7 +26,12 @@ from metroliza.industrial.industrial_join_service import (
     set_manual_industrial_report_link,
 )
 from metroliza.reports.report_schema import ensure_report_schema
+from metroliza.ui import detached_threads
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_table,
@@ -34,6 +40,26 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+
+
+_DEFAULT_MATERIALIZE_LINKS = materialize_industrial_report_links
+
+
+class _AutoLinkThread(QThread):
+    """Own the unchanged service call and its literal error until native finish."""
+
+    def __init__(self, db_file: str):
+        super().__init__()
+        self.db_file = db_file
+        self.summary = None
+        self.error = None
+        self.discard_result = False
+
+    def run(self):
+        try:
+            self.summary = _DEFAULT_MATERIALIZE_LINKS(self.db_file)
+        except Exception as exc:
+            self.error = str(exc)
 
 
 REPORT_COLUMNS = (
@@ -200,6 +226,9 @@ class IndustrialLinkingDialog(QDialog):
     def __init__(self, parent=None, *, db_file: str | None = None):
         super().__init__(parent)
         self.db_file = db_file
+        if type(self) is IndustrialLinkingDialog:
+            self._auto_link_thread = None
+            self._auto_link_progress = None
         self.setWindowTitle("Production links")
         configure_window_size(self, minimum=(760, 520), initial=(980, 680))
 
@@ -283,6 +312,8 @@ class IndustrialLinkingDialog(QDialog):
         configure_table(table, stretch_column=1, resize_to_contents=(0,))
 
     def reload_data(self) -> None:
+        if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
+            return
         if not self.db_file:
             self.status_label.setText("Select a Metroliza report database before linking.")
             set_status_variant(self.status_label, "warning")
@@ -346,7 +377,7 @@ class IndustrialLinkingDialog(QDialog):
         return int(value) if value is not None else None
 
     def _sync_button_state(self) -> None:
-        has_db = bool(self.db_file)
+        has_db = bool(self.db_file) and (type(self) is not IndustrialLinkingDialog or self._auto_link_thread is None)
         has_report = self.selected_report_id() is not None
         has_production = self.selected_production_record_id() is not None
         self.link_button.setEnabled(has_db and has_report and has_production)
@@ -354,6 +385,8 @@ class IndustrialLinkingDialog(QDialog):
         self.auto_link_button.setEnabled(has_db)
 
     def link_selected_records(self) -> None:
+        if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
+            return
         report_id = self.selected_report_id()
         production_record_id = self.selected_production_record_id()
         if report_id is None or production_record_id is None:
@@ -377,6 +410,8 @@ class IndustrialLinkingDialog(QDialog):
         set_status_variant(self.status_label, "success")
 
     def clear_selected_manual_link(self) -> None:
+        if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
+            return
         report_id = self.selected_report_id()
         if report_id is None:
             QMessageBox.warning(self, "Production links", "Select one Metroliza report.")
@@ -393,13 +428,23 @@ class IndustrialLinkingDialog(QDialog):
         set_status_variant(self.status_label, "success" if removed else "neutral")
 
     def refresh_auto_links(self) -> None:
+        started_at = monotonic()
+        if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
+            return
         if not self.db_file:
+            return
+        if (type(self) is IndustrialLinkingDialog and type(self.db_file) is str
+                and materialize_industrial_report_links is _DEFAULT_MATERIALIZE_LINKS):
+            self._start_auto_links(started_at)
             return
         try:
             summary = materialize_industrial_report_links(str(self.db_file))
         except Exception as exc:
             QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {exc}")
             return
+        IndustrialLinkingDialog._apply_auto_link_summary(self, summary)
+
+    def _apply_auto_link_summary(self, summary) -> None:
         self.reload_data()
         self.status_label.setText(
             "Auto links refreshed: "
@@ -408,3 +453,59 @@ class IndustrialLinkingDialog(QDialog):
             f"{summary.unmatched_reports} unmatched."
         )
         set_status_variant(self.status_label, "success")
+
+    def _start_auto_links(self, started_at) -> None:
+        thread = None
+        try:
+            thread = _AutoLinkThread(self.db_file)
+            self._auto_link_thread = thread
+            detached_threads.register(thread, defer_quit=True, owner=self, on_finished=IndustrialLinkingDialog._auto_links_finished)
+            detached_threads.run_when_finished([thread], thread.deleteLater)
+            self._auto_link_progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                self, window_title="Production links", initial_status_text="Refreshing auto links…",
+                on_cancel=lambda: None, action_started_at=started_at, cancellable=False,
+            )
+            bar.setRange(0, 0)
+            self._sync_button_state()
+            self._auto_link_progress.show()
+            thread.start()
+        except Exception as exc:
+            if thread is None or not thread.isRunning():
+                self._release_auto_links()
+                if thread is not None:
+                    registered = detached_threads.is_registered(thread)
+                    detached_threads.discard(thread)
+                    if not registered:
+                        thread.deleteLater()
+            else:
+                thread.discard_result = True
+            QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {exc}")
+
+    def _release_auto_links(self) -> None:
+        self._auto_link_thread = None
+        dismiss_worker_progress_dialog(self._auto_link_progress)
+        self._auto_link_progress = None
+        self._sync_button_state()
+
+    def _auto_links_finished(self, thread) -> None:
+        if thread is not self._auto_link_thread:
+            return
+        self._release_auto_links()
+        if thread is None or thread.discard_result or type(self.db_file) is not str or self.db_file != thread.db_file:
+            return
+        if thread.error is not None:
+            QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {thread.error}")
+        else:
+            self._apply_auto_link_summary(thread.summary)
+
+    def done(self, result) -> None:
+        # A running write is durable work, not a cancellable operation. Keep the modal
+        # owner in place rather than allow its caller to navigate or remove the DB.
+        if type(self) is not IndustrialLinkingDialog or self._auto_link_thread is None:
+            super().done(result)
+
+    def closeEvent(self, event) -> None:
+        if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
+            event.ignore()
+            return
+        super().closeEvent(event)

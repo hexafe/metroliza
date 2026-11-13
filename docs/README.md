@@ -6,12 +6,24 @@ This directory contains active operational, maintenance, project, and end-user d
 
 Start here for current product scope, architecture, planning, and development process:
 
+- [`../AGENTS.md`](../AGENTS.md) — concise repository instructions and AI-orchestration entry point.
 - `project/README.md` — canonical Metroliza project control center and source-of-truth hierarchy.
 - `project/product_specification.md` — product personas, workflows, functional/non-functional requirements, boundaries, and release-quality target.
+- `project/feature_catalog.md` — capability maturity, roadmap phase, dependencies, completion rules, and tracking Issues.
 - `project/architecture.md` — canonical package ownership, data flows, compatibility/native policies, and active architecture risks.
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
+- [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
+- [`engineering/chatgpt-project-instructions.md`](engineering/chatgpt-project-instructions.md) — concise project-instruction mirror for ChatGPT/Codex orchestration and current branch lifecycle guidance.
+- [`engineering/model-routing-research-2026-09-23.md`](engineering/model-routing-research-2026-09-23.md) — GPT-6 routing research/evidence supporting the current orchestration playbook.
+- [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
+- [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
+- [`engineering/supervised-diagnostics-v1.md`](engineering/supervised-diagnostics-v1.md) — supervised process/store contracts, bounds, rollback and source/package qualification boundaries.
+- `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
+- `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
+
+- [Repository-wide bug sweep](quality/bug_sweep/README.md) — canonical #974/#975–#985 control plane, machine-readable ownership ledger, finding protocol, and residual-risk closeout.
 
 ## Active docs
 
@@ -29,12 +41,16 @@ Start here for current product scope, architecture, planning, and development pr
 - `user_manual/parser_profiles.md` — end-user guide to Parser Profiles and LLM handoff folders.
 - `user_manual/characteristic_name_matching.md` — end-user guide to Characteristic Name Matching.
 - `user_manual/help_startup_and_license.md` — short support/reference page for startup, license, About, and Release notes.
+- [`user_manual/diagnostic_incidents.md`](user_manual/diagnostic_incidents.md) — local incident preview, selected export and incomplete-history interpretation.
 - `user_manual/group_analysis/README.md` — index for the exported Group Analysis worksheet manual.
 - `user_manual/group_analysis/user_manual.md` — plain-English end-user guide for interpreting the exported Group Analysis worksheet.
 - `user_manual/group_analysis/user_manual.pdf` — optional printable companion version.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `realtime_industrial_validation.md` — deterministic fixture matrix for realtime industrial detector validation.
 - `perf_realtime_detectors.md` — local throughput benchmark guide for deterministic realtime industrial detectors.
+- `perf_csv_pipeline_1028.md` — bounded CSV analytics/export measurement protocol, optimization evidence, and remaining proof limits for Issue #1028.
+- [`engineering/performance-boost-step2.md`](engineering/performance-boost-step2.md) — Performance Boost STEP2 audit (Polish, PO report): measured losses, loading-indicator gaps, first-run splash audit and PoC, batching/concurrency map, ranking and PR plan.
+- [`engineering/performance-boost-step2-flows.md`](engineering/performance-boost-step2-flows.md) — STEP2 module/window/flow matrix with coverage status and evidence.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.
 - `native_build_distribution.md` — native build/distribution workflow and packaging references.
 - `../THIRD_PARTY_NOTICES.md` — third-party license and notice inventory for packaged distributions.
@@ -126,7 +142,7 @@ Canonical release operations docs (release gate/source-of-truth set):
 - `release_checks/branching_strategy.md` — authoritative branch naming/rules used during release work.
 - `release_checks/google_conversion_smoke.md` — required release smoke evidence log for Google conversion checks.
 - `release_checks/cmm_parser_perf_guardrail.md` — CMM parser performance guardrail policy, variance expectations, and CI-failure triage steps.
-- `release_checks/realtime_industrial_rollout_checklist.md` — current 2026.06 RC1 realtime industrial tester rollout gate for replay, bounded reads, source lag, threshold review, and rollback.
+- `release_checks/realtime_industrial_rollout_checklist.md` — historical 2026.06 RC1 realtime industrial tester rollout evidence for replay, bounded reads, source lag, threshold review, and rollback. Current RC qualification is in `release_checks/release_status.md`.
 - `release_checks/realtime_monitor_ui_ux_audit_2026-06-15.md` — build `260615` realtime monitor UI/UX audit, implemented workflow guardrails, About cleanup, and deferred dashboard-mode follow-up.
 - `release_checks/realtime_industrial_optimization_check_2026-06-16.md` — build `260616` Industrial Data fetch, realtime dashboard, and interactive dashboard point-marking release-check note.
 - `release_checks/realtime_industrial_performance_check_2026-06-17.md` — build `260617` Industrial Data SQLite handoff, cached workbook export, realtime polling, and Oznak fallback release-check note.
@@ -155,3 +171,13 @@ Retired planning/temporary docs are under `archive/`.
 
 - Archive entry point: `archive/README.md`
 - Year buckets: `archive/YYYY/`
+
+## RC1 integration and repository cleanup
+
+- [Current release status](release_checks/release_status.md)
+- [Historical step1 package](engineering/repo-cleanup-step1.md) and [manifest](engineering/repo-cleanup-manifest.json)
+- [Independent admission review](engineering/repo-cleanup-admission-20261027.md)
+- [External recovery receipts](engineering/repo-cleanup-external-recovery.json)
+- [Historical test build261021 provenance](archive/2026/build-261021-provenance/README.md)
+- [Accepted candidate build 261029 archive](archive/2026/build-261029-provenance/README.md) and [tester EXE acceptance packet](release_checks/rc1_261029_exe_acceptance_2026-10-30.md)
+- [Live execution ledger #1153](https://github.com/hexafe/metroliza/issues/1153)

@@ -55,7 +55,13 @@ def _load_bootloader_splash_module():
 
 
 def update_bootloader_splash(message: str, *, phase: str) -> None:
-    """Update PyInstaller's pre-Python splash when it is available."""
+    """Update the pre-Qt splash: the native launcher's window, or PyInstaller's splash."""
+    from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+    launcher_splash = launcher_splash_from_environment()
+    if launcher_splash is not None:
+        launcher_splash.show_message(message, phase=phase)
+        return
     pyi_splash = _load_bootloader_splash_module()
     if pyi_splash is None:
         return
@@ -74,8 +80,18 @@ def update_bootloader_splash(message: str, *, phase: str) -> None:
         )
 
 
+# Phases after which no main window will be handed the launcher splash: close it as well.
+_LAUNCHER_SPLASH_TERMINAL_PHASES = frozenset({"top_level_exception", "startup_smoke", "pdf_parser_smoke"})
+
+
 def close_bootloader_splash(*, phase: str) -> None:
-    """Close PyInstaller's pre-Python splash when Metroliza UI feedback has taken over."""
+    """Close the pre-Qt splash when Metroliza UI feedback has taken over or startup ended."""
+    if phase in _LAUNCHER_SPLASH_TERMINAL_PHASES:
+        from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+        launcher_splash = launcher_splash_from_environment()
+        if launcher_splash is not None:
+            launcher_splash.close()
     pyi_splash = _load_bootloader_splash_module()
     if pyi_splash is None:
         return
@@ -232,7 +248,23 @@ class QtStartupSplash:
             self._movie.start()
             record_event("splash_gif_loaded")
         except Exception as exc:  # pragma: no cover - defensive fallback for packaged assets.
+            self._dispose_loading_movie()
             record_event("splash_gif_failed", error_type=type(exc).__name__)
+
+    def _dispose_loading_movie(self) -> None:
+        movie = self._movie
+        self._movie = None
+        if movie is not None:
+            movie.stop()
+            self._gif_label.clear()  # Disconnect QLabel's frame updates before deleting its device.
+            movie.setDevice(None)
+            movie.deleteLater()
+        for name in ("_gif_buffer", "_gif_reader_buffer"):
+            buffer = getattr(self, name)
+            setattr(self, name, None)
+            if buffer is not None:
+                buffer.close()
+                buffer.deleteLater()
 
     def _center_on_screen(self) -> None:
         screen = self._splash.screen() or self._app.primaryScreen()
@@ -255,12 +287,14 @@ class QtStartupSplash:
             widget.raise_()
         if hasattr(widget, "activateWindow"):
             widget.activateWindow()
+        self._dispose_loading_movie()
         self._splash.close()
         self._app.processEvents()
         record_event("splash_finish_done")
 
     def close(self) -> None:
         record_event("splash_close_start")
+        self._dispose_loading_movie()
         self._splash.close()
         self._app.processEvents()
         record_event("splash_close_done")
@@ -284,6 +318,16 @@ def _scaled_splash_gif_size(source_size, qsize_type):
 
 def create_startup_splash(app, *, ui_smoke_mode: bool) -> StartupSplash:
     """Create a startup splash or a no-op replacement for this launch."""
+
+    # A live native launcher splash is already on screen: keep it (its animation is independent
+    # of this process's GUI thread) instead of opening a second splash, also in smoke runs, so
+    # it is handed off and closed after the main window is shown.
+    from metroliza.app.launcher_splash import launcher_splash_from_environment
+
+    launcher_splash = launcher_splash_from_environment()
+    if launcher_splash is not None:
+        record_event("splash_launcher_bridge")
+        return launcher_splash
 
     if not should_show_startup_splash(ui_smoke_mode=ui_smoke_mode):
         record_event("splash_disabled")

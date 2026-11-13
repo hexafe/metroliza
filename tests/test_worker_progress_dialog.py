@@ -196,3 +196,61 @@ def test_worker_progress_dialog_terminal_reject_does_not_request_cancel() -> Non
 
     assert cancel_calls == []
     assert not dialog.isVisible()
+
+
+def test_delayed_progress_uses_action_time_and_never_runs_hidden():
+    from PyQt6.QtGui import QMovie
+
+    _app()
+    dialog, _label, _bar, movie = create_delayed_worker_progress_dialog(
+        None, window_title="Working", initial_status_text="Working", on_cancel=lambda: None,
+        action_started_at=time.monotonic() - 0.9,
+    )
+    frames = []
+    movie.frameChanged.connect(frames.append)
+    assert movie.state() == QMovie.MovieState.NotRunning
+    dialog.show()
+    _process_events_for(40)
+    assert not dialog.isVisible() and frames == []
+    _process_events_for(160)
+    assert dialog.isVisible() and frames
+    dialog.hide()
+    frames.clear()
+    _process_events_for(200)
+    assert frames == []
+    assert movie.state() == QMovie.MovieState.NotRunning
+    dialog.close()
+
+
+def test_dismiss_deletes_even_a_never_shown_dialog_without_cancel():
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from modules.worker_progress_dialog import dismiss_worker_progress_dialog
+
+    _app()
+    cancels = []
+    dialog, _label, _bar, _movie = create_delayed_worker_progress_dialog(
+        None, window_title="Working", initial_status_text="Working",
+        on_cancel=lambda: cancels.append(True),
+    )
+    dialog.show()
+    dismiss_worker_progress_dialog(dialog)
+    dismiss_worker_progress_dialog(dialog)  # terminal cleanup can race the finished signal
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(dialog)
+    assert cancels == []
+
+
+def test_non_cancellable_indicator_cannot_add_a_cancel_route():
+    from PyQt6.QtWidgets import QPushButton
+
+    _app()
+    dialog, _label, _bar, _movie = create_delayed_worker_progress_dialog(
+        None, window_title="Working", initial_status_text="Working", on_cancel=lambda: None,
+        cancellable=False, delay_ms=0,
+    )
+    dialog.show()
+    assert dialog.findChild(QPushButton).isHidden()
+    dialog.reject()
+    assert dialog.isVisible()
+    dialog.close()

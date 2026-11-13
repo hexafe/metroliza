@@ -27,18 +27,37 @@ REQUIRED_PDF_PARSER_REPORT_MODULES = (
 REQUIRED_HEADER_OCR_MODULES = (
     'rapidocr',
     'onnxruntime',
-    'openvino',
     'cv2',
     'numpy',
 )
-REQUIRED_HEADER_OCR_REPORT_MODULES = (
+# Shipped only in the explicitly named benchmark build flavor (METROLIZA_BUILD_FLAVOR=benchmark).
+BENCHMARK_HEADER_OCR_MODULES = ('openvino',)
+REQUIRED_HEADER_OCR_REPORT_PREFIX_MODULES = (
     'metroliza.parsing.header_ocr_backend',
     'metroliza.parsing.header_ocr_geometry',
     'metroliza.reports.header_ocr_corrections',
     'metroliza.parsing.header_ocr_corrections',
+)
+REQUIRED_HEADER_OCR_REPORT_MODULES = (
+    *REQUIRED_HEADER_OCR_REPORT_PREFIX_MODULES,
     *REQUIRED_HEADER_OCR_MODULES,
 )
 REQUIRED_THIRD_PARTY_NOTICE = ROOT / 'THIRD_PARTY_NOTICES.md'
+
+
+def required_header_ocr_modules(flavor: str | None = None) -> tuple[str, ...]:
+    """Header OCR runtime modules required for the selected build flavor."""
+    for import_root in (ROOT, ROOT / "src"):
+        import_root_text = str(import_root)
+        if import_root_text not in sys.path:
+            sys.path.insert(0, import_root_text)
+
+    from scripts.build_flavor import flavor_includes_openvino, resolve_build_flavor
+
+    resolved_flavor = resolve_build_flavor() if flavor is None else flavor
+    if flavor_includes_openvino(resolved_flavor):
+        return (*REQUIRED_HEADER_OCR_MODULES, *BENCHMARK_HEADER_OCR_MODULES)
+    return REQUIRED_HEADER_OCR_MODULES
 
 
 def _load_pdf_backend_helpers():
@@ -119,9 +138,10 @@ def validate_nuitka_report_has_pdf_backend(report_path: str | Path) -> tuple[str
 
 
 def require_header_ocr_available(*, allow_missing: bool = False) -> tuple[str, ...]:
+    required_modules = required_header_ocr_modules()
     missing = []
     broken = []
-    for name in REQUIRED_HEADER_OCR_MODULES:
+    for name in required_modules:
         if importlib.util.find_spec(name) is None:
             missing.append(name)
             continue
@@ -131,9 +151,9 @@ def require_header_ocr_available(*, allow_missing: bool = False) -> tuple[str, .
             broken.append(f"{name} ({type(exc).__name__}: {exc})")
 
     if not missing and not broken:
-        return REQUIRED_HEADER_OCR_MODULES
+        return required_modules
     if allow_missing:
-        return tuple(name for name in REQUIRED_HEADER_OCR_MODULES if name not in missing and not any(item.startswith(f"{name} ") for item in broken))
+        return tuple(name for name in required_modules if name not in missing and not any(item.startswith(f"{name} ") for item in broken))
 
     details = []
     if missing:
@@ -142,7 +162,8 @@ def require_header_ocr_available(*, allow_missing: bool = False) -> tuple[str, .
         details.append(f"import failed: {'; '.join(broken)}")
     raise PackagingValidationError(
         "Header OCR dependencies are missing or not usable in the build environment: "
-        f"{'; '.join(details)}. Install them with `python -m pip install -r requirements-ocr.txt`; "
+        f"{'; '.join(details)}. Install them with `python -m pip install -r requirements-ocr.txt` "
+        "(`requirements-ocr-benchmark.txt` for the benchmark build flavor); "
         "on Windows also verify native DLL prerequisites such as the Microsoft Visual C++ Redistributable."
     )
 
@@ -230,7 +251,8 @@ def validate_nuitka_report_has_header_ocr(report_path: str | Path) -> tuple[str,
 
     root = _load_defusedxml_element_tree().parse(report).getroot()
     haystack = "\n".join(_flatten_report_strings(root))
-    missing_modules = tuple(module_name for module_name in REQUIRED_HEADER_OCR_REPORT_MODULES if module_name not in haystack)
+    report_modules = (*REQUIRED_HEADER_OCR_REPORT_PREFIX_MODULES, *required_header_ocr_modules())
+    missing_modules = tuple(module_name for module_name in report_modules if module_name not in haystack)
     if missing_modules:
         raise PackagingValidationError(
             f"Nuitka build report {report} is missing required header OCR modules: {', '.join(missing_modules)}."
@@ -247,7 +269,7 @@ def validate_nuitka_report_has_header_ocr(report_path: str | Path) -> tuple[str,
         raise PackagingValidationError(
             f"Nuitka build report {report} is missing bundled third-party notices: THIRD_PARTY_NOTICES.md."
         )
-    return REQUIRED_HEADER_OCR_REPORT_MODULES
+    return report_modules
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

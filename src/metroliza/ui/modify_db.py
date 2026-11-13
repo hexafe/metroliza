@@ -11,11 +11,15 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 import PyQt6.QtCore as QtCore
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6 import sip
+from functools import partial
+import weakref
+from metroliza.ui import detached_threads
 import PyQt6.QtWidgets as QtWidgets
 import logging
 import sqlite3
-from metroliza.shared.custom_logger import CustomLogger
+from metroliza.shared.custom_logger import CustomLogger, LOG_ONLY
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
@@ -26,7 +30,24 @@ from metroliza.reports.report_edit_service import (
     ReportEditService,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.reports.report_repository import ReportRepository
+from metroliza.ui.modify_db_records import (
+    FILTER_DEBOUNCE_MS,
+    RecordBusyBanner,
+    RecordLoadThread,
+    RecordRows,
+    RecordSaveThread,
+    RecordTableModel,
+    RecordTableSlot,
+    RecordTableView,
+    cancel_load_thread,
+    display_value,
+    load_record_rows,
+    start_load_thread,
+    _NATIVE_RECORD_CLASS,
+    _NATIVE_RECORD_INIT,
+    _NATIVE_RECORD_START,
+)
+from metroliza.reports.report_repository import ReportRepository, validate_manual_number
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -34,12 +55,15 @@ from metroliza.ui.ui_foundation import (
     configure_table,
     configure_window_size,
 )
+from metroliza.ui.worker_progress_dialog import (
+    create_delayed_worker_progress_dialog,
+    dismiss_worker_progress_dialog,
+)
 
 
 logger = logging.getLogger(__name__)
 QItemSelection = getattr(QtCore, "QItemSelection", None)
 QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
-
 
 class ModifyDB(QDialog):
     """Provide table-based editing for selected report metadata fields.
@@ -119,18 +143,19 @@ class ModifyDB(QDialog):
     LEGACY_REPORT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_REPORT_FIELDS
     LEGACY_MEASUREMENT_FIELD_COLUMNS = EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS
 
-    def __init__(self, parent=None, db_file=""):
+    def __init__(self, parent=None, db_file="", *, modal=True):
         super().__init__(parent)
         self.setWindowTitle("Modify database")
         if parent is not None and hasattr(parent, "windowIcon"):
             self.setWindowIcon(parent.windowIcon())
         configure_window_size(self, minimum=(860, 540), initial=(1100, 650))
-        self.setModal(True)
+        self.setModal(modal)
 
         self.db_file = db_file
+        self.database_change_allowed = None
         self.undo_data = {}
         self._last_clicked_row_by_table = {}
-        self._record_specs_by_table = {}
+        self._record_slots = []
         self._storage_flavor = "current"
         self._changes_committed = False
         self._discard_confirmed = False
@@ -166,7 +191,7 @@ class ModifyDB(QDialog):
             self.connect_signals()
             apply_metroliza_theme(self)
             if self.db_file:
-                self.populate_tables()
+                ModifyDB._refresh_tables_for_view(self)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -192,17 +217,23 @@ class ModifyDB(QDialog):
 
             self.report_filter_edit = QtWidgets.QLineEdit()
             self.report_filter_edit.setPlaceholderText("Filter report records")
-            self.report_records_table = QTableWidget()
-            self.report_records_table.setSelectionMode(self._multi_selection_mode())
-            self.report_records_table.setSelectionBehavior(self._select_rows_behavior())
-            configure_table(self.report_records_table, stretch_column=1, resize_to_contents=(0,), min_height=260)
+            self.report_records_table = self._create_record_table()
+            self.report_busy_banner = RecordBusyBanner("Loading report records...")
 
             self.measurement_filter_edit = QtWidgets.QLineEdit()
             self.measurement_filter_edit.setPlaceholderText("Filter measurement rows")
-            self.measurement_records_table = QTableWidget()
-            self.measurement_records_table.setSelectionMode(self._multi_selection_mode())
-            self.measurement_records_table.setSelectionBehavior(self._select_rows_behavior())
-            configure_table(self.measurement_records_table, stretch_column=4, resize_to_contents=(0, 1), min_height=260)
+            self.measurement_records_table = self._create_record_table()
+            self.measurement_busy_banner = RecordBusyBanner("Loading measurement rows...")
+            self._record_slots = [
+                self._create_record_slot(
+                    "report", self.report_records_tab, self.report_records_table,
+                    self.report_filter_edit, self.report_busy_banner,
+                ),
+                self._create_record_slot(
+                    "measurement", self.measurement_rows_tab, self.measurement_records_table,
+                    self.measurement_filter_edit, self.measurement_busy_banner,
+                ),
+            ]
 
             # Create buttons for Select DB file, Apply changes, Undo, and Cancel
             self.select_db_button = QPushButton("Select DB file")
@@ -218,6 +249,22 @@ class ModifyDB(QDialog):
             )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _create_record_table(self):
+        table = RecordTableView()
+        table.setSelectionMode(self._multi_selection_mode())
+        table.setSelectionBehavior(self._select_rows_behavior())
+        table.set_record_model(RecordTableModel())
+        configure_table(table, min_height=260)
+        return table
+
+    def _create_record_slot(self, kind, tab, table, filter_edit, banner):
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(FILTER_DEBOUNCE_MS)
+        return RecordTableSlot(
+            kind=kind, tab=tab, view=table, filter_edit=filter_edit, banner=banner, filter_timer=timer
+        )
 
     def _create_normalize_table(self):
         table = QTableWidget()
@@ -260,10 +307,12 @@ class ModifyDB(QDialog):
 
             report_layout = QtWidgets.QVBoxLayout(self.report_records_tab)
             report_layout.addWidget(self.report_filter_edit)
+            report_layout.addWidget(self.report_busy_banner)
             report_layout.addWidget(self.report_records_table)
 
             measurement_layout = QtWidgets.QVBoxLayout(self.measurement_rows_tab)
             measurement_layout.addWidget(self.measurement_filter_edit)
+            measurement_layout.addWidget(self.measurement_busy_banner)
             measurement_layout.addWidget(self.measurement_records_table)
 
             self.tab_widget.addTab(self.normalize_tab, "Normalize values")
@@ -308,12 +357,13 @@ class ModifyDB(QDialog):
             self._connect_shift_range_for_table(self.header_table)
             self._connect_shift_range_for_table(self.report_records_table)
             self._connect_shift_range_for_table(self.measurement_records_table)
-            self.report_filter_edit.textChanged.connect(
-                lambda text: self._filter_table_rows(self.report_records_table, text)
-            )
-            self.measurement_filter_edit.textChanged.connect(
-                lambda text: self._filter_table_rows(self.measurement_records_table, text)
-            )
+            self.tab_widget.currentChanged.connect(self._on_main_tab_changed)
+            normalize_changed = getattr(self.normalize_tab_widget, "currentChanged", None)
+            if hasattr(normalize_changed, "connect"):
+                normalize_changed.connect(lambda _index: ModifyDB._load_visible_normalize_table(self))
+            for slot in self._record_slots:
+                slot.filter_edit.textChanged.connect(lambda _text, timer=slot.filter_timer: timer.start())
+                slot.filter_timer.timeout.connect(lambda slot=slot: self._apply_record_filter(slot))
             self.reference_filter_edit.textChanged.connect(
                 lambda text: self._filter_table_rows(self.reference_table, text)
             )
@@ -428,36 +478,55 @@ class ModifyDB(QDialog):
 
     def select_db_file(self):
         """Select a database file and load editable values into each table."""
+        from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
+
+        if vars(self).get("_save_in_progress", False):
+            return
         try:
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return
             if self.has_pending_changes() and not self._confirm_discard_changes(
                 "Choose another database"
             ):
                 return
             """Open a file dialog to select a database file"""
             filename, _ = QFileDialog.getOpenFileName(
-                self, "Select a database file", "", "SQLite database (*.db);;All files (*)"
+                self, "Select a database file", "", SQLITE_FILE_FILTER
             )
             if filename:
-                if not filename.endswith(".db"):
-                    filename += ".db"
+                if self.database_change_allowed is not None and not self.database_change_allowed():
+                    return
+                filename = sqlite_database_path(filename)
                 logger.info("Selected DB file: %s", filename)
                 self.db_file = filename
-                self.populate_tables()
+                ModifyDB._refresh_tables_for_view(self)
                 self.apply_button.setEnabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
-    def populate_tables(self):
-        """Refresh all editor tables from the currently selected database."""
+    def _refresh_tables_for_view(self):
+        # Preserve eager public/subclass/fake-widget behavior. Only the native dialog's
+        # own UI entry points opt in to deferring tables until their tab is shown.
+        tabs = self.normalize_tab_widget
+        if type(self) is ModifyDB and type(tabs).__module__ == "PyQt6.QtWidgets" and type(tabs) is QtWidgets.QTabWidget:
+            self.populate_tables(defer_hidden=True)
+        else:
+            self.populate_tables()
+
+    def populate_tables(self, *, defer_hidden=False):
+        """Refresh the normalization tables and reset the lazily loaded record tables."""
         try:
             # Clear existing items in table widgets and undo data
             self.reference_table.clearContents()
             self.part_number_table.clearContents()
             self.header_table.clearContents()
-            self.report_records_table.clearContents()
-            self.measurement_records_table.clearContents()
+            self._defer_normalize_tables = defer_hidden
+            if defer_hidden:
+                for table in (self.reference_table, self.part_number_table, self.header_table):
+                    table.setRowCount(0)
+            self._pending_normalize_sources = {}
+            self._reset_record_tables()
             self.undo_data.clear()
-            self._record_specs_by_table.clear()
             self._changes_committed = False
             self._discard_confirmed = False
             self._prepare_database_for_loading()
@@ -468,18 +537,46 @@ class ModifyDB(QDialog):
             )
             header_source = ("MEASUREMENTS", "HEADER") if self._uses_legacy_schema() else ("report_measurements", "header")
 
-            self.populate_table(self.reference_table, self._distinct_value_counts(*reference_source))
-            self.populate_table(self.part_number_table, self._distinct_value_counts(*sample_number_source))
-            self.populate_table(self.header_table, self._distinct_value_counts(*header_source))
-
-            if self._uses_legacy_schema():
-                self.populate_legacy_report_records_table()
-                self.populate_legacy_measurement_records_table()
+            self._pending_normalize_sources = {
+                self.reference_table: reference_source,
+                self.part_number_table: sample_number_source,
+                self.header_table: header_source,
+            }
+            if defer_hidden:
+                ModifyDB._load_visible_normalize_table(self)
             else:
-                self.populate_report_records_table()
-                self.populate_measurement_records_table()
+                for table in tuple(self._pending_normalize_sources):
+                    ModifyDB._load_normalize_table(self, table)
+
+            # Report/measurement records load the first time their tab is shown.
+            self._load_visible_record_table()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _load_normalize_table(self, table):
+        pending = getattr(self, "_pending_normalize_sources", {})
+        source = pending.get(table)
+        if source is not None:
+            self.populate_table(table, self._distinct_value_counts(*source))
+            del pending[table]
+            if self._defer_normalize_tables:
+                filters = {self.reference_table: self.reference_filter_edit,
+                           self.part_number_table: self.part_number_filter_edit,
+                           self.header_table: self.header_filter_edit}
+                self._filter_table_rows(table, filters[table].text())
+
+    def _load_visible_normalize_table(self):
+        if not getattr(self, "_pending_normalize_sources", None):
+            return
+        if not self.db_file or self.tab_widget.currentWidget() is not self.normalize_tab:
+            return
+        tables = (self.reference_table, self.part_number_table, self.header_table)
+        index = self.normalize_tab_widget.currentIndex()
+        if 0 <= index < len(tables):
+            try:
+                ModifyDB._load_normalize_table(self, tables[index])
+            except Exception as e:
+                self.log_and_exit(e)
 
     def _prepare_database_for_loading(self):
         """Resolve current vs legacy storage before querying schema-specific tables."""
@@ -536,24 +633,19 @@ class ModifyDB(QDialog):
 
         self._configure_normalize_table(table)
 
-    def populate_report_records_table(self):
-        """Load report-level rows from the overview view into an editable table."""
+    def _plan_report_records(self):
+        """Return ``(specs, query)`` for the report-level rows of the overview view."""
         available_columns = self._source_columns("vw_report_overview")
         specs = self._available_specs(self.REPORT_RECORD_COLUMNS, available_columns)
         if not specs:
-            self._populate_record_table(self.report_records_table, [], [], [])
-            return
+            return [], ""
 
         select_exprs = self._select_exprs_for_specs(specs)
         order_by = " ORDER BY report_id" if "report_id" in available_columns else ""
-        rows, columns = execute_select_with_columns(
-            self.db_file,
-            f"SELECT {', '.join(select_exprs)} FROM vw_report_overview{order_by};",
-        )
-        self._populate_record_table(self.report_records_table, specs, rows, columns)
+        return specs, f"SELECT {', '.join(select_exprs)} FROM vw_report_overview{order_by};"
 
-    def populate_measurement_records_table(self):
-        """Load measurement rows keyed by measurement id when the source exposes it."""
+    def _plan_measurement_records(self):
+        """Return ``(specs, query)`` for measurement rows keyed by measurement id when exposed."""
         view_columns = self._source_columns("vw_measurement_export")
         use_export_view = "measurement_id" in view_columns
         if use_export_view:
@@ -568,47 +660,205 @@ class ModifyDB(QDialog):
             order_by = " ORDER BY report_id, id"
 
         if not specs:
-            self._populate_record_table(self.measurement_records_table, [], [], [])
-            return
+            return [], ""
 
         select_exprs = self._select_exprs_for_specs(specs)
         quoted_source = self._quote_identifier(source_name)
-        rows, columns = execute_select_with_columns(
-            self.db_file,
-            f"SELECT {', '.join(select_exprs)} FROM {quoted_source}{order_by};",
-        )
-        self._populate_record_table(self.measurement_records_table, specs, rows, columns)
+        return specs, f"SELECT {', '.join(select_exprs)} FROM {quoted_source}{order_by};"
 
-    def populate_legacy_report_records_table(self):
+    def _plan_legacy_report_records(self):
         available_columns = self._source_columns("REPORTS")
         specs = self._available_specs(self.LEGACY_REPORT_RECORD_COLUMNS, available_columns)
         if not specs:
-            self._populate_record_table(self.report_records_table, [], [], [])
-            return
+            return [], ""
 
         select_exprs = self._select_exprs_for_specs(specs)
         order_by = " ORDER BY ID" if "id" in available_columns else ""
-        rows, columns = execute_select_with_columns(
-            self.db_file,
-            f"SELECT {', '.join(select_exprs)} FROM REPORTS{order_by};",
-        )
-        self._populate_record_table(self.report_records_table, specs, rows, columns)
+        return specs, f"SELECT {', '.join(select_exprs)} FROM REPORTS{order_by};"
 
-    def populate_legacy_measurement_records_table(self):
+    def _plan_legacy_measurement_records(self):
         available_columns = self._source_columns("MEASUREMENTS")
         specs = self._available_specs(self.LEGACY_MEASUREMENT_RECORD_COLUMNS, available_columns)
         if not specs:
-            self._populate_record_table(self.measurement_records_table, [], [], [])
-            return
+            return [], ""
 
         select_exprs = self._select_exprs_for_specs(specs)
         order_by_parts = [column for column in ("REPORT_ID", "ID") if column.lower() in available_columns]
         order_by = f" ORDER BY {', '.join(order_by_parts)}" if order_by_parts else ""
-        rows, columns = execute_select_with_columns(
-            self.db_file,
-            f"SELECT {', '.join(select_exprs)} FROM MEASUREMENTS{order_by};",
+        return specs, f"SELECT {', '.join(select_exprs)} FROM MEASUREMENTS{order_by};"
+
+    def _record_load_plan(self, kind):
+        legacy = self._uses_legacy_schema()
+        if kind == "report":
+            return self._plan_legacy_report_records() if legacy else self._plan_report_records()
+        return self._plan_legacy_measurement_records() if legacy else self._plan_measurement_records()
+
+    def _reset_record_tables(self):
+        """Drop loaded record rows and pending fetches; the next tab visit reloads them."""
+        for slot in self._record_slots:
+            self._cancel_record_load(slot)
+            slot.state = "idle"
+            slot.view.set_record_model(RecordTableModel())
+            self._last_clicked_row_by_table.pop(slot.view, None)
+
+    def _on_main_tab_changed(self, _index):
+        try:
+            ModifyDB._load_visible_normalize_table(self)
+            self._load_visible_record_table()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _load_visible_record_table(self):
+        """Start loading the record table whose tab is showing, if it has not loaded yet."""
+        if not self.db_file:
+            return
+        current_tab = self.tab_widget.currentWidget()
+        for slot in self._record_slots:
+            if slot.tab is current_tab and slot.state == "idle":
+                self._start_record_load(slot)
+
+    def _start_record_load(self, slot):
+        specs, query = self._record_load_plan(slot.kind)
+        if not specs:
+            self._install_record_rows(slot, specs, RecordRows([], []))
+            return
+
+        slot.generation += 1
+        slot.state = "loading"
+        slot.pending_specs = specs
+        slot.banner.setVisible(True)
+        thread_factory = RecordLoadThread
+        native_constructor = (thread_factory is _NATIVE_RECORD_CLASS
+                              and _NATIVE_RECORD_CLASS.__dict__.get("__init__") is _NATIVE_RECORD_INIT)
+        thread = thread_factory(slot.kind, slot.generation, self.db_file, query, specs)
+        thread.loaded.connect(self._on_record_rows_loaded)
+        thread.failed.connect(self._on_record_load_failed)
+        slot.thread = thread
+        progress, _label, _bar, _movie = create_delayed_worker_progress_dialog(
+            self, window_title="Loading database records",
+            initial_status_text=f"Loading {slot.kind} records...",
+            on_cancel=lambda: self._cancel_record_load(slot), delay_ms=1000,
         )
-        self._populate_record_table(self.measurement_records_table, specs, rows, columns)
+        progress.setWindowModality(Qt.WindowModality.NonModal)
+        slot.progress_dialog = progress
+        progress.show()
+        start = start_load_thread
+        if native_constructor and start is _NATIVE_RECORD_START:
+            start(thread, owner=self, on_finished=ModifyDB._deliver_record_load)
+        else:
+            start(thread)
+
+    def _deliver_record_load(self, thread):
+        delivery = vars(thread).pop("_pending_delivery", None)
+        if delivery is None:
+            return
+        terminal, value = delivery
+        if terminal == "loaded":
+            self._on_record_rows_loaded(thread._kind, thread._generation, value)
+        else:
+            self._on_record_load_failed(thread._kind, thread._generation, value)
+
+    @staticmethod
+    def _release_record_progress(slot):
+        progress, slot.progress_dialog = slot.progress_dialog, None
+        if progress is not None:
+            dismiss_worker_progress_dialog(progress)
+            progress.deleteLater()
+
+    def _slot_for_kind(self, kind):
+        return next((slot for slot in self._record_slots if slot.kind == kind), None)
+
+    def _current_record_slot(self, kind, generation):
+        """Return the slot a worker result belongs to, or ``None`` when it is stale."""
+        slot = self._slot_for_kind(kind)
+        if slot is None or generation != slot.generation or slot.state != "loading":
+            return None
+        return slot
+
+    def _on_record_rows_loaded(self, kind, generation, rows):
+        slot = self._current_record_slot(kind, generation)
+        if slot is None:
+            return
+        try:
+            slot.thread = None
+            self._install_record_rows(slot, slot.pending_specs or [], rows)
+        except Exception as e:
+            slot.state = "idle"
+            slot.banner.setVisible(False)
+            self._release_record_progress(slot)
+            self.log_and_exit(e)
+        else:
+            self._release_record_progress(slot)
+
+    def _on_record_load_failed(self, kind, generation, error):
+        slot = self._current_record_slot(kind, generation)
+        if slot is None:
+            return
+        slot.thread = None
+        slot.state = "idle"
+        slot.banner.setVisible(False)
+        self._release_record_progress(slot)
+        self.log_and_exit(error)
+
+    def _cancel_record_load(self, slot, *, wait_ms=3000):
+        """Invalidate the pending request and interrupt SQL without joining the GUI thread."""
+        slot.generation += 1
+        thread, slot.thread = slot.thread, None
+        if slot.state == "loading":
+            slot.state = "idle"
+        slot.banner.setVisible(False)
+        self._release_record_progress(slot)
+        cancel_load_thread(thread, wait_ms=wait_ms)
+
+    def ensure_record_tables_loaded(self):
+        """Load every record table that is still empty and wait for the rows (blocking)."""
+        try:
+            if not self.db_file:
+                return
+            for table in tuple(getattr(self, "_pending_normalize_sources", {})):
+                ModifyDB._load_normalize_table(self, table)
+            for slot in self._record_slots:
+                if slot.state != "loaded":
+                    self._cancel_record_load(slot)
+                    self._load_record_table_now(slot)
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def _load_record_table_now(self, slot):
+        specs, query = self._record_load_plan(slot.kind)
+        rows = load_record_rows(self.db_file, query, specs) if specs else RecordRows([], [])
+        self._install_record_rows(slot, specs, rows)
+
+    def _install_record_rows(self, slot, specs, record_rows):
+        model = RecordTableModel(specs, record_rows.rows, record_rows.haystack)
+        model.set_filter_text(slot.filter_edit.text())
+        slot.view.set_record_model(model)
+        self._configure_record_table(slot.view, specs)
+        self._last_clicked_row_by_table.pop(slot.view, None)
+        slot.state = "loaded"
+        slot.pending_specs = None
+        slot.banner.setVisible(False)
+
+    def _apply_record_filter(self, slot):
+        try:
+            slot.filter_timer.stop()
+            if slot.view.try_apply_filter(slot.filter_edit.text()):
+                self._last_clicked_row_by_table.pop(slot.view, None)
+            else:
+                slot.filter_timer.start()
+        except Exception as e:
+            self.log_and_exit(e)
+
+    def flush_record_filters(self):
+        """Apply any record filter still waiting for its debounce interval."""
+        for slot in self._record_slots:
+            if slot.filter_timer.isActive():
+                self._apply_record_filter(slot)
+
+    def _shutdown_record_loading(self):
+        for slot in getattr(self, "_record_slots", ()):
+            slot.filter_timer.stop()
+            self._cancel_record_load(slot)
 
     def _source_columns(self, source_name):
         try:
@@ -639,21 +889,6 @@ class ModifyDB(QDialog):
     @staticmethod
     def _quote_identifier(identifier):
         return quote_identifier(identifier)
-
-    def _populate_record_table(self, table, specs, rows, columns):
-        table.setColumnCount(len(specs))
-        table.setHorizontalHeaderLabels([spec["label"] for spec in specs])
-        table.setRowCount(len(rows))
-        self._record_specs_by_table[table] = list(specs)
-        self._configure_record_table(table, specs)
-
-        column_indexes = {column.lower(): index for index, column in enumerate(columns)}
-        for row_index, row_values in enumerate(rows):
-            for column_index, spec in enumerate(specs):
-                value_index = column_indexes.get(spec["field"].lower())
-                value = row_values[value_index] if value_index is not None else None
-                item = self._record_table_item(value, editable=spec.get("editable", False))
-                table.setItem(row_index, column_index, item)
 
     @staticmethod
     def _configure_record_table(table, specs):
@@ -696,7 +931,7 @@ class ModifyDB(QDialog):
 
     @staticmethod
     def _display_value(value):
-        return "" if value is None else str(value)
+        return display_value(value)
 
     def _filter_table_rows(self, table, text):
         normalized_text = str(text).lower()
@@ -725,7 +960,7 @@ class ModifyDB(QDialog):
             if confirmation_dialog.exec() == QMessageBox.StandardButton.Ok:
                 self.apply_changes()
         except Exception as e:
-            self.log_and_exit(e)
+            self._report_save_error(e)
 
     def collect_modifications(self):
         """Collect a user-facing summary of all modified rows across tables."""
@@ -796,21 +1031,33 @@ class ModifyDB(QDialog):
 
         return "\n".join(lines)
 
+    @staticmethod
+    def _record_model(table):
+        """Return the record model behind a record table, or ``None`` when nothing is loaded."""
+        model = table.model() if hasattr(table, "model") else None
+        return model if isinstance(model, RecordTableModel) else None
+
     def collect_record_table_modifications(self, table, table_name, key_field):
         """Build a summary of changed targeted record fields."""
         updates = self.collect_record_table_updates(table, key_field)
         if not updates:
             return ""
 
+        model = self._record_model(table)
+        specs = model.specs
+        editable_fields = {spec["field"]: spec for spec in specs if spec.get("editable")}
+        key_column = self._column_index_for_field(specs, key_field)
+        first_rows = model.first_rows_by_key(
+            key_column, {record_id for record_id, _fields in updates}, self._coerce_record_id
+        )
+
         lines = []
-        specs = self._record_specs_by_table.get(table, [])
-        editable_specs = [spec for spec in specs if spec.get("editable")]
         for record_id, fields in updates:
             for field_name, new_value in fields.items():
-                spec = next((candidate for candidate in editable_specs if candidate["field"] == field_name), None)
+                spec = editable_fields.get(field_name)
                 if spec is None:
                     continue
-                old_value = self._original_value_for_record_field(table, key_field, record_id, field_name)
+                old_value = self._original_value_for_record_field(model, first_rows, record_id, field_name)
                 lines.append(
                     f"{table_name}.{spec['label']}: "
                     f"{self._summary_value(old_value)} -> {self._summary_value(new_value)} "
@@ -821,25 +1068,17 @@ class ModifyDB(QDialog):
             return ""
         return "\n".join(lines)
 
-    def _original_value_for_record_field(self, table, key_field, record_id, field_name):
-        specs = self._record_specs_by_table.get(table, [])
-        key_column = self._column_index_for_field(specs, key_field)
-        value_column = self._column_index_for_field(specs, field_name)
-        if key_column is None or value_column is None:
+    def _original_value_for_record_field(self, model, first_rows, record_id, field_name):
+        value_column = self._column_index_for_field(model.specs, field_name)
+        source_row = first_rows.get(record_id)
+        if value_column is None or source_row is None:
             return None
-
-        for row in range(table.rowCount()):
-            key_item = table.item(row, key_column)
-            if key_item is None:
-                continue
-            if self._coerce_record_id(key_item.text()) != record_id:
-                continue
-            item = table.item(row, value_column)
-            return item.data(Qt.ItemDataRole.UserRole) if item is not None else None
-        return None
+        return model.original_value(source_row, value_column)
 
     def apply_changes(self):
         """Collect table edits and delegate persistence to the report edit service."""
+        if vars(self).get("_edit_thread") is not None or vars(self).get("_save_in_progress", False):
+            return
         try:
             normalization_changes = {
                 "reference": self.collect_normalization_value_changes(self.reference_table),
@@ -853,21 +1092,82 @@ class ModifyDB(QDialog):
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
-            self._create_report_edit_service().apply_changes(
+            completed = self._apply_edit_payload(dict(
                 storage_flavor=self._storage_flavor,
                 normalization_changes=normalization_changes,
                 report_updates=report_updates,
                 measurement_updates=measurement_updates,
-            )
+            ))
+            if completed:
+                self._edit_succeeded()
+        except Exception as e:
+            self._report_save_error(e)
 
-            # Display a message box with confirmation
-            QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
-
-            # Close the dialog
+    def _edit_succeeded(self):
+        QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
+        if "_changes_committed" not in vars(self) or not sip.isdeleted(self):
             self._changes_committed = True
             self.close()
-        except Exception as e:
-            self.log_and_exit(e)
+
+    def _report_save_error(self, error):
+        if getattr(self.log_and_exit, "__func__", None) is not ModifyDB.log_and_exit:
+            self.log_and_exit(error)
+            return
+        CustomLogger(error, reraise=False, behavior=LOG_ONLY)
+        QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
+
+    def _apply_edit_payload(self, payload):
+        native = ("_changes_committed" in vars(self)
+                  and type(self.db_file) is str
+                  and ReportEditService is _DEFAULT_EDIT_SERVICE
+                  and ReportRepository is _DEFAULT_EDIT_REPOSITORY
+                  and ReportEditService.apply_changes is _DEFAULT_EDIT_APPLY
+                  and all(name not in vars(self) and getattr(type(self), name) is method
+                          for name, method in _DEFAULT_EDIT_METHODS.items()))
+        if not native:
+            self._create_report_edit_service().apply_changes(**payload)
+            return True
+        self._save_in_progress = True
+        self._edit_thread, self._edit_progress = None, None
+        self._edit_controls = [(control, control.isEnabled()) for control in
+                               (self.tab_widget, self.select_db_button, self.apply_button, self.undo_button)]
+        for control, _enabled in self._edit_controls:
+            control.setEnabled(False)
+        thread = None
+        try:
+            thread = RecordSaveThread(self.db_file, payload)
+            self._edit_thread = thread
+            progress, _, bar, _ = create_delayed_worker_progress_dialog(
+                self, window_title="Apply database changes", initial_status_text="Saving confirmed edits in one transaction…",
+                on_cancel=lambda: None, cancellable=False,
+            )
+            self._edit_progress = progress
+            bar.setRange(0, 0)
+            detached_threads.register(thread, defer_quit=True, owner=self, on_finished=ModifyDB._finish_edit)
+            detached_threads.run_when_finished((thread,), partial(_release_edit, weakref.ref(self), weakref.ref(thread)))
+            progress.show()
+            thread.start()
+        except Exception:
+            if thread is not None:
+                detached_threads.discard(thread)
+            if self._save_in_progress:
+                _release_edit(weakref.ref(self), weakref.ref(thread) if thread is not None else lambda: None)
+            raise
+        return False
+
+    def _finish_edit(self, thread):
+        if thread is not self._edit_thread:
+            return
+        self._save_in_progress = False
+        error, thread.error = thread.error, None
+        progress = self._edit_progress
+        dismiss_worker_progress_dialog(progress, rejected=error is not None)
+        self._edit_progress = None
+        detached_threads.delete_on_owner_thread(progress)
+        if error is not None:
+            self._report_save_error(error)
+        else:
+            self._edit_succeeded()
 
     def _apply_update_statements(self, cursor, statements):
         ReportEditService.apply_update_statements(cursor, statements)
@@ -926,32 +1226,29 @@ class ModifyDB(QDialog):
 
     def collect_record_table_updates(self, table, key_field):
         """Collect changed editable cells as targeted repository update payloads."""
-        specs = self._record_specs_by_table.get(table, [])
+        model = self._record_model(table)
+        if model is None:
+            return []
+        specs = model.specs
         key_column = self._column_index_for_field(specs, key_field)
         if key_column is None:
             return []
 
         updates = []
-        for row in range(table.rowCount()):
-            key_item = table.item(row, key_column)
-            if key_item is None:
-                continue
-            record_id = self._coerce_record_id(key_item.text())
+        for source_row, edits in model.edited_rows():
+            record_id = self._coerce_record_id(model.original_text(source_row, key_column))
             if record_id is None:
                 continue
 
             fields = {}
-            for column_index, spec in enumerate(specs):
-                if not spec.get("editable"):
+            for column_index, new_text in edits.items():
+                spec = specs[column_index]
+                if not spec.get("editable") or new_text == model.original_text(source_row, column_index):
                     continue
-                item = table.item(row, column_index)
-                if item is None:
-                    continue
-                original_value = item.data(Qt.ItemDataRole.UserRole)
-                new_text = str(item.text())
-                if new_text == self._display_value(original_value):
-                    continue
-                fields[spec["field"]] = self._coerce_record_value(new_text, spec.get("value_type"))
+                try:
+                    fields[spec["field"]] = self._coerce_record_value(new_text, spec.get("value_type"))
+                except ValueError as exc:
+                    raise ValueError(f"{key_field.upper()}={record_id}, {spec['label']}: {exc}") from exc
 
             if fields:
                 updates.append((record_id, fields))
@@ -977,10 +1274,7 @@ class ModifyDB(QDialog):
         if value == "":
             return None
         if value_type == "float":
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return value
+            return validate_manual_number(value)
         return value
 
     def _create_report_repository(self):
@@ -1034,7 +1328,10 @@ class ModifyDB(QDialog):
 
         if not hasattr(self, "reference_table"):
             return False
-        return bool(self.collect_modifications().strip())
+        try:
+            return bool(self.collect_modifications().strip())
+        except ValueError:
+            return True
 
     def _confirm_discard_changes(self, action: str = "Close editor") -> bool:
         choice = QMessageBox.question(
@@ -1046,9 +1343,19 @@ class ModifyDB(QDialog):
         )
         return choice == QMessageBox.StandardButton.Discard
 
+    def done(self, result) -> None:
+        """Stop record fetches before the dialog hides so no worker outlives its owner."""
+
+        if vars(self).get("_save_in_progress", False):
+            return
+        self._shutdown_record_loading()
+        super().done(result)
+
     def reject(self) -> None:
         """Route Escape through the same dirty-state guard as the Close button."""
 
+        if vars(self).get("_save_in_progress", False):
+            return
         if (
             not self._changes_committed
             and not self._discard_confirmed
@@ -1060,6 +1367,9 @@ class ModifyDB(QDialog):
         super().reject()
 
     def closeEvent(self, event) -> None:
+        if vars(self).get("_save_in_progress", False):
+            event.ignore()
+            return
         if (
             not self._changes_committed
             and not self._discard_confirmed
@@ -1073,3 +1383,26 @@ class ModifyDB(QDialog):
 
     def log_and_exit(self, exception):
         CustomLogger(exception, reraise=False)
+
+
+_DEFAULT_EDIT_APPLY = ReportEditService.apply_changes
+_DEFAULT_EDIT_SERVICE = ReportEditService
+_DEFAULT_EDIT_REPOSITORY = ReportRepository
+_DEFAULT_EDIT_METHODS = {name: getattr(ModifyDB, name) for name in
+                         ("_create_report_repository", "_create_report_edit_service")}
+
+
+def _release_edit(owner_ref, thread_ref):
+    owner, thread = owner_ref(), thread_ref()
+    if owner is not None and not sip.isdeleted(owner) and vars(owner).get("_edit_thread") is thread:
+        owner._edit_thread = None
+        owner._save_in_progress = False
+        dismiss_worker_progress_dialog(owner._edit_progress)
+        detached_threads.delete_on_owner_thread(owner._edit_progress)
+        owner._edit_progress = None
+        for control, enabled in owner._edit_controls:
+            control.setEnabled(enabled)
+        owner._edit_controls = []
+    if thread is not None:
+        thread.error = None
+        detached_threads.delete_on_owner_thread(thread)

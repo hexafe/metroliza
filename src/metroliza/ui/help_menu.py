@@ -10,6 +10,7 @@ from metroliza.shared.docs_links import (
     GITHUB_REPOSITORY_BASE_URL,
     current_release_docs_ref,
     github_blob_url as _github_blob_url,
+    is_immutable_docs_ref,
 )
 
 GITHUB_RENDERED_DOCS_REF = current_release_docs_ref()
@@ -172,6 +173,7 @@ __all__ = [
     'DEFAULT_RELEASE_DOCS_REF',
     'GITHUB_RENDERED_DOCS_REF',
     'current_release_docs_ref',
+    'is_immutable_docs_ref',
     'MANUAL_PATHS',
     'MANUAL_RELATIVE_PATHS',
     'USER_MANUAL_ROOT',

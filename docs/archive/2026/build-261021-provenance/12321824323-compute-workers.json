@@ -1,0 +1,1187 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "runs": [
+    {
+      "index": 0,
+      "enabled": false,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 8.15684680000004,
+        "total_seconds": 9.156556499999965,
+        "stage_seconds": {
+          "preflight": 0.9912409999999454,
+          "prepare": 1.453226800000948,
+          "persist": 6.211821299999997,
+          "other_pipeline": 0.4917986999990944
+        },
+        "imported": 200,
+        "hydrated": 0,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 49.375883300000055,
+        "pool": {
+          "mode": "serial_disabled",
+          "workers": 0,
+          "max_pending": 0,
+          "completed": 0
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": []
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 3,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 3,
+        "max_active_processes": 3,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 3,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 62.68799999999999
+    },
+    {
+      "index": 0,
+      "enabled": true,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 10.92838329999995,
+        "total_seconds": 11.920080300000109,
+        "stage_seconds": {
+          "preflight": 0.9824748999999429,
+          "prepare": 0.6017629000021998,
+          "persist": 9.294596200000456,
+          "other_pipeline": 1.032024199997295
+        },
+        "imported": 200,
+        "hydrated": 200,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 32.15004840000006,
+        "pool": {
+          "mode": "spawn",
+          "workers": 2,
+          "max_pending": 4,
+          "completed": 39
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ]
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 7,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 7,
+        "max_active_processes": 5,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            }
+          ],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 7,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 48.0150000000001
+    },
+    {
+      "index": 1,
+      "enabled": true,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 17.859932600000093,
+        "total_seconds": 18.854085799999893,
+        "stage_seconds": {
+          "preflight": 0.9853981999999633,
+          "prepare": 0.5871131999990666,
+          "persist": 16.28344469999729,
+          "other_pipeline": 0.9893747000037365
+        },
+        "imported": 200,
+        "hydrated": 200,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 31.23639049999997,
+        "pool": {
+          "mode": "spawn",
+          "workers": 2,
+          "max_pending": 4,
+          "completed": 39
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ]
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 7,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 7,
+        "max_active_processes": 5,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            }
+          ],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 7,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 54.093000000000075
+    },
+    {
+      "index": 1,
+      "enabled": false,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 11.515176200000042,
+        "total_seconds": 12.49469309999995,
+        "stage_seconds": {
+          "preflight": 0.9708633000000191,
+          "prepare": 1.3333649000005607,
+          "persist": 9.438058899998396,
+          "other_pipeline": 0.7437524000010853
+        },
+        "imported": 200,
+        "hydrated": 0,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 48.188041800000065,
+        "pool": {
+          "mode": "serial_disabled",
+          "workers": 0,
+          "max_pending": 0,
+          "completed": 0
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": []
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 3,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 3,
+        "max_active_processes": 3,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 3,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 64.71899999999982
+    },
+    {
+      "index": 2,
+      "enabled": false,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 14.116960999999947,
+        "total_seconds": 15.11614150000014,
+        "stage_seconds": {
+          "preflight": 0.9910605000000032,
+          "prepare": 1.3161149000006844,
+          "persist": 12.191301500001146,
+          "other_pipeline": 0.6095445999981166
+        },
+        "imported": 200,
+        "hydrated": 0,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 49.74470990000009,
+        "pool": {
+          "mode": "serial_disabled",
+          "workers": 0,
+          "max_pending": 0,
+          "completed": 0
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": []
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 3,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 3,
+        "max_active_processes": 3,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 3,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 69.0469999999998
+    },
+    {
+      "index": 2,
+      "enabled": true,
+      "stage": "complete",
+      "schema_version": 1,
+      "import": {
+        "seconds": 12.895811800000047,
+        "total_seconds": 13.886878799999977,
+        "stage_seconds": {
+          "preflight": 0.9828993999999511,
+          "prepare": 0.5873726999982409,
+          "persist": 11.225189299996828,
+          "other_pipeline": 1.0832498000049782
+        },
+        "imported": 200,
+        "hydrated": 200,
+        "timing_scope": "parent_wall_time_prepare_includes_resolution_and_worker_wait;other_pipeline_includes_setup_approval_cleanup;seconds_excludes_preflight"
+      },
+      "export": {
+        "seconds": 31.926478499999803,
+        "pool": {
+          "mode": "spawn",
+          "workers": 2,
+          "max_pending": 4,
+          "completed": 39
+        }
+      },
+      "packaged": true,
+      "runtime_audit": {
+        "status": "observed",
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ]
+      },
+      "runtime_evidence": {
+        "installed": true,
+        "events": [
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          },
+          {
+            "kind": "compute_worker_launch",
+            "caller": "metroliza",
+            "phase": "after_ready"
+          }
+        ],
+        "owned": {
+          "schema_version": 1,
+          "members": [
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": "unknown",
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_launcher",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 0,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_application",
+              "identity": "fixed_file_verified",
+              "first_phase": "startup",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 1,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            },
+            {
+              "role": "package_compute_worker",
+              "identity": "fixed_file_verified",
+              "first_phase": "running",
+              "last_phase": "running",
+              "parent_ordinal_advisory": 2,
+              "lifecycle": "job_empty"
+            }
+          ],
+          "assigned": 7,
+          "unobserved": 0,
+          "job_empty": true,
+          "overflow": false,
+          "observation_unavailable": false,
+          "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+        },
+        "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+      },
+      "topology": {
+        "launcher_processes_observed": 2,
+        "application_processes_observed": 1,
+        "unexpected_processes_observed": 0,
+        "assigned_processes": 7,
+        "max_active_processes": 5,
+        "creation_order": [
+          "launcher_bootloader",
+          "launcher_supervisor",
+          "application",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker",
+          "compute_worker"
+        ],
+        "all_processes_exited": true,
+        "runtime_evidence": {
+          "installed": true,
+          "events": [
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            },
+            {
+              "kind": "compute_worker_launch",
+              "caller": "metroliza",
+              "phase": "after_ready"
+            }
+          ],
+          "owned": {
+            "schema_version": 1,
+            "members": [
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": "unknown",
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_launcher",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 0,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_application",
+                "identity": "fixed_file_verified",
+                "first_phase": "startup",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 1,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              },
+              {
+                "role": "package_compute_worker",
+                "identity": "fixed_file_verified",
+                "first_phase": "running",
+                "last_phase": "running",
+                "parent_ordinal_advisory": 2,
+                "lifecycle": "job_empty"
+              }
+            ],
+            "assigned": 7,
+            "unobserved": 0,
+            "job_empty": true,
+            "overflow": false,
+            "observation_unavailable": false,
+            "probe_effect": "extra_handle_queries_and_bounded_snapshot"
+          },
+          "probe_effect": "synchronous_private_prelaunch_journal_and_owned_handle_sampling"
+        }
+      },
+      "wall_seconds": 50.202999999999975
+    }
+  ],
+  "stage": "complete",
+  "load_average": "unavailable_on_windows",
+  "processor_count": 4,
+  "git_sha": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "manifest_sha256": "61c310dfa219650683d7e5c30f445ddc849f5322bfe4462abc7a54a45ea849db",
+  "comparison": "all_database_rows_and_workbook_parts_equal_except_persistence_and_document_clocks",
+  "medians_seconds": {
+    "serial": {
+      "import": 11.515176200000042,
+      "export": 49.375883300000055
+    },
+    "workers": {
+      "import": 12.895811800000047,
+      "export": 31.926478499999803
+    }
+  },
+  "speedup": {
+    "import": 0.8929392254313141,
+    "export": 1.5465496233792386
+  },
+  "windows_default_measurement": {
+    "groups": 40,
+    "reports": 200,
+    "workers": 2,
+    "scope": "hosted_runner_boundary_workloads_only"
+  }
+}

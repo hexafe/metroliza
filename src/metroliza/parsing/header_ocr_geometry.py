@@ -8,7 +8,16 @@ translate OCR pixel boxes back into the page coordinate system expected by
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import MethodType
 from typing import Any, Mapping, Sequence
+
+from metroliza.parsing.pdf_backend import load_pdf_backend
+
+
+_NATIVE_BACKEND = load_pdf_backend()
+_NATIVE_PAGE_TYPE = getattr(_NATIVE_BACKEND, "Page", None)
+_NATIVE_DICT_FLAGS = getattr(_NATIVE_BACKEND, "TEXTFLAGS_DICT", None)
+_NATIVE_GET_TEXT = getattr(_NATIVE_PAGE_TYPE, "get_text", None)
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,17 @@ def _bbox_height(bbox: tuple[float, float, float, float]) -> float:
     return max(0.0, bbox[3] - bbox[1])
 
 
+def _geometry_blocks(page):
+    # Native blocks retain mixed text/image indices and bboxes without image payloads.
+    # Fake pages and customized dispatch retain the original dictionary contract.
+    get_text = page.get_text
+    if (type(page) is _NATIVE_PAGE_TYPE and type(get_text) is MethodType
+            and get_text.__self__ is page and get_text.__func__ is _NATIVE_GET_TEXT):
+        return ({"type": block[6], "bbox": block[:4]}
+                for block in get_text("blocks", flags=_NATIVE_DICT_FLAGS))
+    return get_text("dict").get("blocks", ())
+
+
 def _block_candidates(
     page: Any,
     *,
@@ -91,7 +111,7 @@ def _block_candidates(
     min_width_fraction: float,
 ) -> list[dict[str, Any]]:
     try:
-        blocks = page.get_text("dict").get("blocks", ())
+        blocks = _geometry_blocks(page)
     except Exception:
         return []
 

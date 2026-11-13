@@ -1,0 +1,294 @@
+{
+  "utc": "2026-10-27T17:23:03.187037+00:00",
+  "source": "GitHub unpublished archive container asset all-remote-heads.bundle",
+  "bundle_sha256": "e5257b3af3986ca23de00dbc5b42f01b3d818fdd26c879ce51f04625a905e47b",
+  "owner": "hexafe repository maintainer",
+  "fetch_and_fsck_exit": 0,
+  "without_alternates": true,
+  "status": "PASS",
+  "count": 47,
+  "results": [
+    {
+      "ref": "refs/heads/build/onefile-20260927",
+      "commit": "82f8f57653964dd344fac7c01a84d9ab303cdaac",
+      "tree": "a590d34d32b2c762f245a2d41dc7c12a20065b23",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/build/rc2-candidate-20261018",
+      "commit": "78d5d775756e4b64530ce8fb04f175a2e3f461f1",
+      "tree": "71d2ce0a8225538ee1725150915f952af99a8b3e",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/build/step2-rc1-261021",
+      "commit": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+      "tree": "7f6f4abf40fedc50ee6ecaf95d147130bc1cc1ff",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/ci/1061-docs-only-path",
+      "commit": "3753273defeeacf1fa068a947a487a67018986dc",
+      "tree": "b53bbad47f32a8d00d0c4892a1f80c0e77c42898",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/dependabot/github_actions/develop/github-actions-69435ca2c2",
+      "commit": "4538539beea0eeb1623a46a443d8617f0f2c2601",
+      "tree": "f7f719a7a25bfe1be283a75ac7538e31818ba028",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/dependabot/pip/develop/python-dependencies-981d0a6db7",
+      "commit": "3084a8895a6fa956e52c1259b9a9182063d5fca5",
+      "tree": "8ee65ff64ebe23726ebb04c55b9dfe66d69ded84",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/develop",
+      "commit": "784e44b25c6e0572eeda38d5daba433f1746d678",
+      "tree": "c705f63f8fc51886e229718b264bc67e3f0fb746",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/docs/1061-gpt6-routing-workflow",
+      "commit": "508d5b865bd5d9c3c51d2ce121e5e5b3505630d9",
+      "tree": "0149bd8562fb3666ea629a1ec15a65cafdd68ccc",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feat/1099-native-runtime-launcher",
+      "commit": "14f8befc647e87ff2138030bc33ce1378f7ab2f7",
+      "tree": "636d98f9f0964505dbe0a37a8f6086fe939c2454",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feat/1100-metadata-review-before-import",
+      "commit": "bd0cf0f7384257564c2fe08a2a34d3e3ebbb670a",
+      "tree": "6de330c913478444a7e36bf95054652e66cf3b0e",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feat/1134-frozen-compute-workers",
+      "commit": "b566a8163ca3e3d98c80864caa3bc61d687538b6",
+      "tree": "919cff3a461b9ebd44420d45529c750b74cec42f",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feature/1016-report-workspace-shell",
+      "commit": "99a3f3373d4ec184d1a0f93e6cca1c57ab075ebd",
+      "tree": "cb3381c55947695e2899f5a9c345fc209d7b769c",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feature/diagnostics-supervised-v1",
+      "commit": "d1094ba3cc77af82c809686107799233ed47718c",
+      "tree": "b4e03855579aea537871a006dbe69ae56ea87c1d",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/feature/supervised-portable-onefile",
+      "commit": "a8428de259c652af2e667ca6053f6474f80ab0ec",
+      "tree": "bfaef44bda71c41a849ae0bda811f547cd213023",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1018-industrial-dialog-geometry",
+      "commit": "b1f334d3ef0c8fe073126748cf748e880dedd5f8",
+      "tree": "b7c4fb4481b764413d1e00bf3f41c958261b44d9",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1043-windows-completion-recurrence",
+      "commit": "aae8633c6eca1eda13f078804a8c94db8945f0ad",
+      "tree": "cff6a78c1be75eede419000c8526d28b0829b2ac",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1058-grouping-preview-lifecycle",
+      "commit": "fe9086486765cbf72c8d5f6ce46b0dc3b70f2b35",
+      "tree": "bb54fdbb58f7047f8f17ae2326be7f5c53402134",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1096-dark-theme-launch",
+      "commit": "5f4180209fa037814fbab589ab32eb8061beaf9c",
+      "tree": "ad6b236d3f6ac5557f93145e6c2572a6c52e6ded",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1106-onnxruntime-offline-namespaces",
+      "commit": "cffb024d7df7c71125450d044b94216bd13184d8",
+      "tree": "3c6da16a58a1fcfdbe54c086a394ed6bc878be5f",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1110-windows-timing-tests",
+      "commit": "8b86dc8560fcc78353ee1f3eee421986d225d92e",
+      "tree": "adf1ef527696796d7731a327f9f1331337d1f2d0",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1111-package-identity",
+      "commit": "0310a9d67f540453ba6888b41b0c23d989855f90",
+      "tree": "262fee4efb74fe3a1598199004906ea92473d5b5",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1112-clean-exit-qualification-gate",
+      "commit": "1a5279962dbf3ff975837ae96bb6693b5fd47af0",
+      "tree": "4e5c32f7f3462ff70e80737c236d4fa83fe7aaab",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/1119-qt-test-segfault",
+      "commit": "2249d87fc54f55f82cb18c6a26c1176a7abdda3d",
+      "tree": "0cb9f15b61f9089e0c614c0b69aaf6883d701dc7",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/fix/realtime-dashboard-scheduling-contract",
+      "commit": "e13a6bef95696fe4a4be4b2410e1aa5b5cd412d9",
+      "tree": "dffb354b3bfc0b64acfe1fc3425969ee66ba44a4",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/integrate/2026.09-rc1-build-261018",
+      "commit": "78d5d775756e4b64530ce8fb04f175a2e3f461f1",
+      "tree": "71d2ce0a8225538ee1725150915f952af99a8b3e",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/integrate/2026.09-rc1-into-develop",
+      "commit": "82f8f57653964dd344fac7c01a84d9ab303cdaac",
+      "tree": "a590d34d32b2c762f245a2d41dc7c12a20065b23",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/master",
+      "commit": "4a17903061245831c7146d106c876133387e8461",
+      "tree": "c6984cf555e4b7b21bb376cc30fdd27c330b4ae8",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1097-slim-user-payload",
+      "commit": "fb72a42e21651c516d912005eec18802504301e2",
+      "tree": "5945fdbde63cc99a92a5e450ed634d8e4c3d15d5",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1098-splash-first-paint",
+      "commit": "0e4a986d6beec4de7f56fd835ba9a6a63facb077",
+      "tree": "49d6b488e67d441489250040354f6326d7e6da24",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1115-metadata-selector-cache",
+      "commit": "eec2d4ff3d2efaddf0942c27ad2a19a00062e82d",
+      "tree": "12e3ee4936d8a51f8b9825bfd1d580d9022467e2",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1118-modify-db-model-view",
+      "commit": "d985ad68b473d6bd3b1e928810a01137eebb496d",
+      "tree": "e2bfda426636f0e469112eacbbedb74eb494842d",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1124-default-export",
+      "commit": "94c9caf937d9364b89a06b96eff723e3d64c4e2f",
+      "tree": "c6d194dc9c5fb3f485de657dfc8476aa3def361c",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1125-import-pipeline",
+      "commit": "a4e56ea1c2bdeaffb2f32639a0b5ef70d6b8406c",
+      "tree": "8f803cb3b529052ebd832206ac9adc6e35067c0d",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1126-extended-plots",
+      "commit": "384509c798f7606ec0317619a16dfea9e60600db",
+      "tree": "66409a2b4a27ab0465b91ac853502eeae24a74ab",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1127-filter-dialog",
+      "commit": "b449ff906ece5b8bed29e011ece3c4311582d8f8",
+      "tree": "593c3db500bd20c240d0ae7a037aec1a4aaa6fcc",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1128-csv-summary",
+      "commit": "2a134cde336636b794925a273b8b3fe6378fe882",
+      "tree": "75a5c55d9ecc120988a67910d1d2545f21ee8751",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/1136-windows-persist",
+      "commit": "af9a0034c3beabc2291e0c2b3a760fe03a25cd5a",
+      "tree": "e8db1b37e0f9a8c08e62e2ced25893f23c3181a2",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/step2-audit",
+      "commit": "013aafacad42334dbd86b07d7dc2e88822011bdc",
+      "tree": "9e0a7e1b0d4ea0ecfe406f42ef9c8b200f9cf8b6",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/step2-boost",
+      "commit": "101e5a445bc76223b88067de3a3bb37deb7dbb4e",
+      "tree": "4c567d8ff9ec0e40684538844920a35688f8a5e1",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/step3-audit",
+      "commit": "d2a6ec4e9b60ae575a521daaa8a15eaf4ea3831d",
+      "tree": "25b8f1c6719765b7391c1f85d138a7e7b15f2aa0",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/perf/step3-boost",
+      "commit": "f69ca5da31be5ef7efd5547457f14744dcb93baa",
+      "tree": "6287643be2e4e797357b01d6cbec855d6b1ca122",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/rc2",
+      "commit": "1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac",
+      "tree": "e1d61e5e193ba9def1825829434dc207cfcf9f91",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/release/2026.06-rc2",
+      "commit": "1eeeab27352ed2c6bcbdca2af81f3fdd7c1f8cac",
+      "tree": "e1d61e5e193ba9def1825829434dc207cfcf9f91",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/stack/rc2-before-1134",
+      "commit": "5a83175fc52692b94bae1e85aa082e2df1f35de5",
+      "tree": "135031f4bf92cd9114d4cc764ff2fd35bd3a3075",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/test/1095-f8-qt-theme-hermetic",
+      "commit": "9c4e69e527606606112efc878e68a28614e588fc",
+      "tree": "277580e6a6b6e1b4721bdf70a2bae19782691b58",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/win-dlv-1/acceptance",
+      "commit": "a50d19721a8eee8761b8872987533b8b902d3991",
+      "tree": "c5494fdbee33962fde821eb2d2c75fdbe410a081",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    },
+    {
+      "ref": "refs/heads/win-dlv-1/engineering",
+      "commit": "e98be6060f5defe372765554782a189466a44f60",
+      "tree": "8b930480bfb79320c3a9892cb431880ce2a753d1",
+      "status": "PASS_FROM_INDEPENDENT_GITHUB_BUNDLE_ASSET"
+    }
+  ]
+}

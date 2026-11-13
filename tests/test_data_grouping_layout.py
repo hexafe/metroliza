@@ -162,3 +162,139 @@ class TestDataGroupingLayout(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGroupingSignalPopulation(unittest.TestCase):
+    _run_probe = TestDataGroupingLayout._run_probe
+
+    def test_population_coalesces_callbacks_and_restores_existing_signal_block(self):
+        payload = self._run_probe(
+            """
+            import json
+            import pandas as pd
+            from PyQt6.QtWidgets import QApplication
+            from metroliza.ui.data_grouping import DataGrouping
+
+            class Grouping(DataGrouping):
+                def read_data_to_df(self):
+                    self.df = pd.DataFrame({'REPORT_ID': [1, 2, 3], 'REFERENCE': ['001', None, ' '],
+                                            'SAMPLE_NUMBER': [1, 2, 3], 'PART_NAME': ['A', 'B', 'A']})
+                def on_reference_selection_changed(self):
+                    self.reference_callbacks = getattr(self, 'reference_callbacks', 0) + 1
+                    super().on_reference_selection_changed()
+                def on_group_selection_changed(self):
+                    self.group_callbacks = getattr(self, 'group_callbacks', 0) + 1
+                    super().on_group_selection_changed()
+
+            app = QApplication.instance() or QApplication([])
+            dialog = Grouping(parent=None, db_file='')
+            initial = [dialog.reference_callbacks, dialog.group_callbacks]
+            dialog.reference_callbacks = dialog.group_callbacks = 0
+            dialog.reference_list.blockSignals(True)
+            emitted = []
+            dialog.groups_list.itemSelectionChanged.connect(lambda: emitted.append('group'))
+            dialog.reference_list.itemSelectionChanged.connect(lambda: emitted.append('reference'))
+            dialog.populate_list_widgets()
+            after = [dialog.reference_callbacks, dialog.group_callbacks]
+            blocked = [dialog.reference_list.signalsBlocked(), dialog.groups_list.signalsBlocked(),
+                       dialog.part_list.signalsBlocked(), dialog.part_group_list.signalsBlocked()]
+            print(json.dumps({'initial': initial, 'after': after, 'blocked': blocked, 'emitted': emitted,
+                              'parts': dialog.part_list.count(), 'group_parts': dialog.part_group_list.count()}))
+            """
+        )
+        self.assertEqual(payload, {'initial': [1, 1], 'after': [1, 1], 'blocked': [True, False, False, False],
+                                   'parts': 1, 'group_parts': 3, 'emitted': []})
+
+    def test_population_errors_restore_all_prior_signal_states_including_partial_construction(self):
+        payload = self._run_probe(
+            """
+            import json
+            import pandas as pd
+            from unittest.mock import patch
+            from PyQt6 import QtCore
+            from PyQt6.QtWidgets import QApplication
+            from metroliza.ui.data_grouping import DataGrouping
+            DataGrouping.read_data_to_df = lambda self: setattr(self, 'df', pd.DataFrame({
+                'REPORT_ID': [1, 2], 'REFERENCE': ['A', 'B'], 'SAMPLE_NUMBER': [1, 2],
+            }))
+            app = QApplication.instance() or QApplication([])
+            dialog = DataGrouping(parent=None, db_file='')
+            widgets = [getattr(dialog, name) for name in (
+                'reference_list', 'part_list', 'all_parts_list', 'groups_list', 'part_group_list',
+            )]
+            prior = [False, True, False, True, False]
+            for widget, blocked in zip(widgets, prior):
+                widget.blockSignals(blocked)
+            errors = []
+            dialog.log_and_exit = lambda error: errors.append(str(error))
+            original = QtCore.QSignalBlocker
+            attempts = []
+            def partial_failure(widget):
+                attempts.append(widget)
+                if len(attempts) == 2:
+                    raise RuntimeError('blocker construction failure')
+                return original(widget)
+            with patch.object(QtCore, 'QSignalBlocker', partial_failure):
+                dialog.populate_list_widgets()
+            after_partial = [widget.signalsBlocked() for widget in widgets]
+            def population_failure():
+                raise RuntimeError('population failure')
+            dialog._ensure_group_color_integrity = population_failure
+            dialog.populate_list_widgets()
+            print(json.dumps({'prior': prior, 'after_partial': after_partial,
+                              'after_population': [widget.signalsBlocked() for widget in widgets],
+                              'errors': errors, 'construction_attempts': len(attempts)}))
+            """
+        )
+        self.assertEqual(payload['after_partial'], payload['prior'])
+        self.assertEqual(payload['after_population'], payload['prior'])
+        self.assertEqual(payload['construction_attempts'], 2)
+        self.assertEqual(payload['errors'], ['blocker construction failure', 'population failure'])
+
+    def test_native_missing_blocker_preserves_general_output_and_other_import_errors_surface(self):
+        payload = self._run_probe(
+            """
+            import builtins
+            import json
+            import pandas as pd
+            from unittest.mock import patch
+            from PyQt6.QtWidgets import QApplication
+            from metroliza.ui.data_grouping import DataGrouping
+            DataGrouping.read_data_to_df = lambda self: setattr(self, 'df', pd.DataFrame({
+                'REPORT_ID': [1, 2], 'REFERENCE': ['A', 'B'], 'SAMPLE_NUMBER': [1, 2],
+            }))
+            app = QApplication.instance() or QApplication([])
+            dialog = DataGrouping(parent=None, db_file='')
+            def snapshot():
+                lists = []
+                for name in ('reference_list', 'part_list', 'all_parts_list', 'groups_list', 'part_group_list'):
+                    widget = getattr(dialog, name)
+                    lists.append([(widget.item(i).text(), widget.item(i).isSelected(),
+                                   widget.item(i).background().color().name()) for i in range(widget.count())])
+                return {'lists': lists, 'summaries': [getattr(dialog, name).text() for name in (
+                    'reference_summary_label', 'group_summary_label', 'selection_summary_label',
+                )]}
+            expected = snapshot()
+            original_import = builtins.__import__
+            attempts = []
+            def missing_blocker(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == 'PyQt6.QtCore' and 'QSignalBlocker' in fromlist:
+                    attempts.append('missing')
+                    raise ImportError('blocker deliberately unavailable')
+                return original_import(name, globals, locals, fromlist, level)
+            errors = []
+            dialog.log_and_exit = lambda error: errors.append(str(error))
+            with patch('builtins.__import__', side_effect=missing_blocker):
+                dialog.populate_list_widgets()
+            equal = snapshot() == expected
+            def unexpected_error(name, globals=None, locals=None, fromlist=(), level=0):
+                if name == 'PyQt6.QtCore' and 'QSignalBlocker' in fromlist:
+                    raise RuntimeError('unexpected blocker import error')
+                return original_import(name, globals, locals, fromlist, level)
+            with patch('builtins.__import__', side_effect=unexpected_error):
+                dialog.populate_list_widgets()
+            print(json.dumps({'general_identical': equal, 'attempts': attempts, 'errors': errors}))
+            """
+        )
+        self.assertEqual(payload, {'general_identical': True, 'attempts': ['missing'],
+                                   'errors': ['unexpected blocker import error']})

@@ -6,20 +6,21 @@ import logging
 import os
 import time
 import traceback
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
 from PyQt6.QtCore import QThread, pyqtSignal
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.cmm_schema import ensure_cmm_report_schema
-from metroliza.reports.db import execute_with_retry, sqlite_connection_scope
+from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
+from metroliza.reports.db import checkpoint_pending_import_commits
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
+from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
+from metroliza.shared.workflow_diagnostics import start_workflow_trace
 from metroliza.shared.progress_status import (
     MonotonicProgressEmitterMixin,
     build_three_line_status,
@@ -27,16 +28,41 @@ from metroliza.shared.progress_status import (
 )
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import CanonicalReportMetadata
-from metroliza.reports.report_repository import ReportRepository, compute_sha256
+from metroliza.reports.report_repository import (
+    ReportEnrichmentApproval,
+    ReportImportDisposition,
+    ReportImportPolicy,
+    ReportRepository,
+    compute_sha256,
+)
 from metroliza.parsing.base_report_parser import BaseReportParser
 from metroliza.parsing.cmm_report_parser import CMMReportParser
-from metroliza.parsing.parser_plugin_contracts import infer_source_format
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.import_prepare_pool import (
+    ImportPreparationCancelled,
+    ImportPreparePool,
+    resolve_prepare_worker_count,
+)
+from metroliza.parsing.parse_result_v2_persistence import (
+    build_persistence_payload,
+    import_parse_result_v2_payload_if_absent,
+)
+from metroliza.parsing.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    ParseResultV2,
+    infer_source_format,
+)
+from metroliza.parsing.source_inspection import (
+    SourceChangedAfterInspectionError,
+    SourceInspectionContext,
+)
 from metroliza.parsing.preflight import (
+    ImportPlan,
     ParsePreflightResult,
     ParsePreflightStatus,
+    SelectedReportIdentity,
     is_supported_report_archive,
     safe_unpack_report_archive,
+    validate_import_plan,
 )
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 
@@ -55,6 +81,42 @@ class ParseBatchResult:
     preflight_ambiguous_files: int = 0
     preflight_unreadable_files: int = 0
     preflight_changed_files: int = 0
+    selected_files: int = 0
+    imported_files: int = 0
+    already_present_files: int = 0
+    intentionally_excluded_files: int = 0
+    cancelled_files: int = 0
+
+
+@dataclass(frozen=True)
+class _SelectedReportWorkItem:
+    report_path: str | Path
+    selected_identity: SelectedReportIdentity | None = None
+    # Inspection created while approving the plan; its digest is only provisional until the
+    # final in-transaction verification (see SourceInspectionContext.verified_sha256()).
+    source_inspection: SourceInspectionContext | None = field(default=None, compare=False)
+
+
+@dataclass(frozen=True)
+class _PreparedReportWorkItem:
+    report_path: str | Path
+    selected_identity: SelectedReportIdentity | None
+    source_inspection: SourceInspectionContext
+    parser: object
+    resolution_evidence: report_parser_factory.ParserResolutionEvidence | None
+
+
+@dataclass(frozen=True)
+class _ImportPlanFilterResult:
+    approved_reports: tuple[_SelectedReportWorkItem, ...]
+    changed_files: int = 0
+    selected_changed_files: int = 0
+
+    @property
+    def approved_paths(self) -> tuple[Path, ...]:
+        """Return paths for the legacy preflight-filter compatibility seam."""
+
+        return tuple(Path(item.report_path) for item in self.approved_reports)
 
 
 @dataclass(frozen=True)
@@ -63,9 +125,194 @@ class MetadataEnrichmentBatchResult:
     total_files: int
     failed_files: int = 0
     skipped_files: int = 0
+    cancelled_files: int = 0
+    started: bool = True
+    cancellation_requested: bool = False
+
+    @property
+    def status(self):
+        if not self.started and self.cancellation_requested:
+            return "cancelled_before_start"
+        if not self.total_files:
+            return "no_eligible_work"
+        if self.failed_files or self.skipped_files or self.cancelled_files:
+            return "incomplete"
+        return "completed"
 
 
 PARSE_TELEMETRY_BATCH_SIZE = 25
+
+
+class _MetadataEnrichmentCancelled(Exception):
+    """The active enrichment was rejected before commit due to cancellation."""
+
+
+class _SelectedReportApprovalDriftError(ValueError):
+    """Raised when per-report evidence no longer matches the import plan."""
+
+
+def _coerce_selected_report_work_item(report) -> _SelectedReportWorkItem:
+    if isinstance(report, _SelectedReportWorkItem):
+        return report
+    return _SelectedReportWorkItem(report_path=report)
+
+
+def _selected_report_fingerprint(sha256_value: str | None) -> str | None:
+    return f"sha256:{sha256_value}" if sha256_value else None
+
+
+def _sha256_from_fingerprint(fingerprint: str | None) -> str | None:
+    prefix = "sha256:"
+    if fingerprint and fingerprint.startswith(prefix):
+        return fingerprint[len(prefix):] or None
+    return None
+
+
+def _require_selected_source_approval(
+    work_item: _SelectedReportWorkItem,
+    source_inspection: SourceInspectionContext,
+    *,
+    verify_current: bool,
+) -> None:
+    identity = work_item.selected_identity
+    if identity is None:
+        return
+    if not verify_current:
+        source_inspection.require_unchanged_size()
+    sha256_value = (
+        source_inspection.verified_sha256() if verify_current else source_inspection.sha256
+    )
+    if _selected_report_fingerprint(sha256_value) != identity.fingerprint:
+        raise _SelectedReportApprovalDriftError(
+            f"Selected report content no longer matches reviewed approval: {identity.occurrence_id}"
+        )
+
+
+def _require_prepared_report_approval(
+    prepared: _PreparedReportWorkItem,
+    *,
+    verify_current: bool = True,
+) -> None:
+    """Check parser and source approval; ``verify_current`` is the one content rehash."""
+
+    identity = prepared.selected_identity
+    if identity is None:
+        return
+    if getattr(prepared.parser, "source_inspection_context", None) is not (
+        prepared.source_inspection
+    ):
+        raise _SelectedReportApprovalDriftError(
+            f"Parser source inspection changed for {identity.occurrence_id}"
+        )
+    evidence = prepared.resolution_evidence
+    if (
+        evidence is None
+        or getattr(prepared.parser, "parser_resolution_evidence", None) is not evidence
+        or evidence.plugin_id != identity.parser_id
+        or evidence.registry_generation_id != identity.registry_generation_id
+        or report_parser_factory.get_registry_snapshot().generation_id
+        != identity.registry_generation_id
+    ):
+        raise _SelectedReportApprovalDriftError(
+            f"Parser approval changed for {identity.occurrence_id}"
+        )
+    _require_selected_source_approval(
+        _SelectedReportWorkItem(prepared.report_path, identity),
+        prepared.source_inspection,
+        verify_current=verify_current,
+    )
+
+
+class _StablePluginAtomicImportAdapter:
+    """Add owner-thread atomic persistence to a standalone stable plugin."""
+
+    def __init__(
+        self,
+        plugin,
+        *,
+        source_inspection: SourceInspectionContext,
+        database,
+        connection,
+        manifest,
+        import_policy: ReportImportPolicy,
+    ):
+        self._plugin = plugin
+        self._source_inspection = source_inspection
+        self._database = database
+        self._connection = connection
+        self._manifest = manifest
+        self._import_policy = import_policy
+        self._prepared_parse_result_v2 = None
+        self._prepared_persistence_payload = None
+
+    @property
+    def source_inspection_context(self):
+        return self._plugin.source_inspection_context
+
+    @property
+    def parser_resolution_evidence(self):
+        return self._plugin.parser_resolution_evidence
+
+    @property
+    def stage_timings_s(self):
+        return getattr(self._plugin, "stage_timings_s", None)
+
+    @property
+    def parse_backend_used(self):
+        return getattr(self._plugin, "parse_backend_used", "unknown")
+
+    @property
+    def persistence_backend_used(self):
+        return getattr(
+            self._plugin,
+            "persistence_backend_used",
+            "parse_result_v2_atomic",
+        )
+
+    def _prepare_parse_result_v2(self):
+        if self._prepared_parse_result_v2 is not None:
+            return self._prepared_parse_result_v2
+
+        parse_result = self._plugin.parse_to_v2()
+        if not isinstance(parse_result, ParseResultV2):
+            raise TypeError(
+                "Standalone stable parser plugin parse_to_v2() must return "
+                f"ParseResultV2, got {type(parse_result).__name__}"
+            )
+        payload = build_persistence_payload(
+            parse_result,
+            source_path=self._source_inspection.source_path,
+            manifest=self._manifest,
+            expected_source_format=self._source_inspection.source_format,
+        )
+        self._prepared_parse_result_v2 = parse_result
+        self._prepared_persistence_payload = payload
+        return parse_result
+
+    def prepare_for_two_stage_pipeline(self):
+        return self._prepare_parse_result_v2()
+
+    def _import_prepared_parse_result_v2(self):
+        parse_result = self._prepared_parse_result_v2
+        payload = self._prepared_persistence_payload
+        if parse_result is None or payload is None:
+            parse_result = self._prepare_parse_result_v2()
+            payload = self._prepared_persistence_payload
+        return import_parse_result_v2_payload_if_absent(
+            payload,
+            parse_result=parse_result,
+            source_path=self._source_inspection.source_path,
+            database=self._database,
+            connection=self._connection,
+            source_inspection=self._source_inspection,
+            import_policy=self._import_policy,
+        )
+
+    def import_report_if_absent(self):
+        return self._import_prepared_parse_result_v2()
+
+    def import_prepared_report_if_absent(self):
+        return self._import_prepared_parse_result_v2()
 
 
 def build_report_fingerprints_from_rows(rows, should_cancel=lambda: False):
@@ -211,6 +458,12 @@ def _log_parse_file_failure(report, stage, exception, processed_files, total_fil
     )
 
 
+def _release_report_inspections(work_items):
+    for item in work_items:
+        if item.source_inspection is not None:
+            item.source_inspection.release_extracted_text()
+
+
 def parse_new_reports(
     report_paths,
     report_fingerprints,
@@ -223,20 +476,86 @@ def parse_new_reports(
     enable_two_stage_pipeline=False,
     worker_count=None,
     log_file_failures=True,
+    on_file_imported=None,
+    require_typed_persistence_outcome=False,
+    on_file_accepted=None,
+    prepare_pool=None,
 ):
+    # Keep source evidence on each item, but release its potentially large text
+    # representations even when processing aborts or leaves a cancelled suffix.
+    work_items = tuple(_coerce_selected_report_work_item(report) for report in report_paths)
+    work_items = tuple(
+        replace(item, source_inspection=item.source_inspection or SourceInspectionContext.from_path(
+            item.report_path, source_format=infer_source_format(item.report_path)
+        ))
+        for item in work_items
+    )
+    try:
+        return _parse_new_reports(
+            work_items, report_fingerprints, parser_factory, persist_report,
+            should_cancel=should_cancel, on_progress=on_progress,
+            on_file_parsed=on_file_parsed, on_file_failed=on_file_failed,
+            enable_two_stage_pipeline=enable_two_stage_pipeline, worker_count=worker_count,
+            log_file_failures=log_file_failures, on_file_imported=on_file_imported,
+            require_typed_persistence_outcome=require_typed_persistence_outcome,
+            on_file_accepted=on_file_accepted, prepare_pool=prepare_pool,
+        )
+    finally:
+        _release_report_inspections(work_items)
+
+
+def _parse_new_reports(
+    report_paths,
+    report_fingerprints,
+    parser_factory,
+    persist_report,
+    should_cancel=lambda: False,
+    on_progress=None,
+    on_file_parsed=None,
+    on_file_failed=None,
+    enable_two_stage_pipeline=False,
+    worker_count=None,
+    log_file_failures=True,
+    on_file_imported=None,
+    require_typed_persistence_outcome=False,
+    on_file_accepted=None,
+    prepare_pool=None,
+):
+    work_items = tuple(_coerce_selected_report_work_item(report) for report in report_paths)
     parsed_files = 0
+    imported_files = 0
+    already_present_files = 0
     failed_files = 0
     skipped_files = 0
-    total_files = len(report_paths)
+    changed_files = 0
+    total_files = len(work_items)
+
+    def _record_persistence_outcome(outcome):
+        nonlocal parsed_files, imported_files, already_present_files
+        if require_typed_persistence_outcome:
+            if outcome is ReportImportDisposition.IMPORTED:
+                imported_files += 1
+            elif outcome is ReportImportDisposition.ALREADY_PRESENT:
+                already_present_files += 1
+            else:
+                raise TypeError(
+                    "Normal report import persistence must return ReportImportDisposition"
+                )
+        else:
+            imported_files += 1
+        parsed_files = imported_files + already_present_files
 
     def _emit_processed_progress():
         if on_progress:
-            on_progress(parsed_files + failed_files + skipped_files, total_files)
+            on_progress(
+                parsed_files + failed_files + skipped_files + changed_files,
+                total_files,
+            )
 
     def _record_unsupported_skip(report, exception):
         nonlocal skipped_files
         skipped_files += 1
-        processed_files = parsed_files + failed_files + skipped_files
+        processed_files = parsed_files + failed_files + skipped_files + changed_files
         _log_unsupported_report_skip(
             report,
             exception,
@@ -248,7 +567,7 @@ def parse_new_reports(
     def _record_file_failure(report, stage, exception):
         nonlocal failed_files
         failed_files += 1
-        processed_files = parsed_files + failed_files + skipped_files
+        processed_files = parsed_files + failed_files + skipped_files + changed_files
         setattr(exception, "_metroliza_parse_failure_stage", str(stage))
         if log_file_failures:
             _log_parse_file_failure(
@@ -262,99 +581,237 @@ def parse_new_reports(
             on_file_failed(report, exception, processed_files, total_files)
         _emit_processed_progress()
 
+    def _record_approval_drift(report, exception):
+        nonlocal changed_files
+        changed_files += 1
+        logger.info(
+            "Selected report approval changed before persistence: file=%s reason=%s",
+            report,
+            exception,
+            extra=build_parse_log_extra(
+                source_path=report,
+                total_files=total_files,
+                parsed_count=(parsed_files + failed_files + skipped_files + changed_files),
+                cancel_flag=False,
+            )
+            | {
+                "source_file": str(report),
+                "stage": "selected_report_approval",
+                "skip_reason": "selected_report_approval_changed",
+            },
+        )
+        _emit_processed_progress()
+
+    def _inspect_work_item(work_item):
+        report = work_item.report_path
+        source_inspection = work_item.source_inspection or SourceInspectionContext.from_path(
+            report,
+            source_format=infer_source_format(report),
+        )
+        _require_selected_source_approval(
+            work_item,
+            source_inspection,
+            verify_current=False,
+        )
+        fingerprint = build_source_file_fingerprint(report, source_inspection)
+        return source_inspection, fingerprint
+
+    def _construct_prepared_report(work_item, source_inspection):
+        identity = work_item.selected_identity
+        parser = report_parser_factory.invoke_parser_factory(
+            parser_factory,
+            work_item.report_path,
+            source_inspection=source_inspection,
+            expected_plugin_id=(identity.parser_id if identity is not None else None),
+            expected_registry_generation_id=(
+                identity.registry_generation_id if identity is not None else None
+            ),
+        )
+        evidence = getattr(parser, "parser_resolution_evidence", None)
+        prepared = _PreparedReportWorkItem(
+            report_path=work_item.report_path,
+            selected_identity=identity,
+            source_inspection=source_inspection,
+            parser=parser,
+            resolution_evidence=(
+                evidence
+                if isinstance(
+                    evidence,
+                    report_parser_factory.ParserResolutionEvidence,
+                )
+                else None
+            ),
+        )
+        if identity is not None:
+            # Parser/registry evidence now; the final content rehash happens inside
+            # the persistence transaction, after the write lock is acquired.
+            _require_prepared_report_approval(prepared, verify_current=False)
+        return prepared
+
+    def _is_selected_approval_drift(work_item, exception):
+        return work_item.selected_identity is not None and isinstance(
+            exception,
+            (
+                _SelectedReportApprovalDriftError,
+                report_parser_factory.ParserApprovalMismatchError,
+                report_parser_factory.ParserAmbiguityError,
+                SourceChangedAfterInspectionError,
+            ),
+        )
+
+    def _prepare_report(work_item, prepared):
+        """Prepare in a worker process when it produced this report's state, else in-process."""
+
+        if should_cancel():
+            raise ImportPreparationCancelled()
+        if prepare_pool is not None and prepare_pool.apply_to(work_item, prepared):
+            return
+        if should_cancel():
+            raise ImportPreparationCancelled()
+        prepared.parser.prepare_for_two_stage_pipeline()
+
     if enable_two_stage_pipeline:
         max_workers = worker_count or max(1, min(8, os.cpu_count() or 1))
 
-        def _stage1_worker(report, enqueued_at, source_inspection):
+        def _stage1_worker(work_item, enqueued_at, source_inspection):
             try:
-                parser = report_parser_factory.invoke_parser_factory(
-                    parser_factory,
-                    report,
-                    source_inspection=source_inspection,
-                )
-            except Exception as exc:
-                setattr(exc, "_metroliza_parse_failure_stage", "parser")
-                raise
-            stage_timings = getattr(parser, "stage_timings_s", None)
-            if isinstance(stage_timings, dict):
-                stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
-
-            prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
-            if callable(prepare_method):
                 try:
-                    prepare_method()
+                    prepared = _construct_prepared_report(
+                        work_item,
+                        source_inspection,
+                    )
                 except Exception as exc:
-                    setattr(exc, "_metroliza_parse_failure_stage", "prepare")
+                    setattr(exc, "_metroliza_parse_failure_stage", "parser")
                     raise
+                parser = prepared.parser
+                stage_timings = getattr(parser, "stage_timings_s", None)
+                if isinstance(stage_timings, dict):
+                    stage_timings["stage1_queue_wait_s"] = max(0.0, time.perf_counter() - enqueued_at)
 
-            return parser, time.perf_counter()
+                prepare_method = getattr(parser, "prepare_for_two_stage_pipeline", None)
+                if callable(prepare_method):
+                    try:
+                        prepare_method()
+                    except Exception as exc:
+                        setattr(exc, "_metroliza_parse_failure_stage", "prepare")
+                        raise
+
+                return prepared, time.perf_counter()
+
+            finally:
+                source_inspection.release_extracted_text()
 
         executor = ThreadPoolExecutor(max_workers=max_workers)
         futures = []
         cancel_requested = False
 
         try:
-            for report in report_paths:
+            for work_item in work_items:
                 if should_cancel():
                     cancel_requested = True
                     break
-                source_inspection = SourceInspectionContext.from_path(
-                    report,
-                    source_format=infer_source_format(report),
-                )
-                fingerprint = build_source_file_fingerprint(report, source_inspection)
-                if fingerprint in report_fingerprints:
+                report = work_item.report_path
+                try:
+                    source_inspection, fingerprint = _inspect_work_item(work_item)
+                except Exception as exc:
+                    work_item.source_inspection.release_extracted_text()
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
+                    _record_file_failure(report, "inspection", exc)
+                    continue
+                if not require_typed_persistence_outcome and fingerprint in report_fingerprints:
+                    source_inspection.release_extracted_text()
                     parsed_files += 1
+                    already_present_files += 1
                     _emit_processed_progress()
                     continue
                 enqueued_at = time.perf_counter()
                 futures.append(
                     (
-                        report,
+                        work_item,
                         fingerprint,
                         executor.submit(
                             _stage1_worker,
-                            report,
+                            work_item,
                             enqueued_at,
                             source_inspection,
                         ),
                     )
                 )
 
-            future_context = {future: (report, fingerprint) for report, fingerprint, future in futures}
+            future_context = {
+                future: (work_item, fingerprint) for work_item, fingerprint, future in futures
+            }
             for future in as_completed(future_context):
                 if should_cancel():
                     cancel_requested = True
                     break
 
                 report_parse_start = time.perf_counter()
-                report, fingerprint = future_context[future]
+                work_item, fingerprint = future_context[future]
+                report = work_item.report_path
                 try:
-                    parser, stage1_completed_at = future.result()
+                    prepared, stage1_completed_at = future.result()
                 except report_parser_factory.UnsupportedReportFormatError as exc:
                     _record_unsupported_skip(report, exc)
                     continue
                 except Exception as exc:
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
                     _record_file_failure(
                         report,
                         getattr(exc, "_metroliza_parse_failure_stage", "parser"),
                         exc,
                     )
                     continue
+                if (
+                    prepared.report_path != report
+                    or prepared.selected_identity is not work_item.selected_identity
+                ):
+                    _record_approval_drift(
+                        report,
+                        _SelectedReportApprovalDriftError(
+                            "Two-stage result no longer matches its selected report"
+                        ),
+                    )
+                    continue
+                parser = prepared.parser
 
                 stage_timings = getattr(parser, "stage_timings_s", None)
                 if isinstance(stage_timings, dict):
-                    stage_timings["stage2_queue_wait_s"] = max(0.0, time.perf_counter() - stage1_completed_at)
+                    stage_timings["stage2_queue_wait_s"] = max(
+                        0.0, time.perf_counter() - stage1_completed_at
+                    )
 
-                if fingerprint not in report_fingerprints:
+                if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
                     try:
-                        persist_report(parser)
+                        _require_prepared_report_approval(
+                            prepared, verify_current=not require_typed_persistence_outcome
+                        )
+                        if should_cancel():
+                            cancel_requested = True
+                            break
+                        outcome = persist_report(parser)
+                        _record_persistence_outcome(outcome)
                     except Exception as exc:
+                        if _is_selected_approval_drift(work_item, exc):
+                            _record_approval_drift(report, exc)
+                            continue
                         _record_file_failure(report, "persistence", exc)
                         continue
                     report_fingerprints.add(fingerprint)
-
-                parsed_files += 1
+                    if on_file_imported and (
+                        not require_typed_persistence_outcome
+                        or outcome is ReportImportDisposition.IMPORTED
+                    ):
+                        on_file_imported(report, parser)
+                    if on_file_accepted and require_typed_persistence_outcome:
+                        on_file_accepted(work_item, parser, outcome)
+                else:
+                    already_present_files += 1
+                parsed_files = imported_files + already_present_files
                 parse_duration_s = time.perf_counter() - report_parse_start
 
                 if on_file_parsed:
@@ -374,53 +831,98 @@ def parse_new_reports(
             total_files=total_files,
             failed_files=failed_files,
             skipped_files=skipped_files,
+            preflight_changed_files=changed_files,
+            selected_files=total_files,
+            imported_files=imported_files,
+            already_present_files=already_present_files,
+            cancelled_files=max(
+                0,
+                total_files - parsed_files - failed_files - skipped_files - changed_files,
+            ),
         )
 
-    for report in report_paths:
-        if should_cancel():
-            break
+    for work_item in work_items:
+        try:
+            if should_cancel():
+                break
 
-        report_parse_start = time.perf_counter()
-        source_inspection = SourceInspectionContext.from_path(
-            report,
-            source_format=infer_source_format(report),
-        )
-        fingerprint = build_source_file_fingerprint(report, source_inspection)
-        if fingerprint not in report_fingerprints:
+            report = work_item.report_path
+            report_parse_start = time.perf_counter()
             try:
-                parser = report_parser_factory.invoke_parser_factory(
-                    parser_factory,
-                    report,
-                    source_inspection=source_inspection,
-                )
-            except report_parser_factory.UnsupportedReportFormatError as exc:
-                _record_unsupported_skip(report, exc)
-                continue
+                source_inspection, fingerprint = _inspect_work_item(work_item)
             except Exception as exc:
-                _record_file_failure(report, "parser", exc)
+                if _is_selected_approval_drift(work_item, exc):
+                    _record_approval_drift(report, exc)
+                    continue
+                _record_file_failure(report, "inspection", exc)
                 continue
+            if require_typed_persistence_outcome or fingerprint not in report_fingerprints:
+                try:
+                    prepared = _construct_prepared_report(work_item, source_inspection)
+                except report_parser_factory.UnsupportedReportFormatError as exc:
+                    _record_unsupported_skip(report, exc)
+                    continue
+                except Exception as exc:
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
+                    _record_file_failure(report, "parser", exc)
+                    continue
+                parser = prepared.parser
 
-            try:
-                persist_report(parser)
-            except Exception as exc:
-                _record_file_failure(report, "persistence", exc)
-                continue
-            report_fingerprints.add(fingerprint)
-        else:
-            parser = None
-        parsed_files += 1
-        parse_duration_s = time.perf_counter() - report_parse_start
+                try:
+                    if require_typed_persistence_outcome:
+                        _prepare_report(work_item, prepared)
+                    _require_prepared_report_approval(
+                        prepared, verify_current=not require_typed_persistence_outcome
+                    )
+                    if should_cancel():
+                        break
+                    outcome = persist_report(parser)
+                    _record_persistence_outcome(outcome)
+                except ImportPreparationCancelled:
+                    break
+                except Exception as exc:
+                    if _is_selected_approval_drift(work_item, exc):
+                        _record_approval_drift(report, exc)
+                        continue
+                    _record_file_failure(report, "persistence", exc)
+                    continue
+                report_fingerprints.add(fingerprint)
+                if on_file_imported and (
+                    not require_typed_persistence_outcome
+                    or outcome is ReportImportDisposition.IMPORTED
+                ):
+                    on_file_imported(report, parser)
+                if on_file_accepted and require_typed_persistence_outcome:
+                    on_file_accepted(work_item, parser, outcome)
+            else:
+                parser = None
+                already_present_files += 1
+            parsed_files = imported_files + already_present_files
+            parse_duration_s = time.perf_counter() - report_parse_start
 
-        if on_file_parsed:
-            on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
+            if on_file_parsed:
+                on_file_parsed(parser, parsed_files, total_files, parse_duration_s)
 
-        _emit_processed_progress()
+            _emit_processed_progress()
+
+        finally:
+            work_item.source_inspection.release_extracted_text()
 
     return ParseBatchResult(
         parsed_files=parsed_files,
         total_files=total_files,
         failed_files=failed_files,
         skipped_files=skipped_files,
+        preflight_changed_files=changed_files,
+        selected_files=total_files,
+        imported_files=imported_files,
+        already_present_files=already_present_files,
+        cancelled_files=max(
+            0,
+            total_files - parsed_files - failed_files - skipped_files - changed_files,
+        ),
     )
 
 
@@ -438,11 +940,15 @@ def enrich_report_metadata(
     skipped_files = 0
     processed_files = 0
     total_files = len(report_paths)
+    started = False
+    cancellation_requested = False
 
     for report in report_paths:
         if should_cancel():
+            cancellation_requested = True
             break
 
+        started = True
         enrichment_start = time.perf_counter()
         parser = None
         try:
@@ -460,7 +966,12 @@ def enrich_report_metadata(
                 parser._verified_source_sha256 = verified_source_sha256
             except (AttributeError, TypeError):
                 pass
+            if should_cancel():
+                raise _MetadataEnrichmentCancelled()
             enriched = parser is not None and persist_enrichment(report, parser)
+        except _MetadataEnrichmentCancelled:
+            cancellation_requested = True
+            break
         except report_parser_factory.UnsupportedReportFormatError as exc:
             skipped_files += 1
             _log_unsupported_report_skip(
@@ -501,6 +1012,9 @@ def enrich_report_metadata(
         total_files=total_files,
         failed_files=failed_files,
         skipped_files=skipped_files,
+        cancelled_files=total_files - processed_files,
+        started=started,
+        cancellation_requested=cancellation_requested or should_cancel(),
     )
 
 
@@ -612,7 +1126,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
                 updated_fields.append(field_name)
             continue
 
-        if current_value not in (None, ""):
+        if current_value not in (None, "") or _field_has_manual_override(current_metadata_json, field_name):
             merged_map[field_name] = current_value
             if current_value != enriched_value:
                 preserved_fields.append(field_name)
@@ -734,9 +1248,27 @@ def selection_result_for_complete_metadata_parser(parser):
     return selection_result
 
 
-def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *, connection=None):
+def _enriched_candidates_after_manual_clears(candidates, metadata):
+    """Keep detected evidence without selecting values explicitly cleared by a user."""
+    cleared = {
+        name for name in _METADATA_VALUE_FIELDS
+        if _field_has_manual_override(metadata.metadata_json, name)
+        and _metadata_value(metadata, name) in (None, "")
+    }
+    return tuple(
+        replace(candidate, selected=False) if candidate.field_name in cleared else candidate
+        for candidate in candidates
+    )
+
+
+def persist_complete_metadata_enrichment(
+    db_file, report_id, selection_result, *, connection=None,
+    approval: ReportEnrichmentApproval | None = None,
+):
     if selection_result is None:
         return None, {"skipped": True, "reason": "metadata_parser_not_available"}
+    if approval is not None:
+        approval.validate_entry(db_file, connection)
     current_row = report_metadata_row_for_enrichment(db_file, report_id, connection=connection)
     merged_metadata, merge_summary = merge_enriched_metadata_for_persistence(
         current_row,
@@ -752,7 +1284,7 @@ def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *
     repository.replace_report_metadata_enrichment(
         report_id,
         merged_metadata,
-        candidates=selection_result.candidates,
+        candidates=_enriched_candidates_after_manual_clears(selection_result.candidates, merged_metadata),
         warnings=merged_metadata.warnings,
         metadata_version="report_metadata_v1",
         metadata_profile_id=DEFAULT_CMM_PDF_HEADER_BOX_PROFILE.template_family,
@@ -761,8 +1293,17 @@ def persist_complete_metadata_enrichment(db_file, report_id, selection_result, *
         metadata_confidence=merged_metadata.metadata_confidence,
         identity_hash=build_report_identity_hash(merged_metadata),
         raw_report_json=raw_report_json,
+        approval=approval,
     )
     return merged_metadata, merge_summary
+
+
+def _plain_selected_identity(identity):
+    return (type(identity) is SelectedReportIdentity
+            and type(identity.occurrence_id) is str
+            and type(identity.fingerprint) is str
+            and type(identity.parser_id) is str
+            and type(identity.registry_generation_id) is int)
 
 
 class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
@@ -779,10 +1320,27 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     error_occurred = pyqtSignal(str)
     parsing_finished = pyqtSignal()
 
-    def __init__(self, parse_request: ParseRequest):
+    def __init__(self, parse_request: ParseRequest | ImportPlan):
         super().__init__()
 
-        validated_request = validate_parse_request(parse_request)
+        import_plan = (
+            validate_import_plan(parse_request)
+            if isinstance(parse_request, ImportPlan)
+            else None
+        )
+        request = (
+            ParseRequest(
+                source_directory=import_plan.source_path,
+                db_file=import_plan.database_path,
+                metadata_parsing_mode=import_plan.metadata_parsing_mode,
+                run_background_metadata_enrichment=(
+                    import_plan.run_background_metadata_enrichment
+                ),
+            )
+            if import_plan is not None
+            else parse_request
+        )
+        validated_request = validate_parse_request(request)
 
         # Initialize the thread with validated request values
         self.directory = validated_request.source_directory
@@ -791,14 +1349,54 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
         self._extracted_archive_dir = None
+        self._resolved_report_root: Path | None = None
+        self._prepare_pool: ImportPreparePool | None = None
+        self._discovery_complete = False
         self._preflight_reviewed_total = 0
-        self.preflight_result: ParsePreflightResult | None = None
+        self._parse_request = validated_request
+        self.import_plan = import_plan
         self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
+        self.last_enrichment_result: MetadataEnrichmentBatchResult | None = None
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
         if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
             self._progress_stage_ranges["parse_reports"] = (30, 75)
             self._progress_stage_ranges["enrich_metadata"] = (75, 100)
+
+    @classmethod
+    def for_all_ready(
+        cls,
+        parse_request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+    ) -> "ParseReportsThread":
+        """Build the legacy all-READY behavior through an explicit plan adapter."""
+
+        return cls(ImportPlan.all_ready(parse_request, preflight_result))
+
+    @property
+    def import_plan(self):
+        return self._import_plan
+
+    @import_plan.setter
+    def import_plan(self, value):
+        self._import_plan = value
+        self._enrichment_index = None
+
+    @property
+    def preflight_result(self) -> ParsePreflightResult | None:
+        """Compatibility view of the preflight bound to the active import plan."""
+
+        return self.import_plan.preflight_result if self.import_plan is not None else None
+
+    @preflight_result.setter
+    def preflight_result(self, value: ParsePreflightResult | None) -> None:
+        """Adapt legacy import/verification into explicit reviewed candidates."""
+
+        self.import_plan = (
+            None
+            if value is None
+            else ImportPlan.all_atomic_candidates(self._parse_request, value)
+        )
 
     def _emit_stage_progress(self, stage_name, fraction=1.0):
         start, end = self._progress_stage_ranges[stage_name]
@@ -858,9 +1456,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         return source_path
 
     def get_list_of_reports(self):
+        self._discovery_complete = False
         try:
             report_files = []
             report_root = self._resolve_report_root()
+            self._resolved_report_root = report_root
             supported_extensions = supported_report_file_extensions()
             logger.info(
                 "Parse discovery started",
@@ -888,6 +1488,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     and path.stat().st_size
                 ):
                     report_files.append(path)
+            else:
+                self._discovery_complete = True
+
+            report_files.sort(
+                key=lambda path: (
+                    self._occurrence_id_for_report(path).casefold(),
+                    self._occurrence_id_for_report(path),
+                )
+            )
 
             self._emit_stage_progress('discover_reports', 1.0)
             logger.info(
@@ -903,77 +1512,78 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         except Exception as e:
             self.log_and_exit(e)
 
-    def _filter_reports_for_preflight(self, report_paths):
-        """Apply an operator-approved scan and reject changed/new content.
+    def _occurrence_id_for_report(self, report: Path) -> str:
+        report_root = self._resolved_report_root or Path(self.directory)
+        if report_root.is_file():
+            return report_root.name
+        return report.relative_to(report_root).as_posix()
 
-        Parser selection is verified again against the scanned parser id.  The
-        normal parser still verifies the content digest immediately before
-        persistence, closing the remaining scan-to-import race.
-        """
+    def _filter_reports_for_import_plan(
+        self,
+        report_paths,
+        plan: ImportPlan,
+    ) -> _ImportPlanFilterResult:
+        """Re-enumerate selected occurrences and reject stale approval evidence."""
 
-        preflight = self.preflight_result
-        if preflight is None:
-            self._preflight_reviewed_total = len(report_paths)
-            return list(report_paths), 0
+        preflight = plan.preflight_result
         self._preflight_reviewed_total = max(len(report_paths), len(preflight.files))
-        if not preflight.matches_request(
-            source_path=self.directory,
-            database_path=self.db_file,
-            metadata_parsing_mode=self.metadata_parsing_mode,
-        ):
-            return [], max(len(report_paths), len(preflight.ready_files))
+        reviewed_occurrences = {item.stable_occurrence_id: item for item in preflight.files}
+        selected_by_occurrence: dict[str, SelectedReportIdentity] = {
+            identity.occurrence_id: identity for identity in plan.selected_reports
+        }
+        current_items = [(path, self._occurrence_id_for_report(path)) for path in report_paths]
+        current_occurrences = {occurrence for _, occurrence in current_items}
+        missing_selected = set(selected_by_occurrence) - current_occurrences
+        approved: list[_SelectedReportWorkItem] = []
+        changed_files = max(
+            len(current_occurrences - set(reviewed_occurrences)), len(missing_selected)
+        )
+        selected_changed_files = len(missing_selected)
 
-        expected_fingerprint_counts = Counter(
-            item.fingerprint for item in preflight.files if item.fingerprint
-        )
-        ready_fingerprint_counts = Counter(
-            item.fingerprint for item in preflight.ready_files if item.fingerprint
-        )
-        parser_approval_by_fingerprint = preflight.parser_approval_by_ready_fingerprint
-        observed_fingerprint_counts: Counter[str] = Counter()
-        used_ready_fingerprint_counts: Counter[str] = Counter()
-        approved: list[Path] = []
-        changed_observed_files = 0
-        for report in report_paths:
+        for report, occurrence_id in current_items:
             if self.parsing_canceled:
                 break
+            reviewed_item = reviewed_occurrences.get(occurrence_id)
+            if reviewed_item is None:
+                continue
+
+            selected_identity = selected_by_occurrence.get(occurrence_id)
+            if selected_identity is None:
+                # Reviewed but unselected READY reports are intentional
+                # exclusions. They are not changed files or parser failures.
+                continue
+
             inspection = SourceInspectionContext.from_path(
                 report,
                 source_format=infer_source_format(report),
             )
+            inspection.adopt_reviewed_sha256(
+                _sha256_from_fingerprint(selected_identity.fingerprint),
+                reviewed_item.stat_signature,
+            )
             sha256_value = inspection.sha256
             fingerprint = f"sha256:{sha256_value}" if sha256_value else None
-            if (
-                not fingerprint
-                or observed_fingerprint_counts[fingerprint]
-                >= expected_fingerprint_counts[fingerprint]
-            ):
-                changed_observed_files += 1
+            if fingerprint != selected_identity.fingerprint:
+                changed_files += 1
+                selected_changed_files += 1
                 continue
-            observed_fingerprint_counts[fingerprint] += 1
 
-            parser_approval = parser_approval_by_fingerprint.get(fingerprint)
-            if parser_approval is None:
-                # Duplicate/unsupported/ambiguous/unreadable entries are review
-                # evidence, not approved import work.
-                continue
-            if used_ready_fingerprint_counts[fingerprint] >= ready_fingerprint_counts[fingerprint]:
-                # A reviewed duplicate is expected input, but it is not a
-                # second persistence operation.
-                continue
-            approved_parser_id, approved_registry_generation_id = parser_approval
             try:
                 diagnostics = report_parser_factory.resolve_parser_with_diagnostics(
                     report,
                     source_inspection=inspection,
                 )
             except Exception:
-                changed_observed_files += 1
+                changed_files += 1
+                selected_changed_files += 1
                 continue
+            finally:
+                # A probe-cache miss extracts the whole PDF text into the inspection. Keep only
+                # the reviewed digest on the work item; holding every selected file's text until
+                # it is processed is unbounded for large or archive imports.
+                inspection.release_extracted_text()
             selected_parser_id = (
-                diagnostics.selected.plugin_id
-                if diagnostics.selected is not None
-                else None
+                diagnostics.selected.plugin_id if diagnostics.selected is not None else None
             )
             resolved_registry_generation_id = getattr(
                 diagnostics,
@@ -981,21 +1591,46 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 None,
             )
             if (
-                selected_parser_id != approved_parser_id
-                or approved_registry_generation_id is None
-                or resolved_registry_generation_id != approved_registry_generation_id
+                selected_parser_id != selected_identity.parser_id
+                or resolved_registry_generation_id != selected_identity.registry_generation_id
             ):
-                changed_observed_files += 1
+                changed_files += 1
+                selected_changed_files += 1
                 continue
-            approved.append(report)
-            used_ready_fingerprint_counts[fingerprint] += 1
+            approved.append(
+                _SelectedReportWorkItem(
+                    report_path=report,
+                    selected_identity=selected_identity,
+                    source_inspection=inspection,
+                )
+            )
 
-        missing_ready_files = sum(
-            max(0, expected_count - observed_fingerprint_counts[fingerprint])
-            for fingerprint, expected_count in ready_fingerprint_counts.items()
+        return _ImportPlanFilterResult(
+            approved_reports=tuple(approved),
+            changed_files=changed_files,
+            selected_changed_files=selected_changed_files,
         )
-        changed_files = max(changed_observed_files, missing_ready_files)
-        return approved, changed_files
+
+    def _filter_reports_for_preflight(self, report_paths):
+        """Compatibility wrapper around canonical import-plan filtering."""
+
+        plan = self._validated_import_plan()
+        result = self._filter_reports_for_import_plan(report_paths, plan)
+        return list(result.approved_paths), result.changed_files
+
+    def _validated_import_plan(self) -> ImportPlan:
+        plan = validate_import_plan(self.import_plan)
+        if (
+            not plan.preflight_result.matches_request(
+                source_path=self.directory,
+                database_path=self.db_file,
+                metadata_parsing_mode=self.metadata_parsing_mode,
+            )
+            or self.run_background_metadata_enrichment
+            != plan.run_background_metadata_enrichment
+        ):
+            raise ValueError("Import executor inputs do not match the immutable import plan.")
+        return plan
 
     def get_report_fingerprints_in_database(self, connection=None):
         try:
@@ -1131,18 +1766,53 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
     def _report_metadata_row(self, report_id, connection=None):
         return report_metadata_row_for_enrichment(self.db_file, report_id, connection=connection)
 
+    def _enrichment_plan_index(self):
+        if type(self) is not ParseReportsThread:
+            return None
+        plan = self.import_plan
+        cached = getattr(self, "_enrichment_index", None)
+        if cached is not None and cached[0] is plan:
+            return cached[1]
+        index = None
+        if (type(plan) is ImportPlan and type(plan.selected_reports) is tuple
+                and all(_plain_selected_identity(item) for item in plan.selected_reports)):
+            index = ({item.occurrence_id: item for item in plan.selected_reports},
+                     frozenset(plan.selected_reports))
+        self._enrichment_index = (plan, index)
+        return index
+
+    def _selected_enrichment_identity(self, report, source_inspection):
+        if self.import_plan is None:
+            return None
+        index = ParseReportsThread._enrichment_plan_index(self)
+        identities = (index[0] if index is not None else
+                      {item.occurrence_id: item for item in self.import_plan.selected_reports})
+        identity = identities.get(self._occurrence_id_for_report(Path(report)))
+        if identity is None:
+            raise _SelectedReportApprovalDriftError("Enrichment report is not selected")
+        _require_selected_source_approval(
+            _SelectedReportWorkItem(report, identity), source_inspection, verify_current=True,
+        )
+        return identity
+
     def _run_background_metadata_enrichment(self, report_paths, connection):
         if self.metadata_parsing_mode != "light" or not self.run_background_metadata_enrichment:
             return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
 
+        if self.parsing_canceled:
+            return MetadataEnrichmentBatchResult(
+                enriched_files=0, total_files=len(report_paths),
+                cancelled_files=len(report_paths), started=False, cancellation_requested=True,
+            )
         if not report_paths:
             self._emit_stage_progress('enrich_metadata', 1.0)
-            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+            return MetadataEnrichmentBatchResult(enriched_files=0, total_files=0, started=False)
+        self._validate_enrichment_connection(connection)
 
         self.update_label.emit(
             build_three_line_status(
                 "Enriching report metadata...",
-                "Running complete OCR metadata for imported reports",
+                "Running complete OCR metadata for accepted reports",
                 "ETA --",
             )
         )
@@ -1151,43 +1821,30 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         start_time = time.perf_counter()
 
         def _parser_factory(report, *, source_inspection=None):
+            identity = self._selected_enrichment_identity(report, source_inspection)
             parser = get_parser(
                 report,
                 self.db_file,
                 connection=connection,
                 source_inspection=source_inspection,
+                expected_plugin_id=identity.parser_id if identity is not None else None,
+                expected_registry_generation_id=(
+                    identity.registry_generation_id if identity is not None else None
+                ),
+            )
+            parser._selected_enrichment_approval = _PreparedReportWorkItem(
+                report, identity, source_inspection, parser,
+                getattr(parser, "parser_resolution_evidence", None),
             )
             selection_result = selection_result_for_complete_metadata_parser(parser)
             if selection_result is not None:
                 parser._metadata_selection_result = selection_result
             return parser
 
-        def _persist_enrichment(report, parser):
-            report_id = self._report_id_for_source_path(
-                report,
-                connection=connection,
-                source_sha256=getattr(parser, "_verified_source_sha256", None),
-            )
-            if report_id is None:
-                return False
-
-            selection_result = getattr(parser, "_metadata_selection_result", None)
-            if selection_result is None:
-                selection_result = selection_result_for_complete_metadata_parser(parser)
-            if selection_result is None:
-                return False
-            persist_complete_metadata_enrichment(
-                self.db_file,
-                report_id,
-                selection_result,
-                connection=connection,
-            )
-            return True
-
         result = enrich_report_metadata(
             report_paths,
             parser_factory=_parser_factory,
-            persist_enrichment=_persist_enrichment,
+            persist_enrichment=lambda report, parser: self._persist_selected_metadata(report, parser, connection),
             should_cancel=lambda: self.parsing_canceled,
             on_progress=lambda enriched_files, total_files: (
                 self._emit_stage_progress('enrich_metadata', enriched_files / total_files if total_files else 1.0),
@@ -1211,13 +1868,92 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         )
         return result
 
-    def run(self):
-        try:
-            list_of_reports = self.get_list_of_reports()
+    def _persist_selected_metadata(self, report, parser, connection):
+        prepared = parser._selected_enrichment_approval
+        approval = self._enrichment_transaction_approval(prepared)
+        _require_prepared_report_approval(prepared)
+        if self.parsing_canceled:
+            raise _MetadataEnrichmentCancelled()
+        report_id = self._report_id_for_source_path(
+            report,
+            connection=connection,
+            source_sha256=getattr(parser, "_verified_source_sha256", None),
+        )
+        if report_id is None:
+            return False
+
+        selection_result = getattr(parser, "_metadata_selection_result", None)
+        if selection_result is None:
+            selection_result = selection_result_for_complete_metadata_parser(parser)
+        if selection_result is None:
+            return False
+        persist_complete_metadata_enrichment(
+            self.db_file,
+            report_id,
+            selection_result,
+            connection=connection,
+            approval=approval,
+        )
+        return True
+
+    def _complete_requested_enrichment(self, report_paths, connection):
+        if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
+            self.last_enrichment_result = self._run_background_metadata_enrichment(report_paths, connection)
+
+    def _validate_enrichment_connection(self, connection):
+        if self.import_plan is not None:
+            ReportEnrichmentApproval.validate_connection(connection)
+
+    def _enrichment_transaction_approval(self, prepared):
+        if self.import_plan is None:
+            # Compatibility for explicit legacy helper callers. Core run()
+            # rejects missing plans before import or enrichment can start.
+            return None
+        identity = prepared.selected_identity
+        index = ParseReportsThread._enrichment_plan_index(self) if _plain_selected_identity(identity) else None
+        if (
+            identity is None
+            or identity not in (index[1] if index is not None else self.import_plan.selected_reports)
+            or self._occurrence_id_for_report(Path(prepared.report_path)) != identity.occurrence_id
+            or not isinstance(prepared.source_inspection, SourceInspectionContext)
+        ):
+            raise _SelectedReportApprovalDriftError("Selected enrichment approval is incomplete")
+
+        def verify_live():
+            _require_prepared_report_approval(prepared)
             if self.parsing_canceled:
+                raise _MetadataEnrichmentCancelled()
+
+        return ReportEnrichmentApproval(
+            expected_source_sha256=identity.fingerprint.removeprefix("sha256:"),
+            verify_live=verify_live,
+        )
+
+    def run(self):
+        diagnostic = start_workflow_trace(WorkflowOperation.SELECTED_IMPORT)
+        reports_to_parse = ()
+        try:
+            plan = self._validated_import_plan()
+            preflight = plan.preflight_result
+            preflight_counts = preflight.status_counts
+            selected_files = len(plan.selected_reports)
+            diagnostic.stage(WorkflowStage.PREFLIGHT_COMPLETE, selected_report_count=selected_files)
+            intentionally_excluded_files = len(
+                {item.stable_occurrence_id for item in preflight.ready_files}
+                - {identity.occurrence_id for identity in plan.selected_reports}
+            )
+            list_of_reports = self.get_list_of_reports()
+            if not self._discovery_complete:
                 self.last_parse_result = ParseBatchResult(
                     parsed_files=0,
-                    total_files=len(list_of_reports),
+                    total_files=max(len(list_of_reports), len(preflight.files)),
+                    selected_files=selected_files,
+                    intentionally_excluded_files=intentionally_excluded_files,
+                    cancelled_files=selected_files,
+                    preflight_duplicate_files=preflight_counts[ParsePreflightStatus.DUPLICATE],
+                    preflight_unsupported_files=preflight_counts[ParsePreflightStatus.UNSUPPORTED],
+                    preflight_ambiguous_files=preflight_counts[ParsePreflightStatus.AMBIGUOUS],
+                    preflight_unreadable_files=preflight_counts[ParsePreflightStatus.UNREADABLE],
                 )
                 logger.info(
                     "Parse ended before processing due to cancellation",
@@ -1228,27 +1964,58 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         cancel_flag=True,
                     )
                 )
+                self._complete_requested_enrichment([], None)
                 self.parsing_finished.emit()
                 return
 
-            reports_to_parse, preflight_changed_files = self._filter_reports_for_preflight(
-                list_of_reports
+            filter_result = self._filter_reports_for_import_plan(
+                list_of_reports,
+                plan,
             )
-            preflight = self.preflight_result
-            preflight_counts = (
-                preflight.status_counts
-                if preflight is not None
-                else {}
-            )
-
-            with sqlite_connection_scope(self.db_file) as connection:
-                ensure_cmm_report_schema(
-                    self.db_file,
-                    connection=connection,
-                    retries=5,
-                    retry_delay_s=1,
+            reports_to_parse = list(filter_result.approved_reports)
+            if self.parsing_canceled or not reports_to_parse:
+                self.last_parse_result = ParseBatchResult(
+                    parsed_files=0,
+                    total_files=self._preflight_reviewed_total,
+                    selected_files=selected_files,
+                    intentionally_excluded_files=intentionally_excluded_files,
+                    cancelled_files=(
+                        max(
+                            0,
+                            selected_files - filter_result.selected_changed_files,
+                        )
+                        if self.parsing_canceled
+                        else 0
+                    ),
+                    preflight_duplicate_files=preflight_counts.get(
+                        ParsePreflightStatus.DUPLICATE,
+                        0,
+                    ),
+                    preflight_unsupported_files=preflight_counts.get(
+                        ParsePreflightStatus.UNSUPPORTED,
+                        0,
+                    ),
+                    preflight_ambiguous_files=preflight_counts.get(
+                        ParsePreflightStatus.AMBIGUOUS,
+                        0,
+                    ),
+                    preflight_unreadable_files=preflight_counts.get(
+                        ParsePreflightStatus.UNREADABLE,
+                        0,
+                    ),
+                    preflight_changed_files=filter_result.changed_files,
                 )
-                report_fingerprints = self.get_report_fingerprints_in_database(connection)
+                self._emit_stage_progress('parse_reports', 1.0)
+                self._complete_requested_enrichment([], None)
+                self.parsing_finished.emit()
+                return
+
+            # Keep one owner-thread connection alive across per-report commits.
+            # Closing the last WAL connection after each report forces repeated
+            # checkpoint/sidecar cleanup. Preparation workers never borrow it.
+            with lazy_sqlite_connection_scope(self.db_file) as connection:
+                report_fingerprints = set()
+                self._emit_stage_progress('load_existing_reports', 1.0)
 
                 logger.info(
                     "Parse processing started",
@@ -1350,19 +2117,73 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     two_stage_workers = None
 
                 def _persist_report(parser):
-                    if two_stage_enabled and callable(getattr(parser, "persist_prepared_report", None)):
-                        return parser.persist_prepared_report()
-                    return parser.open_database_and_check_filename()
+                    if callable(
+                        getattr(parser, "import_prepared_report_if_absent", None)
+                    ):
+                        return parser.import_prepared_report_if_absent()
+                    return parser.import_report_if_absent()
 
-                def _parser_factory(report, *, source_inspection=None):
-                    return get_parser(
+                metadata_overrides = {
+                    override.occurrence_id: override for override in plan.metadata_overrides
+                }
+
+                def _parser_factory(
+                    report,
+                    *,
+                    source_inspection=None,
+                    expected_plugin_id=None,
+                    expected_registry_generation_id=None,
+                ):
+                    parser = get_parser(
                         report,
                         self.db_file,
                         connection=connection,
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         source_inspection=source_inspection,
+                        expected_plugin_id=expected_plugin_id,
+                        expected_registry_generation_id=(expected_registry_generation_id),
                     )
+                    review_override = metadata_overrides.get(
+                        self._occurrence_id_for_report(Path(report))
+                    )
+                    if review_override is not None:
+                        if not getattr(parser, "supports_metadata_review_override", False):
+                            raise ValueError(
+                                "Parser does not support reviewed metadata overrides."
+                            )
+                        parser.metadata_review_override = review_override
+                    import_policy = ReportImportPolicy(
+                        metadata_parsing_mode=self.metadata_parsing_mode,
+                        refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,
+                        refreshable_parser_version=_CURRENT_CMM_PARSER_VERSION,
+                    )
+                    if (
+                        isinstance(parser, BaseReportParserPlugin)
+                        and not callable(getattr(parser, "import_report_if_absent", None))
+                    ):
+                        if not isinstance(source_inspection, SourceInspectionContext):
+                            raise TypeError(
+                                "Standalone stable parser plugin requires the bound "
+                                "SourceInspectionContext"
+                            )
+                        return _StablePluginAtomicImportAdapter(
+                            parser,
+                            source_inspection=source_inspection,
+                            database=self.db_file,
+                            connection=connection,
+                            manifest=parser.manifest,
+                            import_policy=import_policy,
+                        )
+                    parser.report_import_policy = import_policy
+                    return parser
 
+                accepted_reports: dict[SelectedReportIdentity, Path] = {}
+                prepare_pool = None if two_stage_enabled else self._open_prepare_pool(reports_to_parse)
+
+                def _record_accepted_report(work_item, _parser, _outcome):
+                    accepted_reports.setdefault(work_item.selected_identity, work_item.report_path)
+
+                diagnostic.stage(WorkflowStage.PROCESSING)
                 result = parse_new_reports(
                     reports_to_parse,
                     report_fingerprints,
@@ -1389,39 +2210,50 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         ),
                     ),
                     on_file_parsed=_record_file_telemetry,
+                    on_file_accepted=_record_accepted_report,
                     on_file_failed=_record_file_failure,
                     enable_two_stage_pipeline=two_stage_enabled,
                     worker_count=two_stage_workers,
                     log_file_failures=False,
+                    require_typed_persistence_outcome=True,
+                    prepare_pool=prepare_pool,
                 )
-                if preflight is not None:
-                    result = ParseBatchResult(
-                        parsed_files=result.parsed_files,
-                        total_files=self._preflight_reviewed_total,
-                        failed_files=result.failed_files,
-                        skipped_files=result.skipped_files,
-                        preflight_duplicate_files=preflight_counts.get(
-                            ParsePreflightStatus.DUPLICATE,
-                            0,
-                        ),
-                        preflight_unsupported_files=preflight_counts.get(
-                            ParsePreflightStatus.UNSUPPORTED,
-                            0,
-                        ),
-                        preflight_ambiguous_files=preflight_counts.get(
-                            ParsePreflightStatus.AMBIGUOUS,
-                            0,
-                        ),
-                        preflight_unreadable_files=preflight_counts.get(
-                            ParsePreflightStatus.UNREADABLE,
-                            0,
-                        ),
-                        preflight_changed_files=preflight_changed_files,
-                    )
+                result = ParseBatchResult(
+                    parsed_files=result.parsed_files,
+                    total_files=self._preflight_reviewed_total,
+                    failed_files=result.failed_files,
+                    skipped_files=result.skipped_files,
+                    selected_files=selected_files,
+                    imported_files=result.imported_files,
+                    already_present_files=result.already_present_files,
+                    intentionally_excluded_files=intentionally_excluded_files,
+                    cancelled_files=(result.cancelled_files),
+                    preflight_duplicate_files=preflight_counts.get(
+                        ParsePreflightStatus.DUPLICATE,
+                        0,
+                    ),
+                    preflight_unsupported_files=preflight_counts.get(
+                        ParsePreflightStatus.UNSUPPORTED,
+                        0,
+                    ),
+                    preflight_ambiguous_files=preflight_counts.get(
+                        ParsePreflightStatus.AMBIGUOUS,
+                        0,
+                    ),
+                    preflight_unreadable_files=preflight_counts.get(
+                        ParsePreflightStatus.UNREADABLE,
+                        0,
+                    ),
+                    preflight_changed_files=(
+                        filter_result.changed_files + result.preflight_changed_files
+                    ),
+                )
                 self.last_parse_result = result
+                # Enrichment can run for minutes without committing; sync the import first.
+                checkpoint_pending_import_commits(connection)
+                diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
-                if not self.parsing_canceled and self.run_background_metadata_enrichment:
-                    self._run_background_metadata_enrichment(reports_to_parse, connection)
+                self._complete_requested_enrichment(list(accepted_reports.values()), connection)
 
             if result.total_files == 0:
                 self._emit_stage_progress('parse_reports', 1.0)
@@ -1445,11 +2277,76 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
             self.parsing_finished.emit()
         except Exception as e:
+            diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
-            if self._extracted_archive_dir is not None:
-                self._extracted_archive_dir.cleanup()
-                self._extracted_archive_dir = None
+            _release_report_inspections(reports_to_parse)
+            self._finish_import_resources(diagnostic)
+
+    def _finish_import_resources(self, diagnostic) -> None:
+        """Report teardown failures without releasing inputs still owned by workers."""
+
+        try:
+            self._close_prepare_pool()
+        except Exception as exc:
+            diagnostic.fail(WorkflowError.PROCESSING_FAILED)
+            self.log_and_exit(exc)
+        finally:
+            diagnostic.finish_import(self.last_parse_result, self.parsing_canceled)
+        if self._prepare_pool is not None:
+            return  # Retain pool and archive ownership for a later cleanup retry.
+        if self._extracted_archive_dir is not None:
+            self._extracted_archive_dir.cleanup()
+            self._extracted_archive_dir = None
+        self._resolved_report_root = None
+
+    def _open_prepare_pool(self, work_items) -> ImportPreparePool | None:
+        """Start the bounded worker pool for CMM light-mode preparation, if it pays off."""
+
+        if self.metadata_parsing_mode != "light":
+            return None  # complete mode may run OCR, which stays on its existing path
+        plugin_id = CMMReportParser.manifest.plugin_id
+        paths = [
+            str(item.report_path)
+            for item in work_items
+            if item.selected_identity is not None and item.selected_identity.parser_id == plugin_id
+        ]
+        workers = resolve_prepare_worker_count(len(paths))
+        if not workers:
+            return None
+        overrides = {
+            override.occurrence_id: override
+            for override in (self.import_plan.metadata_overrides if self.import_plan else ())
+        }
+        path_overrides = {
+            path: overrides[occurrence_id]
+            for path in paths
+            if overrides
+            and (occurrence_id := self._occurrence_id_for_report(Path(path))) in overrides
+        }
+        try:
+            self._prepare_pool = ImportPreparePool(
+                paths,
+                database_path=self.db_file,
+                metadata_parsing_mode=self.metadata_parsing_mode,
+                workers=workers,
+                parser_plugin_id=plugin_id,
+                should_cancel=lambda: self.parsing_canceled,
+                metadata_review_overrides=path_overrides,
+            )
+        except Exception as exc:  # fall back to the in-process path
+            logger.warning(
+                "Import worker pool unavailable, preparing reports in-process: %s",
+                type(exc).__name__,
+            )
+            self._prepare_pool = None
+        return self._prepare_pool
+
+    def _close_prepare_pool(self) -> None:
+        if self._prepare_pool is not None:
+            # Retain ownership if bounded shutdown fails; archive cleanup must wait.
+            self._prepare_pool.close(cancel=self.parsing_canceled)
+            self._prepare_pool = None
 
     def log_and_exit(self, exception):
         caller = inspect.stack()[1].function

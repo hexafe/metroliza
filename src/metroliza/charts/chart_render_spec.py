@@ -35,12 +35,6 @@ from metroliza.exporting.export_workbook_planning_helpers import compute_histogr
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.value_formatting import format_metrology_label_text
 
-try:
-    from scipy.stats import gaussian_kde
-except Exception:  # pragma: no cover - scipy is optional in some environments
-    gaussian_kde = None
-
-
 DEFAULT_DPI = 150
 DEFAULT_WIDTH_PX = 1320
 DEFAULT_HEIGHT_PX = 600
@@ -1301,8 +1295,10 @@ def _resolve_violin_density_shape(series: np.ndarray, *, y_min: float, y_max: fl
         return None
     sample_y = np.linspace(y_min, y_max, 101)
     density = None
-    if gaussian_kde is not None and series.size >= 3 and np.std(series, ddof=1) > 0:
+    if series.size >= 3 and np.std(series, ddof=1) > 0:
         try:
+            from scipy.stats import gaussian_kde
+
             density = gaussian_kde(series)(sample_y)
         except Exception:
             density = None

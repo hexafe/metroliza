@@ -285,3 +285,58 @@ def test_late_cancellation_preserves_completed_workbook_and_cancels_pending_clou
     assert workbook_result.status is ExportArtifactStatus.COMPLETE
     assert workbook_result.location == str(workbook.resolve())
     assert google_result.status is ExportArtifactStatus.CANCELLED
+
+
+def _group_analysis_status(result):
+    artifact = next(item for item in result.artifacts if item.artifact_id == 'group_analysis')
+    stage = next(item for item in result.stages if item.stage_id == 'group_analysis')
+    assert stage.status is artifact.status
+    return artifact.status
+
+
+def test_requested_group_analysis_is_failed_without_completion_after_terminal_failure(tmp_path):
+    result = derive_export_run_result(
+        excel_file=tmp_path / 'report.xlsx',
+        export_target='excel_xlsx',
+        completion_metadata={'group_analysis_requested': True, 'group_analysis_warnings': []},
+        terminal_failure='group analysis writer failed',
+    )
+    assert result.status is ExportRunStatus.FAILED
+    assert _group_analysis_status(result) is ExportArtifactStatus.FAILED
+
+
+def test_later_terminal_failure_preserves_completed_group_analysis(tmp_path):
+    for warnings, expected in (([], ExportArtifactStatus.COMPLETE),
+                               (['One comparison omitted.'], ExportArtifactStatus.PARTIAL)):
+        result = derive_export_run_result(
+            excel_file=tmp_path / 'report.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata={
+                'group_analysis_requested': True,
+                'group_analysis_completed': True,
+                'group_analysis_warnings': warnings,
+            },
+            terminal_failure='later dashboard failed',
+        )
+        assert result.status is ExportRunStatus.FAILED
+        assert _group_analysis_status(result) is expected
+
+
+def test_requested_group_analysis_is_included_in_cancellation_result(tmp_path):
+    for completed, warnings, expected in (
+        (False, [], ExportArtifactStatus.CANCELLED),
+        (True, [], ExportArtifactStatus.COMPLETE),
+        (True, ['One comparison omitted.'], ExportArtifactStatus.PARTIAL),
+    ):
+        result = derive_export_run_result(
+            excel_file=tmp_path / 'report.xlsx',
+            export_target='excel_xlsx',
+            completion_metadata={
+                'group_analysis_requested': True,
+                'group_analysis_completed': completed,
+                'group_analysis_warnings': warnings,
+            },
+            cancelled=True,
+        )
+        assert result.status is ExportRunStatus.CANCELLED
+        assert _group_analysis_status(result) is expected

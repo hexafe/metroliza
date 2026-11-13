@@ -790,3 +790,19 @@ def test_compressed_pdf_coexistence_selects_parser_by_row_grammar(monkeypatch, t
             "cmm": "builtin",
             "alternate_pdf": "manual",
         }
+
+
+def test_external_registry_signature_detects_same_stat_different_bytes(tmp_path):
+    import os
+
+    plugin = tmp_path / "plugin.py"
+    plugin.write_bytes(b"version = 'one'\n")
+    before_stat = plugin.stat()
+    before = factory._current_external_path_signature((str(plugin),))
+    plugin.write_bytes(b"version = 'two'\n")
+    os.utime(plugin, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+    after_stat = plugin.stat()
+    assert (after_stat.st_mtime_ns, after_stat.st_size, after_stat.st_ino) == (
+        before_stat.st_mtime_ns, before_stat.st_size, before_stat.st_ino,
+    )
+    assert factory._current_external_path_signature((str(plugin),)) != before

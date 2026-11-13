@@ -84,9 +84,8 @@ class DetectorConfigRepository:
         self.ensure_schema()
 
         def _list(cursor) -> list[DetectorConfig]:
-            where = "" if include_disabled else "WHERE enabled = 1"
             cursor.execute(
-                f"""
+                """
                 SELECT
                     id,
                     detector_key,
@@ -97,9 +96,10 @@ class DetectorConfigRepository:
                     created_at,
                     updated_at
                 FROM industrial_detector_configs
-                {where}
+                WHERE (? OR enabled = 1)
                 ORDER BY detector_key ASC
-                """
+                """,
+                (int(bool(include_disabled)),),
             )
             return [_row_to_config(row) for row in cursor.fetchall()]
 

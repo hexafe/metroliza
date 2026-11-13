@@ -1,6 +1,51 @@
 # Changelog (for end users)
 
-## 2026.06 RC2 (build 260711) — current version
+## 2026.09 RC1 (build 261031) — current version
+- Help menu entries open the manuals that match this version, without any setup.
+- The Windows download is one ZIP. Extract all of it and start the EXE; the build identity file and the third-party notices folder sit next to the EXE.
+
+## 2026.09 RC1 (build 261029)
+- Exporting to an existing workbook asks you to Save a copy (the default, such as `name (2).xlsx`), Replace, or Cancel; a workbook open in Excel is not overwritten.
+- Report metadata enrichment now reports canceled, failed, and skipped reports instead of showing a green 100% completion.
+- Opening an existing `.sqlite`, `.sqlite3`, or `.DB` database keeps the exact file you selected.
+- Copy to checked shows how many hidden values will be copied and existing values overwritten, and you can undo the change.
+- Searching filter choices keeps selected headers; All and specific values cannot be selected together, and a From date later than To is blocked.
+- Renaming a group to an existing name is rejected, and Create-or-add uses the last active pane.
+- Modify Database accepts an unambiguous decimal comma and shows the interpreted value before saving; invalid numbers are blocked and all changes are saved together or none are saved.
+- Mapping CSV import previews Added, Replaced, and Unchanged entries and imports only new entries by default.
+- CSV Summary requires Enter to apply a filter before assigning matching rows, keeps groups when Apply makes no changes, and keeps the manual limits of metrics you deselect and select again.
+
+## 2026.09 RC1 (build 261020)
+- Much faster start on Windows: the app unpacks once per version into the local app data folder; later starts open the main window in about a second.
+- Smaller download: unused OCR acceleration (OpenVINO), video and software-OpenGL components are no longer bundled.
+- Fast report import is about 2.5 times faster.
+- After review, report metadata (reference, part name, sample number, date) is read automatically into the import table; you can correct values, run OCR for selected reports, and your corrections always win.
+- The dark theme is applied correctly at start-up.
+- The splash screen closes as soon as the main window is visible.
+- A missing or damaged program file is repaired automatically, or the message names the affected file and what to do.
+- Modify Database opens instantly and filters quickly on large databases, and uses far less memory.
+- Excel export (Main plots) is about twice as fast and uses much less memory; Extended plots and CSV Summary exports are faster; the output is unchanged.
+- The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged.
+- Canceling an export right after it starts stops at once, without loading all measurements first.
+- Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook.
+- Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time.
+- Import reads each report file fewer times, which helps most with large reports.
+- Importing reports on Windows saves them to the database much faster: the database is written through to disk every few seconds instead of after every report. After a sudden power loss during an import, re-running the import adds any reports from those last seconds.
+- Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks
+- Extended plots export uses several processor cores in the Windows app.
+- Metadata you clear before import stays empty, also after background metadata enrichment.
+
+Also in this release candidate (first published as build 260927):
+- A refreshed Windows workspace brings report review, selected PDF import, analysis, and export together.
+- Completed imports remain in SQLite and can be reopened without duplicating saved measurements.
+- Numeric filters and grouping agree between the table, analysis, and workbook output.
+- Excel chart titles and series names preserve literal report text.
+- Reports follow the selected app theme, including changes made while the app is open.
+- Reports with missing reference metadata remain exportable; Group Analysis identifies omitted rows instead of treating them as a shared reference.
+- Supervised runs retain private incident reports that can be previewed and exported from the Help menu.
+- Canceling active work protects completed database and workbook output.
+
+## 2026.06 RC2 (build 260711)
 - Parser selection now validates and atomically refreshes plugin generations,
   recognizes report families from decoded measurement rows rather than file
   names, retries transient inspection failures, and rejects ambiguous or empty

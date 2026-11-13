@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import sys
 import time
 import types
@@ -11,6 +13,8 @@ from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 from modules.contracts import DashboardInteractivityOptions
 
 try:
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent, QThread
     from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
     from modules.industrial_analytics_dialog import (
         build_analytics_completion_message,
@@ -38,6 +42,10 @@ except ImportError as exc:  # pragma: no cover - environment/order dependent
     DashboardPopulationLayerOptionsDialog = None
     QDialog = None
     QMessageBox = None
+    QCoreApplication = None
+    QEvent = None
+    QThread = None
+    sip = None
     IndustrialAnalyticsDialog = None
     IndustrialAnalyticsFilterDialog = None
     IndustrialAnalyticsThread = None
@@ -53,6 +61,7 @@ else:
     PYQT_IMPORT_ERROR = None
 
 _APP = None
+_WORKER_JOIN_MS = 5_000
 
 
 def _app():
@@ -63,6 +72,25 @@ def _app():
     global _APP
     _APP = QApplication.instance() or _APP or QApplication([])
     return _APP
+
+
+def _dispose_dialog(dialog) -> None:
+    """Cancel an actual running worker before bounded Qt owner disposal."""
+
+    if dialog is None or sip.isdeleted(dialog):
+        return
+    for attribute in ("tabular_load_thread", "analytics_thread"):
+        worker = getattr(dialog, attribute, None)
+        if not isinstance(worker, QThread) or not worker.isRunning():
+            continue
+        cancel = getattr(worker, "cancel", None)
+        assert callable(cancel), f"running {attribute} has no cancellation method"
+        cancel()
+        assert worker.wait(_WORKER_JOIN_MS), f"running {attribute} did not join"
+    assert dialog.close(), "dialog rejected close after running workers joined"
+    dialog.deleteLater()
+    QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+    assert sip.isdeleted(dialog), "dialog C++ object remained after DeferredDelete"
 
 
 def _wait_for_tabular_load(dialog, *, timeout_seconds: float = 5.0) -> None:
@@ -98,7 +126,7 @@ def test_production_analytics_dialog_loads_cached_metric_candidates(tmp_path) ->
         assert not dialog.parameter_sheets_checkbox.isEnabled()
         assert dialog.start_button.isEnabled()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> None:
@@ -115,7 +143,7 @@ def test_reference_cohort_labels_describe_pasted_reference_action(tmp_path) -> N
         assert "comma, semicolon, space, or new line" in dialog.references_edit.placeholderText()
         assert "only this analytics run" in dialog.reference_mode_hint_label.text()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> None:
@@ -133,7 +161,7 @@ def test_production_analytics_dialog_passes_filter_state_to_worker(tmp_path) -> 
         assert thread.filter_state.references == ("REF-100",)
         assert thread.filter_state.stations == ("S1",)
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_filter_dialog_builds_fixed_and_dynamic_filters() -> None:
@@ -164,7 +192,7 @@ def test_production_filter_dialog_builds_fixed_and_dynamic_filters() -> None:
         assert state.dynamic_filters[0].operator == "gt"
         assert state.dynamic_filters[2].values == ("1", "2")
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) -> None:
@@ -215,7 +243,52 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         assert thread.timestamp_column == "time_stamp"
         assert thread.reference_column == "reference_id"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
+
+
+def test_tabular_load_thread_stop_joins_and_schedules_cleanup(tmp_path, monkeypatch) -> None:
+    _app()
+    input_file = tmp_path / "table.csv"
+    pd.DataFrame(
+        {
+            "TraceCode": ["TC-001", "TC-002", "TC-003"],
+            "Length mm": [10.0, 10.2, 10.4],
+        }
+    ).to_csv(input_file, index=False)
+    thread_type = IndustrialAnalyticsDialog.show_tabular_load_screen.__globals__[
+        "TabularAnalyticsLoadThread"
+    ]
+    original_wait = thread_type.wait
+    original_delete_later = thread_type.deleteLater
+    wait_receipts = []
+    delete_later_receipts = []
+
+    def tracked_wait(thread, *args):
+        completed = original_wait(thread, *args)
+        wait_receipts.append((thread, completed, thread.isRunning()))
+        return completed
+
+    def tracked_delete_later(thread):
+        delete_later_receipts.append(thread)
+        return original_delete_later(thread)
+
+    monkeypatch.setattr(thread_type, "wait", tracked_wait)
+    monkeypatch.setattr(thread_type, "deleteLater", tracked_delete_later)
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(input_file)
+        dialog.load_metrics()
+        thread = dialog.tabular_load_thread
+        assert thread is not None
+
+        _wait_for_tabular_load(dialog)
+
+        assert wait_receipts == [(thread, True, False)]
+        assert delete_later_receipts == [thread]
+        assert dialog.tabular_load_thread is None
+    finally:
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path) -> None:
@@ -252,7 +325,7 @@ def test_tabular_analytics_dialog_uses_workbook_path_only_when_opted_in(tmp_path
         assert enabled_thread.output_workbook_file == str(workbook_file)
         assert enabled_thread.separate_parameter_sheets is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_part_id_wording_and_hides_reference_cohort() -> None:
@@ -267,7 +340,7 @@ def test_tabular_analytics_dialog_uses_part_id_wording_and_hides_reference_cohor
         assert dialog.reference_mode_hint_label.isHidden()
         assert dialog._cohort_state().references == ()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_full_dashboard_detail_without_selector() -> None:
@@ -279,7 +352,7 @@ def test_tabular_analytics_dialog_uses_full_dashboard_detail_without_selector() 
 
         assert request.dashboard_detail_mode == "full"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_request() -> None:
@@ -336,7 +409,7 @@ def test_tabular_analytics_dialog_interactivity_controls_are_visible_and_in_requ
             size_limit_mb=128,
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_default() -> None:
@@ -365,7 +438,7 @@ def test_tabular_analytics_dialog_advanced_section_hides_optional_outputs_by_def
         assert dialog.advanced_toggle_button.text() == "Hide advanced options"
         assert not dialog.advanced_options_container.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> None:
@@ -398,7 +471,7 @@ def test_dashboard_interactivity_dialog_keeps_population_layer_separate() -> Non
             size_limit_mb=24,
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
@@ -430,7 +503,7 @@ def test_population_layer_dialog_updates_only_population_layer_mode() -> None:
             population_layer_mode="static",
         )
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_production_analytics_dialog_hides_interactivity_controls() -> None:
@@ -444,7 +517,7 @@ def test_production_analytics_dialog_hides_interactivity_controls() -> None:
         assert dialog.population_layer_summary_label.isHidden()
         assert dialog.population_layer_button.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> None:
@@ -510,7 +583,7 @@ def test_preloaded_industrial_cache_uses_csv_summary_without_file_controls() -> 
         assert dialog.start_button.isEnabled()
     finally:
         dialog.tabular_load_result = None
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> None:
@@ -552,7 +625,7 @@ def test_tabular_analytics_interactivity_button_launches_dialog(monkeypatch) -> 
         )
         assert dialog.population_layer_summary_label.text() == "Auto"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) -> None:
@@ -598,7 +671,7 @@ def test_tabular_analytics_population_layer_button_launches_dialog(monkeypatch) 
         )
         assert dialog.population_layer_summary_label.text() == "Static image"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_large_tabular_dashboard_auto_mode_starts_without_interactivity_prompt(monkeypatch) -> None:
@@ -641,7 +714,7 @@ def test_large_tabular_dashboard_auto_mode_starts_without_interactivity_prompt(m
         assert dialog.dashboard_interactivity_options == DashboardInteractivityOptions()
     finally:
         dialog.tabular_load_result = None
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabular(monkeypatch) -> None:
@@ -672,7 +745,7 @@ def test_analytics_dashboard_visuals_button_is_visible_for_production_and_tabula
             assert "Adjust dashboard style" in dialog.dashboard_visuals_button.toolTip()
     finally:
         for dialog in dialogs:
-            dialog.close()
+            _dispose_dialog(dialog)
 
 
 def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None:
@@ -718,7 +791,7 @@ def test_analytics_dashboard_visuals_button_launches_dialog(monkeypatch) -> None
         assert dialog.dashboard_visual_settings["preset"] == "distinct"
         assert dialog.dashboard_visuals_summary_label.text() == "Distinct groups"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
@@ -771,7 +844,7 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         assert dialog.filters_button.isHidden()
         assert not dialog.start_button.isEnabled()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
@@ -829,7 +902,7 @@ def test_tabular_analytics_dialog_loads_multiple_csv_files(
         assert set(dialog.df_for_grouping["GROUP"]) == {"line_a", "line_b"}
         assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
@@ -865,7 +938,7 @@ def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
         assert dialog.df_for_grouping is None
         assert dialog.grouping_summary_label.text() == "Groups: not applied"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
@@ -902,7 +975,7 @@ def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
         assert warning_calls
         assert "Select only CSV files" in warning_calls[0][2]
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
@@ -984,7 +1057,7 @@ def test_tabular_grouping_dialog_uses_sqlite_store_without_materializing_rows(
         assert calls["column_filters"] == (TabularColumnFilter("line", selected_values=("A",)),)
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 
@@ -1032,7 +1105,7 @@ def test_tabular_analytics_dialog_lists_excel_sheets_after_file_selection(
         assert dialog.metrics_list.count() == 1
         assert dialog.metrics_list.item(0).text() == "Width Mm"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping(
@@ -1096,7 +1169,7 @@ def test_tabular_row_filter_is_summarized_passed_to_worker_and_used_for_grouping
         assert calls["column_mapping"]["TraceCode"] == "tracecode"
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
@@ -1148,7 +1221,7 @@ def test_tabular_filter_dialog_accept_uses_column_filters_without_legacy_keys(
         assert dialog.tabular_filter_columns == ()
         assert dialog.tabular_filter_keys == ()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
@@ -1162,7 +1235,7 @@ def test_tabular_analytics_dialog_starts_with_load_before_row_filter() -> None:
         assert dialog.filters_button.isHidden()
         assert dialog.clear_filter_button.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> None:
@@ -1185,11 +1258,12 @@ def test_tabular_analytics_dialog_uses_manual_groups_for_aggregation_state() -> 
         thread = dialog.create_analytics_thread()
 
         assert thread.grouping_df is not grouping_df
-        assert thread.grouping_df.equals(grouping_df)
+        from metroliza.tabular.contracts import validate_grouping_df
+        assert thread.grouping_df == validate_grouping_df(grouping_df)
         assert thread.aggregation_state.group_fields == ("GROUP",)
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> None:
@@ -1235,7 +1309,7 @@ def test_tabular_groupstats_is_disabled_until_manual_groups_are_available() -> N
         assert not dialog.groupstats_checkbox.isChecked()
         assert "at least 2 non-empty manual groups" in dialog.groupstats_checkbox.toolTip()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -> None:
@@ -1271,7 +1345,7 @@ def test_tabular_groupstats_toggle_does_not_start_analysis_worker(monkeypatch) -
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.analytics_thread is None
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group() -> None:
@@ -1295,7 +1369,7 @@ def test_tabular_grouping_summary_and_groupstats_do_not_require_population_group
         assert dialog.groupstats_checkbox.isEnabled()
         assert dialog.groupstats_reason_label.isHidden()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) -> None:
@@ -1322,7 +1396,7 @@ def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) 
 
         assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
         cleanup_tabular_load_result(loaded)
 
 
@@ -1367,7 +1441,7 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
         assert not dialog.clear_groups_button.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_limits_dialog_applies_absolute_one_sided_limits_to_worker_metric() -> None:
@@ -1385,7 +1459,7 @@ def test_metric_limits_dialog_applies_absolute_one_sided_limits_to_worker_metric
         assert thread.metric_selection[0].lsl == 9.5
         assert thread.metric_selection[0].usl is None
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
@@ -1442,7 +1516,7 @@ def test_tabular_grouping_dialog_reopens_with_existing_groups_and_column_labels(
         assert calls["grouping_dataframe"] is existing_grouping
         assert calls["executed"] is True
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> None:
@@ -1467,7 +1541,7 @@ def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> N
         ]
         assert dialog.summary_label.text() == "2 of 2 metrics selected"
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_metric_selection_dialog_filters_visible_metrics_without_losing_selection() -> None:
@@ -1493,7 +1567,7 @@ def test_metric_selection_dialog_filters_visible_metrics_without_losing_selectio
             "cycle_time_s",
         ]
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_completion_message_uses_export_style_file_links(tmp_path, monkeypatch) -> None:
@@ -1537,7 +1611,7 @@ def test_analytics_completion_message_uses_export_style_file_links(tmp_path, mon
         assert f"Workbook: {workbook_file.resolve().as_uri()}" in calls[0][3]
         assert calls[0][4] == str(workbook_file)
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_completion_message_opens_dashboard_normally_when_workbook_disabled(
@@ -1578,7 +1652,7 @@ def test_analytics_completion_message_opens_dashboard_normally_when_workbook_dis
         assert f"HTML dashboard: {dashboard_file.resolve().as_uri()}" in calls[0][3]
         assert calls[0][4] == ""
     finally:
-        dialog.close()
+        _dispose_dialog(dialog)
 
 
 def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path) -> None:
@@ -1628,4 +1702,481 @@ def test_analytics_dialog_wires_cancellable_worker_without_running_job(tmp_path)
     finally:
         if hasattr(dialog, "loading_dialog"):
             dialog.loading_dialog.close()
-        dialog.close()
+        _dispose_dialog(dialog)
+
+
+def test_csv_result_is_applied_before_progress_is_dismissed(monkeypatch):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    events = []
+    monkeypatch.setattr(dialog, "_apply_tabular_load_result", lambda loaded: events.append(("apply", loaded)))
+    monkeypatch.setattr(dialog, "_close_worker_progress", lambda: events.append(("dismiss", None)))
+    try:
+        dialog.on_tabular_load_finished("result")
+        assert events == [("apply", "result"), ("dismiss", None)]
+        events.clear()
+
+        def fail(_loaded):
+            events.append(("apply", None))
+            raise ValueError("synthetic application failure")
+
+        monkeypatch.setattr(dialog, "_apply_tabular_load_result", fail)
+        with pytest.raises(ValueError, match="synthetic application failure"):
+            dialog.on_tabular_load_finished(None)
+        assert events == [("apply", None), ("dismiss", None)]
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_loading_action_validates_grouping_once_and_revokes_on_replace(monkeypatch, tmp_path):
+    from metroliza.tabular import contracts
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    calls = []
+    original = contracts._validate_grouping_assignments
+    def validate(value, provenance=None):
+        calls.append(value)
+        return original(value, provenance)
+    monkeypatch.setattr(contracts, '_validate_grouping_assignments', validate)
+    monkeypatch.setattr(IndustrialAnalyticsThread, 'start', lambda self: None)
+    dialog.input_file = 'table.csv'
+    dialog.output_dashboard_file = str(tmp_path / 'result.html')
+    dialog.set_df_for_grouping(source)
+    dialog.set_grouping_applied(True)
+    try:
+        dialog.show_loading_screen()
+        thread = dialog.analytics_thread
+        snapshot = thread.request._grouping_snapshot
+        assert len(calls) == 1
+        assert snapshot.source_id == id(source)
+        assert thread.grouping_df is snapshot.assignments
+        source.loc[0, 'GROUP'] = 'changed'
+        assert snapshot.resolve(thread.grouping_df)[0].group == 'A'
+        dialog.show_loading_screen()  # double-click cannot replace the worker
+        assert dialog.analytics_thread is thread
+        assert len(calls) == 1
+        dialog.cancel_analytics()
+        assert thread._is_cancelled()
+        dialog.set_df_for_grouping(source.copy())
+        with pytest.raises(ValueError, match='stale'):
+            snapshot.resolve(thread.grouping_df)
+        thread.finished.emit()
+        assert dialog.analytics_thread is None
+        dialog.show_loading_screen()
+        assert len(calls) == 2
+        assert dialog.analytics_thread.grouping_df[0].group == 'changed'
+        dialog.analytics_thread.finished.emit()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_stale_grouping_handoff_closes_progress_and_reports_error(monkeypatch, tmp_path):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    dialog.input_file = 'table.csv'
+    dialog.output_dashboard_file = str(tmp_path / 'result.html')
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    dialog.set_df_for_grouping(source)
+    dialog.set_grouping_applied(True)
+    create = dialog.create_analytics_thread
+    def replace_source():
+        dialog.set_df_for_grouping(source.copy())
+        return create()
+    warnings = []
+    monkeypatch.setattr(dialog, 'create_analytics_thread', replace_source)
+    monkeypatch.setattr(QMessageBox, 'warning', lambda *args: warnings.append(args[-1]))
+    try:
+        dialog.show_loading_screen()
+        assert dialog.analytics_thread is None
+        assert dialog._pending_grouping_snapshot is None
+        assert not dialog.loading_dialog.isVisible()
+        assert len(warnings) == 1 and 'stale' in warnings[0]
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize('callback', ['reference', 'label'])
+def test_declined_snapshot_keeps_actual_raw_thread_workflow_handoff(monkeypatch, callback):
+    from metroliza.industrial import industrial_analytics_workflow as workflow
+    _app()
+    events, observed = [], []
+    source = pd.DataFrame({'REPORT_ID': [1], 'GROUP': ['A']})
+    class Value:
+        def __str__(self):
+            events.append(callback)
+            if callback == 'reference':
+                source.loc[0, 'GROUP'] = 'B'
+                return 'reference'
+            return f'Rest{len(events)}'
+    if callback == 'reference':
+        source['REFERENCE'] = [Value()]
+    else:
+        source.attrs['default_group_label'] = Value()
+    real_thread, validate = IndustrialAnalyticsThread, workflow.validate_industrial_analytics_request
+    def create(**kwargs):
+        assert kwargs['grouping_df'] is source
+        assert 'grouping_default_group_label' not in kwargs
+        return real_thread(**kwargs)
+    class Boundary(BaseException):
+        pass
+    def capture(*args, **kwargs):
+        request = validate(*args, **kwargs)
+        observed.append((request.grouping_df[0].group, request.grouping_default_group_label))
+        raise Boundary()
+    monkeypatch.setitem(IndustrialAnalyticsDialog.create_analytics_thread.__globals__, 'IndustrialAnalyticsThread', create)
+    monkeypatch.setattr(workflow, 'validate_industrial_analytics_request', capture)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file='table.csv')
+    thread = None
+    try:
+        dialog.set_df_for_grouping(source)
+        dialog.set_grouping_applied(True)
+        thread = dialog.create_analytics_thread()
+        with pytest.raises(Boundary):
+            thread.run()
+        assert observed == [('B', 'POPULATION') if callback == 'reference' else ('A', 'Rest2')]
+        assert events == [callback] * 3
+    finally:
+        if thread is not None:
+            thread.deleteLater()
+            QCoreApplication.sendPostedEvents(thread, QEvent.Type.DeferredDelete)
+        _dispose_dialog(dialog)
+
+
+def test_t23a_literal_population_filter_and_mutation_oracle(tmp_path):
+    _app()
+    path = tmp_path / "population.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(rows=((1, "Żółć"), (2, "Żółć")), columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 2
+        grouping.rows = ((1, "Żółć"), (2, "Żółć"), (3, "Żółć"))
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert dialog._tabular_manual_group_count() == 1
+        dialog.tabular_column_filters = (TabularColumnFilter("part", selected_values=("A",)),)
+        assert dialog._tabular_filtered_row_count() == 1
+        grouping.rows = ((2, "Other"),)
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_population_cache_reuses_only_native_unchanged_scope(tmp_path, monkeypatch):
+    from metroliza.tabular.tabular_analytics_service import TabularSqliteStore
+    from metroliza.reports.db import sqlite_connection_scope
+    _app()
+    path = tmp_path / "revision.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    original = TabularSqliteStore.count_source_row_numbers
+    calls = []
+    def traced(self, *args, **kwargs):
+        calls.append(tuple(args[0]))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(TabularSqliteStore, "count_source_row_numbers", traced)
+    grouping = RowTable(rows=((1, "A"), (2, "A")), columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        dialog._sync_grouping_summary()
+        before = len(calls)
+        dialog._sync_grouping_summary()
+        assert dialog._tabular_manual_group_count() == 2
+        assert len(calls) == before
+        grouping.rows += ((3, "B"),)
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+        assert len(calls) == before + 1
+        dialog.tabular_filter_expression = "part = A"
+        assert dialog._tabular_filtered_row_count() == 1
+        dialog.tabular_filter_expression = "part = absent"
+        assert dialog._tabular_filtered_row_count() == 0
+        dialog.tabular_filter_expression = ""
+        assert dialog._tabular_filtered_row_count() == 3
+        with sqlite_connection_scope(loaded.sqlite_store.path) as connection:
+            with connection:
+                connection.execute('DELETE FROM tabular_rows WHERE source_row_number = 3')
+        assert dialog._tabular_filtered_row_count() == 2
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_custom_group_cells_keep_observed_conversion_calls():
+    import metroliza.ui.industrial_analytics_dialog as module
+    calls = []
+    class Observed(str):
+        def __str__(self):
+            calls.append("str")
+            return "Observed"
+        def __eq__(self, other):
+            raise AssertionError("cache compared a raw custom cell")
+        __hash__ = str.__hash__
+    grouping = RowTable(rows=((1, Observed("A")),), columns=("REPORT_ID", "GROUP"))
+    assert module._native_grouping_revision(grouping) is None
+    assert calls == []
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = grouping
+        dialog.grouping_applied = True
+        for _ in range(2):
+            dialog._sync_grouping_summary()
+            assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert calls == ["str"] * 4
+        mutable = pd.DataFrame({"REPORT_ID": [1], "GROUP": ["A"]})
+        dialog.df_for_grouping = mutable
+        dialog._sync_grouping_summary()
+        mutable.loc[0, "GROUP"] = "POPULATION"
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: POPULATION only"
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_t23a_cache_guard_does_not_hash_or_compare_raw_custom_keys():
+    import metroliza.ui.industrial_analytics_dialog as module
+    calls = []
+    class Observed(str):
+        def __hash__(self):
+            calls.append("hash")
+            return super().__hash__()
+        def __eq__(self, other):
+            calls.append("equal")
+            return super().__eq__(other)
+    raw = {Observed("REPORT_ID"): 1}
+    calls.clear()
+    assert module._literal_cache_token(raw) is None
+    assert calls == []
+
+
+def test_t23a_inherited_dialog_does_not_dispatch_new_helper_collisions(tmp_path):
+    _app()
+    class CustomDialog(IndustrialAnalyticsDialog):
+        def _tabular_scope_revision(self):
+            raise AssertionError("old subclass helper")
+        def _tabular_group_values(self):
+            raise AssertionError("old subclass helper")
+    path = tmp_path / "subclass.csv"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_csv(path, index=False)
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = CustomDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(RowTable(rows=((1, "A"),), columns=("REPORT_ID", "GROUP")))
+        dialog.set_grouping_applied(True)
+        assert dialog._tabular_filtered_row_count() == 3
+        assert dialog._tabular_manual_group_count() == 2
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("before, after", [
+    (((1, 1), (2, True)), ((1, 1), (2, 1))),
+    (((1, 0.0), (2, -0.0)), ((1, 0.0), (2, 0.0))),
+])
+def test_t23a_group_cache_tracks_replaced_typed_payload(tmp_path, before, after):
+    _app()
+    path = tmp_path / "typed_groups.csv"
+    path.write_text("Part,Value\nA,1\nB,2\nC,3\n")
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(rows=before, columns=("REPORT_ID", "GROUP"))
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.set_df_for_grouping(grouping)
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 2 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 3
+        grouping.rows = after
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_manual_group_count() == 2
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_signed_zero_filter_refreshes_population_with_original_row_memo(tmp_path):
+    _app()
+    path = tmp_path / "signed_filter.csv"
+    path.write_text("Tag,Value\n-0.0,1\n0.0,2\n-0.0,3\n")
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    negative = (TabularColumnFilter("tag", selected_values=(-0.0,)),)
+    positive = (TabularColumnFilter("tag", selected_values=(0.0,)),)
+    for filters in (negative, positive):
+        loaded.sqlite_store.count_rows(column_filters=filters)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.tabular_column_filters = negative
+        dialog.set_df_for_grouping(RowTable(rows=((2, "Assigned"),), columns=("REPORT_ID", "GROUP")))
+        dialog.set_grouping_applied(True)
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog._tabular_filtered_row_count() == 2
+        dialog.tabular_column_filters = positive
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom"
+        assert dialog._tabular_manual_group_count() == 1
+        assert dialog._tabular_grouping_has_population() is False
+        assert loaded.sqlite_store.count_rows(column_filters=positive) == 1
+        # Preserve the separately recorded original row-count memo limitation.
+        assert dialog._tabular_filtered_row_count() == 2
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('custom', [False, True])
+def test_t23a_f1_filter_container_preserves_original_iteration(tmp_path, custom):
+    _app()
+    path = tmp_path / 'filters.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    events = []
+    class Filters(list):
+        def __iter__(self):
+            events.append('iter')
+            return super().__iter__()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.tabular_load_result = loaded
+        dialog.tabular_column_filters = Filters([TabularColumnFilter('part', selected_values=('A', 'B'))]) if custom else None
+        dialog.df_for_grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+        assert [dialog._tabular_filtered_row_count() for _ in range(2)] == [2 if custom else 3] * 2
+        assert [dialog._tabular_grouping_has_population() for _ in range(2)] == [True, True]
+        assert events == (['iter'] * 7 if custom else [])
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('mode', ['observe', 'raise', 'permissive'])
+@pytest.mark.parametrize('where', ['cell', 'literal'])
+def test_t23a_f1_metaclass_equality_keeps_public_fallback(tmp_path, mode, where):
+    _app()
+    path = tmp_path / 'metadata.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    events = []
+    class Meta(type):
+        def __eq__(cls, other):
+            events.append('equal')
+            if mode == 'raise':
+                raise RuntimeError('metaclass equality')
+            return mode == 'permissive'
+        __hash__ = type.__hash__
+    class Cell(metaclass=Meta):
+        def __str__(self):
+            events.append('str')
+            return 'A'
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = RowTable(((1, Cell() if where == 'cell' else 'A'),), ('REPORT_ID', 'GROUP'))
+        dialog.grouping_applied = True
+        if where == 'cell':
+            for _ in range(2):
+                dialog._sync_grouping_summary()
+                assert dialog.grouping_summary_label.text() == 'Groups: 1 custom'
+            assert events == ['str'] * 4
+        else:
+            dialog.tabular_load_result = loaded
+            class Literal(str, metaclass=Meta):
+                pass
+            loaded.column_mapping['unused'] = Literal('part')
+            assert dialog._tabular_filtered_row_count() == 3
+            assert dialog._tabular_grouping_has_population() is True
+            assert events == []
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize('instance', [False, True])
+@pytest.mark.parametrize('raises', [False, True])
+def test_t23a_f1_custom_get_keeps_refresh_and_exception(monkeypatch, instance, raises):
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+    state, events = [1], []
+    def get(*args):
+        events.append('get')
+        if raises and state[0] == 2:
+            raise RuntimeError('original producer')
+        return ['A'] if state[0] == 1 else ['A', 'B']
+    monkeypatch.setattr(grouping if instance else RowTable, 'get', get)
+    try:
+        dialog.set_df_for_grouping(grouping)
+        dialog.grouping_applied = True
+        dialog._sync_grouping_summary()
+        assert dialog.grouping_summary_label.text() == 'Groups: 1 custom'
+        state[0] = 2
+        if raises:
+            with pytest.raises(RuntimeError, match='original producer'):
+                dialog._sync_grouping_summary()
+        else:
+            dialog._sync_grouping_summary()
+            assert dialog.grouping_summary_label.text() == 'Groups: 2 custom'
+        assert events == ['get'] * 2
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize('producer', ['__getitem__', 'iter_rows', 'row_mapping'])
+def test_t23a_f1_population_cache_keeps_custom_producers(tmp_path, monkeypatch, producer):
+    _app()
+    path = tmp_path / 'producers.csv'
+    path.write_text('Part,Value\nA,1\nB,2\nC,3\n')
+    loaded = load_tabular_analytics_file(path, force_sqlite=True)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    native, state, events = RowTable.__getitem__, [1], []
+    def getitem(table, key):
+        if type(key) is list:
+            events.append(producer)
+            return RowTable(tuple((n, 'A') for n in range(1, state[0] + 1)), ('REPORT_ID', 'GROUP'))
+        return native(table, key)
+    def iter_rows(table, *, as_dict=False):
+        events.append(producer)
+        return iter([{'REPORT_ID': n, 'GROUP': 'A'} for n in range(1, state[0] + 1)])
+    def row_mapping(table, index):
+        events.append(producer)
+        return {'REPORT_ID': 1, 'GROUP': 'A' if state[0] == 1 else 'POPULATION'}
+    monkeypatch.setattr(RowTable, producer, {'__getitem__': getitem, 'iter_rows': iter_rows, 'row_mapping': row_mapping}[producer])
+    try:
+        dialog.tabular_load_result = loaded
+        rows = ((1, 'A'), (2, 'A'), (3, 'A')) if producer == 'row_mapping' else ((1, 'A'),)
+        dialog.df_for_grouping = RowTable(rows, ('REPORT_ID', 'GROUP'))
+        assert dialog._tabular_grouping_has_population() is True
+        state[0] = 3
+        assert dialog._tabular_grouping_has_population() is (producer == 'row_mapping')
+        assert events == [producer] * (6 if producer == 'row_mapping' else 2)
+    finally:
+        _dispose_dialog(dialog)
+        cleanup_tabular_load_result(loaded)
+
+
+def test_t23a_f1_native_group_cache_reuses_qualified_payload():
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.df_for_grouping = RowTable(((1, 'A'),), ('REPORT_ID', 'GROUP'))
+        first = dialog._tabular_group_values()
+        assert first == ('A',)
+        assert dialog._tabular_group_values() is first
+    finally:
+        _dispose_dialog(dialog)

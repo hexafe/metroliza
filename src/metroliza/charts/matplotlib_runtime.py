@@ -39,7 +39,7 @@ def configure_headless_matplotlib(*, cache_dir_name: str = "metroliza-mpl") -> N
     config directory being writable.
     """
 
-    os.environ.setdefault("MPLBACKEND", "Agg")
+    os.environ["MPLBACKEND"] = "Agg"
     if not os.environ.get("MPLCONFIGDIR"):
         cache_dir = _default_cache_dir(cache_dir_name)
         if _is_writable_directory(cache_dir):
@@ -52,6 +52,6 @@ def configure_headless_matplotlib(*, cache_dir_name: str = "metroliza-mpl") -> N
     try:
         import matplotlib
 
-        matplotlib.use(os.environ.get("MPLBACKEND", "Agg"), force=True)
+        matplotlib.use("Agg", force=True)
     except Exception:
         pass

@@ -6,6 +6,14 @@ Metroliza is a Python desktop app for industrial metrology workflows: parsing me
 reports, organizing data in SQLite, and creating analysis-ready Excel summaries,
 dashboard-first grouped analysis, and CSV/production dashboards.
 
+## Repository and release status
+
+The current RC source line is `rc` (formerly `release/2026.09-rc1`), cut from accepted `develop` under
+[#1153](https://github.com/hexafe/metroliza/issues/1153). Final packaged Windows acceptance and
+the final build identity remain pending. See [release status](docs/release_checks/release_status.md).
+The 2026-11-13 #960 topology uses `main` for production/history and `dev` for normal work.
+Historical June RC2/source/build identities retain their original provenance; `main` promotion is separately gated.
+
 ## Quickstart
 
 ```bash
@@ -41,7 +49,9 @@ Dependency files:
 - `requirements.txt` - runtime
 - `requirements-dev.txt` - development/testing
 - `requirements-build.txt` - packaging
-- `requirements-ocr.txt` - packaged header OCR runtime
+- `requirements-ocr.txt` - packaged header OCR runtime (ONNX Runtime; user builds)
+- `requirements-ocr-benchmark.txt` - adds OpenVINO for OCR benchmarks and the explicit
+  `METROLIZA_BUILD_FLAVOR=benchmark` build; user builds never ship OpenVINO
 
 ## Windows Runtime Setup And OCR Diagnostics
 
@@ -72,10 +82,30 @@ To diagnose OCR for one PDF without relying on PowerShell output redirection:
   -OutputPath "$env:USERPROFILE\Desktop\ocr_diag.json"
 ```
 
-The output JSON includes module specs, native import smoke tests, VC++ runtime
-registry status, RapidOCR model-file status, and the real parser metadata
-diagnostic. A healthy OCR metadata path reports `header_extraction_mode="ocr"`
-and `field_sources` such as `position_cell`, not `filename_candidate`.
+Diagnostics use safe schema version 1: controlled check IDs, required/advisory
+classification, pass/fail/skipped status and reason, validated numeric runtime
+versions, model counts, extraction mode and metadata-source counts. Document/DB
+values, paths, hashes, environment values, raw child output and exception text
+are omitted. There is no raw-output mode.
+
+The selected OCR configuration is tested (default: ONNX Runtime CPU), including
+its configured model files, imports, engine construction and synthetic inference.
+Unselected alternatives are skipped/advisory. Required failures and incomplete
+requested PDF/DB inspections return nonzero while preserving completed safe
+results. Missing optional metadata is an observation; a missing or unsupported
+DB is a failure. Database inspection never creates/migrates a DB, and refuses
+active WAL/journal sidecars to avoid stale inspection or sidecar changes.
+
+`--output` / `-OutputPath` publishes complete UTF-8 JSON atomically. Publication
+failure returns nonzero and preserves the earlier complete file. Output cannot
+alias the PDF, DB or their sidecars. Without an output path the safe result is
+printed to stdout. The standalone header script supports the same safe contract.
+Direct Python CLI input/output paths are relative to the calling directory;
+each input is resolved there before inspection and output protection. The
+PowerShell wrapper retains its repository-relative input/output convention.
+PowerShell propagates failure and required setup validation stops before setup
+completion. Explicit `-SkipOcr` / `-SkipValidation` remains skipped, not tested/pass.
+These source diagnostics do not establish clean-Windows packaged acceptance (#901).
 
 ## Build Windows EXE
 
@@ -96,6 +126,21 @@ validates the vendored RapidOCR model files, builds `packaging/metroliza_onefile
 bundles `THIRD_PARTY_NOTICES.md`, and prints the generated `dist\*.exe` path. Use `.\build_windows_exe.ps1 -Clean` to
 remove previous `build`/`dist` output first, or `.\build_windows_exe.ps1 -WithNative` to
 use the native-module packaging helper.
+
+For a single-file delivery that starts fast after the first run, pack the onedir with the
+native launcher instead of using the PyInstaller onefile. It unpacks the application once per
+version into `%LOCALAPPDATA%\Metroliza\runtime` and reuses it on every later start:
+
+```powershell
+.\build_windows_portable_exe.ps1              # supervised onedir + portable envelope
+.\build_windows_launcher_exe.ps1 -Supervised  # the same onedir -> native launcher EXE
+```
+
+The result is `dist\metroliza_<version>_<yymmdd>_launcher.exe` (the portable envelope is
+`dist\metroliza_<version>_<yymmdd>.exe`). See `packaging/launcher/README.md` for the format, cache
+layout, self-repair contract, benchmark and fallbacks; `scripts/qualify_windows_launcher.py`
+qualifies the launcher with a synthetic payload and `scripts/qualify_windows_portable_onefile.py
+--kind launcher` the real packaged application.
 
 If the OCR model files are missing, refresh them before building:
 
@@ -257,14 +302,34 @@ Examples of metric availability by spec type:
 - Parser plugin generation and onboarding: [`docs/parser_plugins/README.md`](docs/parser_plugins/README.md)
 - Historical plans and retired docs: [`docs/archive/`](docs/archive/)
 
+## Read-only CMM database check
+
+To check existing imports for extra page-break blocks, close Metroliza and use a
+checkpointed database (no WAL/SHM/journal sidecars) plus the original report folders
+or ZIP/TAR archives. From an installed source environment:
+
+```bash
+PYTHONPATH=src:. python scripts/detect_cmm_page_breaks.py reports.db original_reports/ reports.zip --output comparison.json
+```
+
+On Windows (PowerShell): `$env:PYTHONPATH = "src;."; python scripts\detect_cmm_page_breaks.py reports.db original_reports\ --output comparison.csv`.
+Run it on a copy: close Metroliza normally (closing checkpoints the database), then copy the
+`.db` file. Archives are extracted to a temporary directory, so leave free disk space.
+
+Use `.csv` for CSV output; the output must be a new file. Every stored report gets
+counts and a verdict. SHA-256 identifies sources; missing sources and weak identity
+remain explicit. `EXTRA_BLOCKS_SUSPECTED` needs investigation; `MATCH` confirms
+counts only. The script never repairs, re-imports or migrates the database. Keep
+the database closed throughout the check. See the script docstring for limits.
+
 ## Release metadata
 
-Current release highlight (`2026.06 RC2 (build 260711)`): Release hardening for safer exports and credentials, atomic industrial synchronization, stricter parser and report integrity, deterministic shutdown, and enforceable packaging and security gates.
+Current release highlight (`2026.09 RC1 (build 261031)`): A refreshed Windows workspace for reviewing and importing reports, now with much faster start-up, import and export, and report metadata you can review and correct before import.
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.06 RC2 (build 260711)`)
+### Changelog highlights (release `2026.09 RC1 (build 261031)`)
 
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 

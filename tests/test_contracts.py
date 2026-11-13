@@ -176,7 +176,7 @@ class TestValidateExportOptions(unittest.TestCase):
         self.assertFalse(options.generate_summary_sheet)
         self.assertTrue(options.generate_html_dashboard)
         self.assertFalse(options.allow_non_essential_chart_skipping)
-        self.assertEqual(options.chart_worker_count, 2)
+        self.assertEqual(options.chart_worker_count, 4)
         self.assertEqual(options.chart_worker_queue_size, 4)
 
     def test_normalizes_allow_non_essential_chart_skipping_flag(self):
@@ -279,6 +279,22 @@ class TestValidatePaths(unittest.TestCase):
 
 
 class TestValidateGroupingDf(unittest.TestCase):
+    def test_row_table_maps_named_columns_and_preserves_identity_validation(self):
+        from metroliza.analytics.row_table import RowTable
+
+        table = RowTable(columns=('GROUP_COLOR', 'GROUP', 'REPORT_ID'), rows=(('#123456', 'A', 3),))
+        self.assertEqual(
+            validate_grouping_df(table),
+            (GroupingAssignment(report_id=3, group='A', group_color='#123456'),),
+        )
+        self.assertEqual(validate_grouping_df(RowTable(columns=table.columns, rows=())), ())
+        for columns, rows in (
+            (('row_id', 'GROUP'), ((3, 'A'),)),
+            (('REPORT_ID', 'GROUP'), ((1.5, 'A'),)),
+        ):
+            with self.subTest(columns=columns, rows=rows), self.assertRaisesRegex(ValueError, 'REPORT_ID'):
+                validate_grouping_df(RowTable(columns=columns, rows=rows))
+
     def test_accepts_report_id_identity(self):
         rows = [{'REPORT_ID': 1, 'GROUP': 'A'}]
         validated = validate_grouping_df(rows)

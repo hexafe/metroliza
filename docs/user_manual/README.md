@@ -41,7 +41,10 @@ If a supplier sends a report layout Metroliza does not recognize, use
 
 ## Current documentation focus
 
-The current 2026.06 RC1 tester documentation focus is realtime industrial
+Current RC source and qualification status is maintained in [release status](../release_checks/release_status.md).
+The historical focus below does not assert acceptance of a new packaged candidate.
+
+The historical 2026.06 RC1 tester documentation focus was realtime industrial
 monitoring, Industrial Data source safety, multi-source fetches, dashboard point
 marking, replay evidence, and false-positive handling. If you work with
 production-line data, read these pages first:

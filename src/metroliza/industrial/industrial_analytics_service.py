@@ -27,13 +27,7 @@ from metroliza.industrial.industrial_analytics_state import (
     require_identifier,
 )
 from metroliza.shared.numeric_coercion import coerce_finite_float as _coerce_float
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()

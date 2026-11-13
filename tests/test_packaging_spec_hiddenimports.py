@@ -56,12 +56,13 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
     assert "copy_metadata" in spec_text
     assert 'collect_required_runtime_assets(\n        "rapidocr"\n    )' in spec_text
     assert 'collect_required_runtime_assets("onnxruntime")' in spec_text
-    assert 'collect_required_runtime_assets(\n        "openvino"\n    )' in spec_text
+    assert 'collect_required_runtime_assets(\n            "openvino"\n        )' in spec_text
+    assert "flavor_includes_openvino(resolve_build_flavor())" in spec_text
     assert 'collect_required_runtime_assets("cv2")' in spec_text
     assert 'collect_required_runtime_assets("numpy")' in spec_text
     assert 'collect_optional_distribution_metadata("rapidocr")' in spec_text
     assert 'collect_optional_distribution_metadata("onnxruntime")' in spec_text
-    assert 'collect_optional_distribution_metadata("openvino")' in spec_text
+    assert 'openvino_metadata = collect_optional_distribution_metadata("openvino")' in spec_text
     assert 'collect_optional_distribution_metadata("opencv-python")' in spec_text
     assert 'collect_optional_distribution_metadata("numpy")' in spec_text
     assert "collect_optional_vendored_model_data(root_dir)" in spec_text
@@ -80,6 +81,10 @@ def test_onefile_spec_collects_ocr_runtime_assets_and_model_data():
 def test_windows_pyinstaller_build_validates_ocr_packaging_inputs():
     script_text = Path("build_windows_exe.ps1").read_text(encoding="utf-8")
 
+    assert "@('-3.11', '-m', 'venv', $venvDir)" in script_text
+    assert "@('-3', '-m', 'venv', $venvDir)" not in script_text
+    assert "sys.version_info[:2] == (3, 11)" in script_text
+    assert "Assert-BuildPythonVersion" in script_text
     assert "[ValidateSet('onefile', 'onedir', 'both')]" in script_text
     assert "[string]$Mode = 'both'" in script_text
     assert "packaging/metroliza_onefile.spec" in script_text
@@ -115,20 +120,18 @@ def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
     assert "requirements-ocr.txt" in setup_text
     assert "vc_redist.x64.exe" in setup_text
     assert "scripts/validate_qt_runtime.py" in setup_text
-    assert "scripts/windows_ocr_runtime_diagnostics.py" in setup_text
-    assert "scripts/validate_packaged_pdf_parser.py" in setup_text
-    assert "--require-header-ocr" in setup_text
+    assert "diagnose_windows_ocr.ps1" in setup_text
+    assert "Required OCR diagnostic validation failed" in setup_text
 
     assert "scripts/windows_ocr_runtime_diagnostics.py" in diagnose_text
     assert "--pdf" in diagnose_text
     assert "--db-file" in diagnose_text
     assert "--output" in diagnose_text
 
-    assert "onnxruntime_basic" in runtime_diag_text
-    assert "openvino_basic" in runtime_diag_text
-    assert "cv2_then_onnxruntime" in runtime_diag_text
-    assert "rapidocr_engine_load" in runtime_diag_text
-    assert "vc_redist_x64" in runtime_diag_text
+    assert "_selected_config" in runtime_diag_text
+    assert "_selected_models" in runtime_diag_text
+    assert "_engine_smoke_check" in runtime_diag_text
+
 
 
 def test_onefile_spec_uses_release_metadata_pyinstaller_output_name():

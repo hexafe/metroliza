@@ -11,7 +11,7 @@ import shutil
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_NOTICE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
-DEFAULT_INVENTORY = REPO_ROOT / "docs/release_checks/third_party_inventory_260711.json"
+DEFAULT_INVENTORY = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
 
 def _sha256(path: Path) -> str:

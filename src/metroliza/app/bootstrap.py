@@ -1,10 +1,15 @@
 import logging
 import os
 import sys
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+import re
+import uuid
 
 from metroliza.app import version as VersionDate
-from metroliza.app.build_provenance import load_build_provenance, runtime_mode
+from metroliza.app.build_provenance import (
+    BUILD_PROVENANCE_SCHEMA_VERSION, BuildProvenance, load_build_provenance, runtime_mode,
+)
 from metroliza.app.license_bootstrap import (
     show_invalid_license_message,
     validate_license_bootstrap,
@@ -16,8 +21,19 @@ from metroliza.app.startup_splash import (
 )
 from metroliza.app.startup_profile import record_event, ui_smoke_enabled
 from metroliza.app.ui_entrypoint import MainWindowFactory, load_main_window_factory
-from metroliza.shared.env_utils import env_bool
+from metroliza.shared.diagnostic_events import (
+    BuildPackager,
+    DiagnosticOperation,
+    RuntimeMode,
+    RuntimeProvenanceEvent,
+    StartupCallsite,
+    StartupDiagnosticEvent,
+    StartupMode,
+    StartupOutcome,
+    build_exception_diagnostic_event,
+)
 from metroliza.shared.logging_utils import ensure_application_logging
+from metroliza.shared.diagnostic_transport import supervised_invocation_id
 
 VERSION_DATE = VersionDate.VERSION_DATE
 STARTUP_SMOKE_ENV = "METROLIZA_STARTUP_SMOKE"
@@ -27,6 +43,155 @@ LICENSE_MODE_ENV = "METROLIZA_LICENSE_VERIFICATION"
 PARSER_STRICT_MATCHING_ENV = "PARSER_STRICT_MATCHING"
 
 record_event("process_entry")
+
+
+@dataclass(slots=True)
+class _StartupInvocation:
+    invocation_id: uuid.UUID = field(default_factory=lambda: uuid.uuid4())
+    startup_id: uuid.UUID = field(default_factory=lambda: uuid.uuid4())
+    sequence: int = 0
+    mode: StartupMode = StartupMode.UNKNOWN
+    callsite: StartupCallsite = StartupCallsite.BOOTSTRAP
+    startup_complete: bool = False
+
+
+_STARTUP_INVOCATION: ContextVar[_StartupInvocation | None] = ContextVar(
+    "metroliza_startup_invocation", default=None
+)
+
+
+def _begin_startup_context():
+    # Clearing first also isolates a nested invocation when UUID generation fails.
+    token = _STARTUP_INVOCATION.set(None)
+    try:
+        context = _StartupInvocation()
+        supervised_id = supervised_invocation_id()
+        if supervised_id is not None:
+            context.invocation_id = supervised_id
+        _STARTUP_INVOCATION.set(context)
+    except Exception:
+        pass
+    return token
+
+
+def _startup_event(
+    callsite: StartupCallsite,
+    outcome: StartupOutcome = StartupOutcome.MILESTONE,
+    *,
+    mode: StartupMode | None = None,
+    exit_code: int | None = None,
+    exception: Exception | None = None,
+) -> None:
+    """Best-effort projection at an explicit seam; never log a diagnostic failure."""
+    try:
+        context = _STARTUP_INVOCATION.get()
+        if context is None:
+            return
+        context.callsite = callsite
+        if mode is not None:
+            context.mode = mode
+        if outcome is StartupOutcome.STARTUP_COMPLETED:
+            context.startup_complete = True
+        if context.sequence >= 16:
+            return
+        context.sequence += 1
+        shape = None if exception is None else build_exception_diagnostic_event(
+            exception, operation=DiagnosticOperation.UNHANDLED_EXCEPTION
+        )
+        event = StartupDiagnosticEvent(
+            context.invocation_id, context.startup_id, context.sequence,
+            context.mode, callsite, outcome, exit_code, shape,
+        )
+        level = logging.ERROR if exception is not None or outcome is StartupOutcome.STARTUP_REJECTED else logging.INFO
+        logger = logging.getLogger(__name__)
+        if logger.hasHandlers():
+            logger.log(level, event)
+    except Exception:
+        pass
+
+
+def _startup_failure(exception: Exception) -> None:
+    try:
+        context = _STARTUP_INVOCATION.get()
+        if context is None:
+            return
+        outcome = StartupOutcome.APPLICATION_FAILED if context.startup_complete else StartupOutcome.STARTUP_FAILED
+        _startup_event(context.callsite, outcome, exception=exception)
+    except Exception:
+        pass
+
+
+def _selected_startup_mode(config) -> StartupMode:
+    if config.startup_smoke_mode:
+        return StartupMode.STARTUP_SMOKE
+    if config.pdf_parser_smoke_fixture:
+        return StartupMode.PDF_SMOKE
+    if config.startup_ui_smoke_mode:
+        return StartupMode.UI_SMOKE
+    return StartupMode.INTERACTIVE
+
+
+def _configuration_observed(config: "StartupConfig") -> None:
+    try:
+        _startup_event(StartupCallsite.CONFIG_READY, mode=_selected_startup_mode(config))
+    except Exception:
+        pass
+
+
+def _smoke_return(exit_code: int) -> int:
+    outcome = StartupOutcome.STARTUP_COMPLETED if type(exit_code) is int and exit_code == 0 else StartupOutcome.STARTUP_REJECTED
+    _startup_event(StartupCallsite.SMOKE_RETURN, outcome, exit_code=exit_code)
+    return exit_code
+
+
+def _source_release_fields() -> tuple[int, int, int | None]:
+    version = VersionDate.RELEASE_VERSION
+    if type(version) is not str or len(version) > 32:
+        raise ValueError("invalid source release")
+    match = re.fullmatch(r"([0-9]{4})\.([0-9]{2})(?:rc([0-9]{1,3}))?", version)
+    if match is None:
+        raise ValueError("invalid source release")
+    return int(match[1]), int(match[2]), None if match[3] is None else int(match[3])
+
+
+def _project_build_identity():
+    """Read only exact manifest primitives; unknown is preferable to stale identity."""
+    mode = runtime_mode()
+    if type(mode) is str and mode == "source":
+        return RuntimeMode.SOURCE, BuildPackager.SOURCE, "unknown", None
+    if type(mode) is not str or mode != "frozen":
+        return RuntimeMode.UNKNOWN, BuildPackager.UNKNOWN, "unknown", None
+    fallback = (RuntimeMode.FROZEN, BuildPackager.UNKNOWN, "unknown", None)
+    provenance = load_build_provenance()
+    if type(provenance) is not BuildProvenance:
+        return fallback
+    return _project_manifest_identity(provenance, fallback)
+
+
+def _project_manifest_identity(provenance: BuildProvenance, fallback):
+    values = object.__getattribute__(provenance, "__dict__")
+    if type(values) is not dict:
+        return fallback
+    schema = dict.get(values, "schema_version")
+    if type(schema) is not int or schema != BUILD_PROVENANCE_SCHEMA_VERSION:
+        return fallback
+    label = dict.get(values, "release_label")
+    sha = dict.get(values, "git_sha")
+    dirty = dict.get(values, "dirty")
+    packager = dict.get(values, "packager")
+    if type(label) is not str or label != VersionDate.VERSION_LABEL:
+        return fallback
+    if type(sha) is not str or len(sha) not in (40, 64):
+        return fallback
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", sha) is None or type(dirty) is not bool:
+        return fallback
+    if type(packager) is not str:
+        return fallback
+    if packager == "pyinstaller":
+        return RuntimeMode.FROZEN, BuildPackager.PYINSTALLER, sha, dirty
+    if packager == "nuitka":
+        return RuntimeMode.FROZEN, BuildPackager.NUITKA, sha, dirty
+    return fallback
 
 
 @dataclass(frozen=True)
@@ -78,30 +243,41 @@ def initialize_logging() -> logging.Logger:
     ensure_application_logging()
     record_event("logging_init_done")
     logger = logging.getLogger(__name__)
+    _startup_event(StartupCallsite.LOGGING_READY)
     log_runtime_provenance(logger)
     return logger
 
 
 def log_runtime_provenance(logger: logging.Logger) -> None:
-    """Emit one build/process identity line for correlating field diagnostics."""
+    """Emit a closed build projection through the unchanged managed logging route."""
+    try:
+        context = _STARTUP_INVOCATION.get() or _StartupInvocation()
+        if context.sequence >= 16:
+            return
+        context.sequence += 1
+        mode, packager, sha, dirty = _project_build_identity()
+        year, month, candidate = _source_release_fields()
+        event = RuntimeProvenanceEvent(
+            context.invocation_id, context.startup_id, context.sequence,
+            mode, packager, sha, dirty,
+            release_year=year, release_month=month, release_candidate=candidate,
+        )
+        logger.info(event)
+    except Exception:
+        pass
 
-    provenance = load_build_provenance()
-    dirty = "unknown" if provenance.dirty is None else str(provenance.dirty).lower()
-    logger.info(
-        "Runtime provenance pid=%s executable=%s mode=%s git_sha=%s dirty=%s "
-        "packager=%s parser_strict_matching=%s",
-        os.getpid(),
-        os.path.abspath(sys.executable),
-        runtime_mode(),
-        provenance.git_sha,
-        dirty,
-        provenance.packager,
-        str(env_bool(PARSER_STRICT_MATCHING_ENV, default=True)).lower(),
-    )
 
+def get_or_create_qapplication(*, gui_gc: bool = True):
+    """Return the active QApplication, creating it when startup has not done so yet.
 
-def get_or_create_qapplication():
-    """Return the active QApplication, creating it when startup has not done so yet."""
+    GUI flows (the application and the qualification flows that open windows and start
+    workers) get the GUI-thread garbage-collection policy of ``metroliza.app.gc_policy``.
+    Modes without a Qt event loop, such as the startup smoke, pass ``gui_gc=False``.
+    """
+    from metroliza.app import qt_teardown
+
+    if qt_teardown.APPLICATION_RELEASED:
+        raise RuntimeError("QApplication has been released; a second application is unsafe (#1119).")
     record_event("qapplication_import_start")
     from PyQt6.QtWidgets import QApplication
 
@@ -109,12 +285,19 @@ def get_or_create_qapplication():
     existing_app = QApplication.instance()
     if existing_app is not None:
         record_event("qapplication_reused")
-        return existing_app
+        app = existing_app
+    else:
+        record_event("qapplication_create_start")
+        app = QApplication(sys.argv)
+        record_event("qapplication_create_done")
+    if gui_gc:
+        from metroliza.app.gc_policy import install as install_gui_gc
 
-    record_event("qapplication_create_start")
-    app = QApplication(sys.argv)
-    record_event("qapplication_create_done")
+        install_gui_gc(app)
     return app
+
+
+EXIT_AFTER_WARMUP_ENV = "METROLIZA_STARTUP_EXIT_AFTER_WARMUP"
 
 
 def _schedule_startup_ui_smoke_exit(app) -> None:
@@ -123,9 +306,56 @@ def _schedule_startup_ui_smoke_exit(app) -> None:
 
     def record_and_quit() -> None:
         record_event("first_event_loop_tick")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("first_event_loop_tick")
         app.quit()
 
     QTimer.singleShot(0, record_and_quit)
+
+
+def _schedule_after_first_event_loop_tick(callback) -> None:
+    """Run ``callback`` on the first Qt event-loop turn after the window was shown."""
+    from PyQt6.QtCore import QTimer
+
+    QTimer.singleShot(0, callback)
+
+
+def _schedule_splash_finish_then_warmup(app, splash, main_window) -> None:
+    """Close the splash once the main window is painted, then warm feature imports.
+
+    Feature-module warmup only prepares tools the user has not opened yet, so it
+    must not keep the splash on screen. Warmup starts after the splash is gone and
+    reports progress through the main window status bar only (the splash status
+    callback is deliberately not wired up).
+    """
+
+    def warmup_finished() -> None:
+        record_event("launch_ui_warmup_finished")
+        from metroliza.app.startup_stall_probe import record_summary
+
+        record_summary("warmup_finished")
+        # Measurement aid: leave once the window is fully usable (first useful screen).
+        if os.getenv(EXIT_AFTER_WARMUP_ENV) == "1":
+            from PyQt6.QtCore import QTimer
+
+            QTimer.singleShot(0, app.quit)
+
+    def finish_splash_and_start_warmup() -> None:
+        record_event("main_window_first_paint_tick")
+        try:
+            # Flush the pending paint of the freshly shown window before the
+            # splash disappears so the user never sees an empty frame.
+            app.processEvents()
+            splash.finish(main_window)
+            record_event("splash_finished_after_first_paint")
+        finally:
+            main_window.schedule_feature_import_warmup(
+                delay_ms=0,
+                on_finished=warmup_finished,
+            )
+
+    _schedule_after_first_event_loop_tick(finish_splash_and_start_warmup)
 
 
 def log_and_exit(exception: Exception) -> None:
@@ -144,7 +374,10 @@ def run_startup_smoke_mode(logger: logging.Logger) -> int:
     from metroliza.app.license_key_manager import LicenseKeyManager
 
     logger.info("Startup smoke mode enabled (%s): beginning non-interactive init", STARTUP_SMOKE_ENV)
-    app = get_or_create_qapplication()
+    _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
+    app = get_or_create_qapplication(gui_gc=False)
+    _startup_event(StartupCallsite.QAPPLICATION_READY)
+    _startup_event(StartupCallsite.SMOKE_WORK)
     _ = LicenseKeyManager.generate_hardware_id()
     app.processEvents()
     logger.info("Startup smoke mode completed successfully; exiting without showing UI")
@@ -179,11 +412,20 @@ def launch_ui(
     # QApplication exists before importing the main window dependency graph.
     record_event("launch_ui_start")
     update_bootloader_splash("Starting Metroliza interface...", phase="qt")
+    _startup_event(StartupCallsite.QAPPLICATION_REQUEST)
     app = get_or_create_qapplication()
+    _startup_event(StartupCallsite.QAPPLICATION_READY)
+    from metroliza.app.gc_policy import install as install_gui_gc
+
+    install_gui_gc(app)
+    from metroliza.app.startup_stall_probe import install_if_requested
+
+    install_if_requested(app)
     splash = create_startup_splash(app, ui_smoke_mode=config.startup_ui_smoke_mode)
     close_bootloader_splash(phase="qt_splash_ready")
     splash.show_message("Checking license...", phase="license")
 
+    _startup_event(StartupCallsite.LICENSE_CHECK)
     record_event("license_validation_start")
     license_result = validate_license_bootstrap(config.license_verification_enabled)
     record_event("license_validation_done", is_valid=license_result.is_valid)
@@ -203,14 +445,17 @@ def launch_ui(
             hardware_id,
         )
         record_event("launch_ui_invalid_license")
+        _startup_event(StartupCallsite.LICENSE_REJECTED, StartupOutcome.STARTUP_REJECTED, exit_code=1)
         return 1
 
     splash.show_message("Loading main window...", phase="main_window")
+    _startup_event(StartupCallsite.MAIN_WINDOW_FACTORY)
     record_event("main_window_import_start")
     if main_window_factory is None:
         main_window_factory = load_main_window_factory()
     record_event("main_window_import_done")
 
+    _startup_event(StartupCallsite.MAIN_WINDOW_CONSTRUCT)
     record_event("main_window_construct_start")
     main_window = main_window_factory(
         VersionDate.VERSION_LABEL,
@@ -218,19 +463,21 @@ def launch_ui(
     )
     record_event("main_window_construct_done")
     splash.show_message("Opening dashboard...", phase="show")
+    _startup_event(StartupCallsite.MAIN_WINDOW_SHOW_REQUEST)
     main_window.show()
+    _startup_event(StartupCallsite.MAIN_WINDOW_SHOW_RETURNED)
     record_event("main_window_show_called")
     if config.startup_ui_smoke_mode:
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
     else:
-        main_window.schedule_feature_import_warmup(
-            delay_ms=0,
-            on_finished=lambda: splash.finish(main_window),
-            status_callback=lambda message: splash.show_message(message, phase="warmup"),
-        )
+        _schedule_splash_finish_then_warmup(app, splash, main_window)
     record_event("event_loop_enter")
+    _startup_event(StartupCallsite.EVENT_LOOP_EXEC_REQUEST, StartupOutcome.STARTUP_COMPLETED)
     exit_code = app.exec()
+    from metroliza.app.qt_teardown import shutdown_qt
+
+    shutdown_qt(app)
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
 
@@ -239,29 +486,47 @@ def bootstrap_application() -> int:
     """Entrypoint orchestration for startup configuration, logging, and UI launch."""
     record_event("bootstrap_start")
     update_bootloader_splash("Starting Metroliza...", phase="bootstrap")
+    _startup_event(StartupCallsite.LOGGING_INITIALIZE)
     logger = initialize_logging()
+    _startup_event(StartupCallsite.CONFIG_LOAD)
     config = load_startup_config()
+    _configuration_observed(config)
 
     if config.startup_smoke_mode:
-        return run_startup_smoke_mode(logger)
+        _startup_event(StartupCallsite.SMOKE_WORK)
+        return _smoke_return(run_startup_smoke_mode(logger))
 
     if config.pdf_parser_smoke_fixture:
-        return run_pdf_parser_smoke_mode(
+        _startup_event(StartupCallsite.SMOKE_WORK)
+        return _smoke_return(run_pdf_parser_smoke_mode(
             logger,
             config.pdf_parser_smoke_fixture,
             config.pdf_parser_smoke_expected_text or "",
-        )
+        ))
 
     return launch_ui(config)
 
 
 def run_application() -> int:
-    """Run bootstrap flow with top-level exception logging."""
+    """Run the original bootstrap flow with one optional invocation context."""
+    token = None
     try:
-        return bootstrap_application()
-    except Exception as exc:
-        log_and_exit(exc)
-        return 1
+        token = _begin_startup_context()
+    except Exception:
+        pass
+    try:
+        _startup_event(StartupCallsite.BOOTSTRAP, StartupOutcome.INVOCATION_STARTED)
+        try:
+            exit_code = bootstrap_application()
+        except Exception as exc:
+            _startup_failure(exc)
+            log_and_exit(exc)
+            return 1
+        _startup_event(StartupCallsite.APPLICATION_RETURN, StartupOutcome.APPLICATION_RETURNED, exit_code=exit_code)
+        return exit_code
+    finally:
+        if token is not None:
+            _STARTUP_INVOCATION.reset(token)
 
 
 if __name__ == "__main__":

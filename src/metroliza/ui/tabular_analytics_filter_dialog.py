@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog
+
 from PyQt6.QtCore import QDate, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QComboBox,
@@ -44,6 +46,8 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+
 try:
     from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
@@ -67,13 +71,6 @@ _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "GROUP_KEY",
     "GROUP_COLOR",
 }
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()
@@ -786,7 +783,7 @@ class TabularAnalyticsFilterDialog(QDialog):
 
     def _close_preview_loading_dialog(self) -> None:
         if self._preview_loading_dialog is not None:
-            self._preview_loading_dialog.close()
+            dismiss_worker_progress_dialog(self._preview_loading_dialog)
         self._preview_loading_dialog = None
         self._preview_loading_label = None
         self._preview_loading_bar = None

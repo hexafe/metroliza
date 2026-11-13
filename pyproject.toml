@@ -23,6 +23,9 @@ exclude = [
 # Optional test runner normalization for contributors/tools that use pytest.
 testpaths = ["tests"]
 pythonpath = ["src", "."]
+# A test stalled for 27 min in CI (#1158, run 40961931428) with no evidence;
+# dump every thread's stack if one test runs longer than this (never fails it).
+faulthandler_timeout = 600
 markers = [
   "integration: optional tests that require external runtimes, sample files, or packaged artifacts",
 ]

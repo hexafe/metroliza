@@ -1034,3 +1034,32 @@ def test_report_factory_invalidates_changed_sidecar_and_removed_profile_generati
         report_parser_factory._EXTERNAL_PLUGINS_LOADED = original_loaded
         report_parser_factory._EXTERNAL_PLUGIN_CONFIG_SIGNATURE = original_signature
         report_parser_factory._EXTERNAL_PLUGIN_ENTRY_POINTS = original_entry_points
+
+
+@pytest.mark.parametrize("component", ["profile", "approval"])
+def test_profile_registry_signature_detects_same_stat_different_bytes(tmp_path, component):
+    import os
+
+    from metroliza.parsing.declarative_parser_profiles import profile_store_signature
+
+    profile_path, sample_path, expected_path = _write_fixture(tmp_path)
+    install_profile(
+        profile_path, sample_paths=(sample_path,), expected_results_ref=expected_path, home=tmp_path,
+    )
+    directory = approved_profiles_dir(home=tmp_path) / "supplier_alpha"
+    target = directory / (PROFILE_FILE_NAME if component == "profile" else APPROVAL_FILE_NAME)
+    before_bytes = target.read_bytes()
+    before_stat = target.stat()
+    before = profile_store_signature(home=tmp_path)
+    if component == "profile":
+        changed = before_bytes.replace(b"0.1.0", b"0.2.0")
+    else:
+        changed = before_bytes.replace(b'  "', b'\t "', 1)
+    assert changed != before_bytes and len(changed) == len(before_bytes)
+    target.write_bytes(changed)
+    os.utime(target, ns=(before_stat.st_atime_ns, before_stat.st_mtime_ns))
+    after_stat = target.stat()
+    assert (after_stat.st_mtime_ns, after_stat.st_size, after_stat.st_ino) == (
+        before_stat.st_mtime_ns, before_stat.st_size, before_stat.st_ino,
+    )
+    assert profile_store_signature(home=tmp_path) != before

@@ -16,9 +16,24 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
+from metroliza.exporting.output_publication import output_paths, publish_output, retry_output_copy
+
+from metroliza.exporting.xlsx_bulk_sheet import (
+    BulkPlanBuilder,
+    BulkRowsWorksheet,
+    bulk_block_fits,
+    enable_bulk_rows,
+    plan_bulk_rows,
+)
 from metroliza.exporting.xlsx_writer_policy import (
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
+)
+from metroliza.exporting.xlsx_parallel_package import (
+    _cleanup_step,
+    cleanup_failed_workbook,
+    discard_workbook,
+    enable_parallel_package,
 )
 from metroliza.exporting.execution import (
     ExportExecutionContext,
@@ -339,6 +354,7 @@ class XlsxWorkbookWriter:
     path: str
     book: Any
     sheets: dict[str, Any]
+    temporary_directory: tempfile.TemporaryDirectory[str] | None = None
 
 
 class _NullChartAdapter:
@@ -574,6 +590,21 @@ def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], list[tuple[A
     return columns, []
 
 
+def _bulk_sheet_available(writer: XlsxWorkbookWriter) -> bool:
+    return getattr(writer.book, "worksheet_class", None) is BulkRowsWorksheet
+
+
+def _write_rows_cell_by_cell(worksheet: Any, rows: list[tuple[Any, ...]]) -> None:
+    for row_index, row in enumerate(rows, start=1):
+        for column_index, value in enumerate(row):
+            write_untrusted_xlsx_cell(
+                worksheet,
+                row_index,
+                column_index,
+                None if _is_blank_cell(value) else value,
+            )
+
+
 class ExcelExportBackend:
     """Excel backend that persists exports directly through xlsxwriter."""
 
@@ -581,33 +612,94 @@ class ExcelExportBackend:
 
     def create_writer(self, excel_file: str) -> XlsxWorkbookWriter:
         """Create a direct xlsxwriter workbook session for `excel_file`."""
+        book = xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options())
+        temporary_directory = None
+        if isinstance(book, xlsxwriter.workbook.Workbook):
+            temporary_directory = tempfile.TemporaryDirectory(
+                prefix=".xlsx-package-", dir=Path(excel_file).parent
+            )
+            book.tmpdir = temporary_directory.name
+            book._metroliza_package_scratch = temporary_directory.name
+        try:
+            enable_bulk_rows(book)
+            enable_parallel_package(book)
+        except BaseException as error:
+            discard_workbook(book, error)
+            if temporary_directory is not None:
+                _cleanup_step(temporary_directory.cleanup, error)
+            raise
         return XlsxWorkbookWriter(
-            path=excel_file,
-            book=xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options()),
-            sheets={},
+            path=excel_file, book=book, sheets={}, temporary_directory=temporary_directory
         )
 
     def close_writer(self, writer: XlsxWorkbookWriter) -> None:
         """Close the active writer and flush workbook contents to disk."""
-        writer.book.close()
+        try:
+            writer.book.close()
+        except BaseException as error:
+            cleanup_failed_workbook(writer.book, error)
+            self.discard_writer(writer, error)
+            raise
+        else:
+            self.discard_writer(writer)
+
+    def discard_writer(
+        self, writer: XlsxWorkbookWriter, error: BaseException | None = None,
+    ) -> None:
+        """Release an unfinished writer without creating a workbook package."""
+        discard_workbook(getattr(writer, "book", None), error)
+        temporary_directory = getattr(writer, "temporary_directory", None)
+        if temporary_directory is not None:
+            _cleanup_step(temporary_directory.cleanup, error)
 
     def write_dataframe(self, writer: XlsxWorkbookWriter, table: Any, sheet_name: str) -> None:
-        """Write `table` to `sheet_name` without index columns."""
+        """Write `table` to `sheet_name` without index columns.
+
+        Large row tables are written through the bulk worksheet path when it
+        can reproduce the cell-by-cell output exactly; everything else uses
+        ``write_untrusted_xlsx_cell`` per cell.
+        """
         columns, rows = _extract_table_columns_and_rows(table)
+        plan = plan_bulk_rows(columns, rows) if _bulk_sheet_available(writer) else None
         worksheet = writer.book.add_worksheet(str(sheet_name))
         writer.sheets[str(sheet_name)] = worksheet
 
         for column_index, column_name in enumerate(columns):
             write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)
 
-        for row_index, row in enumerate(rows, start=1):
-            for column_index, value in enumerate(row):
-                write_untrusted_xlsx_cell(
-                    worksheet,
-                    row_index,
-                    column_index,
-                    None if _is_blank_cell(value) else value,
-                )
+        if plan is not None and worksheet.write_bulk_block(1, plan):
+            return
+        _write_rows_cell_by_cell(worksheet, rows)
+
+    def write_streamed_rows(
+        self,
+        writer: XlsxWorkbookWriter,
+        sheet_name: str,
+        columns: list[str],
+        row_chunks: Any,
+    ) -> int | None:
+        """Write streamed row chunks as `sheet_name` through the bulk worksheet path.
+
+        Returns the number of data rows written, or ``None`` -- with nothing
+        written -- when the rows cannot be reproduced exactly by the bulk path
+        (the caller then falls back to `write_dataframe`).
+        """
+        if not _bulk_sheet_available(writer):
+            return None
+        builder = BulkPlanBuilder(columns)
+        for chunk in row_chunks:
+            if not builder.add_rows(chunk):
+                return None
+        plan = builder.build()
+        if plan is None or not bulk_block_fits(plan):
+            return None
+        worksheet = writer.book.add_worksheet(str(sheet_name))
+        writer.sheets[str(sheet_name)] = worksheet
+        for column_index, column_name in enumerate(plan.column_names):
+            write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)
+        if not worksheet.write_bulk_block(1, plan):
+            raise RuntimeError(f"Bulk worksheet refused rows for new sheet {sheet_name!r}.")
+        return plan.n_rows
 
     def list_sheet_names(self, writer: XlsxWorkbookWriter) -> set[str]:
         """Return names of worksheets currently attached to `writer`."""
@@ -659,29 +751,64 @@ class ExcelExportBackend:
         temp_path = self.create_temporary_workbook_path(str(target_path))
         excel_writer = None
         outcome = ExportStageOutcome.canceled()
+        pipeline_complete = False
+        pipeline_error: BaseException | None = None
         try:
             excel_writer = self.create_writer(str(temp_path))
             try:
                 outcome = normalize_export_outcome(thread.run_export_pipeline(excel_writer))
+                pipeline_complete = True
+            except BaseException as error:
+                pipeline_error = error
+                raise
             finally:
                 thread.begin_workbook_close()
                 close_start = time.perf_counter()
                 try:
-                    self.close_writer(excel_writer)
+                    if pipeline_complete and outcome:
+                        self.close_writer(excel_writer)
+                    else:
+                        self.discard_writer(excel_writer, pipeline_error)
                 finally:
                     thread.complete_workbook_close(time.perf_counter() - close_start)
-        except BaseException:
-            self.remove_temporary_workbook(temp_path)
+        except BaseException as error:
+            if excel_writer is not None:
+                cleanup_failed_workbook(getattr(excel_writer, "book", None), error)
+                self.discard_writer(excel_writer, error)
+            _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
-        if not outcome:
+        if not outcome or getattr(thread, "export_canceled", False):
             self.remove_temporary_workbook(temp_path)
-            return outcome
+            return ExportStageOutcome.canceled()
 
         try:
-            self.replace_workbook(temp_path, target_path)
-        except BaseException:
-            self.remove_temporary_workbook(temp_path)
+            published_path, _result = retry_output_copy(
+                lambda path: publish_output(
+                    temp_path, path, consents=getattr(thread, "replace_outputs", ()), replace=self.replace_workbook,
+                ),
+                target_path, copy_from=getattr(thread, "copy_output_from", None),
+                dashboard=bool(getattr(thread, "html_dashboard_file", None)),
+            )
+        except BaseException as error:
+            _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
+        _record_workbook_path(thread, published_path)
         return outcome
+
+
+def _record_workbook_path(thread, published_path):
+    """Keep sidecars and completion links bound to the actual copy destination."""
+    if hasattr(thread, "completion_metadata"):
+        thread.completion_metadata["published_output_path"] = str(published_path)
+        if "local_xlsx_path" in thread.completion_metadata:
+            thread.completion_metadata["local_xlsx_path"] = str(published_path)
+    if Path(thread.excel_file) == published_path:
+        return
+    thread.excel_file = str(published_path)
+    thread._primary_output_file = str(published_path)
+    if getattr(thread, "html_dashboard_file", None):
+        html_path = output_paths(published_path, dashboard=True)[-1]
+        thread.html_dashboard_file = str(html_path)
+        thread.html_dashboard_assets_dir = str(html_path.with_name(f"{html_path.stem}_assets"))

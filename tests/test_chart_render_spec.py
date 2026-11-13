@@ -23,6 +23,67 @@ from modules.native_chart_compositor import render_distribution_png, render_hist
 FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "chart_parity"
 
 
+def test_violin_density_literal_kde_and_histogram_equivalence():
+    from scipy.stats import gaussian_kde
+    from metroliza.charts.chart_render_spec import _resolve_violin_density_shape
+
+    for values in ([], [1.], [1., 1., 1.], [1., 2., 3., 2.5]):
+        series = np.asarray(values)
+        actual = _resolve_violin_density_shape(series, y_min=0., y_max=4.)
+        if not values:
+            assert actual is None
+            continue
+        sample_y = np.linspace(0., 4., 101)
+        if series.size >= 3 and np.std(series, ddof=1) > 0:
+            density = gaussian_kde(series)(sample_y)
+        else:
+            density, edges = np.histogram(series, bins=min(24, max(6, int(np.sqrt(series.size)))),
+                                         range=(0., 4.), density=True)
+            sample_y = np.linspace(float(edges[0]), float(edges[-2]), density.size)
+        assert actual[0].tobytes() == sample_y.tobytes()
+        assert actual[1].tobytes() == (density / np.max(density)).tobytes()
+
+
+def test_chart_render_spec_defers_scipy_until_first_violin_use():
+    import subprocess
+    import sys
+    import textwrap
+
+    result = subprocess.run([sys.executable, '-c', textwrap.dedent('''
+        import builtins
+        import sys
+        original_import = builtins.__import__
+        attempted = []
+        def guarded(name, *args, **kwargs):
+            if name == 'scipy' or name.startswith('scipy.'):
+                attempted.append(name)
+                raise ImportError('optional SciPy unavailable')
+            return original_import(name, *args, **kwargs)
+        builtins.__import__ = guarded
+        import numpy as np
+        from metroliza.charts.chart_render_spec import _resolve_violin_density_shape
+        assert not attempted, attempted
+        assert 'scipy.stats' not in sys.modules
+        assert _resolve_violin_density_shape(np.array([]), y_min=0., y_max=4.) is None
+        assert not attempted
+        result = _resolve_violin_density_shape(np.array([1., 2., 3.]), y_min=0., y_max=4.)
+        assert attempted == ['scipy.stats'], attempted
+        density, edges = np.histogram([1., 2., 3.], bins=6, range=(0., 4.), density=True)
+        assert result[0].tobytes() == np.linspace(edges[0], edges[-2], 6).tobytes()
+        assert result[1].tobytes() == (density / np.max(density)).tobytes()
+        builtins.__import__ = original_import
+        series = np.array([1., 2., 3.])
+        actual = _resolve_violin_density_shape(series, y_min=0., y_max=4.)
+        assert 'scipy.stats' in sys.modules
+        from scipy.stats import gaussian_kde
+        sample_y = np.linspace(0., 4., 101)
+        density = gaussian_kde(series)(sample_y)
+        assert actual[0].tobytes() == sample_y.tobytes()
+        assert actual[1].tobytes() == (density / np.max(density)).tobytes()
+    ''')], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def _non_white_pixels(image: np.ndarray, *, y0: float, y1: float, x0: float, x1: float) -> int:
     height, width = image.shape[:2]
     region = image[int(height * y0): int(height * y1), int(width * x0): int(width * x1), :3]

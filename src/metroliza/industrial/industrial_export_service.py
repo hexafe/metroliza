@@ -21,13 +21,7 @@ from metroliza.exporting.xlsx_writer_policy import (
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
 )
-
-
-class _LazyPandas:
-    def __getattr__(self, name: str) -> Any:
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 pd = _LazyPandas()

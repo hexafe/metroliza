@@ -43,6 +43,21 @@ class MetadataEnrichmentWorkItem:
     sha256: str
 
 
+@dataclass(frozen=True)
+class StandaloneEnrichmentResult(MetadataEnrichmentBatchResult):
+    """Standalone accounting without changing the import enrichment contract."""
+
+    termination_reason: str = "completed"
+
+    @property
+    def processed_files(self):
+        return self.enriched_files + self.failed_files + self.skipped_files
+
+    @property
+    def not_processed_files(self):
+        return max(0, self.total_files - self.processed_files)
+
+
 def _json_object(value):
     if isinstance(value, dict):
         return dict(value)
@@ -221,9 +236,11 @@ def run_metadata_enrichment_batch(
     skipped_files = 0
     processed_files = 0
     total_files = len(work_items)
+    cancelled = False
 
     for work_item in work_items:
         if should_cancel():
+            cancelled = True
             break
         started_at = time.perf_counter()
         enriched = False
@@ -258,11 +275,16 @@ def run_metadata_enrichment_batch(
         if on_progress:
             on_progress(processed_files, total_files)
 
-    return MetadataEnrichmentBatchResult(
+    cancelled = cancelled or should_cancel()
+    return StandaloneEnrichmentResult(
         enriched_files=enriched_files,
         total_files=total_files,
         failed_files=failed_files,
         skipped_files=skipped_files,
+        cancelled_files=total_files - processed_files if cancelled else 0,
+        started=processed_files > 0 or not cancelled,
+        cancellation_requested=cancelled,
+        termination_reason="cancelled" if cancelled else "completed",
     )
 
 
@@ -279,7 +301,7 @@ class MetadataEnrichmentThread(QThread):
         self.db_file = str(db_file)
         self.limit = limit
         self.enrichment_canceled = False
-        self.result = MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+        self.result = StandaloneEnrichmentResult(enriched_files=0, total_files=0, started=False)
 
     def stop_enrichment(self):
         self.enrichment_canceled = True
@@ -316,17 +338,22 @@ class MetadataEnrichmentThread(QThread):
                     connection=connection,
                     limit=self.limit,
                 )
+                self.result = StandaloneEnrichmentResult(enriched_files=0, total_files=len(work_items), started=False)
                 if not work_items:
                     self.update_label.emit(self._build_label(processed_files=0, total_files=0, start_time=time.perf_counter()))
-                    self.update_progress.emit(100)
-                    self.result = MetadataEnrichmentBatchResult(enriched_files=0, total_files=0)
+                    self.result = StandaloneEnrichmentResult(
+                        enriched_files=0, total_files=0,
+                        started=not self.enrichment_canceled,
+                        cancellation_requested=self.enrichment_canceled,
+                        termination_reason="cancelled" if self.enrichment_canceled else "completed",
+                    )
                     self.enrichment_finished.emit()
                     return
 
                 start_time = time.perf_counter()
 
                 def _on_progress(processed, total):
-                    self.update_progress.emit(int(round((processed / total) * 100)) if total else 100)
+                    self.update_progress.emit(min(99, int(round((processed / total) * 100))) if total else 0)
                     self.update_label.emit(
                         self._build_label(
                             processed_files=processed,
@@ -340,7 +367,7 @@ class MetadataEnrichmentThread(QThread):
 
                 def _on_warning(work_item, exc):
                     self.warning.emit(
-                        f"Metadata enrichment skipped report {work_item.report_id}: {exc}"
+                        f"Metadata enrichment skipped report {work_item.report_id}: {str(exc)[:500]}"
                     )
 
                 self.result = run_metadata_enrichment_batch(
@@ -354,6 +381,14 @@ class MetadataEnrichmentThread(QThread):
                 )
             self.enrichment_finished.emit()
         except Exception as exc:
+            self.result = StandaloneEnrichmentResult(
+                enriched_files=self.result.enriched_files,
+                total_files=self.result.total_files,
+                failed_files=self.result.failed_files,
+                skipped_files=self.result.skipped_files,
+                started=self.result.started,
+                termination_reason="failed",
+            )
             logger.exception("Metadata enrichment failed: %s", exc)
             self.error_occurred.emit(str(exc))
             custom_logger.handle_exception(

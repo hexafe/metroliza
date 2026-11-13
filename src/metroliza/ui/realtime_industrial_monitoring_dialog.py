@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import tempfile
 from time import monotonic
 from typing import Any
 
@@ -52,6 +51,10 @@ from metroliza.industrial.realtime.monitor_config import (
 )
 from metroliza.industrial.realtime.realtime_dashboard_html import write_realtime_dashboard_html
 from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+from metroliza.ui.private_dashboard_directory import (
+    PrivateDashboardDirectoryError,
+    create_private_dashboard_directory,
+)
 from metroliza.industrial.realtime.stream_config import (
     DEFAULT_CONTEXT_FIELDS,
     DEFAULT_SEGMENT_FIELDS,
@@ -81,6 +84,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     """Configure and run live polling for one or more industrial source profiles."""
 
     shutdown_complete = pyqtSignal()
+    shutdown_cleanup_failed = pyqtSignal()
     monitor_stopped = pyqtSignal()
     database_work_idle = pyqtSignal()
 
@@ -113,9 +117,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._closing = False
         self._shutdown_waiting = False
         self._shutdown_completion_emitted = False
-        self._dashboard_temp_dir = tempfile.TemporaryDirectory(
-            prefix="metroliza-realtime-dashboard-"
-        )
+        self._dashboard_temp_dir = None
+        self._dashboard_session_error = ""
+        self._dashboard_cleanup_retry = False
+        try:
+            self._dashboard_temp_dir = create_private_dashboard_directory()
+        except PrivateDashboardDirectoryError:
+            self._dashboard_session_error = (
+                "Private temporary dashboard storage is unavailable. "
+                "Choose an output file or reopen the monitor to retry."
+            )
         self.profiles: list[IndustrialSourceProfile] = []
         self.configs_by_profile_id: dict[int, RealtimeMonitorConfig] = {}
         self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
@@ -128,6 +139,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         configure_window_size(self, minimum=(900, 620), initial=(1120, 760))
         self._build_ui()
         self.reload_from_database()
+        if self._dashboard_session_error:
+            self._set_dashboard_status(self._dashboard_session_error, "warning")
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -1169,10 +1182,15 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 self.status_table.setItem(row, column, item)
 
     def choose_dashboard_path(self) -> None:
+        initial_path = (
+            str(self._default_dashboard_path())
+            if self._dashboard_temp_dir is not None
+            else "realtime_industrial_monitoring.html"
+        )
         selected, _filter = QFileDialog.getSaveFileName(
             self,
             "Realtime monitoring dashboard",
-            str(self._default_dashboard_path()),
+            initial_path,
             "HTML files (*.html);;All files (*)",
         )
         if selected:
@@ -1204,7 +1222,18 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if self.dashboard_thread is not None:
             return
         self.dashboard_write_debounce_timer.stop()
-        output_path = Path(_field_path(self.dashboard_path_field.text()) or self._default_dashboard_path())
+        try:
+            output_path = Path(_field_path(self.dashboard_path_field.text()) or self._default_dashboard_path())
+        except PrivateDashboardDirectoryError:
+            self._dashboard_write_pending = False
+            self._dashboard_open_pending = False
+            self._dashboard_open_after_current = False
+            self._set_dashboard_status(
+                self._dashboard_session_error or "Realtime dashboard session has already been closed",
+                "warning",
+            )
+            self._emit_database_work_idle_if_ready()
+            return
         self._dashboard_write_pending = False
         self._dashboard_open_after_current = self._dashboard_open_pending
         self._dashboard_open_pending = False
@@ -1271,6 +1300,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_dashboard_path)))
             return self.last_dashboard_path
+        except PrivateDashboardDirectoryError:
+            self._set_dashboard_status(
+                self._dashboard_session_error or "Realtime dashboard session has already been closed",
+                "warning",
+            )
+            return None
         except Exception as exc:
             self._append_diagnostic(f"Dashboard write failed: {exc}")
             self._set_dashboard_status(f"Dashboard write failed: {exc}", "warning")
@@ -1278,7 +1313,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def _default_dashboard_path(self) -> Path:
         if self._dashboard_temp_dir is None:
-            raise RuntimeError("Realtime dashboard session has already been closed")
+            raise PrivateDashboardDirectoryError()
         output_dir = Path(self._dashboard_temp_dir.name)
         return output_dir / "realtime_industrial_monitoring.html"
 
@@ -1353,6 +1388,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def request_shutdown(self) -> bool:
         """Request worker cancellation and report whether database use has stopped."""
 
+        self._dashboard_cleanup_retry = False
         if not self._close_source_profiles_for_context_change("closing realtime monitoring"):
             return False
         self._closing = True
@@ -1369,13 +1405,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_monitor_status("Monitor: stopping", "warning")
             self._set_status("Stopping realtime monitoring...", "warning")
             return False
-        self._cleanup_dashboard_session()
-        return True
+        return self._cleanup_dashboard_session()
 
     def is_close_deferred(self) -> bool:
         """Return whether shutdown was accepted and is waiting only on owned workers."""
 
         return bool(self._closing and self._shutdown_waiting)
+
+    def dashboard_cleanup_retry_required(self) -> bool:
+        """Distinguish retained private storage from an unsaved source-editor veto."""
+        return self._dashboard_cleanup_retry
 
     def is_monitoring_active(self) -> bool:
         """Return whether queued or active work prevents a safe database rebind."""
@@ -1400,17 +1439,30 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _complete_deferred_shutdown(self) -> None:
         if not self._closing or self._workers_own_context():
             return
-        self._cleanup_dashboard_session()
+        if not self._cleanup_dashboard_session():
+            self.shutdown_cleanup_failed.emit()
+            return
         if self._shutdown_waiting and not self._shutdown_completion_emitted:
             self._shutdown_completion_emitted = True
             self.shutdown_complete.emit()
             QTimer.singleShot(0, self.close)
 
-    def _cleanup_dashboard_session(self) -> None:
+    def _cleanup_dashboard_session(self) -> bool:
+        self._dashboard_cleanup_retry = False
         temp_dir = self._dashboard_temp_dir
-        self._dashboard_temp_dir = None
         if temp_dir is not None:
-            temp_dir.cleanup()
+            try:
+                temp_dir.cleanup()
+            except (OSError, PrivateDashboardDirectoryError):
+                self._dashboard_cleanup_retry = True
+                self._shutdown_waiting = False
+                self._set_dashboard_status(
+                    "Could not remove private dashboard storage. Close again to retry.",
+                    "warning",
+                )
+                return False
+        self._dashboard_temp_dir = None
+        return True
 
     def closeEvent(self, event) -> None:
         if not self.request_shutdown():

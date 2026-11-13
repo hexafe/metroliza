@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QDeadlineTimer, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QBrush, QColor, QIntValidator
 from PyQt6.QtWidgets import (
     QDialog,
@@ -46,6 +46,7 @@ from metroliza.tabular.tabular_column_selection import (
 )
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
+    TABULAR_SQLITE_ROW_THRESHOLD,
     TabularColumnFilter,
     build_tabular_grouping_dataframe,
     selectable_tabular_source_columns,
@@ -69,6 +70,8 @@ from metroliza.ui.ui_foundation import (
     set_status_variant,
     status_chip,
 )
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+
 try:
     from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
@@ -112,8 +115,7 @@ _DATE_FILTER_OPERATOR_SYMBOLS = {
     "on_or_before": "<=",
     "lte": "<=",
 }
-_ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = 250_000
-_DETACHED_SELECTOR_PREVIEW_THREADS: list[QThread] = []
+_ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS = TABULAR_SQLITE_ROW_THRESHOLD
 _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "source_row_number",
     "source_file",
@@ -138,13 +140,6 @@ _GROUPING_COLUMNS = (
 )
 
 
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
-
-
 pd = _LazyPandas()
 
 
@@ -164,12 +159,6 @@ def _is_missing_scalar(value) -> bool:
         str(getattr(value_type, "__module__", "")).startswith("pandas.")
         and value_type.__name__ in {"NAType", "NaTType"}
     )
-
-
-def _release_detached_selector_preview_thread(thread: QThread) -> None:
-    if thread in _DETACHED_SELECTOR_PREVIEW_THREADS:
-        _DETACHED_SELECTOR_PREVIEW_THREADS.remove(thread)
-    thread.deleteLater()
 
 
 @dataclass(frozen=True)
@@ -196,8 +185,9 @@ class _SqliteSelectorPreviewThread(QThread):
         offset: int,
         limit: int,
         scope_kwargs: dict[str, object],
+        parent=None,
     ):
-        super().__init__()
+        super().__init__(parent)
         self.request_id = int(request_id)
         self.sqlite_store = sqlite_store
         self.selector_columns = tuple(selector_columns)
@@ -208,6 +198,8 @@ class _SqliteSelectorPreviewThread(QThread):
 
     def run(self) -> None:
         try:
+            if self.isInterruptionRequested():
+                return
             rows, total = self.sqlite_store.preview_group_rows(
                 self.selector_columns,
                 search_text=self.search_text,
@@ -215,6 +207,8 @@ class _SqliteSelectorPreviewThread(QThread):
                 limit=self.limit,
                 **self.scope_kwargs,
             )
+            if self.isInterruptionRequested():
+                return
             self.result_ready.emit(
                 self.request_id,
                 self.selector_columns,
@@ -223,7 +217,76 @@ class _SqliteSelectorPreviewThread(QThread):
                 int(total),
             )
         except Exception as exc:
-            self.error_occurred.emit(self.request_id, str(exc))
+            if not self.isInterruptionRequested():
+                self.error_occurred.emit(self.request_id, str(exc))
+
+
+class _CsvScopeQueryThread(QThread):
+    """Own query execution until native completion; widgets stay on the GUI thread."""
+
+    def __init__(self, operation, parent):
+        super().__init__(parent)
+        self.operation = operation
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.result = self.operation()
+        except Exception as exc:
+            self.error = exc
+
+
+def _run_csv_scope_query(parent, operation, stage):
+    """Keep modal admission and worker ownership through cancellation/native join."""
+    from metroliza.ui.worker_progress_dialog import dismiss_worker_progress_dialog
+
+    thread = _CsvScopeQueryThread(operation, parent)
+    loop = QEventLoop()
+    cancelled = False
+
+    def cancel():
+        nonlocal cancelled
+        cancelled = True
+        thread.requestInterruption()
+        label.setText("Canceling scope query...\nWaiting for SQLite read to finish\nETA --")
+
+    progress, label, bar, _movie = create_delayed_worker_progress_dialog(
+        parent, window_title="CSV / Excel scope", initial_status_text=f"{stage}\nReading matching row IDs/counts\nETA --",
+        on_cancel=cancel,
+    )
+    bar.setRange(0, 0)
+    timer = QTimer(progress)
+
+    def finish_if_joined():
+        if not thread.isFinished() or not thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)):
+            return
+        timer.stop()
+        bar.setRange(0, 1)
+        bar.setValue(1)
+        label.setText("Canceled" if cancelled else "Scope query failed" if thread.error else "Scope query complete")
+        dismiss_worker_progress_dialog(progress, rejected=cancelled or thread.error is not None)
+        loop.quit()
+
+    timer.timeout.connect(finish_if_joined)
+    was_enabled = parent.isEnabled()
+    parent.setEnabled(False)
+    progress.setEnabled(True)
+    parent._scope_query_running = getattr(parent, "_scope_query_running", 0) + 1
+    try:
+        thread.start()
+        timer.start(10)
+        progress.show()
+        loop.exec()
+        if cancelled:
+            return None
+        if thread.error is not None:
+            raise RuntimeError(str(thread.error)) from thread.error
+        return thread.result
+    finally:
+        parent._scope_query_running -= 1
+        parent.setEnabled(was_enabled)
+        thread.deleteLater()
 
 
 class TabularAnalyticsGroupingDialog(QDialog):
@@ -282,7 +345,13 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_page_offset = 0
         self._selector_total_rows = 0
         self._selector_preview_request_id = 0
+        self._selector_preview_rendered_request_id = None
         self._selector_preview_threads: list[_SqliteSelectorPreviewThread] = []
+        self._selector_preview_close_action: str | None = None
+        self._selector_preview_join_timer = QTimer(self)
+        self._selector_preview_join_timer.setSingleShot(True)
+        self._selector_preview_join_timer.setInterval(10)
+        self._selector_preview_join_timer.timeout.connect(self._on_sqlite_selector_preview_stopped)
         self._selector_preview_loading_dialog = None
         self._selector_preview_loading_label = None
         self._selector_preview_loading_bar = None
@@ -293,6 +362,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._applied_column_search_text = ""
         self._applied_selected_column_search_text = ""
         self._applied_selector_filter_text = ""
+        self._scope_query_revision = 0
+        self._scope_count_cache = None
+        self._applied_scope_count = 0
+        self._initializing_scope = True
         self._selector_filter_state_cache: tuple[tuple[object, ...], _SelectorFilterState] | None = None
         self._scoped_source_dataframe_cache: tuple[tuple[object, ...], pd.DataFrame] | None = None
         self._list_selection_utils = ListSelectionUtils()
@@ -320,6 +393,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.group_status_label = status_chip("Draft: no custom groups", "neutral")
         configure_accessibility(self.group_status_label, name="CSV grouping draft summary")
         layout.addWidget(self.group_status_label)
+        self.search_scope_label = status_chip("Applied predicate: all rows", "info")
+        layout.addWidget(self.search_scope_label)
         base_condition_count = self._base_filter_condition_count()
         source_row_count = (
             int(getattr(self.sqlite_store, "row_count", 0) or 0)
@@ -523,6 +598,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             lambda: self._sync_status(recompute_counts=False, recompute_scope=False)
         )
         self.selector_search.returnPressed.connect(self._apply_selector_filter)
+        self.selector_search.textChanged.connect(lambda: self._search_input_changed(selector=True))
+        self.column_search.textChanged.connect(self._search_input_changed)
+        self.selected_column_search.textChanged.connect(self._search_input_changed)
         self.first_page_button.clicked.connect(self.first_selector_page)
         self.previous_page_button.clicked.connect(self.previous_selector_page)
         self.next_page_button.clicked.connect(self.next_selector_page)
@@ -583,6 +661,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         self._refresh_all()
         self._capture_committed_grouping_state()
+        self._initializing_scope = False
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
@@ -631,7 +710,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         return answer == QMessageBox.StandardButton.Yes
 
-    def _reset_grouping_draft(self) -> None:
+    def _reset_grouping_draft(self, *, refresh: bool = True) -> None:
         self.default_group = getattr(self, "_committed_default_group", TABULAR_DEFAULT_GROUP)
         assignments = dict(getattr(self, "_committed_group_assignments", {}))
         self._apply_group_assignments(assignments)
@@ -640,7 +719,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         self._invalidate_sqlite_assignment_cache()
         self.df = self._empty_grouping_dataframe()
-        self._refresh_all(preferred_group=self.default_group)
+        if refresh:
+            self._refresh_all(preferred_group=self.default_group)
 
     def _request_reset_grouping(self) -> None:
         if not self._is_grouping_dirty():
@@ -675,7 +755,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self._discard_gate_active = False
             if not allowed:
                 return False
-        self._reset_grouping_draft()
+        self._reset_grouping_draft(refresh=False)
         return True
 
     def showEvent(self, event) -> None:
@@ -686,6 +766,12 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self._refresh_all(preferred_group=self.default_group)
         self._configure_stretch_panes()
         QTimer.singleShot(0, self._configure_stretch_panes)
+        if self._applied_scope_count is None:
+            QTimer.singleShot(0, self._refresh_scope_count_after_show)
+
+    def _refresh_scope_count_after_show(self) -> None:
+        if self.isVisible() and not self._dialog_cleanup_done:
+            self._sync_status(recompute_counts=False, recompute_scope=True)
 
     def _configure_stretch_panes(self) -> None:
         pane_specs = (
@@ -756,10 +842,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if not assignments:
             return
         group_colors: dict[str, str] = {}
+        normalize_color = _local_color_normalizer(self, _native_assignment_colors(assignments))
         for group_name, color in assignments.values():
             if group_name == self.default_group:
                 continue
-            normalized = self._normalized_group_color(color)
+            normalized = normalize_color(color)
             if normalized != self.default_group_color:
                 group_colors.setdefault(group_name, normalized)
         for row_id, (group_name, color) in list(assignments.items()):
@@ -830,6 +917,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         color_map: dict[tuple[str, ...], str] = {}
         mixed_keys: set[tuple[str, ...]] = set()
         assignments = self._temp_assignments()
+        normalize_color = _local_color_normalizer(
+            self, _native_assignment_colors(assignments) and _native_selector_rows(row_ids_by_key),
+        )
         for key_tuple, row_ids in row_ids_by_key.items():
             groups: set[str] = set()
             colors: set[str] = set()
@@ -839,7 +929,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                     (self.default_group, self.default_group_color),
                 )
                 groups.add(str(group_name))
-                colors.add(self._normalized_group_color(color))
+                colors.add(normalize_color(color))
             if len(groups) == 1 and len(colors) == 1:
                 color_map[key_tuple] = next(iter(colors))
             elif len(groups) > 1:
@@ -1130,6 +1220,30 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return ()
         return self._current_selector_index().matching_keys(search_text=search_text)
 
+    def _assignment_scope_count(self) -> int | None:
+        if not self._is_sqlite_backed():
+            return self._scope_row_count()
+        if not self._selector_filter_text() and not self._base_filter_condition_count():
+            return int(self.sqlite_store.row_count)
+        if self._initializing_scope:
+            return None  # Do not enter an event loop before the grouping modal opens.
+        key = (self._selector_filter_text(), tuple(self.selector_columns))
+        cached = getattr(self, "_scope_count_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        revision = self._scope_query_revision
+        try:
+            count = _run_csv_scope_query(self, self._scope_row_count, "Counting matching rows")
+        except RuntimeError as exc:
+            QMessageBox.information(self, self.windowTitle(), f"Could not count matching rows: {exc}. Press Enter to retry.")
+            return None
+        if revision != self._scope_query_revision:
+            return None
+        if count is None:
+            return None
+        self._scope_count_cache = (key, count)
+        return count
+
     def _scope_row_count(self) -> int:
         state = self._selector_filter_state()
         if state.mode == "invalid":
@@ -1182,6 +1296,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
     def _apply_column_search(self) -> None:
         self._applied_column_search_text = str(self.column_search.text() or "").strip()
         self._refresh_available_columns()
+        self._sync_search_scope_state()
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1277,6 +1392,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if self.group_color_column not in frame.columns:
             frame[self.group_color_column] = None
         deduped = frame.drop_duplicates(subset=["REPORT_ID"], keep="last").set_index("REPORT_ID")
+        if (type(dataframe) is pd.DataFrame and type(dataframe.columns) is pd.Index
+                and all(type(column) is str for column in dataframe.columns)):
+            colors = _plain_color_array(deduped[self.group_color_column])
+            if colors is not None:
+                return {
+                    int(report_id): (str(group), color)
+                    for report_id, group, color in zip(
+                        deduped.index.to_numpy(), deduped["GROUP"].to_numpy(dtype=object), colors, strict=True,
+                    )
+                }
         return {
             int(report_id): (str(row["GROUP"]), row.get(self.group_color_column))
             for report_id, row in deduped.iterrows()
@@ -1359,6 +1484,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         if sqlite_operations is not None:
             sqlite_operations.clear()
         self._invalidate_sqlite_assignment_cache()
+        normalize_color = _local_color_normalizer(self, _native_assignment_colors(assignments))
         for report_id, assignment in assignments.items():
             if isinstance(assignment, tuple):
                 group_name, color = assignment
@@ -1369,17 +1495,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 continue
             temp_assignments[int(report_id)] = (
                 group_name,
-                self._normalized_group_color(color or self.default_group_color),
+                normalize_color(color or self.default_group_color),
             )
         if self._is_sqlite_backed() and temp_assignments:
-            for group_name, color in sorted(set(temp_assignments.values())):
-                row_ids = [
-                    row_id
-                    for row_id, assignment in sorted(temp_assignments.items())
-                    if assignment == (group_name, color)
-                ]
-                self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
+            TabularAnalyticsGroupingDialog._restore_sqlite_assignment_operations(self, temp_assignments)
         self._ensure_group_color_integrity()
+
+    def _restore_sqlite_assignment_operations(self, assignments) -> None:
+        if _native_sqlite_restore(self, assignments):
+            buckets: dict[tuple[str, str], list[int]] = {}
+            for row_id, assignment in sorted(assignments.items()):
+                buckets.setdefault(assignment, []).append(row_id)
+            for (group_name, color), row_ids in sorted(buckets.items()):
+                self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
+            return
+        for group_name, color in sorted(set(assignments.values())):
+            row_ids = [row_id for row_id, assignment in sorted(assignments.items())
+                       if assignment == (group_name, color)]
+            self._append_sqlite_row_assignment_operation(row_ids, group_name, color)
 
     def _materialize_grouping_dataframe(self):
         assignments = self._temp_assignments()
@@ -1388,11 +1521,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 tuple(self._sqlite_assignment_operations),
                 default_group=self.default_group,
             )
-            return self._sqlite_assignment_dataframe(
+            return set_default_group_label(self._sqlite_assignment_dataframe(
                 [record.row_id for record in records],
                 group_names=[record.group_name for record in records],
                 colors=[self._normalized_group_color(record.color) for record in records],
-            )
+            ), self.default_group)
 
         frame = self._base_grouping_dataframe().copy()
         if frame.empty or "REPORT_ID" not in frame.columns:
@@ -1471,10 +1604,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
             row_count = int(getattr(self.sqlite_store, "row_count", 0) or 0)
         except (TypeError, ValueError):
             row_count = 0
-        return bool(row_count >= _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS and len(self.selector_columns) > 1)
+        return bool(row_count >= _ASYNC_SQLITE_SELECTOR_PREVIEW_ROWS)
 
     def _start_sqlite_selector_preview(self, filter_state: _SelectorFilterState) -> None:
-        self._selector_preview_request_id += 1
         request_id = self._selector_preview_request_id
         self.selector_preview_label.setText("Loading matching groups...")
         set_status_variant(self.selector_preview_label, "neutral")
@@ -1499,34 +1631,39 @@ class TabularAnalyticsGroupingDialog(QDialog):
             offset=self._selector_page_offset,
             limit=_SELECTOR_PAGE_SIZE,
             scope_kwargs=self._sqlite_scope_kwargs(),
+            parent=self,
         )
         self._selector_preview_threads.append(thread)
         thread.result_ready.connect(self._on_sqlite_selector_preview_ready)
         thread.error_occurred.connect(self._on_sqlite_selector_preview_error)
-        thread.finished.connect(lambda thread=thread: self._on_sqlite_selector_preview_stopped(thread))
+        thread.finished.connect(self._on_sqlite_selector_preview_stopped)
         thread.start()
         self._selector_preview_loading_dialog.show()
 
     def _cancel_sqlite_selector_preview(self) -> None:
-        self._selector_preview_request_id += 1
-        for thread in tuple(self._selector_preview_threads):
-            thread.requestInterruption()
         if self._selector_preview_loading_label is not None:
             self._selector_preview_loading_label.setText(
                 "Canceling group preview...\nWaiting for the current SQLite read to stop\nETA --"
             )
+        self._invalidate_sqlite_selector_preview()
         self.selector_preview_label.setText("Group preview canceled.")
         set_status_variant(self.selector_preview_label, "warning")
         self._close_selector_preview_loading_dialog()
 
     def _close_selector_preview_loading_dialog(self) -> None:
+        if self._selector_preview_loading_gif is not None:
+            self._selector_preview_loading_gif.stop()
         if self._selector_preview_loading_dialog is not None:
             self._selector_preview_loading_dialog.close()
+            delete_later = getattr(self._selector_preview_loading_dialog, "deleteLater", None)
+            if callable(delete_later):
+                delete_later()
         self._selector_preview_loading_dialog = None
         self._selector_preview_loading_label = None
         self._selector_preview_loading_bar = None
         self._selector_preview_loading_gif = None
 
+    @pyqtSlot(int, tuple, int, list, int)
     def _on_sqlite_selector_preview_ready(
         self,
         request_id: int,
@@ -1549,42 +1686,56 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return
         self._render_selector_preview(filter_state, preview_rows, int(total_rows))
 
+    @pyqtSlot(int, str)
     def _on_sqlite_selector_preview_error(self, request_id: int, message: str) -> None:
         if request_id != self._selector_preview_request_id:
             return
         self.selector_preview_label.setText(f"Could not load groups: {message}")
         set_status_variant(self.selector_preview_label, "danger")
 
-    def _on_sqlite_selector_preview_stopped(self, thread: _SqliteSelectorPreviewThread) -> None:
-        if thread in self._selector_preview_threads:
+    @pyqtSlot()
+    def _on_sqlite_selector_preview_stopped(self) -> None:
+        """Keep ownership until native completion, then dispose on the GUI thread."""
+        for thread in tuple(self._selector_preview_threads):
+            if not thread.wait(0):
+                continue
             self._selector_preview_threads.remove(thread)
-        if thread.request_id == self._selector_preview_request_id:
-            self._close_selector_preview_loading_dialog()
-        thread.deleteLater()
+            if thread.request_id == self._selector_preview_request_id:
+                self._close_selector_preview_loading_dialog()
+            thread.deleteLater()
+        # QThread.finished can precede thread-local/native cleanup. Never block
+        # the GUI or treat the notification as permission to release its DB.
+        if self._selector_preview_threads:
+            self._selector_preview_join_timer.start()
+        else:
+            self._selector_preview_join_timer.stop()
+        if not self._selector_preview_threads and self._selector_preview_close_action is not None:
+            action = self._selector_preview_close_action
+            self._selector_preview_close_action = None
+            self.setEnabled(True)
+            getattr(self, action)()
+
+    def _invalidate_sqlite_selector_preview(self) -> None:
+        self._selector_preview_request_id += 1
+        for thread in self._selector_preview_threads:
+            thread.requestInterruption()
+        self._close_selector_preview_loading_dialog()
+
+    def _defer_close_for_sqlite_selector_preview(self, action: str) -> bool:
+        if not self._selector_preview_threads:
+            return False
+        if self._selector_preview_close_action is None:
+            self._selector_preview_close_action = action
+            self._cancel_sqlite_selector_preview()
+            self.setEnabled(False)
+        self._selector_preview_join_timer.start()
+        return True
 
     def _detach_sqlite_selector_preview_threads(self) -> None:
-        self._selector_preview_request_id += 1
+        """Finalize joined ownership; live workers are never detached from a DB owner."""
+        self._invalidate_sqlite_selector_preview()
         self._close_selector_preview_loading_dialog()
-        for thread in tuple(self._selector_preview_threads):
-            for signal, slot in (
-                (thread.result_ready, self._on_sqlite_selector_preview_ready),
-                (thread.error_occurred, self._on_sqlite_selector_preview_error),
-            ):
-                try:
-                    signal.disconnect(slot)
-                except TypeError:
-                    pass
-            try:
-                thread.finished.disconnect()
-            except TypeError:
-                pass
-            thread.requestInterruption()
-            self._selector_preview_threads.remove(thread)
-            if not thread.isRunning():
-                thread.deleteLater()
-                continue
-            _DETACHED_SELECTOR_PREVIEW_THREADS.append(thread)
-            thread.finished.connect(lambda thread=thread: _release_detached_selector_preview_thread(thread))
+        self._selector_preview_join_timer.stop()
 
     def _sqlite_selector_row_count(self) -> int:
         if not self._is_sqlite_backed():
@@ -1859,6 +2010,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._ensure_group_color_integrity()
 
     def create_group(self, initial_group_name: str | None = None) -> None:
+        if self._row_scope_search_pending():
+            QMessageBox.information(self, self.windowTitle(), "Not applied — press Enter before assigning rows.")
+            return
         if self._is_sqlite_backed():
             row_ids: list[int] = []
             has_rows = self._sqlite_selected_keys_have_rows()
@@ -1895,8 +2049,22 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._refresh_all(preferred_group=group_name)
 
     def assign_filtered_rows(self, initial_group_name: str | None = None) -> None:
+        if isinstance(initial_group_name, bool):
+            initial_group_name = None
+        if self._row_scope_search_pending():
+            QMessageBox.information(self, self.windowTitle(), "Not applied — press Enter in the matching-row search before assigning rows.")
+            return
+        state = self._selector_filter_state()
+        if state.mode == "invalid":
+            QMessageBox.information(self, self.windowTitle(), f"Invalid filter: {state.error}. Nothing assigned.")
+            return
+        revision = self._scope_query_revision
+        row_count = self._assignment_scope_count()
+        if row_count is None:
+            return
         if self._is_sqlite_backed():
-            has_rows = self._scope_has_rows()
+            scope = self._pending_sqlite_scope(state)
+            has_rows = bool(row_count)
         else:
             row_ids = self._row_ids_for_scope()
             has_rows = bool(row_ids)
@@ -1907,31 +2075,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 "No rows match the current search or filter.",
             )
             return
-        selected_group = str(self._selected_group_name() or "").strip()
-        default_name = str(initial_group_name or "").strip()
-        if not default_name and selected_group and selected_group != self.default_group:
-            default_name = selected_group
-        if initial_group_name is None:
-            group_name, accepted = QInputDialog.getText(
-                self,
-                "Assign all filtered rows",
-                "Group name:",
-                text=default_name,
-            )
-            group_name = str(group_name or "").strip()
-            if not accepted or not group_name:
-                return
-        else:
-            group_name = default_name
-            if not group_name:
-                return
+        group_name = self._filtered_assignment_target(initial_group_name, row_count)
+        if not group_name:
+            return
+        if revision != self._scope_query_revision or self._row_scope_search_pending():
+            QMessageBox.information(self, self.windowTitle(), "Search scope changed. Nothing assigned; apply the current text and try again.")
+            return
         if self._is_sqlite_backed():
             assigned_color = self._assignment_color_for_group(group_name)
             self._sqlite_assignment_operations.append(
                 AssignGroupingScope(
                     group_name=group_name,
                     color=assigned_color,
-                    scope=self._pending_sqlite_scope(),
+                    scope=scope,
                 )
             )
         else:
@@ -1939,6 +2095,18 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selected_selector_keys = set()
         self.selector_list.clearSelection()
         self._refresh_all(preferred_group=group_name)
+
+    def _filtered_assignment_target(self, initial_group_name, row_count):
+        selected_group = str(self._selected_group_name() or "").strip()
+        default_name = str(initial_group_name or "").strip()
+        if not default_name and selected_group != self.default_group:
+            default_name = selected_group
+        if initial_group_name is not None:
+            return default_name
+        group_name, accepted = QInputDialog.getText(
+            self, "Assign all filtered rows", f"Group name for {row_count} rows:", text=default_name,
+        )
+        return str(group_name or "").strip() if accepted else ""
 
     def _current_selector_index(self) -> CsvGroupingIndex:
         selector_index = vars(self).get("_selector_index")
@@ -1962,11 +2130,57 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._scoped_source_dataframe_cache = None
 
     def _apply_selector_filter(self) -> None:
+        if self._applied_selector_filter_text == self._selector_filter_input_text():
+            if self._selector_preview_rendered_request_id != self._selector_preview_request_id and not any(
+                thread.request_id == self._selector_preview_request_id for thread in self._selector_preview_threads
+            ):
+                self._refresh_selectors()
+            if self._applied_scope_count is None:
+                self._sync_status(recompute_counts=False, recompute_scope=True)
+            self._sync_search_scope_state()
+            return
         self._applied_selector_filter_text = self._selector_filter_input_text()
+        self._scope_query_revision += 1
         self._invalidate_selector_cache()
         self._selector_page_offset = 0
         self._refresh_selectors()
         self._sync_status(recompute_counts=False, recompute_scope=True)
+
+    def _pending_search_names(self) -> list[str]:
+        drafts = vars(self).get("_search_draft_texts", {})
+        return [name for name, _widget, applied in (
+            ("columns", self.column_search, self._applied_column_search_text),
+            ("selected columns", self.selected_column_search, self._applied_selected_column_search_text),
+            ("matching rows", self.selector_search, self._applied_selector_filter_text),
+        ) if drafts.get(name, applied) != applied]
+
+    def _row_scope_search_pending(self) -> bool:
+        return self._selector_filter_input_text() != self._applied_selector_filter_text
+
+    def _search_input_changed(self, *_args, selector=False) -> None:
+        self._search_draft_texts = {
+            "columns": self.column_search.text().strip(),
+            "selected columns": self.selected_column_search.text().strip(),
+            "matching rows": self.selector_search.text().strip(),
+        }
+        self._sync_search_scope_state()
+
+    def _sync_search_scope_state(self) -> None:
+        pending = self._pending_search_names()
+        row_pending = self._row_scope_search_pending()
+        state = self._selector_filter_state()
+        predicate = state.text[:160] or "all rows"
+        count = self._applied_scope_count
+        count_text = f"{count:,} matching rows" if count is not None else "Count unavailable — press Enter to retry"
+        text = f"Applied predicate: {predicate} | {count_text}"
+        if pending:
+            text = f"Not applied — press Enter ({', '.join(pending)}). {text}"
+        self.search_scope_label.setText(text)
+        set_status_variant(self.search_scope_label, "warning" if pending or state.mode == "invalid" else "info")
+        self.assign_filtered_rows_button.setEnabled(not row_pending and state.mode != "invalid" and count is not None and count > 0)
+        self.create_group_button.setEnabled(
+            not row_pending and bool(self.selector_columns and self.selected_selector_keys) and state.mode != "invalid"
+        )
 
     def _cached_selector_preview_rows(
         self,
@@ -2107,7 +2321,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             bool(self.selector_columns and self.selected_selector_keys and filter_state.mode != "invalid")
         )
         if recompute_scope:
-            self.assign_filtered_rows_button.setEnabled(self._scope_has_rows())
+            self._applied_scope_count = self._assignment_scope_count()
+        self._sync_search_scope_state()
         selected_group = self._selected_group_name()
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
@@ -2115,6 +2330,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
+        if self._selector_preview_close_action is not None:
+            return
+        self._invalidate_sqlite_selector_preview()
+        self._close_selector_preview_loading_dialog()
         self.selector_list.blockSignals(True)
         self.selector_list.clear()
         filter_state = self._selector_filter_state()
@@ -2161,21 +2380,24 @@ class TabularAnalyticsGroupingDialog(QDialog):
         preview_rows: list[dict[str, object]],
         total_rows: int,
     ) -> None:
+        self._selector_preview_rendered_request_id = self._selector_preview_request_id
         self._selector_total_rows = int(total_rows)
         selected_keys = set(self.selected_selector_keys)
         color_map, mixed_keys = self._selector_color_map(preview_rows)
-        for row in preview_rows:
-            item = QListWidgetItem(f"{row['label']} (n={row['row_count']})")
-            key = tuple(row["key"])
-            item.setData(Qt.ItemDataRole.UserRole, key)
-            if key in mixed_keys:
-                item.setToolTip("Rows for this value are split across multiple groups.")
-            else:
-                self._apply_item_color(item, color_map.get(key, self.default_group_color))
-            self.selector_list.addItem(item)
-            if key in selected_keys:
-                item.setSelected(True)
+        with QSignalBlocker(self.selector_list):
+            for row in preview_rows:
+                item = QListWidgetItem(f"{row['label']} (n={row['row_count']})")
+                key = tuple(row["key"])
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                if key in mixed_keys:
+                    item.setToolTip("Rows for this value are split across multiple groups.")
+                else:
+                    self._apply_item_color(item, color_map.get(key, self.default_group_color))
+                self.selector_list.addItem(item)
+                if key in selected_keys:
+                    item.setSelected(True)
         self.selector_list.blockSignals(False)
+        self._store_current_selection()
         start = 0 if not total_rows else self._selector_page_offset + 1
         end = min(self._selector_page_offset + len(preview_rows), total_rows)
         if filter_state.mode == "invalid":
@@ -2219,6 +2441,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             self.selected_column_search.text() or ""
         ).strip()
         self._refresh_selected_columns()
+        self._sync_search_scope_state()
 
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)
@@ -2453,17 +2676,31 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._cleanup_sqlite_assignment_store()
 
     def accept(self) -> None:
+        if getattr(self, "_scope_query_running", False):
+            return
+        if self._defer_close_for_sqlite_selector_preview("accept"):
+            return
         self._cleanup_dialog_once()
         super().accept()
 
     def reject(self) -> None:
+        if getattr(self, "_scope_query_running", False):
+            return
         if not self._discard_draft_if_allowed():
+            return
+        if self._defer_close_for_sqlite_selector_preview("reject"):
             return
         self._cleanup_dialog_once()
         super().reject()
 
     def closeEvent(self, event) -> None:
+        if getattr(self, "_scope_query_running", False):
+            event.ignore()
+            return
         if not self._discard_draft_if_allowed():
+            event.ignore()
+            return
+        if self._defer_close_for_sqlite_selector_preview("close"):
             event.ignore()
             return
         self._cleanup_dialog_once()
@@ -2471,3 +2708,81 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
 
 __all__ = ["TabularAnalyticsGroupingDialog"]
+
+
+_NORMALIZED_GROUP_COLOR = TabularAnalyticsGroupingDialog._normalized_group_color
+_DARK_MODE_BASE = TabularAnalyticsGroupingDialog._is_dark_mode_base
+_APPEND_ROW_OPERATION = TabularAnalyticsGroupingDialog._append_sqlite_row_assignment_operation
+_IS_SQLITE_BACKED = TabularAnalyticsGroupingDialog._is_sqlite_backed
+_NORMALIZE_DISPLAY_COLOR = ui_theme_tokens.normalize_group_display_color
+_IS_DARK_MODE_FUNCTION = ui_theme_tokens.is_dark_mode_base
+
+
+def _native_assignment_colors(assignments):
+    return type(assignments) is dict and all(
+        type(row_id) is int and type(value) is tuple and len(value) == 2
+        and type(value[0]) is str and type(value[1]) is str
+        for row_id, value in assignments.items()
+    )
+
+
+def _native_selector_rows(rows):
+    return type(rows) is dict and all(
+        type(key) is tuple and all(type(part) is str for part in key)
+        and (type(ids) is list or type(ids) is tuple) and all(type(row_id) is int for row_id in ids)
+        for key, ids in rows.items()
+    )
+
+
+def _native_color_context(dialog):
+    if type(dialog) is not TabularAnalyticsGroupingDialog:
+        return False
+    state = vars(dialog)
+    if any(type(key) is not str for key in state):
+        return False
+    return (
+        "_normalized_group_color" not in state and "_is_dark_mode_base" not in state
+        and type(state.get("default_group_color")) is str and type(state.get("default_group")) is str
+        and TabularAnalyticsGroupingDialog._normalized_group_color is _NORMALIZED_GROUP_COLOR
+        and TabularAnalyticsGroupingDialog._is_dark_mode_base is _DARK_MODE_BASE
+        and ui_theme_tokens.normalize_group_display_color is _NORMALIZE_DISPLAY_COLOR
+        and ui_theme_tokens.is_dark_mode_base is _IS_DARK_MODE_FUNCTION
+    )
+
+
+def _native_sqlite_restore(dialog, assignments):
+    if not _native_assignment_colors(assignments) or not _native_color_context(dialog):
+        return False
+    state = vars(dialog)
+    return (
+        "_append_sqlite_row_assignment_operation" not in state and "_is_sqlite_backed" not in state
+        and type(state.get("_sqlite_assignment_operations")) is list
+        and TabularAnalyticsGroupingDialog._append_sqlite_row_assignment_operation is _APPEND_ROW_OPERATION
+        and TabularAnalyticsGroupingDialog._is_sqlite_backed is _IS_SQLITE_BACKED
+    )
+
+
+def _local_color_normalizer(dialog, eligible):
+    """Memoize only callback-free native batches; custom batches retain each old lookup."""
+    if not eligible or not _native_color_context(dialog):
+        return lambda color: dialog._normalized_group_color(color)
+    normalize = dialog._normalized_group_color
+    cache: dict[str, str] = {}
+
+    def normalize_once(color):
+        if color not in cache:
+            if len(cache) >= 256:
+                cache.clear()
+            cache[color] = normalize(color)
+        return cache[color]
+
+    return normalize_once
+
+
+def _plain_color_array(series):
+    # Object/mixed/numeric colors retain iterrows' per-row inference and boxing.
+    if type(series.dtype) is pd.StringDtype:
+        colors = series.to_numpy(dtype=object)
+        if all(type(color) is str for color in colors):
+            return colors
+    return None

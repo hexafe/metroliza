@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 import hashlib
+import os
 from pathlib import Path
 from threading import Lock
 
@@ -57,7 +58,13 @@ def _page_embedded_text(page: object) -> str:
         return str(get_text("text") or "")
 
 
-def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
+@dataclass(frozen=True)
+class _PdfEmbeddedText:
+    joined_text: str
+    page_texts: tuple[str, ...]
+
+
+def _extract_pdf_embedded_text(path: Path, max_chars: int) -> _PdfEmbeddedText:
     """Decode bounded embedded text from every page through the canonical backend."""
 
     document = None
@@ -80,7 +87,7 @@ def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
                     f"{path}"
                 )
             page_texts.append(page_text)
-        return "\n".join(page_texts)
+        return _PdfEmbeddedText("\n".join(page_texts), tuple(page_texts))
     except (PdfSourceInspectionError, SourceInspectionLimitError):
         raise
     except Exception as exc:
@@ -93,11 +100,22 @@ def _extract_pdf_embedded_text(path: Path, max_chars: int) -> str:
             close()
 
 
+def source_stat_signature(path: str | Path) -> tuple[int, int] | None:
+    """Return the cheap ``(size, mtime_ns)`` change signal, or None when unavailable."""
+
+    try:
+        stat_result = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    return stat_result.st_size, stat_result.st_mtime_ns
+
+
 @dataclass
 class _SourceInspectionCache:
     lock: Lock = field(default_factory=Lock)
     sha256: object = _UNSET
     extracted_text: dict[str, str] = field(default_factory=dict)
+    pdf_page_texts: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -137,6 +155,32 @@ class SourceInspectionContext:
             is_file=is_file,
         )
 
+    def adopt_reviewed_sha256(
+        self,
+        reviewed_sha256: str | None,
+        reviewed_stat: tuple[int, int] | None,
+    ) -> bool:
+        """Carry an earlier review's digest forward instead of rehashing the file.
+
+        The reviewed digest becomes this context's *provisional* digest only while the file's
+        ``(size, mtime_ns)`` still equals ``reviewed_stat`` and no digest was computed yet.
+        It is never trusted for persistence: ``verified_sha256()`` always rehashes and
+        compares against it, so a same-size/same-mtime content change is still rejected.
+        """
+
+        if (
+            not reviewed_sha256
+            or reviewed_stat is None
+            or not self.is_file
+            or (self.file_size_bytes, self.file_modified_ns) != tuple(reviewed_stat)
+        ):
+            return False
+        with self._cache.lock:
+            if self._cache.sha256 is not _UNSET:
+                return False
+            self._cache.sha256 = reviewed_sha256
+        return True
+
     def _compute_sha256(self) -> str | None:
         if not self.is_file:
             return None
@@ -159,12 +203,29 @@ class SourceInspectionContext:
             value = self._cache.sha256
         return value if isinstance(value, str) else None
 
+    def require_unchanged_size(self) -> None:
+        """Reject definite content drift without a read; mtime alone is inconclusive."""
+
+        current_stat = source_stat_signature(self.source_path)
+        if current_stat is None or current_stat[0] != self.file_size_bytes:
+            raise SourceChangedAfterInspectionError(
+                self.source_path,
+                inspected_sha256=self.sha256,
+                current_sha256=None,
+            )
+
     def verified_sha256(self) -> str | None:
-        """Rehash the source and reject persistence when it changed after inspection."""
+        """Rehash the source and reject persistence when it changed after inspection.
+
+        Atomic import calls this after acquiring the write lock. A file whose
+        ``(size, mtime_ns)`` moved while it was being hashed is rejected as changed.
+        """
 
         inspected_sha256 = self.sha256
+        stat_before = source_stat_signature(self.source_path)
         current_sha256 = self._compute_sha256()
-        if inspected_sha256 != current_sha256:
+        stat_after = source_stat_signature(self.source_path)
+        if inspected_sha256 != current_sha256 or stat_before != stat_after:
             raise SourceChangedAfterInspectionError(
                 self.source_path,
                 inspected_sha256=inspected_sha256,
@@ -189,7 +250,7 @@ class SourceInspectionContext:
         *,
         cache_key: str,
         max_chars: int,
-        loader: Callable[[Path, int], str],
+        loader: Callable[[Path, int], str | _PdfEmbeddedText],
     ) -> str:
         """Load and cache one bounded text representation of the source."""
 
@@ -198,12 +259,16 @@ class SourceInspectionContext:
             cached = self._cache.extracted_text.get(key, _UNSET)
             if cached is _UNSET:
                 text = loader(Path(self.source_path), max_chars)
+                pdf_text = text if isinstance(text, _PdfEmbeddedText) else None
+                text = pdf_text.joined_text if pdf_text is not None else text
                 if len(text) > max_chars:
                     raise SourceInspectionLimitError(
                         f"{self.source_path} extracted more than {max_chars} characters"
                     )
                 cached = str(text)
                 self._cache.extracted_text[key] = cached
+                if key == PDF_EMBEDDED_TEXT_CACHE_KEY and pdf_text is not None:
+                    self._cache.pdf_page_texts = pdf_text.page_texts
             elif len(cached) > max_chars:
                 raise SourceInspectionLimitError(
                     f"{self.source_path} extracted more than {max_chars} characters"
@@ -226,6 +291,24 @@ class SourceInspectionContext:
             cache_key=PDF_EMBEDDED_TEXT_CACHE_KEY,
             max_chars=max_chars,
         )
+
+    def get_cached_pdf_page_texts(self, *, max_chars: int) -> tuple[str, ...] | None:
+        """Return canonical page texts; a custom joined-text loader has no page evidence."""
+
+        with self._cache.lock:
+            cached = self._cache.extracted_text.get(PDF_EMBEDDED_TEXT_CACHE_KEY)
+            if cached is not None and len(cached) > max_chars:
+                raise SourceInspectionLimitError(
+                    f"{self.source_path} extracted more than {max_chars} characters"
+                )
+            return self._cache.pdf_page_texts
+
+    def release_extracted_text(self) -> None:
+        """Drop text representations while retaining the inspected digest and stat facts."""
+
+        with self._cache.lock:
+            self._cache.extracted_text.clear()
+            self._cache.pdf_page_texts = None
 
     def get_cached_extracted_text(
         self,

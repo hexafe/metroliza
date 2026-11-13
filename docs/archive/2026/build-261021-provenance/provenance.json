@@ -1,0 +1,82 @@
+{
+  "utc": "2026-10-27T17:08:22.047505+00:00",
+  "source_commit": "a0d37690272f6d0b05263076b20cc1b0cfe84780",
+  "product_base_commit": "a58b693f65f81a6a7b2d3ad368eb78522754e6f8",
+  "build": "261021",
+  "release_line": "2026.09 RC1 historical test build",
+  "archive_tag": "archive/repo-cleanup-2026-10-27/build/step2-rc1-261021",
+  "zip_API_digest_verified": true,
+  "artifacts": [
+    {
+      "artifact_id": 12322835269,
+      "name": "windows-supervised-launcher-exe",
+      "source_run": 39545859603,
+      "zip_file": "windows-supervised-launcher-exe.zip",
+      "zip_sha256": "8ae6d6c7de4d227d6f8b24878388c5922c7767d4c6e3db2f986045ea8d72d751",
+      "bytes": 289148387,
+      "members": [
+        {
+          "path": "metroliza_2026.09rc1_261021_launcher.exe",
+          "bytes": 335069504,
+          "crc": 2915616238,
+          "sha256": "b643bb15389674c5010ade05cc6f9ea2a4e300bddcd52272ac9b00c578aaeae9"
+        },
+        {
+          "path": "metroliza_2026.09rc1_261021_launcher.exe.provenance.json",
+          "bytes": 444,
+          "crc": 3631927868,
+          "sha256": "c1cea8b8c5bdae0a62118b68fd42ff65f3fe7d90c844bd632d5e2c026657817f"
+        }
+      ]
+    },
+    {
+      "artifact_id": 12322750592,
+      "name": "windows-supervised-portable-onefile",
+      "source_run": 39545859603,
+      "zip_file": "windows-supervised-portable-onefile.zip",
+      "zip_sha256": "780b63e3848e7db0a67a5e3c6ece567233b8eae8c48e0e972fe63a12b7386435",
+      "bytes": 304864069,
+      "members": [
+        {
+          "path": "metroliza_2026.09rc1_261021.exe",
+          "bytes": 306320516,
+          "crc": 2316665684,
+          "sha256": "78414cfb741448c15910eb63858c8e1685f4fa15f8d322eb0269602ccf19cc58"
+        }
+      ]
+    },
+    {
+      "artifact_id": 12322650023,
+      "name": "windows-package-identity-receipt",
+      "source_run": 39545859603,
+      "zip_file": "windows-package-identity-receipt.zip",
+      "zip_sha256": "01d31887adda214a02fd29aac9d5430f31e13bbecd8b4cf231dc4fec4026d15e",
+      "bytes": 1397,
+      "members": [
+        {
+          "path": "package-identity-receipt.json",
+          "bytes": 8562,
+          "crc": 4080831898,
+          "sha256": "20ab38f22776feecd4821f8050f5d6c84486d563e61acab643b40d1d52dc1a38"
+        }
+      ]
+    },
+    {
+      "artifact_id": 12321824323,
+      "name": "windows-compute-worker-receipt",
+      "source_run": 39545859603,
+      "zip_file": "windows-compute-worker-receipt.zip",
+      "zip_sha256": "1c52fa18f407a6d2c104be6950a0406055c37a69a9d4d2de0b9089b109fe0801",
+      "bytes": 2585,
+      "members": [
+        {
+          "path": "compute-workers.json",
+          "bytes": 39732,
+          "crc": 2906971638,
+          "sha256": "0040cc3cdb4a7e8c472df429a898d2826393532b8892204af53492eceb83d559"
+        }
+      ]
+    }
+  ],
+  "not_final_RC": true
+}

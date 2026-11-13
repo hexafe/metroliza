@@ -60,6 +60,9 @@ def record_event(name: str, **extra: Any) -> None:
     payload: dict[str, Any] = {
         "name": name,
         "elapsed_ms": round(elapsed_ms, 3),
+        # Wall clock of the event, so an external benchmark can measure from the moment it
+        # launched the executable (bootloader, launcher and supervisor time included).
+        "epoch_ms": round(time.time() * 1000, 1),
         "pid": os.getpid(),
         "executable": sys.executable,
         "frozen": bool(getattr(sys, "frozen", False)),

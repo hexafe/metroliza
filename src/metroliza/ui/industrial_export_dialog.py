@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from PyQt6.QtWidgets import (
@@ -42,7 +43,7 @@ from metroliza.ui.ui_foundation import (
     update_path_field,
 )
 from metroliza.ui.worker_progress_dialog import (
-    create_worker_progress_dialog,
+    create_delayed_worker_progress_dialog as create_worker_progress_dialog,
     dismiss_worker_progress_dialog,
 )
 
@@ -455,6 +456,7 @@ class IndustrialExportDialog(QDialog):
         )
 
     def show_loading_screen(self) -> None:
+        action_started_at = monotonic()
         export_thread = self.create_export_thread()
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = (
             create_worker_progress_dialog(
@@ -474,9 +476,11 @@ class IndustrialExportDialog(QDialog):
                     "ETA --",
                 ),
                 on_cancel=self.cancel_export,
+                action_started_at=action_started_at,
             )
         )
-        self.loading_bar.setValue(0)
+        self._progress_widgets = (self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif)
+        self.loading_bar.setRange(0, 0)
         self.export_thread = export_thread
         self.export_thread.result_ready.connect(self.on_export_finished)
         self.export_thread.error_occurred.connect(self.on_export_error)
@@ -546,7 +550,12 @@ class IndustrialExportDialog(QDialog):
 
     def on_export_thread_stopped(self) -> None:
         if hasattr(self, "loading_dialog"):
-            self.loading_dialog.close()
+            dismiss_worker_progress_dialog(self.loading_dialog)
+        progress = getattr(self, "_progress_widgets", ())
+        self._progress_widgets = ()
+        for name, widget in zip(("loading_dialog", "loading_label", "loading_bar", "loading_gif"), progress):
+            if getattr(self, name, None) is widget:
+                delattr(self, name)
         self.export_thread = None
         self._sync_ui_state()
 

@@ -14,6 +14,8 @@ import re
 from typing import Any, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
+from metroliza.shared.finite_numeric import finite_numeric_source, parse_numeric_literal
+from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 
 
 FilterMatchMode = Literal["and", "or"]
@@ -21,13 +23,6 @@ FilterMatchMode = Literal["and", "or"]
 _BLANK_GROUP_VALUE = "(blank)"
 
 FilterAliases = Mapping[str, str] | Iterable[tuple[str, str]]
-
-
-class _LazyPandas:
-    def __getattr__(self, name):
-        import importlib
-
-        return getattr(importlib.import_module("pandas"), name)
 
 
 pd = _LazyPandas()
@@ -269,10 +264,12 @@ class DataFrameGroupingIndex:
             .size()
             .reset_index(name="_row_count")
         )
-        if grouped.empty:
-            grouped["_label"] = pd.Series(dtype="string")
-        else:
-            grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        if "_label" in grouped.columns:
+            # Preserve the original eager overwrite, including its grouping-key semantics.
+            if grouped.empty:
+                grouped["_label"] = pd.Series(dtype="string")
+            else:
+                grouped["_label"] = grouped.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
         self._grouped_preview = grouped
         return grouped
 
@@ -315,7 +312,7 @@ class DataFrameGroupingIndex:
             rows.append(
                 {
                     "key": key,
-                    "label": str(record["_label"]),
+                    "label": str(record["_label"]) if "_label" in record else " | ".join(key),
                     "row_count": int(record["_row_count"]),
                 }
             )
@@ -325,7 +322,12 @@ class DataFrameGroupingIndex:
         search = str(search_text or "").strip().casefold()
         if not search:
             return preview
-        labels = preview["_label"].astype("string").str.casefold()
+        if "_label" in preview.columns:
+            labels = preview["_label"]
+        else:
+            # Search still includes separators and cross-column substrings literally.
+            labels = preview.loc[:, list(self.grouping_columns)].agg(" | ".join, axis=1)
+        labels = labels.astype("string").str.casefold()
         return preview.loc[labels.str.contains(search, regex=False, na=False)]
 
     def _valid_selected_keys(
@@ -404,7 +406,7 @@ class NumberFilterSpec:
     def mask(self, data_frame: pd.DataFrame) -> pd.Series:
         _require_column(data_frame, self.column)
         operator = self.operator.lower().strip()
-        numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
+        numbers = _finite_number_series(data_frame[self.column])
 
         if operator == "is_blank":
             return numbers.isna()
@@ -495,7 +497,7 @@ class MembershipFilterSpec:
 
         value_kind = membership_value_kind(values, dayfirst=self.dayfirst)
         if value_kind == "number":
-            numbers = pd.to_numeric(data_frame[self.column], errors="coerce")
+            numbers = _finite_number_series(data_frame[self.column])
             parsed_values = [_coerce_number(value, field_name="IN value") for value in values]
             mask = numbers.isin(parsed_values).fillna(False)
         elif value_kind == "date":
@@ -1199,7 +1201,15 @@ def _require_column(data_frame: pd.DataFrame, column: str) -> None:
         raise KeyError(f"DataFrame column not found: {column}")
 
 
-def _coerce_number(value: float | int | str | None, *, field_name: str) -> float:
+def _finite_number_series(series: pd.Series) -> pd.Series:
+    # Object storage prevents mixed missing/integer values from rounding to float.
+    return pd.Series(
+        [finite_numeric_source(value) for value in series.to_numpy(dtype=object)],
+        index=series.index, dtype=object,
+    )
+
+
+def _coerce_number(value: float | int | str | None, *, field_name: str) -> int | float:
     if value is None:
         raise ValueError(f"{field_name} is required for this number filter")
     number = _parse_scalar_number(value)
@@ -1217,19 +1227,10 @@ def _coerce_date(value: Any, *, dayfirst: bool, field_name: str) -> datetime:
     return parsed.replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
 
-def _parse_scalar_number(value: Any) -> float | None:
+def _parse_scalar_number(value: Any) -> int | float | None:
     """Parse one numeric filter literal without importing pandas."""
 
-    if value is None or isinstance(value, bool):
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        number = float(text)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+    return parse_numeric_literal(value)
 
 
 def _parse_scalar_datetime(value: Any, *, dayfirst: bool) -> datetime | None:

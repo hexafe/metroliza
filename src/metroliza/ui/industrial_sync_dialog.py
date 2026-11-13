@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -402,14 +404,28 @@ class IndustrialSyncDialog(QDialog):
                 "Fetching to cache requires an active local industrial cache."
             )
         apply_metroliza_theme(self)
+        self._preserve_source_picker_height()
 
     def _build_layout(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Production database access and cache fetch"))
-        layout.addWidget(self.status_label)
+
+        # Keep the action footer reachable while the complete credential and
+        # filter surface remains available on compact Windows working areas.
+        self.content_scroll = QScrollArea(self)
+        self.content_scroll.setWidgetResizable(True)
+        self.content_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Ignored,
+        )
+        content = QWidget(self.content_scroll)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        content_layout.addWidget(self.status_label)
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -419,12 +435,11 @@ class IndustrialSyncDialog(QDialog):
         source_pick_row.setContentsMargins(0, 0, 0, 0)
         source_pick_row.setSpacing(8)
         source_pick_row.addWidget(self.source_check_list, 1)
-        source_pick_actions = QVBoxLayout()
+        source_pick_actions = QHBoxLayout()
         source_pick_actions.setContentsMargins(0, 0, 0, 0)
         source_pick_actions.setSpacing(6)
         source_pick_actions.addWidget(self.select_all_sources_button)
         source_pick_actions.addWidget(self.current_source_only_button)
-        source_pick_actions.addStretch(1)
         source_pick_row.addLayout(source_pick_actions)
         form.addRow("Production sources to fetch", source_pick_row)
         self.source_check_row_label = form.labelForField(source_pick_row)
@@ -446,7 +461,7 @@ class IndustrialSyncDialog(QDialog):
         form.addRow("", self.fetch_all_checkbox)
         self.fetch_all_row_label = form.labelForField(self.fetch_all_checkbox)
         form.addRow("Query timeout seconds", self.timeout_spin)
-        layout.addLayout(form)
+        content_layout.addLayout(form)
 
         guided_tab = QVBoxLayout()
         guided_tab.setContentsMargins(8, 8, 8, 8)
@@ -500,7 +515,9 @@ class IndustrialSyncDialog(QDialog):
         sql_tab.addWidget(self.sql_status_label)
         sql_tab.addWidget(self.sql_preview_table, 1)
         self.mode_tabs.addTab(sql_holder, "SQL query")
-        layout.addWidget(self.mode_tabs, 1)
+        content_layout.addWidget(self.mode_tabs)
+        self.content_scroll.setWidget(content)
+        layout.addWidget(self.content_scroll, 1)
 
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
@@ -512,6 +529,17 @@ class IndustrialSyncDialog(QDialog):
         actions.addWidget(self.fetch_csv_summary_button)
         actions.addWidget(self.cancel_sync_button)
         layout.addLayout(actions)
+
+    def _preserve_source_picker_height(self) -> None:
+        """Apply the themed action-row height to the adjacent source list."""
+
+        picker_height = max(
+            52,
+            self.select_all_sources_button.sizeHint().height(),
+            self.current_source_only_button.sizeHint().height(),
+        )
+        self.source_check_list.setMinimumHeight(picker_height)
+        self.source_check_list.setMaximumHeight(picker_height)
 
     def _sync_access_only_visibility(self) -> None:
         show_cache_write_controls = not self.access_only

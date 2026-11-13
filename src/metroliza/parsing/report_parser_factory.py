@@ -12,10 +12,12 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from functools import partial
 import hashlib
 from importlib import metadata as importlib_metadata
 import importlib.util
 import inspect
+import json
 import logging
 from pathlib import Path
 import re
@@ -106,6 +108,34 @@ class ParserAmbiguityError(ValueError):
         )
 
 
+class ParserApprovalMismatchError(ValueError):
+    """Raised when parser resolution no longer matches reviewed approval."""
+
+    def __init__(
+        self,
+        diagnostics: ResolverDiagnostics,
+        *,
+        expected_plugin_id: str | None,
+        expected_registry_generation_id: int | None,
+    ) -> None:
+        self.diagnostics = diagnostics
+        self.expected_plugin_id = expected_plugin_id
+        self.expected_registry_generation_id = expected_registry_generation_id
+        self.resolved_plugin_id = (
+            diagnostics.selected.plugin_id
+            if diagnostics.selected is not None
+            else None
+        )
+        self.resolved_registry_generation_id = diagnostics.registry_generation_id
+        super().__init__(
+            "Parser approval changed after review: "
+            f"expected plugin={expected_plugin_id!r}, "
+            f"generation={expected_registry_generation_id!r}; "
+            f"resolved plugin={self.resolved_plugin_id!r}, "
+            f"generation={self.resolved_registry_generation_id!r}"
+        )
+
+
 class ParserRegistrationError(ValueError):
     """Base error for invalid parser registry mutations."""
 
@@ -143,6 +173,16 @@ class ParserRegistration:
     detector: DetectorType | None
     origin: ParserOrigin
     origin_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class ParserResolutionEvidence:
+    """Exact resolver result used to construct one parser instance."""
+
+    plugin_id: str
+    registry_generation_id: int
+    registration: ParserRegistration = field(compare=False, repr=False)
+    diagnostics: ResolverDiagnostics = field(compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -411,6 +451,102 @@ def get_registry_snapshot(*, refresh: bool = True) -> RegistrySnapshot:
         return _synchronize_compatibility_maps_locked()
 
 
+def _identity_module(value: object) -> str:
+    module_name = getattr(value, "__module__", "") or ""
+    # Path-plugin module counters are process-local; bind those to their source.
+    if module_name.startswith("metroliza_external_parser_plugin_"):
+        module_file = getattr(sys.modules.get(module_name), "__file__", None)
+        if module_file:
+            return str(Path(module_file).resolve(strict=False))
+    return module_name
+
+
+def _stable_argument(value: object, depth: int = 0) -> object:
+    """Describe partial arguments without process-local repr/address values."""
+
+    if value is None or type(value) in (bool, int, str):
+        return value
+    if isinstance(value, float):
+        return ["float", value.hex()]
+    if isinstance(value, bytes):
+        return ["bytes", value.hex()]
+    kind = [_identity_module(type(value)), type(value).__qualname__]
+    if depth >= 8:
+        return kind
+    if isinstance(value, (list, tuple)):
+        return [kind, [_stable_argument(item, depth + 1) for item in value]]
+    if isinstance(value, dict):
+        items = [[_stable_argument(key, depth + 1), _stable_argument(item, depth + 1)]
+                 for key, item in value.items()]
+        return [kind, sorted(items, key=lambda item: json.dumps(item, sort_keys=True))]
+    if isinstance(value, (set, frozenset)):
+        return [kind, sorted((_stable_argument(item, depth + 1) for item in value),
+                             key=lambda item: json.dumps(item, sort_keys=True))]
+    return kind
+
+
+def _code_identity(value: object) -> list[object] | None:
+    """Stable code/type and partial-argument identity, without address-based reprs."""
+
+    if value is None:
+        return None
+    if isinstance(value, partial):
+        return [type(value).__module__, type(value).__qualname__,
+                _identity_module(value.func),
+                _code_identity(value.func), _stable_argument(value.args),
+                _stable_argument(value.keywords)]
+    if not getattr(value, "__qualname__", None):
+        return [_identity_module(type(value)), type(value).__qualname__, _code_identity(type(value))]
+    module = sys.modules.get(getattr(value, "__module__", "") or "")
+    module_file = getattr(module, "__file__", None)
+    signature: list[object] | None = None
+    if module_file:
+        try:
+            stat_result = Path(module_file).stat()
+            signature = [str(Path(module_file).resolve(strict=False)), stat_result.st_size,
+                         stat_result.st_mtime_ns]
+        except OSError:
+            signature = [str(module_file), None, None]
+    # External path plugins load under per-process module names, so the module name is
+    # not part of the identity; the file it came from is.
+    return [str(value.__qualname__), signature]
+
+
+def registry_configuration_fingerprint(snapshot: RegistrySnapshot | None = None) -> str:
+    """Return a deterministic digest of what defines parser resolution in this process.
+
+    Read-only: it never refreshes or publishes a generation (pass the snapshot a caller
+    resolved with).  Two processes with the same digest have the same registrations in the
+    same order (ids, origins, manifests, parser and detector code files), the same plugin
+    configuration (paths and their content digests, entry points, approved profiles,
+    disabled ids), the same load errors and the same selection threshold.  Generation ids
+    are process-local counters and are deliberately excluded.
+    """
+
+    if snapshot is None:
+        snapshot = get_registry_snapshot(refresh=False)
+    with _PARSER_REGISTRY_LOCK:
+        config_signature = _EXTERNAL_PLUGIN_CONFIG_SIGNATURE
+    payload = {
+        "registrations": [
+            {
+                "plugin_id": registration.plugin_id,
+                "origin": registration.origin,
+                "origin_ref": registration.origin_ref,
+                "parser": _code_identity(registration.parser_cls),
+                "detector": _code_identity(registration.detector),
+                "manifest": repr(registration.manifest),
+            }
+            for registration in snapshot.registrations
+        ],
+        "load_errors": list(snapshot.load_errors),
+        "plugin_configuration": repr(config_signature),
+        "minimum_confidence": _minimum_confidence_for_selection(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=repr)
+    return f"sha256:{hashlib.sha256(encoded.encode('utf-8')).hexdigest()}"
+
+
 def list_plugins() -> tuple[PluginManifest, ...]:
     """Return manifests from one authoritative registry generation."""
 
@@ -633,6 +769,77 @@ def _probe_with_cache(
         with _PROBE_RESULT_CACHE_LOCK:
             completed = _PROBE_RESULT_CACHE_INFLIGHT.pop(inflight_key, inflight)
             completed.set()
+
+
+@dataclass(frozen=True)
+class ProbeCacheEntry:
+    """Portable cached probe evidence; process-local registration ids are omitted."""
+
+    plugin_id: str
+    normalized_path: str
+    source_identity: tuple[object, ...]
+    result: ProbeResult
+
+
+def export_probe_cache_entries(
+    paths: tuple[str, ...], *, generation_id: int,
+) -> tuple[ProbeCacheEntry, ...]:
+    """Copy cacheable evidence for one review chunk, in cache insertion/LRU order."""
+
+    selected = frozenset(paths)
+    with _PROBE_RESULT_CACHE_LOCK:
+        return tuple(
+            ProbeCacheEntry(key[0], key[1], key[2], result)
+            for key, result in PROBE_RESULT_CACHE.items()
+            if key[1] in selected and key[5] == generation_id
+        )
+
+
+def seed_probe_cache_entries(
+    entries: tuple[ProbeCacheEntry, ...], *, generation_id: int, fingerprint: str,
+) -> None:
+    """Rebind accepted review evidence to this process's registry and unchanged sources.
+
+    Check only stat hints here, retaining the worker's full digest in the key. Import
+    computes its own content identity before looking up that key. Skip oversized
+    batches, whose entries would be evicted by import's own probing.
+    """
+
+    with _PROBE_RESULT_CACHE_LOCK:
+        cache_epoch = _PROBE_RESULT_CACHE_EPOCH
+    snapshot = get_registry_snapshot()
+    if (len(entries) > PROBE_RESULT_CACHE_MAX_ENTRIES
+            or snapshot.generation_id != generation_id
+            or registry_configuration_fingerprint(snapshot) != fingerprint):
+        return
+    registrations = {item.plugin_id: item for item in snapshot.registrations}
+    identities = {}
+    verified = []
+    for entry in entries:
+        registration = registrations.get(entry.plugin_id)
+        if (registration is None or entry.result.plugin_id != entry.plugin_id
+                or entry.result.outcome is ProbeOutcome.INSPECTION_ERROR):
+            continue
+        path = entry.normalized_path
+        if path not in identities:
+            source = SourceInspectionContext.from_path(path)
+            identities[path] = (source.file_modified_ns, source.file_size_bytes)
+        if identities[path] != entry.source_identity[:2]:
+            continue
+        key = (entry.plugin_id, path, entry.source_identity,
+               id(registration.parser_cls), id(registration.detector), generation_id)
+        verified.append((key, entry.result))
+    with _PARSER_REGISTRY_LOCK:
+        if _synchronize_compatibility_maps_locked().generation_id != generation_id:
+            return
+        with _PROBE_RESULT_CACHE_LOCK:
+            if cache_epoch != _PROBE_RESULT_CACHE_EPOCH:
+                return
+            for key, result in verified:
+                PROBE_RESULT_CACHE[key] = result
+                PROBE_RESULT_CACHE.move_to_end(key)
+            while len(PROBE_RESULT_CACHE) > PROBE_RESULT_CACHE_MAX_ENTRIES:
+                PROBE_RESULT_CACHE.popitem(last=False)
 
 
 def _iter_external_plugin_candidate_files(path_entry: str) -> list[Path]:
@@ -1327,20 +1534,72 @@ def detect_format(file_path: str | Path) -> str:
     return diagnostics.selected.plugin_id if diagnostics.selected else "unknown"
 
 
+def _resolve_parser_for_construction(
+    normalized_path: str,
+    *,
+    source_inspection: SourceInspectionContext | None,
+    expected_plugin_id: str | None,
+    expected_registry_generation_id: int | None,
+) -> tuple[ResolverDiagnostics, ParserRegistration | None]:
+    """Resolve once and translate only reviewed late ambiguity to approval drift."""
+
+    try:
+        return _resolve_parser_with_registration(
+            normalized_path,
+            source_inspection=source_inspection,
+        )
+    except ParserAmbiguityError as exc:
+        if (
+            expected_plugin_id is None
+            and expected_registry_generation_id is None
+        ):
+            raise
+        raise ParserApprovalMismatchError(
+            exc.diagnostics,
+            expected_plugin_id=expected_plugin_id,
+            expected_registry_generation_id=expected_registry_generation_id,
+        ) from exc
+
+
 def get_parser(
     file_path: str | Path,
     database: str,
     connection=None,
     metadata_parsing_mode=None,
     source_inspection: SourceInspectionContext | None = None,
+    expected_plugin_id: str | None = None,
+    expected_registry_generation_id: int | None = None,
 ):
-    """Construct parser instance for a given file path."""
+    """Resolve once, validate optional reviewed approval, and construct a parser."""
 
     normalized_path = _as_file_path(file_path)
-    diagnostics, registration = _resolve_parser_with_registration(
+    approval_expected = (
+        expected_plugin_id is not None
+        or expected_registry_generation_id is not None
+    )
+    diagnostics, registration = _resolve_parser_for_construction(
         normalized_path,
         source_inspection=source_inspection,
+        expected_plugin_id=expected_plugin_id,
+        expected_registry_generation_id=expected_registry_generation_id,
     )
+    resolved_plugin_id = (
+        diagnostics.selected.plugin_id
+        if diagnostics.selected is not None
+        else None
+    )
+    if approval_expected and (
+        resolved_plugin_id != expected_plugin_id
+        or diagnostics.registry_generation_id
+        != expected_registry_generation_id
+        or registration is None
+        or registration.plugin_id != expected_plugin_id
+    ):
+        raise ParserApprovalMismatchError(
+            diagnostics,
+            expected_plugin_id=expected_plugin_id,
+            expected_registry_generation_id=expected_registry_generation_id,
+        )
     if diagnostics.selected is None or registration is None:
         if diagnostics.rejected_reason == "parser_inspection_failed":
             raise ParserInspectionError(diagnostics)
@@ -1365,18 +1624,25 @@ def get_parser(
 
     parser = parser_cls(normalized_path, database, **constructor_kwargs)
     parser.source_inspection_context = diagnostics.source_inspection
+    parser.parser_resolution_evidence = ParserResolutionEvidence(
+        plugin_id=registration.plugin_id,
+        registry_generation_id=diagnostics.registry_generation_id,
+        registration=registration,
+        diagnostics=diagnostics,
+    )
 
     if metadata_parsing_mode is not None and hasattr(parser, "metadata_parsing_mode"):
         parser.metadata_parsing_mode = metadata_parsing_mode
 
     return parser
 
-
 def invoke_parser_factory(
     parser_factory,
     file_path: str | Path,
     *args,
     source_inspection: SourceInspectionContext | None = None,
+    expected_plugin_id: str | None = None,
+    expected_registry_generation_id: int | None = None,
     **kwargs,
 ):
     """Invoke old or context-aware parser factories without masking callback errors."""
@@ -1387,6 +1653,18 @@ def invoke_parser_factory(
         "source_inspection",
     ):
         factory_kwargs["source_inspection"] = source_inspection
+    if expected_plugin_id is not None and _callable_accepts_keyword(
+        parser_factory,
+        "expected_plugin_id",
+    ):
+        factory_kwargs["expected_plugin_id"] = expected_plugin_id
+    if expected_registry_generation_id is not None and _callable_accepts_keyword(
+        parser_factory,
+        "expected_registry_generation_id",
+    ):
+        factory_kwargs["expected_registry_generation_id"] = (
+            expected_registry_generation_id
+        )
     parser = parser_factory(file_path, *args, **factory_kwargs)
     if source_inspection is not None and getattr(parser, "source_inspection_context", None) is None:
         try:
@@ -1394,7 +1672,6 @@ def invoke_parser_factory(
         except (AttributeError, TypeError):
             pass
     return parser
-
 
 def _default_cmm_detector(
     file_path: str,

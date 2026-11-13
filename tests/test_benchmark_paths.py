@@ -791,3 +791,36 @@ def test_benchmark_main_validates_cli_choices(monkeypatch: pytest.MonkeyPatch):
         benchmark_paths.main()
 
     assert exc_info.value.code == 2
+
+
+def test_workbook_timing_counts_bulk_writes_once_and_observes_real_close(tmp_path):
+    import pandas as pd
+    from metroliza.tabular import tabular_xlsx_writer
+    from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
+
+    def export():
+        with pd.ExcelWriter(tmp_path / 'bulk.xlsx', engine='xlsxwriter',
+                            engine_kwargs=pandas_xlsxwriter_engine_kwargs()) as writer:
+            tabular_xlsx_writer.write_tabular_dataframe(pd.DataFrame({'a': [1, 2]}), writer, 'Data')
+        return 'done'
+
+    result, timings = benchmark_paths._run_with_pandas_excel_writer_close_timing(export)
+    assert result == 'done'
+    assert timings['workbook_sheet_write_count'] == 1
+    assert timings['workbook_sheet_writes'] > 0
+    assert timings['workbook_close'] > 0
+
+
+def test_workbook_timing_restores_bulk_pandas_and_close_hooks_on_failure():
+    import pandas as pd
+    from pandas.io.excel._xlsxwriter import XlsxWriter
+    from metroliza.tabular import tabular_xlsx_writer
+
+    original = (pd.DataFrame.to_excel, tabular_xlsx_writer.write_tabular_dataframe, XlsxWriter._save)
+
+    def fail():
+        raise ValueError('synthetic export failure')
+
+    with pytest.raises(ValueError, match='synthetic export failure'):
+        benchmark_paths._run_with_pandas_excel_writer_close_timing(fail)
+    assert (pd.DataFrame.to_excel, tabular_xlsx_writer.write_tabular_dataframe, XlsxWriter._save) == original

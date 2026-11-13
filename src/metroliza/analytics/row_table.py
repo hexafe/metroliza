@@ -244,6 +244,7 @@ class RowTable:
 
     rows: tuple[tuple[Any, ...], ...]
     columns: tuple[str, ...]
+    default_group_label: str | None = None
 
     @property
     def empty(self) -> bool:
@@ -317,7 +318,31 @@ class RowTable:
         self.rows = tuple((*row, value) for row, value in zip(self.rows, value_tuple))
 
     def copy(self) -> "RowTable":
-        return RowTable(rows=tuple(tuple(row) for row in self.rows), columns=tuple(self.columns))
+        return RowTable(
+            rows=tuple(tuple(row) for row in self.rows), columns=tuple(self.columns),
+            default_group_label=self.default_group_label,
+        )
+
+    def take_rows(self, indices: Iterable[int]) -> "RowTable":
+        """Select rows without rebuilding their immutable tuples.
+
+        Like ``sort_values``, the new table has independent row/column assignment,
+        shallow cell aliases, and no default grouping label. Repeated and negative
+        indices retain normal tuple indexing semantics.
+        """
+        return RowTable(
+            rows=tuple(self.rows[index] for index in indices),
+            columns=tuple(self.columns),
+        )
+
+    def _sort_indices(self, sort_value_columns: Sequence[Sequence[Any]]) -> list[int]:
+        """Share the stable row comparator with precomputed-key consumers."""
+        return sorted(
+            range(len(self.rows)),
+            key=lambda row_index: tuple(
+                _sort_marker(sort_values[row_index]) for sort_values in sort_value_columns
+            ),
+        )
 
     def get(self, column_name: str, default: Any = None) -> RowColumn | Any:
         if column_name not in self.columns:
@@ -375,14 +400,9 @@ class RowTable:
                 raise ValueError("sort key must preserve row count")
             sort_value_columns.append(transformed_values)
 
-        sorted_indexes = sorted(
-            range(len(self.rows)),
-            key=lambda row_index: tuple(
-                _sort_marker(sort_values[row_index]) for sort_values in sort_value_columns
-            ),
-        )
-        sorted_rows = tuple(self.rows[index] for index in sorted_indexes)
-        return RowTable(rows=tuple(sorted_rows), columns=tuple(self.columns))
+        # Existing subclasses may already use these new helper names. Sorting
+        # retains its base-table result without dispatching to those methods.
+        return RowTable.take_rows(self, RowTable._sort_indices(self, sort_value_columns))
 
     def groupby(
         self,

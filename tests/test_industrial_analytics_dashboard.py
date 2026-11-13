@@ -34,6 +34,91 @@ from modules.industrial_analytics_state import (
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
+def test_writer_clones_once_and_reuses_only_request_local_spec_sizes(monkeypatch, tmp_path):
+    from tests.test_industrial_dashboard_performance_equivalence import _manifest
+
+    calls = {"clone": 0, "sizes": 0}
+    clone = dashboard_module.copy_dashboard_manifest_for_render
+    measure = dashboard_module._measure_plotly_spec_json_bytes
+
+    def counted_clone(*args, **kwargs):
+        calls["clone"] += 1
+        return clone(*args, **kwargs)
+
+    def counted_measure(*args, **kwargs):
+        calls["sizes"] += 1
+        return measure(*args, **kwargs)
+
+    monkeypatch.setattr(dashboard_module, "copy_dashboard_manifest_for_render", counted_clone)
+    monkeypatch.setattr(dashboard_module, "_measure_plotly_spec_json_bytes", counted_measure)
+    source = _manifest()
+    first = write_production_dashboard(source, tmp_path / "first.html", plotly_spec_count_budget=1)
+    assert calls == {"clone": 1, "sizes": 3}
+    source["charts"][0]["plotly_spec"]["data"][0]["y"].append(12345)
+    second = write_production_dashboard(source, tmp_path / "second.html", plotly_spec_count_budget=1)
+    assert calls == {"clone": 2, "sizes": 6}
+    assert second["html_dashboard_plotly_serialized_json_bytes"] > first[
+        "html_dashboard_plotly_serialized_json_bytes"
+    ]
+
+
+def test_snapshot_omission_skips_only_proven_plain_trace_values(monkeypatch):
+    events = []
+
+    class TimestampCallback:
+        def isoformat(self):
+            events.append("isoformat")
+            return "2026-01-01T00:00:00"
+
+    plain = pd.DataFrame({"process_datetime": pd.date_range("2026-01-01", periods=2),
+                          "v": [1.0, 2.0]})
+    original = dashboard_module._json_values
+
+    def observed(*args, **kwargs):
+        events.append("json_values")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(dashboard_module, "_json_values", observed)
+    arguments = dict(
+        metric=ProductionMetricSelection("v"), aggregate_frame=pd.DataFrame(),
+        aggregation=ProductionAggregationState(), include_plotly_specs=False,
+    )
+    assert dashboard_module._build_time_series_charts(raw_frame=plain, **arguments)
+    assert events == []
+    unusual = pd.DataFrame({"process_datetime": [TimestampCallback()], "v": [1.0]})
+    assert dashboard_module._build_time_series_charts(raw_frame=unusual, **arguments)
+    assert events == ["json_values", "isoformat"]
+
+
+def test_json_values_keeps_subclass_and_extension_scalar_fallback():
+    class CustomSeries(pd.Series):
+        def isna(self):
+            raise AssertionError("custom isna callback must not be added")
+
+    assert dashboard_module._json_values(CustomSeries([1.0, None])) == [1.0, None]
+    assert dashboard_module._json_values(pd.Series([1, pd.NA], dtype="Int64")) == [1, None]
+    overridden = pd.Series([1.0, 2.0])
+    overridden.tolist = lambda: [None, 3.0]
+    assert dashboard_module._json_values(overridden) == [None, 3.0]
+
+
+def test_json_values_uses_one_mask_for_plain_native_series(monkeypatch):
+    import numpy as np
+
+    calls = []
+    original = dashboard_module.pd.isna
+
+    def observed(value):
+        calls.append(type(value))
+        return original(value)
+
+    monkeypatch.setattr(dashboard_module.pd, "isna", observed)
+    result = dashboard_module._json_values(pd.Series([1.0, None, -0.0]))
+    assert result == [1.0, None, -0.0]
+    assert np.signbit(result[-1])
+    assert calls == [np.ndarray]
+
+
 def test_dashboard_visual_preview_labels_derive_from_industrial_chart_groups() -> None:
     labels = dashboard_module._dashboard_visual_preview_labels_from_charts(
         [

@@ -3,12 +3,17 @@ import json
 import os
 import sqlite3
 import tempfile
+import threading
 import types
 import unittest
+import warnings
+
+import pytest
 from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
+from metroliza.charts.chart_renderer import MatplotlibChartRenderer
 from metroliza.exporting.export_data_thread import (
     ExportDataThread,
     classify_normality_status,
@@ -29,7 +34,10 @@ from metroliza.exporting.export_logging_service import (
     log_google_issue,
 )
 from metroliza.exporting.google_drive_export import GoogleDriveConversionResult
-from metroliza.parsing.cmm_report_parser import EmptyCMMReportError
+from metroliza.parsing.cmm_report_parser import CMMReportParser, EmptyCMMReportError
+from metroliza.parsing.base_report_parser import BaseReportParser
+
+
 from metroliza.parsing.parse_reports_thread import (
     build_report_fingerprints_from_rows,
     build_source_file_fingerprint,
@@ -37,8 +45,178 @@ from metroliza.parsing.parse_reports_thread import (
     merge_enriched_metadata_for_persistence,
     parse_new_reports,
 )
+from metroliza.parsing.parser_plugin_contracts import (
+    BaseReportParserPlugin,
+    MeasurementBlockV2,
+    MeasurementV2,
+    ParseMetaV2,
+    ParseResultV2,
+    PluginManifest,
+    ProbeResult,
+    ReportInfoV2,
+)
 from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+from metroliza.reports.report_repository import ReportImportDisposition
+from metroliza.shared.parse_contracts import ParseRequest
 import metroliza.parsing.parse_reports_thread as parse_thread_module
+
+
+_STANDALONE_PLUGIN_ID = "standalone_atomic_test"
+
+
+def _synthetic_parse_result(source_path, *, reference="STANDALONE-1"):
+    source_path = Path(source_path)
+    return ParseResultV2(
+        meta=ParseMetaV2(
+            source_file=source_path.name,
+            source_format="pdf",
+            plugin_id=_STANDALONE_PLUGIN_ID,
+            plugin_version="1.0.0",
+            template_id="standalone-test",
+            parse_timestamp="2026-09-04T00:00:00Z",
+            locale_detected=None,
+            confidence=100,
+        ),
+        report=ReportInfoV2(
+            reference=reference,
+            report_date="2026-09-04",
+            sample_number="1",
+            file_name=source_path.name,
+            file_path=str(source_path.parent),
+        ),
+        blocks=(
+            MeasurementBlockV2(
+                header_raw=("Feature",),
+                header_normalized="Feature",
+                dimensions=(
+                    MeasurementV2(
+                        axis_code="X",
+                        nominal=1.0,
+                        tol_plus=0.1,
+                        tol_minus=-0.1,
+                        bonus=0.0,
+                        measured=1.0,
+                        deviation=0.0,
+                        out_of_tolerance=0.0,
+                    ),
+                ),
+                block_index=0,
+            ),
+        ),
+    )
+
+
+def _standalone_plugin_class(
+    evidence,
+    *,
+    result_factory=_synthetic_parse_result,
+    parse_started=None,
+    allow_parse_completion=None,
+):
+    class StandaloneStablePlugin(BaseReportParserPlugin):
+        manifest = PluginManifest(
+            plugin_id=_STANDALONE_PLUGIN_ID,
+            display_name="Standalone atomic test parser",
+            version="1.0.0",
+            supported_formats=("pdf",),
+            priority=1000,
+        )
+
+        def __init__(self, file_path, database, connection=None):
+            self.source_path = str(file_path)
+            self.database = str(database)
+            self.connection = connection
+            self.stage_timings_s = {}
+            self.parse_backend_used = "synthetic_standalone"
+
+        @classmethod
+        def probe(cls, _input_ref, _context):
+            return ProbeResult(
+                plugin_id=cls.manifest.plugin_id,
+                can_parse=True,
+                confidence=100,
+                semantic_row_count=1,
+            )
+
+        def parse_to_v2(self):
+            evidence["parse_threads"].append(threading.get_ident())
+            evidence["database_exists_during_parse"].append(
+                Path(self.database).exists()
+            )
+            if parse_started is not None:
+                parse_started.set()
+            if allow_parse_completion is not None:
+                if not allow_parse_completion.wait(timeout=10):
+                    raise TimeoutError("test did not release standalone parser")
+            return result_factory(self.source_path)
+
+        @staticmethod
+        def to_legacy_blocks(_parse_result_v2):
+            evidence["legacy_calls"].append("to_legacy_blocks")
+            raise AssertionError("legacy conversion must not be called")
+
+        def open_database_and_check_filename(self):
+            evidence["legacy_calls"].append("open_database_and_check_filename")
+            raise AssertionError("legacy persistence must not be called")
+
+        def to_sqlite(self):
+            evidence["legacy_calls"].append("to_sqlite")
+            raise AssertionError("legacy persistence must not be called")
+
+        def persist_prepared_report(self):
+            evidence["legacy_calls"].append("persist_prepared_report")
+            raise AssertionError("legacy persistence must not be called")
+
+    return StandaloneStablePlugin
+
+
+def _standalone_evidence():
+    return {
+        "parse_threads": [],
+        "database_exists_during_parse": [],
+        "legacy_calls": [],
+    }
+
+
+def _database_contents(database):
+    if not Path(database).exists():
+        return {}
+    with closing(sqlite3.connect(database)) as connection:
+        tables = [
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        return {
+            table: connection.execute(
+                f'SELECT * FROM "{table}" ORDER BY rowid'
+            ).fetchall()
+            for table in tables
+        }
+
+
+def _configured_import_thread(report, database):
+    from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+
+    request = ParseRequest(source_directory=str(report), db_file=str(database))
+    review = ParsePreflightService().scan_source(
+        source_path=report, database_path=database,
+        metadata_parsing_mode=request.metadata_parsing_mode,
+    )
+    thread = parse_thread_module.ParseReportsThread(
+        ImportPlan.all_atomic_candidates(request, review)
+    )
+    return thread
+
+
+def _bind_test_parser(parser, report, database, **kwargs):
+    """Keep real resolver/source approval while substituting only the persistence seam."""
+    resolved = parse_thread_module.report_parser_factory.get_parser(report, database, **kwargs)
+    parser.source_inspection_context = resolved.source_inspection_context
+    parser.parser_resolution_evidence = resolved.parser_resolution_evidence
+    return parser
 
 
 class TestParseHelpers(unittest.TestCase):
@@ -407,11 +585,9 @@ class TestParseHelpers(unittest.TestCase):
 
             persisted = []
             existing = set()
-            calls = {'count': 0}
 
             def should_cancel():
-                calls['count'] += 1
-                return calls['count'] > 2
+                return len(persisted) >= 2
 
             progress_updates = []
 
@@ -428,6 +604,557 @@ class TestParseHelpers(unittest.TestCase):
             self.assertEqual(result.parsed_files, 2)
             self.assertEqual(persisted, ['a.pdf', 'b.pdf'])
             self.assertEqual(progress_updates, [(1, 3), (2, 3)])
+
+    def test_typed_import_outcomes_propagate_in_sequential_and_two_stage_paths(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+                self.stage_timings_s = {}
+
+            def prepare_for_two_stage_pipeline(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reports = []
+            for name in ("imported.pdf", "duplicate.pdf"):
+                path = os.path.join(tmpdir, name)
+                with open(path, "wb") as report_file:
+                    report_file.write(name.encode("utf-8"))
+                reports.append(path)
+
+            for two_stage in (False, True):
+                with self.subTest(two_stage=two_stage):
+                    persisted = []
+
+                    def persist_report(parser):
+                        name = os.path.basename(parser.FILE_PATH)
+                        persisted.append(name)
+                        if name == "imported.pdf":
+                            return ReportImportDisposition.IMPORTED
+                        return ReportImportDisposition.ALREADY_PRESENT
+
+                    result = parse_new_reports(
+                        reports,
+                        {build_source_file_fingerprint(path) for path in reports},
+                        parser_factory=DummyParser,
+                        persist_report=persist_report,
+                        enable_two_stage_pipeline=two_stage,
+                        worker_count=2,
+                        require_typed_persistence_outcome=True,
+                    )
+
+                    self.assertEqual(result.parsed_files, 2)
+                    self.assertEqual(result.imported_files, 1)
+                    self.assertEqual(result.already_present_files, 1)
+                    self.assertEqual(
+                        result.parsed_files,
+                        result.imported_files + result.already_present_files,
+                    )
+                    self.assertCountEqual(persisted, ["imported.pdf", "duplicate.pdf"])
+
+    def test_typed_import_rejects_untyped_persistence_success(self):
+        class DummyParser:
+            def __init__(self, report):
+                self.FILE_PATH = str(report)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "untyped.pdf")
+            with open(report, "wb") as report_file:
+                report_file.write(b"untyped")
+
+            result = parse_new_reports(
+                [report],
+                set(),
+                parser_factory=DummyParser,
+                persist_report=lambda _parser: None,
+                require_typed_persistence_outcome=True,
+                log_file_failures=False,
+            )
+
+        self.assertEqual(result.parsed_files, 0)
+        self.assertEqual(result.imported_files, 0)
+        self.assertEqual(result.already_present_files, 0)
+        self.assertEqual(result.failed_files, 1)
+
+    def test_standalone_stable_plugin_imports_through_atomic_v2_fallback(self):
+        evidence = _standalone_evidence()
+        plugin = _standalone_plugin_class(evidence)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "standalone.pdf"
+            report.write_bytes(b"synthetic standalone plugin report")
+            database = Path(tmpdir) / "reports.sqlite3"
+            report_parser_factory = parse_thread_module.report_parser_factory
+            report_parser_factory.register_parser(plugin)
+            try:
+                thread = _configured_import_thread(report, database)
+                real_import = (
+                    parse_thread_module.import_parse_result_v2_payload_if_absent
+                )
+                with mock.patch.object(
+                    parse_thread_module,
+                    "import_parse_result_v2_payload_if_absent",
+                    wraps=real_import,
+                ) as atomic_import:
+                    thread.run()
+            finally:
+                report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
+
+            self.assertEqual(thread.last_parse_result.imported_files, 1)
+            self.assertEqual(thread.last_parse_result.already_present_files, 0)
+            self.assertEqual(thread.last_parse_result.parsed_files, 1)
+            self.assertEqual(thread.last_parse_result.failed_files, 0)
+            self.assertEqual(
+                thread.last_parse_result.parsed_files,
+                thread.last_parse_result.imported_files
+                + thread.last_parse_result.already_present_files,
+            )
+            self.assertEqual(len(evidence["parse_threads"]), 1)
+            self.assertEqual(evidence["legacy_calls"], [])
+            self.assertEqual(len(_database_contents(database)["parsed_reports"]), 1)
+            atomic_import.assert_called_once()
+            import_call = atomic_import.call_args.kwargs
+            self.assertEqual(import_call["source_path"], str(report))
+            self.assertEqual(import_call["database"], str(database))
+            self.assertEqual(import_call["source_inspection"].source_path, str(report))
+            self.assertEqual(
+                import_call["import_policy"].metadata_parsing_mode,
+                thread.metadata_parsing_mode,
+            )
+
+    def test_standalone_stable_plugin_duplicate_preserves_original_graph(self):
+        evidence = _standalone_evidence()
+        plugin = _standalone_plugin_class(evidence)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "standalone.pdf"
+            report.write_bytes(b"synthetic standalone plugin report")
+            database = Path(tmpdir) / "reports.sqlite3"
+            report_parser_factory = parse_thread_module.report_parser_factory
+            report_parser_factory.register_parser(plugin)
+            try:
+                first_thread = _configured_import_thread(report, database)
+                first_thread.run()
+                original_graph = _database_contents(database)
+
+                duplicate_thread = _configured_import_thread(report, database)
+                duplicate_thread.run()
+            finally:
+                report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
+
+            result = duplicate_thread.last_parse_result
+            self.assertEqual(result.imported_files, 0)
+            self.assertEqual(result.already_present_files, 1)
+            self.assertEqual(result.parsed_files, 1)
+            self.assertEqual(
+                result.parsed_files,
+                result.imported_files + result.already_present_files,
+            )
+            self.assertEqual(_database_contents(database), original_graph)
+            self.assertEqual(len(evidence["parse_threads"]), 2)
+            self.assertEqual(evidence["legacy_calls"], [])
+
+    def test_standalone_stable_plugin_two_stage_prepares_once_then_persists_on_owner(self):
+        evidence = _standalone_evidence()
+        parse_started = threading.Event()
+        allow_parse_completion = threading.Event()
+        plugin = _standalone_plugin_class(
+            evidence,
+            parse_started=parse_started,
+            allow_parse_completion=allow_parse_completion,
+        )
+        owner_threads = []
+        persistence_threads = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "standalone.pdf"
+            report.write_bytes(b"synthetic standalone plugin report")
+            database = Path(tmpdir) / "reports.sqlite3"
+            report_parser_factory = parse_thread_module.report_parser_factory
+            real_import = parse_thread_module.import_parse_result_v2_payload_if_absent
+
+            def tracking_import(*args, **kwargs):
+                persistence_threads.append(threading.get_ident())
+                return real_import(*args, **kwargs)
+
+            def run_on_owner_thread():
+                owner_threads.append(threading.get_ident())
+                thread.run()
+
+            report_parser_factory.register_parser(plugin)
+            try:
+                thread = _configured_import_thread(report, database)
+                with mock.patch.dict(
+                    os.environ,
+                    {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1"},
+                ), mock.patch.object(
+                    parse_thread_module,
+                    "import_parse_result_v2_payload_if_absent",
+                    side_effect=tracking_import,
+                ):
+                    owner = threading.Thread(target=run_on_owner_thread)
+                    owner.start()
+                    self.assertTrue(parse_started.wait(timeout=10))
+                    self.assertFalse(database.exists())
+                    allow_parse_completion.set()
+                    owner.join(timeout=10)
+                    self.assertFalse(owner.is_alive())
+            finally:
+                allow_parse_completion.set()
+                report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
+
+            result = thread.last_parse_result
+            self.assertEqual(result.imported_files, 1)
+            self.assertEqual(result.already_present_files, 0)
+            self.assertEqual(result.parsed_files, 1)
+            self.assertEqual(len(evidence["parse_threads"]), 1)
+            self.assertNotEqual(evidence["parse_threads"], owner_threads)
+            self.assertEqual(persistence_threads, owner_threads)
+            self.assertEqual(evidence["database_exists_during_parse"], [False])
+            self.assertEqual(evidence["legacy_calls"], [])
+
+    def test_standalone_stable_plugin_rejects_invalid_v2_without_database(self):
+        evidence = _standalone_evidence()
+        plugin = _standalone_plugin_class(
+            evidence,
+            result_factory=lambda _source_path: object(),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "standalone.pdf"
+            report.write_bytes(b"synthetic malformed plugin report")
+            database = Path(tmpdir) / "reports.sqlite3"
+            report_parser_factory = parse_thread_module.report_parser_factory
+            report_parser_factory.register_parser(plugin)
+            try:
+                thread = _configured_import_thread(report, database)
+                with mock.patch.object(
+                    parse_thread_module,
+                    "_log_parse_file_failure",
+                ) as log_failure:
+                    thread.run()
+            finally:
+                report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
+
+            result = thread.last_parse_result
+            self.assertEqual(result.failed_files, 1)
+            self.assertEqual(result.parsed_files, 0)
+            self.assertEqual(result.imported_files, 0)
+            self.assertEqual(result.already_present_files, 0)
+            self.assertFalse(database.exists())
+            self.assertEqual(evidence["legacy_calls"], [])
+            failure = log_failure.call_args.args[2]
+            self.assertIsInstance(failure, TypeError)
+            self.assertEqual(
+                str(failure),
+                "Standalone stable parser plugin parse_to_v2() must return "
+                "ParseResultV2, got object",
+            )
+
+    def test_standalone_stable_plugin_source_drift_preserves_existing_graph(self):
+        evidence = _standalone_evidence()
+        plugin = _standalone_plugin_class(evidence)
+        report_parser_factory = parse_thread_module.report_parser_factory
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "standalone.pdf"
+            report.write_bytes(b"synthetic standalone plugin report")
+            database = Path(tmpdir) / "reports.sqlite3"
+            report_parser_factory.register_parser(plugin)
+            try:
+                initial_thread = _configured_import_thread(report, database)
+                initial_thread.run()
+                original_graph = _database_contents(database)
+
+                parse_started = threading.Event()
+                allow_parse_completion = threading.Event()
+                drift_plugin = _standalone_plugin_class(
+                    evidence,
+                    parse_started=parse_started,
+                    allow_parse_completion=allow_parse_completion,
+                )
+                report_parser_factory.register_parser(drift_plugin, replace=True)
+                drift_thread = _configured_import_thread(report, database)
+
+                with mock.patch.object(
+                    parse_thread_module,
+                    "_log_parse_file_failure",
+                ) as log_failure, mock.patch.dict(
+                    os.environ,
+                    {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1"},
+                ):
+                    owner = threading.Thread(target=drift_thread.run)
+                    owner.start()
+                    self.assertTrue(parse_started.wait(timeout=10))
+                    report.write_bytes(b"changed after parser inspection")
+                    allow_parse_completion.set()
+                    owner.join(timeout=10)
+                    self.assertFalse(owner.is_alive())
+            finally:
+                report_parser_factory._unregister_parser(_STANDALONE_PLUGIN_ID)
+
+            result = drift_thread.last_parse_result
+            self.assertEqual(result.failed_files, 0)
+            self.assertEqual(result.preflight_changed_files, 1)
+            self.assertEqual(result.parsed_files, 0)
+            self.assertEqual(result.imported_files, 0)
+            self.assertEqual(result.already_present_files, 0)
+            self.assertEqual(_database_contents(database), original_graph)
+            self.assertEqual(evidence["legacy_calls"], [])
+            log_failure.assert_not_called()
+
+    def test_preflight_destination_duplicate_reaches_atomic_import_filter(self):
+        import shutil
+
+        from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+        from metroliza.parsing.parse_reports_thread import ParseReportsThread
+        from metroliza.reports.report_repository import ReportRepository
+        from metroliza.shared.parse_contracts import ParseRequest
+
+        fixture = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            report = root / "incomplete.pdf"
+            database = root / "reports.sqlite"
+            shutil.copyfile(fixture, report)
+            repository = ReportRepository(str(database))
+            repository.replace_existing_report(
+                source_path=report,
+                parser_id="cmm_pdf_header_box",
+                parser_version="1.1.0",
+                template_family="synthetic",
+                parse_status="failed",
+                metadata={"metadata_json": {}},
+                candidates=(),
+                warnings=(),
+                measurements=(),
+                metadata_version="synthetic-v1",
+            )
+            preflight = ParsePreflightService().scan_source(
+                source_path=report,
+                database_path=database,
+                metadata_parsing_mode="light",
+            )
+            self.assertIs(preflight.files[0].status, ParsePreflightStatus.DUPLICATE)
+            self.assertNotIn(
+                "duplicate_in_selected_source",
+                preflight.files[0].reason_codes,
+            )
+            thread = ParseReportsThread(
+                ParseRequest(
+                    source_directory=str(report),
+                    db_file=str(database),
+                    metadata_parsing_mode="light",
+                )
+            )
+            thread.preflight_result = preflight
+
+            approved, changed_count = thread._filter_reports_for_preflight([report])
+
+            self.assertEqual(approved, [report])
+            self.assertEqual(changed_count, 0)
+
+    def test_parse_thread_propagates_typed_outcomes_on_owner_thread(self):
+        owner_thread = threading.get_ident()
+
+        class DummyParser:
+            def __init__(self, disposition):
+                self.disposition = disposition
+                self.stage_timings_s = {}
+                self.persistence_backend_used = "synthetic"
+                self.parse_backend_used = "synthetic"
+                self.persistence_threads = []
+                self.preparation_threads = []
+
+            def prepare_for_two_stage_pipeline(self):
+                self.preparation_threads.append(threading.get_ident())
+
+            def import_report_if_absent(self):
+                self.persistence_threads.append(threading.get_ident())
+                return self.disposition
+
+            def import_prepared_report_if_absent(self):
+                return self.import_report_if_absent()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "synthetic.pdf")
+            with open(report, "wb") as report_file:
+                report_file.write((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
+
+            for two_stage, disposition in (
+                (False, ReportImportDisposition.IMPORTED),
+                (True, ReportImportDisposition.ALREADY_PRESENT),
+            ):
+                with self.subTest(two_stage=two_stage, disposition=disposition):
+                    database = os.path.join(tmpdir, f"{two_stage}.sqlite3")
+                    parser = DummyParser(disposition)
+                    thread = _configured_import_thread(report, database)
+                    with mock.patch.object(
+                        parse_thread_module,
+                        "get_parser",
+                        side_effect=lambda *args, **kwargs: _bind_test_parser(parser, *args, **kwargs),
+                    ), mock.patch.dict(
+                        os.environ,
+                        {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1" if two_stage else "0"},
+                    ):
+                        thread.run()
+
+                    self.assertEqual(thread.last_parse_result.parsed_files, 1)
+                    self.assertEqual(
+                        thread.last_parse_result.imported_files,
+                        int(disposition is ReportImportDisposition.IMPORTED),
+                    )
+                    self.assertEqual(
+                        thread.last_parse_result.already_present_files,
+                        int(disposition is ReportImportDisposition.ALREADY_PRESENT),
+                    )
+                    self.assertEqual(parser.persistence_threads, [owner_thread])
+                    if two_stage:
+                        self.assertEqual(len(parser.preparation_threads), 1)
+                        self.assertNotEqual(parser.preparation_threads[0], owner_thread)
+
+    def test_existing_base_and_cmm_typed_import_paths_bypass_standalone_adapter(self):
+        owner_thread = threading.get_ident()
+
+        class ExistingBaseParser(BaseReportParser):
+            def open_report(self):
+                return None
+
+            def split_text_to_blocks(self):
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "synthetic.pdf"
+            report.write_bytes((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
+            database = Path(tmpdir) / "reports.sqlite3"
+            parsers = (
+                (
+                    ExistingBaseParser(str(report), str(database)),
+                    False,
+                    ReportImportDisposition.IMPORTED,
+                ),
+                (
+                    CMMReportParser(str(report), str(database)),
+                    True,
+                    ReportImportDisposition.ALREADY_PRESENT,
+                ),
+            )
+
+            for parser, two_stage, disposition in parsers:
+                with self.subTest(
+                    parser=type(parser).__name__,
+                    two_stage=two_stage,
+                    disposition=disposition,
+                ):
+                    preparation_threads = []
+                    persistence_threads = []
+                    parser.stage_timings_s = {}
+                    parser.prepare_for_two_stage_pipeline = lambda: (
+                        preparation_threads.append(threading.get_ident())
+                    )
+                    parser.import_report_if_absent = lambda: (
+                        persistence_threads.append(threading.get_ident()) or disposition
+                    )
+                    parser.import_prepared_report_if_absent = (
+                        parser.import_report_if_absent
+                    )
+                    thread = _configured_import_thread(report, database)
+
+                    with mock.patch.object(
+                        parse_thread_module,
+                        "get_parser",
+                        side_effect=lambda *args, **kwargs: _bind_test_parser(parser, *args, **kwargs),
+                    ), mock.patch.dict(
+                        os.environ,
+                        {"METROLIZA_PARSE_TWO_STAGE_PIPELINE": "1" if two_stage else "0"},
+                    ), mock.patch.object(
+                        parse_thread_module,
+                        "_StablePluginAtomicImportAdapter",
+                    ) as adapter:
+                        thread.run()
+
+                    adapter.assert_not_called()
+                    result = thread.last_parse_result
+                    self.assertEqual(
+                        result.imported_files,
+                        int(disposition is ReportImportDisposition.IMPORTED),
+                    )
+                    self.assertEqual(
+                        result.already_present_files,
+                        int(disposition is ReportImportDisposition.ALREADY_PRESENT),
+                    )
+                    self.assertEqual(result.parsed_files, 1)
+                    self.assertEqual(
+                        result.parsed_files,
+                        result.imported_files + result.already_present_files,
+                    )
+                    self.assertEqual(persistence_threads, [owner_thread])
+                    if two_stage:
+                        self.assertEqual(len(preparation_threads), 1)
+                        self.assertNotEqual(preparation_threads[0], owner_thread)
+
+    def test_parse_thread_parser_failure_creates_no_database_artifact(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = os.path.join(tmpdir, "broken.pdf")
+            database = os.path.join(tmpdir, "reports.sqlite3")
+            with open(report, "wb") as report_file:
+                report_file.write((Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf").read_bytes())
+            thread = _configured_import_thread(report, database)
+
+            with mock.patch.object(
+                parse_thread_module,
+                "get_parser",
+                side_effect=RuntimeError("synthetic parser failure"),
+            ):
+                thread.run()
+
+            self.assertEqual(thread.last_parse_result.failed_files, 1)
+            self.assertFalse(os.path.exists(database))
+
+    def test_cmm_import_entrypoint_propagates_repository_disposition(self):
+        from metroliza.parsing.source_inspection import SourceInspectionContext
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report = Path(tmpdir) / "synthetic.pdf"
+            report.write_bytes(b"synthetic")
+            parser = CMMReportParser(str(report), str(Path(tmpdir) / "reports.sqlite3"))
+            parser.blocks_text = [(["Feature"], [["X", 1, 0.1, -0.1, 0, 1, 0, 0]])]
+            parser._metadata_selection_result = types.SimpleNamespace(
+                metadata=types.SimpleNamespace(
+                    parser_id="cmm_pdf_header_box",
+                    template_family="cmm_pdf_header_box",
+                    template_variant="synthetic",
+                    warnings=(),
+                    page_count=1,
+                    metadata_confidence=1.0,
+                ),
+                candidates=(),
+            )
+            parser._normalized_rows_for_persistence = lambda: [
+                {"row_order": 1, "header": "Feature", "ax": "X", "status_code": "ok"}
+            ]
+            parser.build_report_identity_hash = lambda: "synthetic-identity"
+            parser.source_inspection_context = SourceInspectionContext.from_path(
+                report,
+                source_format="pdf",
+            )
+
+            class FakeRepository:
+                calls = []
+
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                def import_report_if_absent(self, **kwargs):
+                    self.calls.append(kwargs)
+                    return ReportImportDisposition.ALREADY_PRESENT
+
+            with mock.patch.dict(
+                CMMReportParser.to_sqlite.__globals__,
+                {"ReportRepository": FakeRepository},
+            ):
+                outcome = parser.to_sqlite(import_if_absent=True)
+
+            self.assertIs(outcome, ReportImportDisposition.ALREADY_PRESENT)
+            self.assertEqual(len(FakeRepository.calls), 1)
+            self.assertTrue(callable(FakeRepository.calls[0]["source_digest_verifier"]))
 
     def test_parse_new_reports_does_not_count_failed_persistence_as_success(self):
         class DummyParser:
@@ -1540,6 +2267,130 @@ class TestExportHelpers(unittest.TestCase):
         self.assertTrue(any('ref_idx' in str(row[0]) for row in indexes))
         self.assertTrue(any('SEARCH' in str(row).upper() for row in query_plan))
 
+    def test_snapshot_partition_flow_preserves_source_catalog_rows_and_fallback(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, 'partition-source.db')
+            with closing(sqlite3.connect(db_path)) as connection, connection:
+                connection.execute(
+                    'CREATE TABLE source_rows (REPORT_ID INTEGER, REFERENCE TEXT, '
+                    'HEADER TEXT, AX TEXT, MEAS REAL, OCCURRENCE INTEGER)'
+                )
+                connection.executemany('INSERT INTO source_rows VALUES (?, ?, ?, ?, ?, ?)', [
+                    (1, 'shared', 'H2', 'X', 2.0, 3), (2, None, 'H1', 'X', 1.0, 1),
+                    (3, 'shared', 'H1', 'X', 3.0, 2), (2, '   ', 'H1', 'X', 1.0, 1),
+                    (4, 'Report 2 (no reference)', 'H0', 'X', 0.0, 0),
+                ])
+                catalog_before = connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall()
+                rows_before = connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall()
+            bytes_before = Path(db_path).read_bytes()
+            thread = ExportDataThread(ExportRequest(
+                paths=AppPaths(db_file=db_path, excel_file='dummy.xlsx'), options=ExportOptions(),
+            ))
+            thread.filter_query = 'SELECT * FROM source_rows ORDER BY OCCURRENCE, MEAS'
+            with closing(sqlite3.connect(db_path)) as connection:
+                thread._db_connection = connection
+                thread._prepare_export_snapshot()
+                snapshot_name = thread._snapshot_table_name
+                self.assertIsNotNone(thread._snapshot_partition_source)
+                queries = []
+                connection.set_trace_callback(queries.append)
+                actual = list(thread._iter_reference_partitions())
+                connection.set_trace_callback(None)
+                self.assertEqual([label for label, _ in actual], ['Report 2 (no reference)', 'shared', 'Report 2 (no reference)'])
+                self.assertEqual(
+                    [[row['OCCURRENCE'] for row in table.iter_rows(as_dict=True)] for _, table in actual],
+                    [[0], [2, 3], [1, 1]],
+                )
+                self.assertEqual(
+                    [table['SAMPLE_NUMBER'].tolist() for _, table in actual], [['1'], ['1', '2'], ['1', '2']],
+                )
+                fast_queries = [query for query in queries if 'ORDER BY export_scope.' in query]
+                self.assertEqual(len(fast_queries), 3)
+                for query in fast_queries:
+                    plan = connection.execute('EXPLAIN QUERY PLAN ' + query).fetchall()
+                    self.assertTrue(any('SEARCH' in row[3] and '_idx' in row[3] for row in plan), plan)
+                    self.assertFalse(any('TEMP B-TREE' in row[3] for row in plan), plan)
+                with mock.patch.object(thread, '_partition_header_counts', side_effect=RuntimeError('count failed')):
+                    discovered = list(thread._iter_reference_partitions())
+                self.assertEqual(
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in discovered},
+                    {table['EXPORT_PARTITION_KEY'].iloc[0]: list(table.iter_rows()) for _, table in actual},
+                )
+                thread._cleanup_export_snapshot()
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master WHERE tbl_name = ?', (snapshot_name,)).fetchall(), [])
+                live = list(thread._iter_reference_partitions())
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in live],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                with mock.patch('metroliza.exporting.export_data_thread.prepare_snapshot_partition_source', side_effect=RuntimeError('snapshot failed')):
+                    thread._prepare_export_snapshot()
+                self.assertIsNone(thread._snapshot_table_name)
+                self.assertIsNone(thread._snapshot_partition_source)
+                self.assertEqual(thread._active_export_query, thread.filter_query)
+                self.assertEqual(connection.execute('SELECT name FROM sqlite_temp_master').fetchall(), [])
+                self.assertEqual([(label, list(table.iter_rows())) for label, table in thread._iter_reference_partitions()],
+                                 [(label, list(table.iter_rows())) for label, table in actual])
+                thread._cleanup_export_snapshot()
+                self.assertEqual(connection.execute('SELECT * FROM sqlite_master ORDER BY name').fetchall(), catalog_before)
+                self.assertEqual(connection.execute('SELECT * FROM source_rows ORDER BY rowid').fetchall(), rows_before)
+            self.assertEqual(Path(db_path).read_bytes(), bytes_before)
+
+    def test_snapshot_owner_revokes_previous_and_cleaned_generations(self):
+        from metroliza.exporting import export_query_service as service
+
+        thread = ExportDataThread(ExportRequest(
+            paths=AppPaths(db_file=':memory:', excel_file='dummy.xlsx'), options=ExportOptions(),
+        ))
+        # Casts give the CTAS snapshot the canonical TEXT/INT affinities.
+        thread.filter_query = (
+            "SELECT CAST(2 AS INTEGER) AS REPORT_ID, CAST('shared' AS TEXT) AS REFERENCE, "
+            "'H1' AS HEADER, 'X' AS AX"
+        )
+        with closing(sqlite3.connect(':memory:')) as connection:
+            thread._db_connection = connection
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=1.0):
+                thread._prepare_export_snapshot()
+            first_source = thread._snapshot_partition_source
+            first_query = service.build_analytical_partition_query(thread._active_export_query)
+            with mock.patch('metroliza.exporting.export_data_thread.time.time', return_value=2.0):
+                thread._prepare_export_snapshot()
+            second_source = thread._snapshot_partition_source
+            second_query = service.build_analytical_partition_query(thread._active_export_query)
+            self.assertIsNot(first_source, second_source)
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                rows = service.load_export_partition_dataframe(
+                    ':memory:', first_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=first_source,
+                )
+                self.assertEqual(len(rows), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            thread._cleanup_export_snapshot()
+            connection.execute(
+                f'CREATE TABLE main."{second_source.table_name}" AS '
+                "SELECT 2 AS REPORT_ID, 'wrong-main' AS REFERENCE, 'H1' AS HEADER, 'X' AS AX"
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table: temp'):
+                    service.load_export_partition_dataframe(
+                        ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                        connection=connection, snapshot_source=second_source,
+                    )
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+            # Recreate the same TEMP name: the old generation must still be refused.
+            connection.execute(
+                f'CREATE TEMP TABLE "{second_source.table_name}" AS {thread.filter_query}'
+            )
+            with mock.patch.object(service, '_read_sql_query', wraps=service._read_sql_query) as reader:
+                result = service.load_export_partition_dataframe(
+                    ':memory:', second_query, 'reference:shared', partition_column='EXPORT_PARTITION_KEY',
+                    connection=connection, snapshot_source=second_source,
+                )
+                self.assertEqual(len(result), 1)
+                self.assertIn('WHERE "EXPORT_PARTITION_KEY" = ?', reader.call_args.args[1])
+                self.assertNotIn('ORDER BY export_scope.', reader.call_args.args[1])
+
     def test_google_stage_message_builder_matches_existing_semantics(self):
         self.assertEqual(
             build_google_stage_message('completed', 'https://docs.google.com/spreadsheets/d/sheet-id/edit'),
@@ -1769,6 +2620,8 @@ class TestExportBackendSmoke(unittest.TestCase):
                     rows.append(
                         {
                             'REFERENCE': ref,
+                            'EXPORT_PARTITION_KEY': f'reference:{ref}',
+                            'EXPORT_PARTITION_LABEL': ref,
                             'HEADER - AX': header,
                             'NOM': 10.0,
                             '+TOL': 1.0,
@@ -1838,10 +2691,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread._active_backend = fake_backend
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: __import__('pandas').DataFrame()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -1905,10 +2758,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -1968,10 +2821,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_progress.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -2052,10 +2905,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.update_label.connect(lambda *_: None)
 
             measurement_df = self._build_multi_header_measurement_dataframe()
-            module.fetch_partition_values = lambda *_args, **_kwargs: ['REF_A', 'REF_B']
-            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'REF_A': 3, 'REF_B': 3}
+            module.fetch_partition_values = lambda *_args, **_kwargs: ['reference:REF_A', 'reference:REF_B']
+            module.fetch_partition_header_counts = lambda *_args, **_kwargs: {'reference:REF_A': 3, 'reference:REF_B': 3}
             module.load_measurement_export_partition_dataframe = (
-                lambda *_args, partition_value=None, **_kwargs: measurement_df[measurement_df['REFERENCE'] == partition_value].copy()
+                lambda _db, _query, partition_value, **_kwargs: measurement_df[measurement_df['EXPORT_PARTITION_KEY'] == partition_value].copy()
             )
             module.read_sql_dataframe = lambda *_args, **_kwargs: object()
             module.build_measurement_export_dataframe = lambda *_args, **_kwargs: measurement_df
@@ -2336,6 +3189,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'iqr'}
 
         observed_ylims = []
@@ -2476,7 +3330,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             }
 
             with mock.patch(
-                'modules.export_data_thread._write_export_html_dashboard',
+                'modules.export_data_thread.write_dashboard_safely',
                 return_value={
                     'html_dashboard_path': str(dashboard_file),
                     'html_dashboard_assets_path': str(Path(tmpdir) / 'out_dashboard_assets'),
@@ -2576,7 +3430,8 @@ class TestExportBackendSmoke(unittest.TestCase):
         thread.update_label.connect(lambda text: labels.append(text))
         thread.update_progress.connect(lambda value: progress_values.append(value))
 
-        self.assertTrue(_Backend().run(thread))
+        with mock.patch('metroliza.exporting.export_backends.publish_output'):
+            self.assertTrue(_Backend().run(thread))
 
         self.assertIn('workbook_close', thread._stage_timings)
         self.assertGreaterEqual(thread._stage_timings['workbook_close'], 0.0)
@@ -3174,6 +4029,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -3246,6 +4102,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread.violin_plot_min_samplesize = 2
         chart_calls = []
 
@@ -3333,6 +4190,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 3
 
@@ -3388,6 +4246,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -3618,6 +4477,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         header_group = pd.DataFrame(
@@ -3667,6 +4527,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'trend'}
 
         label_count = 40
@@ -3718,6 +4579,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution'}
         thread.violin_plot_min_samplesize = 10
 
@@ -4566,6 +5428,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             options=ExportOptions(generate_summary_sheet=True),
         )
         thread = ExportDataThread(request)
+        thread._chart_renderer = MatplotlibChartRenderer()
         thread._optimization_toggles['summary_sheet_minimum_charts'] = {'distribution', 'iqr'}
         thread.violin_plot_min_samplesize = 2
 
@@ -4977,3 +5840,358 @@ class TestExportBackendSmoke(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@pytest.mark.parametrize("container", ["directory", "zip"])
+@pytest.mark.parametrize("change", ["reversed", "missing-approved", "renamed-approved"])
+def test_preflight_approval_preserves_source_occurrence(tmp_path, container, change):
+    import shutil
+    import zipfile
+
+    from metroliza.parsing.preflight import ParsePreflightService, ParsePreflightStatus
+    from metroliza.reports.report_repository import ReportRepository
+
+    folder = tmp_path / "source"
+    folder.mkdir()
+    approved = folder / "a-reviewed.pdf"
+    copy_dir = folder / "nested"
+    copy_dir.mkdir()
+    excluded = copy_dir / "a-reviewed.pdf"
+    fixture = Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf"
+    shutil.copyfile(fixture, approved)
+    shutil.copyfile(fixture, excluded)
+    database = tmp_path / "reports.sqlite3"
+    ReportRepository(str(database)).replace_existing_report(
+        source_path=approved, parser_id="cmm_pdf_header_box", parser_version="1.1.0",
+        template_family="synthetic", parse_status="failed", metadata={"metadata_json": {}},
+        candidates=(), warnings=(), measurements=(), metadata_version="synthetic-v1",
+    )
+    source = folder
+    if container == "zip":
+        source = tmp_path / "source.zip"
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.write(excluded, "nested/a-reviewed.pdf")
+            archive.write(approved, "a-reviewed.pdf")
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light"
+    )
+    assert review.files[0].display_name == "a-reviewed.pdf"
+    assert all(item.status is ParsePreflightStatus.DUPLICATE for item in review.files)
+    assert "duplicate_in_selected_source" in review.files[1].reason_codes
+    thread = parse_thread_module.ParseReportsThread(ParseRequest(
+        source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"
+    ))
+    thread.preflight_result = review
+    try:
+        reports = sorted(thread.get_list_of_reports(), key=lambda p: len(p.parts), reverse=True)
+        assert reports[0].parent.name == "nested"
+        approved_path = reports[1]
+        if change == "missing-approved":
+            approved_path.unlink()
+            reports = reports[:1]
+        elif change == "renamed-approved":
+            renamed = approved_path.with_name("renamed.pdf")
+            approved_path.rename(renamed)
+            reports[1] = renamed
+        filtered, changed = thread._filter_reports_for_preflight(reports)
+        assert filtered == ([approved_path] if change == "reversed" else [])
+        assert changed == (0 if change == "reversed" else 1)
+    finally:
+        if thread._extracted_archive_dir is not None:
+            thread._extracted_archive_dir.cleanup()
+
+
+class _LegacySummaryRenderer:
+    """Keep the pre-T02 caller path as an independent rendering oracle."""
+
+    def __init__(self, renderer):
+        self.renderer = renderer
+
+    def render_distribution_png(self, *args, **kwargs):
+        return self.renderer.render_distribution_png(*args, **kwargs)
+
+    def render_iqr_png(self, *args, **kwargs):
+        return self.renderer.render_iqr_png(*args, **kwargs)
+
+    def render_trend_png(self, *args, **kwargs):
+        return self.renderer.render_trend_png(*args, **kwargs)
+
+
+def _capture_summary_plotstats(*, legacy=False, scenario='scatter', forbid_legacy=False):
+    import copy
+    import matplotlib
+    import pandas as pd
+    import metroliza.exporting.export_data_thread as module
+    from metroliza.charts.chart_renderer import PlotstatsChartRenderer
+
+    labels = ['1', '2', '3', '4', '5', '6']
+    if scenario == 'violin':
+        labels = ['1'] * 6 + ['2'] * 6
+    elif scenario == 'wide':
+        labels = [str(index) for index in range(1, 33)]
+    count = len(labels)
+    group = pd.DataFrame({
+        'MEAS': [9.9, 10.0, 10.2, 10.1, 10.05, 9.95] * (count // 6)
+                + [10.0] * (count % 6),
+        'NOM': [10.0] * count, '+TOL': [0.2] * count, '-TOL': [-0.2] * count,
+        'SAMPLE_NUMBER': labels, 'DATE': ['2024-01-01'] * count,
+    })
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True, generate_html_dashboard=True),
+    ))
+    chart_names = {
+        'iqr-only': ['iqr'], 'iqr-default': ['iqr'],
+        'distribution-only': ['distribution'], 'trend-only': ['trend'],
+        'distribution-iqr': ['distribution', 'iqr'],
+    }.get(scenario, ['distribution', 'iqr', 'trend'])
+    thread._optimization_toggles['summary_sheet_minimum_charts'] = set(chart_names)
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = _LegacySummaryRenderer(renderer) if legacy else renderer
+    inserted = []
+
+    class Worksheet:
+        def write(self, *_args, **_kwargs):
+            pass
+
+        def insert_image(self, row, col, _filename, options):
+            inserted.append((row, col, {key: value for key, value in options.items() if key != 'image_data'}))
+
+    # Replace only this caller's pyplot reference. Plotstats may legitimately
+    # construct its own matplotlib figures while producing the primary PNG.
+    real_pyplot = module.plt
+
+    class CallerPyplot:
+        def __getattr__(self, name):
+            return getattr(real_pyplot, name)
+
+    pyplot = CallerPyplot()
+    if forbid_legacy:
+        pyplot.subplots = mock.Mock(side_effect=AssertionError('legacy summary figure created'))
+    warnings = []
+    thread._record_summary_sheet_warning = lambda *args: warnings.append(args)
+    rc = ({} if scenario == 'iqr-default' else
+          {'font.size': 17, 'axes.labelsize': 19, 'axes.linewidth': 2.75})
+    with (
+        matplotlib.rc_context(),
+        mock.patch.object(module, 'plt', pyplot),
+        mock.patch.object(module, 'resolve_distribution_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_iqr_renderer_backend', return_value='matplotlib'),
+        mock.patch.object(module, 'resolve_trend_renderer_backend', return_value='matplotlib'),
+    ):
+        matplotlib.rcdefaults()
+        matplotlib.rcParams.update(rc)
+        rc_before = matplotlib.rcParams.copy()
+        figures_before = real_pyplot.get_fignums()
+        thread.summary_sheet_fill(Worksheet(), 'Synthetic H1', group, col=5)
+        rc_after = matplotlib.rcParams.copy()
+        figures_after = real_pyplot.get_fignums()
+    assert not warnings, warnings
+    if forbid_legacy:
+        pyplot.subplots.assert_not_called()
+    sections = copy.deepcopy(thread._html_dashboard_sections)
+    assert len(sections) == 1
+    charts = sections[0]['charts']
+    assert [chart['chart_type'] for chart in charts] == chart_names
+    pngs = [chart.pop('image_buffer').getvalue() for chart in charts]
+    # Finalized legacy geometry is consumed by the native compositor only;
+    # Plotstats and the HTML dashboard derive their views from the payload.
+    payloads = [copy.deepcopy(chart['payload']) for chart in charts]
+    for chart in charts:
+        chart['payload'].pop('resolved_render_spec', None)
+    return {'pngs': pngs, 'slots': inserted, 'sections': sections, 'payloads': payloads,
+            'rc_before': rc_before, 'rc_after': rc_after,
+            'figures_before': figures_before, 'figures_after': figures_after}
+
+
+def _summary_plotstats_failure(failure):
+    from contextlib import nullcontext
+    import matplotlib
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    if failure is None:
+        return nullcontext()
+    render = adapter.render_chart_artifact_png
+
+    def fail(*_args, **_kwargs):
+        if failure.startswith('mutating-'):
+            matplotlib.rcParams.update({'font.size': 31, 'axes.edgecolor': 'red', 'axes.linewidth': 3.5})
+        if failure.endswith('exception'):
+            raise RuntimeError('forced Plotstats failure')
+        if failure.endswith('success'):
+            return render(*_args, **_kwargs)
+        return None
+
+    return mock.patch.object(adapter, 'render_chart_artifact_png', side_effect=fail)
+
+
+@pytest.mark.parametrize('scenario', [
+    'scatter', 'violin', 'wide', 'iqr-only', 'iqr-default',
+    'distribution-only', 'trend-only', 'distribution-iqr',
+])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception', 'mutating-none', 'mutating-exception', 'mutating-success'])
+def test_summary_plotstats_literal_png_slot_and_dashboard_equivalence(scenario, failure, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True, scenario=scenario)
+        actual = _capture_summary_plotstats(scenario=scenario)
+    for key in ('pngs', 'slots', 'sections', 'rc_before', 'rc_after', 'figures_before', 'figures_after'):
+        assert actual[key] == expected[key], key
+    assert actual['figures_after'] == actual['figures_before']
+    if scenario == 'violin':
+        assert actual['payloads'][0]['render_mode'] == 'violin'
+    assert [chart['backend'] for chart in actual['sections'][0]['charts']] == [
+        'plotstats' if failure in (None, 'mutating-success') else 'matplotlib'
+    ] * len(actual['pngs'])
+
+
+@pytest.mark.parametrize('scenario', ['scatter', 'violin', 'wide', 'iqr-only', 'iqr-default', 'distribution-iqr'])
+def test_summary_plotstats_success_creates_no_legacy_figure(scenario, qapplication_session):
+    _capture_summary_plotstats(scenario=scenario, forbid_legacy=True)
+
+
+@pytest.mark.parametrize('chart_name', ['distribution', 'iqr', 'trend'])
+@pytest.mark.parametrize('width', [6.0, 8.8, 10.0, 17.3, 32.0])
+def test_summary_declared_size_has_exact_figure_slot_and_span(chart_name, width):
+    from matplotlib.figure import Figure
+
+    figure = Figure(figsize=(width, 4.0))
+    # Keep the exact declared inches through the worksheet scale calculation;
+    # rounded integer PNG dimensions are a separate rendering concern.
+    size = {'width_px': width * 150.0, 'height_px': 4.0 * 150.0}
+    slot = {'row': 1, 'col': 5}
+    expected = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, figure)
+    actual = ExportDataThread._summary_image_slot_with_scale(chart_name, slot, size)
+    assert actual == expected
+    assert ExportDataThread._resolve_scaled_summary_image_cell_span(size, actual) == (
+        ExportDataThread._resolve_scaled_summary_image_cell_span(figure, expected)
+    )
+
+
+def _serialize_summary_plotstats_capture(capture, directory, mode):
+    import copy
+    from datetime import datetime, timezone
+    from io import BytesIO
+    import metroliza.charts.export_html_dashboard as dashboard
+
+    sections = copy.deepcopy(capture['sections'])
+    for chart, png, payload in zip(sections[0]['charts'], capture['pngs'], capture['payloads'], strict=True):
+        chart['image_buffer'] = BytesIO(png)
+        chart['payload'] = payload
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2024, 1, 1, tzinfo=timezone.utc)
+
+    # Control generation entropy at its source; compare every produced byte.
+    with (
+        mock.patch.object(dashboard, 'datetime', FixedDatetime),
+        mock.patch.object(dashboard, 'uuid4', return_value=types.SimpleNamespace(hex='a' * 32)),
+    ):
+        dashboard.write_export_html_dashboard(
+            excel_file='out.xlsx', output_path=directory / 'dashboard.html',
+            assets_dir=directory / 'dashboard_assets', sections=sections,
+            source_label='Synthetic dashboard', dashboard_mode=mode,
+        )
+    return {
+        path.relative_to(directory).as_posix(): path.read_bytes()
+        for path in directory.rglob('*') if path.is_file() and not path.name.endswith('.lock')
+    }
+
+
+@pytest.mark.parametrize('mode', ['workbook_sidecar', 'html_only'])
+@pytest.mark.parametrize('failure', [None, 'none', 'exception'])
+def test_summary_plotstats_serialized_html_and_assets_are_literal(mode, failure, tmp_path, qapplication_session):
+    with _summary_plotstats_failure(failure):
+        expected = _capture_summary_plotstats(legacy=True)
+        actual = _capture_summary_plotstats()
+    assert _serialize_summary_plotstats_capture(actual, tmp_path / 'actual', mode) == (
+        _serialize_summary_plotstats_capture(expected, tmp_path / 'expected', mode)
+    )
+
+
+@pytest.mark.parametrize('outcome', ['success', 'none', 'exception'])
+def test_summary_primary_attempt_restores_only_failed_speculation(outcome, qapplication_session):
+    import copy
+    import matplotlib
+    from metroliza.charts.chart_renderer import ChartRenderResult, PlotstatsChartRenderer
+
+    thread = ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file='test.db', excel_file='out.xlsx'),
+        options=ExportOptions(generate_summary_sheet=True),
+    ))
+    renderer = PlotstatsChartRenderer()
+    thread._chart_renderer = renderer
+    success = ChartRenderResult(b'primary-png', 'plotstats')
+
+    def attempt(_payload):
+        matplotlib.rcParams['font.size'] = 31
+        matplotlib.rcParams['font.family'].append('Synthetic family')
+        if outcome == 'exception':
+            raise RuntimeError('partial renderer failure')
+        return success if outcome == 'success' else None
+
+    with matplotlib.rc_context():
+        # Own a separate mutable list so this observer cannot leak its mutation.
+        matplotlib.rcParams['font.family'] = list(matplotlib.rcParams['font.family'])
+        before = copy.deepcopy(matplotlib.rcParams)
+        with mock.patch.object(renderer, 'try_render_payload_png', side_effect=attempt):
+            result = thread._try_summary_plotstats_chart({'type': 'iqr'})
+        if outcome == 'success':
+            assert result is success
+            assert matplotlib.rcParams['font.size'] == 31
+            assert matplotlib.rcParams['font.family'][-1] == 'Synthetic family'
+        else:
+            assert result is None
+            assert matplotlib.rcParams == before
+
+def test_numeric_array_literal_conversion_and_copy_contract():
+    from decimal import Decimal
+    import numpy as np
+    from metroliza.exporting.export_data_thread import _coerce_float_or_nan, _numeric_array
+
+    cases = [[], [None, ' ', 'bad', '0.30000000000000004', Decimal('1.25'), -0., np.inf],
+             np.array(1.), np.array([[1., 2.], [3., np.nan]]),
+             np.array([0x7ff0000000000001, 0xfff8000000000001], dtype=np.uint64).view(np.float64),
+             np.array([0x7f800001, 0xffc00001], dtype=np.uint32).view(np.float32),
+             np.array([True, False]), np.array([1, 2]),
+             np.array(['1.5\x00', 'nan', '1.25']), np.array([None, Decimal('2')], dtype=object)]
+    for dtype in (np.float16, np.float32, np.float64, np.longdouble):
+        cases.extend([np.array([1., -0., np.nan, np.inf, -np.inf], dtype=dtype),
+                      np.array([1., 2., 3., 4.], dtype=dtype)[::2],
+                      np.array([], dtype=dtype)])
+    for values in cases:
+        for dropna in (False, True):
+            results = []
+            for reference in (True, False):
+                with warnings.catch_warnings(record=True) as emitted:
+                    warnings.simplefilter('always')
+                    try:
+                        if reference:
+                            array = np.asarray([_coerce_float_or_nan(v) for v in values], dtype=float)
+                            result = array[np.isfinite(array)] if dropna else array
+                        else:
+                            result = _numeric_array(values, dropna=dropna)
+                        assert not isinstance(values, np.ndarray) or not np.shares_memory(result, values)
+                        outcome = (result.dtype.str, result.shape, result.tobytes())
+                    except (TypeError, ValueError) as exc:
+                        outcome = (type(exc), str(exc))
+                    results.append((outcome, [(type(w.message), str(w.message)) for w in emitted]))
+            assert results[0] == results[1]
+
+
+def test_numeric_array_fast_path_and_scalar_fallback():
+    import numpy as np
+    from metroliza.exporting import export_data_thread as module
+
+    for dtype in (np.float16, np.float32, np.float64):
+        values = np.array([1., -0., np.inf, -np.inf], dtype=dtype)
+        values.flags.writeable = False
+        with mock.patch.object(module, '_coerce_float_or_nan', side_effect=AssertionError('scalar conversion')):
+            assert module._numeric_array(values, dropna=True).tobytes() == np.array([1., -0.]).tobytes()
+            assert module._numeric_array(values).tobytes() == values.astype(float).tobytes()
+    with mock.patch.object(module, '_coerce_float_or_nan', wraps=module._coerce_float_or_nan) as scalar:
+        module._numeric_array(np.array([1., np.nan], dtype=np.float32))
+        module._numeric_array(np.array([1., 2.], dtype=np.longdouble))
+        module._numeric_array([None, '2'])
+        assert scalar.call_count == 6

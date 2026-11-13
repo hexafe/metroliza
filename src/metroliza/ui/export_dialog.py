@@ -1,6 +1,10 @@
 """Export dialog UI, export option builders, and completion message helpers."""
 
+from time import monotonic
+from dataclasses import replace
+
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.data_grouping import DataGrouping
 import metroliza.shared.custom_logger as custom_logger
@@ -13,6 +17,9 @@ from metroliza.exporting.export_dialog_service import (
     build_validated_export_request,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics
+from metroliza.exporting.output_publication import (
+    OutputConsent, conflicting_outputs, free_copy_path, output_paths,
+)
 from metroliza.exporting.export_preset_utils import (
     build_export_options_for_preset,
     get_export_preset_id_for_label,
@@ -61,7 +68,12 @@ try:
         dismiss_worker_progress_dialog,
     )
 except ImportError:  # pragma: no cover - compatibility with lightweight test stubs.
-    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog
+    from metroliza.ui.worker_progress_dialog import create_worker_progress_dialog as _create_worker_progress_dialog
+
+    def create_worker_progress_dialog(parent, *, window_title, initial_status_text, on_cancel, **_kwargs):
+        return _create_worker_progress_dialog(
+            parent, window_title=window_title, initial_status_text=initial_status_text, on_cancel=on_cancel,
+        )
 
     def dismiss_worker_progress_dialog(dialog, *, rejected: bool = False) -> None:
         if dialog is None:
@@ -312,6 +324,8 @@ class ExportDialog(QDialog):
     """
 
     close_deferral_cancelled = pyqtSignal()
+    database_change_allowed = None
+    database_context_transition_active = False
 
     def __init__(self, parent=None, db_file=""):
         super().__init__(parent)
@@ -1105,11 +1119,12 @@ class ExportDialog(QDialog):
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
-                                                    "SQLite database (*.db);;All files (*)")
+                                                    SQLITE_FILE_FILTER)
             if filename:
-                if not filename.endswith(".db"):
-                    filename += ".db"
+                filename = sqlite_database_path(filename)
                 logger.info("Selected database file: %s", filename)
                 if not self._update_database_context(filename):
                     return
@@ -1143,19 +1158,29 @@ class ExportDialog(QDialog):
         return accepted
 
     def _update_database_context(self, db_file):
-        if not self._discard_child_drafts():
+        if self.database_context_transition_active:
             return False
-        self.db_file = db_file
-        self._set_path_field_value(self.database_text_label, db_file)
+        if self.database_change_allowed is not None and not self.database_change_allowed():
+            return False
+        self.database_context_transition_active = True
+        try:
+            if not self._discard_child_drafts():
+                return False
+            if self.database_change_allowed is not None and not self.database_change_allowed():
+                return False
+            self.db_file = db_file
+            self._set_path_field_value(self.database_text_label, db_file)
 
-        self.filter_query = DEFAULT_FILTER_QUERY
-        self.filter_state = None
-        self.df_for_grouping = None
-        self._refresh_filter_state_summary()
-        self.set_grouping_applied(False)
-        self._update_export_button_enabled_state()
+            self.filter_query = DEFAULT_FILTER_QUERY
+            self.filter_state = None
+            self.df_for_grouping = None
+            self._refresh_filter_state_summary()
+            self.set_grouping_applied(False)
+            self._update_export_button_enabled_state()
 
-        return True
+            return True
+        finally:
+            self.database_context_transition_active = False
 
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""
@@ -1185,7 +1210,7 @@ class ExportDialog(QDialog):
             # Check if grouping dialog is already open or visible
             if not self.grouping_window:
                 # Create a new grouping dialog if not already existing or visible
-                self.grouping_window = DataGrouping(self, db_file=self.db_file)
+                self.grouping_window = DataGrouping(self, db_file=self.db_file, background_load=True)
             else:
                 self.grouping_window.refresh_data()
             if not self.grouping_window.isVisible():
@@ -1303,6 +1328,7 @@ class ExportDialog(QDialog):
 
     def show_loading_screen(self):
         """Validate inputs, persist options, and hand work to the export thread."""
+        action_started_at = monotonic()
         try:
             self._refresh_metadata_enrichment_notice()
             violin_input = self.violin_plot_min_samplesize.text() or "6"
@@ -1345,6 +1371,9 @@ class ExportDialog(QDialog):
             self.excel_file = Path(output_path)
             if hasattr(self, "excel_file_text_label"):
                 self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            export_request = self._confirm_output_publication(export_request)
+            if export_request is None:
+                return
             self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
             self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
@@ -1356,6 +1385,7 @@ class ExportDialog(QDialog):
                 window_title="Exporting data...",
                 initial_status_text=build_three_line_status("Exporting data...", "Preparing export thread", "ETA --"),
                 on_cancel=self.stop_exporting,
+                action_started_at=action_started_at,
             )
 
             # Disable the export button before the worker starts.
@@ -1377,6 +1407,58 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _confirm_output_publication(self, request):
+        """Decide afresh for every operation; never store replacement consent on the dialog."""
+        html_only = request.options.export_target == "html_dashboard"
+        primary = request.paths.html_dashboard_file if html_only else request.paths.excel_file
+        paths = output_paths(primary, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        conflicts = conflicting_outputs(paths)
+        if not conflicts:
+            return request
+        consents = tuple(OutputConsent.for_path(path) for path in paths if path.exists())
+        copy_path = free_copy_path(primary, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        choice = self._choose_output_collision(request.paths.db_file, paths, conflicts, copy_path)
+        if choice == "cancel":
+            return None
+        if choice == "replace":
+            return replace(request, replace_outputs=consents, copy_output_from=None)
+        copy_paths = output_paths(copy_path, html_only=html_only, dashboard=request.options.generate_html_dashboard)
+        paths_contract = replace(
+            request.paths,
+            excel_file=None if html_only else str(copy_path),
+            html_dashboard_file=str(copy_paths[-1]) if html_only or request.options.generate_html_dashboard else None,
+        )
+        self.excel_file = copy_path
+        self._set_path_field_value(self.excel_file_text_label, copy_path)
+        return replace(request, paths=paths_contract, replace_outputs=(), copy_output_from=str(primary))
+
+    def _choose_output_collision(self, database, paths, conflicts, copy_path):
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("Export output already exists")
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        existing_preview = "\n".join(str(path) for path in conflicts[:10])
+        if len(conflicts) > 10:
+            existing_preview += f"\n... {len(conflicts) - 10} more existing asset generations"
+        prompt.setText(
+            f"Database: {database}\nTarget: " + "\n".join(str(path) for path in paths)
+            + "\nExisting outputs: " + existing_preview
+            + f"\nSave a copy as: {copy_path}\nReplace applies only to this export and these files."
+        )
+        copy = prompt.addButton("Save a copy", QMessageBox.ButtonRole.AcceptRole)
+        overwrite = prompt.addButton("Replace", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
+        prompt.setDefaultButton(copy)
+        prompt.setEscapeButton(cancel)
+        prompt.exec()
+        return "copy" if prompt.clickedButton() is copy else "replace" if prompt.clickedButton() is overwrite else "cancel"
+
+
+    def _dismiss_loading_progress(self, *, rejected=False):
+        dialog = getattr(self, "loading_dialog", None)
+        dismiss_worker_progress_dialog(dialog, rejected=rejected)
+        if callable(getattr(dialog, "deleteLater", None)):
+            for name in ("loading_dialog", "loading_label", "loading_bar", "loading_gif"):
+                setattr(self, name, None)
 
     def _set_loading_cancel_enabled(self, enabled):
         if not hasattr(self, 'loading_dialog') or self.loading_dialog is None:
@@ -1397,10 +1479,11 @@ class ExportDialog(QDialog):
                 self._cancel_requested = True
                 self._set_loading_cancel_enabled(False)
                 self.export_thread.stop_exporting()
-                self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
+                if self.loading_label is not None:
+                    self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
                 return
 
-            _reject_progress_dialog_as_terminal(self.loading_dialog)
+            self._dismiss_loading_progress(rejected=True)
             QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
             self.export_button.setEnabled(True)
             self._cancel_requested = False
@@ -1412,13 +1495,14 @@ class ExportDialog(QDialog):
     def on_export_error(self, message):
         """Store export error details for finalization once the worker stops."""
         self.export_error_message = message
-        self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
+        if self.loading_label is not None:
+            self.loading_label.setText(build_three_line_status("Export failed.", "See error details for context", "ETA --"))
 
     def on_export_canceled(self):
         """Handle explicit worker cancelation and restore dialog state."""
         try:
             self._export_terminal_handled = True
-            _reject_progress_dialog_as_terminal(self.loading_dialog)
+            self._dismiss_loading_progress(rejected=True)
             if not getattr(self, "_close_requested", False):
                 export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
                 completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
@@ -1426,7 +1510,7 @@ class ExportDialog(QDialog):
                 result_path = (
                     completion_metadata.get("html_dashboard_path")
                     if export_target == "html_dashboard"
-                    else self.excel_file
+                    else completion_metadata.get("published_output_path", self.excel_file)
                 )
                 outcome_kwargs = {
                     "excel_file": result_path,
@@ -1452,7 +1536,7 @@ class ExportDialog(QDialog):
         """Finalize export flow with success/error messaging and UI reset."""
         try:
             self._export_terminal_handled = True
-            dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
+            self._dismiss_loading_progress()
             if getattr(self, "_close_requested", False):
                 return
             export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
@@ -1461,7 +1545,7 @@ class ExportDialog(QDialog):
             result_path = (
                 completion_metadata.get('html_dashboard_path')
                 if export_target == 'html_dashboard'
-                else self.excel_file
+                else completion_metadata.get('published_output_path', self.excel_file)
             )
             outcome_kwargs = {
                 "excel_file": result_path,
@@ -1509,7 +1593,7 @@ class ExportDialog(QDialog):
                 self.on_export_canceled()
                 return
             if getattr(self, 'loading_dialog', None) is not None:
-                self.loading_dialog.accept()
+                self._dismiss_loading_progress()
             self.export_button.setEnabled(True)
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)

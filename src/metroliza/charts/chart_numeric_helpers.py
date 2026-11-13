@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 import math
+import sys
 
 import numpy as np
 
@@ -50,7 +51,81 @@ def _raw_numeric_items(values: Any) -> list[Any]:
         return [values]
 
 
+def _plain_numeric_state(value: Any, *, allowed: set[str] | None = None) -> dict[str, Any] | None:
+    state = vars(value)
+    # Validate keys before any lookup: even an exact dict can contain custom
+    # keys whose equality/hash callbacks would be new work before fallback.
+    if type(state) is not dict or any(type(key) is not str for key in state):
+        return None
+    if allowed is not None and any(key not in allowed for key in state):
+        return None
+    return state
+
+
+def _native_numeric_axis(axis: Any) -> bool:
+    pandas = sys.modules["pandas"]
+    if type(axis) not in (pandas.RangeIndex, pandas.Index):
+        return False
+    state = _plain_numeric_state(axis)
+    if state is None:
+        return False
+    # list(Series) also requests a length hint. Only bypass the original
+    # axis length read when its native implementation has native storage.
+    if type(axis) is pandas.RangeIndex:
+        return type(dict.get(state, "_range")) is range
+    return type(dict.get(state, "_data")) is np.ndarray
+
+
+def _native_numeric_manager_array(manager: Any) -> np.ndarray | None:
+    from pandas.core.internals.blocks import NumpyBlock
+    from pandas.core.internals.managers import SingleBlockManager
+
+    if type(manager) is not SingleBlockManager:
+        return None
+    state = _plain_numeric_state(manager, allowed={"axes", "blocks", "_block",
+                                                  "_known_consolidated", "_is_consolidated"})
+    if state is None:
+        return None
+    axes, blocks = dict.get(state, "axes"), dict.get(state, "blocks")
+    if type(axes) is not list or type(blocks) is not tuple:
+        return None
+    if len(axes) != 1 or len(blocks) != 1:
+        return None
+    if not _native_numeric_axis(axes[0]):
+        return None
+    block = blocks[0]
+    if type(block) is not NumpyBlock or dict.get(state, "_block", block) is not block:
+        return None
+    # Native block.values is a storage descriptor. Do not dispatch manager
+    # dtype/internal_values or Series._values while establishing eligibility.
+    array = block.values
+    return array if type(array) is np.ndarray else None
+
+
+def _native_numeric_series_array(values: Any) -> np.ndarray | None:
+    pandas = sys.modules.get("pandas")
+    if pandas is None or type(values) is not getattr(pandas, "Series", None):
+        return None
+    state = _plain_numeric_state(values)
+    if state is None:
+        return None
+    return _native_numeric_manager_array(dict.get(state, "_mgr"))
+
+
+def _finite_float64_array(values: Any) -> np.ndarray | None:
+    # Unsupported raw storage declines before dtype/backing-array dispatch;
+    # the original scalar path retains all of its reads, warnings and errors.
+    array = values if type(values) is np.ndarray else _native_numeric_series_array(values)
+    if array is None or array.dtype != np.dtype(float):
+        return None
+    flat = array.reshape(-1)
+    return flat[np.isfinite(flat)]
+
+
 def finite_float_list(values: Any) -> list[float]:
+    array = _finite_float64_array(values)
+    if array is not None:
+        return array.tolist()
     output: list[float] = []
     for value in _raw_numeric_items(values):
         number = as_finite_float(value)
@@ -60,6 +135,9 @@ def finite_float_list(values: Any) -> list[float]:
 
 
 def finite_array(values: Iterable[Any] | Any) -> np.ndarray:
+    array = _finite_float64_array(values)
+    if array is not None:
+        return array
     return np.asarray(finite_float_list(values), dtype=float)
 
 

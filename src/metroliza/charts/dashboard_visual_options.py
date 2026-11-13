@@ -916,6 +916,7 @@ def build_dashboard_visual_preview_spec(
         title="Dashboard visual preview",
         theme=theme,
         static=False,
+        preview_only=True,
     )
     if spec and plotly_settings:
         apply_dashboard_visual_settings(

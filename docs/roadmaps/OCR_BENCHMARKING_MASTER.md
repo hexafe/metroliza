@@ -156,9 +156,13 @@ Implemented:
   - `scripts/benchmark_header_ocr_modes.py --manifest <LOCAL_CORPUS_MANIFEST_JSON>`.
 - OpenVINO tuning matrix helper:
   - `scripts/benchmark_openvino_tuning_matrix.py`.
-- OpenVINO is included in packaged OCR requirements and packaging config:
-  - `requirements-ocr.txt`,
-  - PyInstaller spec,
+- OpenVINO is dev/benchmark only (#1097): user builds do not ship it, and
+  `METROLIZA_HEADER_OCR_ENGINE=openvino` there reports
+  `header_ocr_engine_unavailable:openvino`. It remains available in a source
+  environment (`requirements-ocr-benchmark.txt`) and in the explicit
+  `METROLIZA_BUILD_FLAVOR=benchmark` build:
+  - `requirements-ocr-benchmark.txt`,
+  - PyInstaller spec / `packaging/pyinstaller_common.py`,
   - Nuitka helper,
   - packaged OCR validator,
   - third-party notices,

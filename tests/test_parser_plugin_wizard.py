@@ -1,14 +1,24 @@
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
+from threading import Event, get_ident
 from unittest.mock import patch
 
 import yaml
 
 from metroliza.parsing.pdf_backend import require_pdf_backend
+from metroliza.parsing.parser_profile_handoff import write_profile_validation_artifact
+from metroliza.parsing import parser_profile_handoff as handoff_service
 
 try:
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication
 
     from metroliza.ui.parser_plugin_wizard import (
@@ -17,6 +27,7 @@ try:
         safe_profile_id,
         summarize_profile_store,
     )
+    from metroliza.ui import detached_threads
     from modules.main_window import MainWindow
 except ImportError as exc:  # pragma: no cover - environment-dependent import
     QApplication = None
@@ -41,12 +52,299 @@ def _write_pdf_text(path: Path, text: str) -> None:
         document.close()
 
 
+def _wait_validation(dialog):
+    deadline = monotonic() + 10
+    while getattr(dialog, "_validation_thread", None) is not None and monotonic() < deadline:
+        QTest.qWait(5)
+    assert getattr(dialog, "_validation_thread", None) is None
+
+
+def _wait_until(predicate):
+    deadline = monotonic() + 10
+    while not predicate() and monotonic() < deadline:
+        QTest.qWait(5)
+    assert predicate()
+
+
+class _FixedClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 1, 5, 12, tzinfo=timezone.utc).astimezone(tz)
+
+
 class TestParserPluginWizard(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if PYQT_IMPORT_ERROR is not None:
             raise unittest.SkipTest(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_validation_artifact_and_status_match_original_service_literally(self):
+        # The unchanged service is the independent synchronous oracle. Compare the
+        # complete artifact at the same workspace, with the parser clock fixed.
+        with tempfile.TemporaryDirectory() as home_dir, patch(
+            "metroliza.parsing.declarative_parser_profiles.datetime", _FixedClock
+        ):
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            try:
+                dialog.plugin_id_edit.setText("literal_case")
+                dialog.create_handoff_workspace()
+                workspace = dialog.last_handoff_workspace
+                original_profile = workspace.profile_path.read_bytes()
+                workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+                for profile in (original_profile, b"{}\n", b"plugin: [\n"):
+                    with self.subTest(profile=profile):
+                        workspace.profile_path.write_bytes(profile)
+                        output, passed = write_profile_validation_artifact(workspace)
+                        self.assertIs(passed, profile == original_profile)
+                        expected_bytes = output.read_bytes()
+                        output.unlink()
+                        dialog.validate_handoff_profile()
+                        _wait_validation(dialog)
+                        self.assertEqual(output.read_bytes(), expected_bytes)
+                        self.assertEqual(
+                            dialog.result_label.text(),
+                            f"Validation {'passed' if passed else 'failed'}. Evidence: {output}",
+                        )
+                        self.assertEqual(dialog.result_label.property("statusVariant"), "success" if passed else "warning")
+            finally:
+                dialog.close()
+
+    def test_default_validation_worker_repeat_stale_close_error_and_cleanup(self):
+        original = handoff_service.validate_profile_handoff
+        for outcome in ("success", "delayed", "error", "stale", "close", "accept", "reject", "delete"):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as home_dir:
+                dialog = ParserPluginWizardDialog(home=Path(home_dir))
+                dialog.create_handoff_workspace()
+                workspace = dialog.last_handoff_workspace
+                workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+                entered, release = Event(), Event()
+                calls = []
+
+                def validate(request):
+                    calls.append((get_ident(), request))
+                    entered.set()
+                    if not release.wait(5):
+                        raise TimeoutError("validation control expired")
+                    if outcome == "error":
+                        raise ValueError("synthetic validation failure")
+                    return original(request)
+
+                with patch.object(handoff_service, "validate_profile_handoff", validate):
+                    try:
+                        with patch("metroliza.ui.parser_plugin_wizard.monotonic",
+                                   return_value=monotonic() - (2 if outcome == "delayed" else 0)):
+                            dialog.validate_handoff_profile()
+                        thread = dialog._validation_thread
+                        _wait_until(entered.is_set)
+                        self.assertNotEqual(calls[0][0], get_ident())
+                        self.assertIs(calls[0][1], thread.workspace)
+                        self.assertIsNot(thread.workspace, workspace)
+                        self.assertFalse(dialog.validate_button.isEnabled())
+                        self.assertEqual(dialog._validation_progress.isVisible(), outcome == "delayed")
+                        self.assertEqual(dialog._validation_progress._delayed_show_timer.isActive(), outcome != "delayed")
+                        dialog.validate_handoff_profile()
+                        self.assertIs(dialog._validation_thread, thread)
+                        self.assertEqual(len(calls), 1)
+                        if outcome == "stale":
+                            dialog.plugin_id_edit.setText("replacement")
+                            dialog.create_handoff_workspace()
+                        elif outcome in ("close", "accept", "reject"):
+                            getattr(dialog, outcome)()
+                        elif outcome == "delete":
+                            dialog.deleteLater()
+                            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+                            self.assertTrue(sip.isdeleted(dialog))
+                        label = None if outcome == "delete" else dialog.result_label.text()
+                    finally:
+                        release.set()
+                        _wait_until(lambda: sip.isdeleted(thread))
+                    self.assertNotIn(thread, detached_threads.running_threads())
+                    if outcome == "delete":
+                        self.assertTrue((workspace.root / "artifacts" / "profile_validation.txt").is_file())
+                        continue
+                    self.assertIsNone(dialog._validation_thread)
+                    self.assertIsNone(dialog._validation_progress)
+                    self.assertTrue(dialog.validate_button.isEnabled())
+                    if outcome == "error":
+                        self.assertEqual(dialog.result_label.text(), "synthetic validation failure")
+                        self.assertEqual(dialog.result_label.property("statusVariant"), "warning")
+                    elif outcome in ("success", "delayed"):
+                        self.assertEqual(dialog.result_label.text(),
+                                         f"Validation passed. Evidence: {workspace.root / 'artifacts/profile_validation.txt'}")
+                    else:
+                        self.assertEqual(dialog.result_label.text(), label)
+                    dialog.close()
+
+    def test_validation_custom_dispatch_stays_synchronous_and_propagates(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            dialog.create_handoff_workspace()
+            workspace = dialog.last_handoff_workspace
+            output = workspace.root / "custom.txt"
+            with patch("metroliza.ui.parser_plugin_wizard.write_profile_validation_artifact",
+                       return_value=(output, False)) as writer:
+                dialog.validate_handoff_profile()
+                writer.assert_called_once_with(workspace)
+                self.assertIsNone(dialog._validation_thread)
+                self.assertEqual(dialog.result_label.text(), f"Validation failed. Evidence: {output}")
+            with patch("metroliza.ui.parser_plugin_wizard.write_profile_validation_artifact",
+                       side_effect=ValueError("custom writer failed")):
+                with self.assertRaisesRegex(ValueError, "custom writer failed"):
+                    dialog.validate_handoff_profile()
+            # Exact-type rejection precedes any new metadata-key equality callback.
+            class Key(str):
+                def __eq__(self, other):
+                    raise AssertionError("custom key equality was consumed")
+
+                __hash__ = str.__hash__
+
+            workspace.__dict__[Key("unexpected")] = object()
+            workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+            dialog.validate_handoff_profile()
+            self.assertIsNone(dialog._validation_thread)
+            self.assertIn("Validation passed", dialog.result_label.text())
+            dialog.close()
+
+    def test_custom_workspace_getter_retains_one_synchronous_dispatch(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            dialog.create_handoff_workspace()
+            workspace = dialog.last_handoff_workspace
+            workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+            calls = []
+
+            def getter():
+                calls.append("workspace")
+                return workspace
+
+            dialog._current_workspace = getter
+            dialog.validate_handoff_profile()
+            self.assertEqual(calls, ["workspace"])
+            self.assertIsNone(dialog._validation_thread)
+            self.assertEqual(dialog.result_label.text(),
+                             f"Validation passed. Evidence: {workspace.root / 'artifacts/profile_validation.txt'}")
+            dialog.close()
+
+    def test_path_metaclass_declines_without_equality_hash_or_copy_callbacks(self):
+        from pathlib import PosixPath
+        for raising in (False, True):
+            observations = []
+
+            class PathMeta(type):
+                def __eq__(cls, other):
+                    observations.append("equality")
+                    if raising:
+                        raise AssertionError("path metaclass equality")
+                    return False
+
+                def __hash__(cls):
+                    observations.append("hash")
+                    raise AssertionError("path metaclass hash")
+
+            class CustomPath(PosixPath, metaclass=PathMeta):
+                def __copy__(self):
+                    observations.append("copy")
+                    raise AssertionError("path copy")
+
+            with self.subTest(raising=raising), tempfile.TemporaryDirectory() as home_dir, patch(
+                "metroliza.parsing.declarative_parser_profiles.datetime", _FixedClock,
+            ):
+                dialog = ParserPluginWizardDialog(home=Path(home_dir))
+                try:
+                    dialog.create_handoff_workspace()
+                    workspace = dialog.last_handoff_workspace
+                    workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+                    workspace = type(workspace)(workspace.root, workspace.profile_path,
+                                                CustomPath(workspace.handoff_path), workspace.expected_results_path)
+                    dialog.last_handoff_workspace = workspace
+                    output, passed = write_profile_validation_artifact(workspace)
+                    expected = output.read_bytes()
+                    observations.clear()
+                    dialog.validate_handoff_profile()
+                    self.assertEqual(observations, [])
+                    self.assertIsNone(getattr(dialog, "_validation_thread", None))
+                    self.assertEqual(output.read_bytes(), expected)
+                    self.assertEqual(dialog.result_label.text(),
+                                     f"Validation {'passed' if passed else 'failed'}. Evidence: {output}")
+                finally:
+                    dialog.close()
+
+    def test_validation_start_failure_releases_controls_and_thread(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            dialog.create_handoff_workspace()
+            with patch("metroliza.ui.parser_plugin_wizard._ProfileValidationThread.start",
+                       side_effect=RuntimeError("synthetic start failure")):
+                with self.assertRaisesRegex(RuntimeError, "synthetic start failure"):
+                    dialog.validate_handoff_profile()
+            self.assertIsNone(dialog._validation_thread)
+            self.assertIsNone(dialog._validation_progress)
+            self.assertTrue(dialog.validate_button.isEnabled())
+            self.assertFalse(detached_threads.running_threads())
+            dialog.close()
+
+    def test_native_application_quit_finishes_started_validation_with_identical_artifact(self):
+        script = r'''
+import sys
+from pathlib import Path
+from threading import Event, Timer
+from time import monotonic
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QApplication
+from metroliza.app.gc_policy import install
+from metroliza.parsing import parser_profile_handoff as service
+from metroliza.ui import detached_threads
+from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
+app = QApplication([]); install(app); app.setQuitOnLastWindowClosed(False)
+dialog = ParserPluginWizardDialog(home=Path(sys.argv[1])); dialog.create_handoff_workspace()
+workspace = dialog.last_handoff_workspace
+workspace.expected_results_path.write_text("sample_file,reference\n", encoding="utf-8")
+output, passed = service.write_profile_validation_artifact(workspace)
+assert passed
+expected = output.read_bytes(); output.unlink()
+entered, release = Event(), Event()
+original = service.validate_profile_handoff
+def validate(request):
+    entered.set()
+    assert release.wait(9), "native control expired"
+    return original(request)
+service.validate_profile_handoff = validate
+def quit_after_start():
+    if not entered.is_set():
+        QTimer.singleShot(5, quit_after_start); return
+    assert dialog._validation_thread.isRunning()
+    assert detached_threads._QUIT_BLOCKERS[id(dialog._validation_thread)] is dialog._validation_thread
+    print("actual validation work started", flush=True)
+    Timer(5.2, release.set).start()
+    app.quit()
+closed, beats = [], []
+original_finish = ParserPluginWizardDialog._finish_validation
+def finish(owner, worker):
+    original_finish(owner, worker)
+    assert owner._validation_thread is None and "Validation passed" in owner.result_label.text()
+    assert owner.close()
+    closed.append(1)
+    app.quit()
+ParserPluginWizardDialog._finish_validation = finish
+heartbeat = QTimer(); heartbeat.timeout.connect(lambda: beats.append(1)); heartbeat.start(10)
+started = monotonic()
+QTimer.singleShot(12000, lambda: app.exit(99))
+QTimer.singleShot(0, dialog.validate_handoff_profile)
+QTimer.singleShot(5, quit_after_start)
+assert app.exec() == 0
+assert closed == [1] and monotonic() - started > 5 and len(beats) > 100
+assert entered.is_set() and release.is_set()
+assert not detached_threads.running_threads()
+assert output.read_bytes() == expected
+print("STARTED -> QUIT -> FINISHED; artifact identical", len(expected), len(beats), flush=True)
+'''
+        with tempfile.TemporaryDirectory() as home_dir:
+            child = subprocess.run([sys.executable, "-c", script, home_dir], capture_output=True, text=True, timeout=20)
+        print("wizard actual child exit", child.returncode, child.stdout, child.stderr)
+        self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+        self.assertIn("STARTED -> QUIT -> FINISHED; artifact identical", child.stdout)
+        self.assertNotIn("QWaitCondition", child.stderr)
 
     def test_safe_profile_id_creates_parser_slug(self):
         self.assertEqual(safe_profile_id("Supplier Alpha v2"), "supplier_alpha_v2")
@@ -159,6 +457,7 @@ class TestParserPluginWizard(unittest.TestCase):
                 )
 
                 dialog.validate_handoff_profile()
+                _wait_validation(dialog)
                 self.assertIn("Validation failed", dialog.result_label.text())
                 self.assertTrue(
                     (dialog.last_handoff_workspace.root / "artifacts" / "profile_validation.txt").is_file()
@@ -252,3 +551,13 @@ class TestParserPluginWizard(unittest.TestCase):
             self.assertEqual(window.parser_plugin_wizard_dialog.activate_calls, 1)
         finally:
             window.close()
+
+
+def test_stale_completion_identity_preserves_current_request():
+    from types import SimpleNamespace
+    from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
+
+    current, stale = object(), object()
+    owner = SimpleNamespace(_validation_thread=current)
+    ParserPluginWizardDialog._finish_validation(owner, stale)
+    assert owner._validation_thread is current

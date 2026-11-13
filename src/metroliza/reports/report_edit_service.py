@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from metroliza.reports.db import quote_identifier, run_transaction_with_retry
-from metroliza.reports.report_repository import ReportRepository
+from metroliza.reports.report_repository import ReportRepository, validate_manual_number
 
 
 SQLStatement = tuple[str, tuple[Any, ...]]
@@ -64,7 +64,7 @@ class ReportEditService:
         report_updates: Iterable[RecordUpdate] = (),
         measurement_updates: Iterable[RecordUpdate] = (),
     ) -> None:
-        """Apply edits with the existing normalization/repository transaction boundary."""
+        """Apply the entire confirmed edit batch as one retryable transaction."""
 
         normalized_flavor = self._validate_storage_flavor(storage_flavor)
         normalized_report_updates = self._normalize_record_updates(report_updates)
@@ -72,6 +72,10 @@ class ReportEditService:
         statements = self.build_normalization_update_statements(
             normalized_flavor,
             normalization_changes,
+        )
+        normalized_measurement_updates = tuple(
+            (record_id, self._validate_measurement_numbers(fields))
+            for record_id, fields in normalized_measurement_updates
         )
 
         repository = None
@@ -90,18 +94,41 @@ class ReportEditService:
                 normalized_measurement_updates,
             )
 
-        if statements:
-            run_transaction_with_retry(
-                self.database,
-                lambda cursor: self.apply_update_statements(cursor, statements),
-            )
+        def apply_batch(cursor):
+            cursor.execute("BEGIN IMMEDIATE")
+            self.apply_update_statements(cursor, statements)
+            if repository is None:
+                return
+            if isinstance(repository, ReportRepository):
+                old_connection, old_join = repository.connection, repository.join_edit_transaction
+                repository.connection, repository.join_edit_transaction = cursor.connection, True
+                try:
+                    self.apply_record_updates(repository, normalized_report_updates, normalized_measurement_updates)
+                finally:
+                    repository.connection, repository.join_edit_transaction = old_connection, old_join
+            else:
+                self.apply_record_updates(repository, normalized_report_updates, normalized_measurement_updates)
 
-        if repository is not None:
-            self.apply_record_updates(
-                repository,
-                normalized_report_updates,
-                normalized_measurement_updates,
-            )
+        if statements or repository is not None:
+            if not statements and repository is not None and not isinstance(repository, ReportRepository):
+                # Custom adapters retain their own storage contract and dispatch hooks.
+                self.apply_record_updates(repository, normalized_report_updates, normalized_measurement_updates)
+                return
+            run_transaction_with_retry(self.database, apply_batch)
+
+    @staticmethod
+    def _validate_measurement_numbers(fields):
+        normalized = dict(fields)
+        for field in {"nominal", "tol_plus", "tol_minus", "bonus", "meas", "dev", "outtol"}.intersection(fields):
+            normalized[field] = validate_manual_number(fields[field])
+        for field in {"page_number", "row_order"}.intersection(fields):
+            normalized[field] = validate_manual_number(fields[field], integer=True)
+        if "status_code" in fields:
+            # Validate the whole batch before the first mutation where possible.
+            normalized["status_code"] = ReportRepository._prepare_measurement_field_updates(
+                {"status_code": fields["status_code"]}
+            )["status_code"]
+        return normalized
 
     @staticmethod
     def _validate_storage_flavor(storage_flavor: str) -> str:

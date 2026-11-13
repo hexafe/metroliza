@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.stats import shapiro
 from datetime import datetime
 import math
 import re
@@ -7,12 +6,10 @@ import textwrap
 from typing import Any
 
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
-from metroliza.analytics.distribution_fit_service import (
-    build_fit_curve_payload,
-    compute_estimated_tail_metrics as compute_fit_tail_metrics,
-    resolve_density_curve_sampling as _resolve_density_curve_sampling,
-)
 
+# ``metroliza.analytics.distribution_fit_service`` and ``scipy.stats`` are imported
+# lazily inside the helpers below: they cost ~0.7 s at import time and the
+# industrial analytics UI only needs ``resolve_histogram_bin_count`` at startup.
 from metroliza.shared.stats_utils import compute_capability_confidence_intervals, is_one_sided_geometric_tolerance, safe_process_capability
 
 
@@ -31,6 +28,11 @@ def _is_missing_value(value: Any) -> bool:
 
 
 def _to_numeric_array(values) -> np.ndarray:
+    if (
+        type(values) is np.ndarray and values.ndim == 1
+        and values.dtype in (np.dtype('float16'), np.dtype('float32'), np.dtype('float64'))
+    ):
+        return values[np.isfinite(values)].astype(float, copy=False)
     numeric_values = []
     for value in values:
         if _is_missing_value(value):
@@ -61,6 +63,10 @@ def _first_column_value(table, column_name: str) -> Any:
 
 def resolve_density_curve_sampling(sample_size, *, requested_point_count=100):
     """Backward-compatible export of canonical density sampling policy."""
+    from metroliza.analytics.distribution_fit_service import (
+        resolve_density_curve_sampling as _resolve_density_curve_sampling,
+    )
+
     return _resolve_density_curve_sampling(
         sample_size,
         requested_point_count=requested_point_count,
@@ -214,6 +220,10 @@ def compute_measurement_summary(header_group, usl: float, lsl: float, nom: float
 
 def compute_estimated_tail_metrics(distribution_fit_result, *, lsl=None, usl=None):
     """Adapter layer for export summary consumers of canonical fit metrics."""
+    from metroliza.analytics.distribution_fit_service import (
+        compute_estimated_tail_metrics as compute_fit_tail_metrics,
+    )
+
     return compute_fit_tail_metrics(distribution_fit_result, lsl=lsl, usl=usl)
 
 
@@ -244,6 +254,8 @@ def compute_normality_status(measurements, *, one_sided=False, location_bound=No
         return unknown_payload
 
     try:
+        from scipy.stats import shapiro
+
         _statistic, p_value = shapiro(numeric_measurements)
     except Exception:
         return unknown_payload
@@ -301,6 +313,8 @@ def build_trend_plot_payload(header_group, *, grouping_active=False, label_colum
 
 def build_histogram_density_curve_payload(measurements, point_count=100, *, mode='normal_fit', distribution_fit_result=None):
     """Adapter layer for histogram overlay payload formatting."""
+    from metroliza.analytics.distribution_fit_service import build_fit_curve_payload
+
     return build_fit_curve_payload(
         measurements,
         point_count=point_count,

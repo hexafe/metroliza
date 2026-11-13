@@ -103,6 +103,22 @@ class TestHelpMenu(unittest.TestCase):
             self.help_menu.DEFAULT_RELEASE_DOCS_REF,
         )
 
+    def test_default_docs_ref_is_an_immutable_commit(self):
+        ref = self.help_menu.DEFAULT_RELEASE_DOCS_REF
+        self.assertTrue(self.help_menu.is_immutable_docs_ref(ref), ref)
+        self.assertIn(f'/blob/{ref}/docs/user_manual/', self.help_menu.manual_url('parsing'))
+        for moving_ref in ('master', 'develop', 'release/2026.09-rc1', ref[:12], ref.upper(), f'{ref}0'):
+            with self.subTest(ref=moving_ref):
+                self.assertFalse(self.help_menu.is_immutable_docs_ref(moving_ref))
+
+    def test_blank_environment_override_falls_back_to_pinned_ref(self):
+        with patch.dict(os.environ, {'METROLIZA_RELEASE_DOCS_REF': '  '}, clear=False):
+            self.assertEqual(self.help_menu.current_release_docs_ref(), self.help_menu.DEFAULT_RELEASE_DOCS_REF)
+            self.assertIn(
+                f'/blob/{self.help_menu.DEFAULT_RELEASE_DOCS_REF}/',
+                self.help_menu.github_blob_url('docs/user_manual/main_window.md'),
+            )
+
     def test_docs_ref_can_be_overridden_by_environment(self):
         sys.modules.pop('modules.help_menu', None)
         sys.modules.pop('metroliza.ui.help_menu', None)

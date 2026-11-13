@@ -114,7 +114,9 @@ Read-only **MEASUREMENT_ID** and **REPORT_ID** columns identify the measurement 
 
 Changing **OUTTOL** or **STATUS_CODE** refreshes the stored NOK/status summary for the owning report.
 
-The report and measurement tabs also include a search field above the table.
+The report and measurement tabs also include a search field above the table. The search matches the current text of every column (including cells you have edited but not applied) and updates shortly after you stop typing.
+
+These two tabs load their rows the first time you open them, so a large database opens immediately. A progress bar shows while the rows are being read.
 
 ## How editing works
 

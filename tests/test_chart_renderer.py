@@ -43,6 +43,44 @@ def _decode_png_shape(payload: bytes) -> tuple[int, int]:
     return int(arr.shape[0]), int(arr.shape[1])
 
 
+@pytest.mark.parametrize('families', [['DejaVu Sans'], ['DejaVu Sans', 'DejaVu Serif']])
+def test_resolved_font_cache_preserves_files_and_fallback_order(families):
+    from matplotlib import font_manager
+    from modules.chart_renderer import _resolved_font_properties, _text_render_context
+
+    properties = font_manager.FontProperties(family=families, size=8.4, weight='bold')
+    manager = font_manager.fontManager
+    expected = manager._find_fonts_by_props(properties)
+    context = _text_render_context()
+    _resolved_font_properties.cache_clear()
+    with mock.patch.object(manager, '_find_fonts_by_props', wraps=manager._find_fonts_by_props) as find:
+        first = _resolved_font_properties(properties.copy(), context)
+        second = _resolved_font_properties(properties.copy(), context)
+        assert find.call_count == 1
+    assert first is second
+    assert manager._find_fonts_by_props(first) == expected
+    assert properties.get_file() is None  # The caller's mutable properties stay independent.
+    if len(families) > 1:
+        assert first.get_file() is None
+
+
+@pytest.mark.parametrize('mode', ['workbook', 'clipped'])
+def test_savefig_optimization_preserves_exact_rgba(mode):
+    from modules.chart_renderer import _savefig_bytes
+
+    fig, ax = plt.subplots(figsize=(3, 2))
+    try:
+        ax.plot([0, 1, 2], [0, 1, 0])
+        ax.set_title('Synthetic μ / two\nlines')
+        expected = BytesIO()
+        kwargs = {'bbox_inches': 'tight'} if mode == 'clipped' else {}
+        fig.savefig(expected, format='png', dpi=150, **kwargs)
+        actual = _savefig_bytes(fig, mode=mode)
+        assert np.array_equal(plt.imread(BytesIO(actual)), plt.imread(BytesIO(expected.getvalue())))
+    finally:
+        plt.close(fig)
+
+
 def _attach_histogram_resolved_spec(payload):
     payload["resolved_render_spec"] = histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
     return payload
@@ -901,3 +939,26 @@ def test_native_histogram_renderer_uses_real_extension_when_available():
         assert result.backend == "native"
         assert isinstance(result.png_bytes, bytes)
         assert len(result.png_bytes) > 0
+
+
+@pytest.mark.parametrize('failure', ['none', 'exception'])
+def test_plotstats_public_payload_attempt_returns_none_on_failure(failure):
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    with mock.patch.object(
+        adapter, 'render_chart_artifact_png', return_value=None,
+        side_effect=RuntimeError('unavailable') if failure == 'exception' else None,
+    ):
+        assert PlotstatsChartRenderer().try_render_payload_png({'type': 'trend'}) is None
+
+
+def test_plotstats_public_payload_attempt_preserves_png_and_backend():
+    from metroliza.charts import hexafe_plotstats_adapter as adapter
+
+    rendered = type('Artifact', (), {'png_bytes': b'literal-png'})()
+    payload = {'type': 'iqr'}
+    with mock.patch.object(adapter, 'render_chart_artifact_png', return_value=rendered) as render:
+        result = PlotstatsChartRenderer().try_render_payload_png(payload)
+    assert result.png_bytes == b'literal-png'
+    assert result.backend == 'plotstats'
+    render.assert_called_once_with(payload, target='workbook_image', backend='auto')

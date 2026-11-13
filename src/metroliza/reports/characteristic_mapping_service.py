@@ -113,11 +113,12 @@ def _is_missing_measurement_source_error(exc: sqlite3.OperationalError) -> bool:
 
 
 def _metric_source_cte(source_sql: str) -> str:
+    materialization = ' MATERIALIZED' if sqlite3.sqlite_version_info >= (3, 35, 0) else ''
     return f"""
         WITH measurement_source AS (
             {source_sql}
         ),
-        metric_source AS (
+        metric_source AS{materialization} (
             SELECT
                 {_METRIC_IDENTITY_SQL} AS metric_name,
                 {_REFERENCE_SQL} AS reference,
@@ -126,41 +127,6 @@ def _metric_source_cte(source_sql: str) -> str:
             FROM measurement_source
         )
     """
-
-
-def _fetch_sample_references(
-    db_path: str,
-    source_sql: str,
-    metric_name: str,
-    *,
-    sample_reference_limit: int,
-    connection: sqlite3.Connection | None = None,
-) -> list[str]:
-    limit = max(0, int(sample_reference_limit or 0))
-    if limit == 0:
-        return []
-
-    try:
-        rows = execute_with_retry(
-            db_path,
-            f"""
-            {_metric_source_cte(source_sql)}
-            SELECT reference
-            FROM metric_source
-            WHERE metric_name = ?
-              AND reference IS NOT NULL
-            GROUP BY reference
-            ORDER BY LOWER(reference), reference
-            LIMIT ?
-            """,
-            params=(metric_name, limit),
-            connection=connection,
-        )
-    except sqlite3.OperationalError as exc:
-        if _is_missing_measurement_source_error(exc):
-            return []
-        raise
-    return [str(row[0]) for row in rows]
 
 
 def fetch_distinct_report_metric_names(
@@ -174,26 +140,60 @@ def fetch_distinct_report_metric_names(
     Metric identity follows export/group-analysis behavior: ``HEADER - AX`` when
     both ``HEADER`` and ``AX`` are non-empty after trimming, otherwise ``HEADER``.
     Blank metric identities are excluded from the result.
+
+    Counts and the first ``sample_reference_limit`` references per metric (ordered
+    by ``LOWER(reference), reference``) are read in one statement, so the
+    metric source is materialized once on SQLite 3.35+, regardless of the number
+    of metrics. Older SQLite versions retain the general query plan.
     """
     source_sql = _measurement_source_sql(db_path, connection=connection)
     if source_sql is None:
         return []
 
+    limit = max(0, int(sample_reference_limit or 0))
     try:
         rows = execute_with_retry(
             db_path,
             f"""
             {_metric_source_cte(source_sql)}
+            , metric_counts AS (
+                SELECT
+                    metric_name,
+                    COUNT(*) AS measurement_count,
+                    COUNT(DISTINCT report_id) AS report_count,
+                    COUNT(DISTINCT reference) AS reference_count
+                FROM metric_source
+                WHERE metric_name <> ''
+                GROUP BY metric_name
+            ),
+            ranked_references AS (
+                SELECT
+                    metric_name,
+                    reference,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY metric_name
+                        ORDER BY LOWER(reference), reference
+                    ) AS reference_rank
+                FROM (
+                    SELECT DISTINCT metric_name, reference
+                    FROM metric_source
+                    WHERE metric_name <> ''
+                      AND reference IS NOT NULL
+                )
+            )
             SELECT
-                metric_name,
-                COUNT(*) AS measurement_count,
-                COUNT(DISTINCT report_id) AS report_count,
-                COUNT(DISTINCT reference) AS reference_count
-            FROM metric_source
-            WHERE metric_name <> ''
-            GROUP BY metric_name
-            ORDER BY LOWER(metric_name), metric_name
+                counts.metric_name,
+                counts.measurement_count,
+                counts.report_count,
+                counts.reference_count,
+                ranked.reference
+            FROM metric_counts AS counts
+            LEFT JOIN ranked_references AS ranked
+              ON ranked.metric_name = counts.metric_name
+             AND ranked.reference_rank <= ?
+            ORDER BY LOWER(counts.metric_name), counts.metric_name, ranked.reference_rank
             """,
+            params=(limit,),
             connection=connection,
         )
     except sqlite3.OperationalError as exc:
@@ -201,22 +201,23 @@ def fetch_distinct_report_metric_names(
             return []
         raise
 
-    return [
-        {
-            'metric_name': str(metric_name),
-            'measurement_count': int(measurement_count or 0),
-            'report_count': int(report_count or 0),
-            'reference_count': int(reference_count or 0),
-            'sample_references': _fetch_sample_references(
-                db_path,
-                source_sql,
-                str(metric_name),
-                sample_reference_limit=sample_reference_limit,
-                connection=connection,
-            ),
-        }
-        for metric_name, measurement_count, report_count, reference_count in rows
-    ]
+    metrics: list[dict[str, object]] = []
+    previous_metric_name: object = None
+    for metric_name, measurement_count, report_count, reference_count, reference in rows:
+        if not metrics or metric_name != previous_metric_name:
+            previous_metric_name = metric_name
+            metrics.append(
+                {
+                    'metric_name': str(metric_name),
+                    'measurement_count': int(measurement_count or 0),
+                    'report_count': int(report_count or 0),
+                    'reference_count': int(reference_count or 0),
+                    'sample_references': [],
+                }
+            )
+        if reference is not None:
+            metrics[-1]['sample_references'].append(str(reference))
+    return metrics
 
 
 def fetch_distinct_references(

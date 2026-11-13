@@ -10,11 +10,30 @@ from __future__ import annotations
 from collections import OrderedDict
 from concurrent.futures import Future
 from dataclasses import dataclass
-from queue import Queue
-from threading import Thread
+from queue import Full, Queue
+from threading import Condition, Thread
+import time
 from typing import Any, Callable
+from weakref import WeakSet
 
 import numpy as np
+
+_POOLS: WeakSet = WeakSet()
+
+
+def shutdown(*, deadline: float) -> bool:
+    """Request all existing pools to stop, then join within a monotonic deadline.
+
+    The GUI exit path must retain Qt if any work is still running. Ordinary
+    export completion continues to use the pool's existing ``wait=True`` API.
+    """
+    pools = tuple(_POOLS)
+    for pool in pools:
+        pool.shutdown(wait=False)
+    for pool in pools:
+        for worker in pool._threads:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
+    return not any(worker.is_alive() for pool in pools for worker in pool._threads)
 
 
 @dataclass(frozen=True)
@@ -374,6 +393,8 @@ class BoundedWorkerPool:
         self._queue: Queue[tuple[Future, Callable[..., Any], tuple[Any, ...], dict[str, Any]] | None] = Queue(maxsize=max(1, int(max_queue_size)))
         self._threads: list[Thread] = []
         self._closed = False
+        self._admission = Condition()
+        _POOLS.add(self)
         for idx in range(self._max_workers):
             worker = Thread(target=self._worker_loop, name=f'chart-worker-{idx}', daemon=True)
             worker.start()
@@ -394,14 +415,21 @@ class BoundedWorkerPool:
             RuntimeError: If called after shutdown has begun.
 
         Notes:
-            Submission uses a blocking queue ``put`` to enforce backpressure when
-            the queue is full.
+            Submission waits for queue space under the admission condition.
+            Shutdown wakes waiting submitters so they fail instead of waiting
+            behind a sentinel after the workers have exited.
         """
 
-        if self._closed:
-            raise RuntimeError('Worker pool is closed.')
         future: Future = Future()
-        self._queue.put((future, fn, args, kwargs), block=True)
+        with self._admission:
+            while True:
+                if self._closed:
+                    raise RuntimeError('Worker pool is closed.')
+                try:
+                    self._queue.put_nowait((future, fn, args, kwargs))
+                    break
+                except Full:
+                    self._admission.wait()
         return future
 
     def _worker_loop(self):
@@ -409,12 +437,17 @@ class BoundedWorkerPool:
 
         while True:
             item = self._queue.get()
+            with self._admission:
+                self._admission.notify_all()
             if item is None:
                 self._queue.task_done()
+                self._wake_shutdown()
                 return
             future, fn, args, kwargs = item
             if not future.set_running_or_notify_cancel():
                 self._queue.task_done()
+                if self._closed:
+                    self._wake_shutdown()
                 continue
             try:
                 result = fn(*args, **kwargs)
@@ -424,6 +457,16 @@ class BoundedWorkerPool:
                 future.set_result(result)
             finally:
                 self._queue.task_done()
+                if self._closed:
+                    self._wake_shutdown()
+
+    def _wake_shutdown(self):
+        # One sentinel can wake every idle worker by being passed on at exit.
+        # If the queue is full, a consumer posts it after completing its item.
+        try:
+            self._queue.put_nowait(None)
+        except Full:
+            pass
 
     def shutdown(self, wait: bool = True):
         """Shut down the pool and optionally wait for worker termination.
@@ -432,15 +475,15 @@ class BoundedWorkerPool:
             wait: Whether to join worker threads before returning.
 
         Notes:
-            Shutdown is idempotent; repeated calls after closure are no-ops.
-            A sentinel is enqueued per worker so each thread exits cleanly.
+            Shutdown is idempotent. Non-waiting shutdown never blocks even on a
+            full queue. Accepted work drains before the sentinel reaches workers.
         """
 
-        if self._closed:
-            return
-        self._closed = True
-        for _ in self._threads:
-            self._queue.put(None, block=True)
+        with self._admission:
+            if not self._closed:
+                self._closed = True
+                self._wake_shutdown()
+            self._admission.notify_all()
         if wait:
             for worker in self._threads:
                 worker.join()

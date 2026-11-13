@@ -1,0 +1,1975 @@
+{
+ "packets": {
+  "S3-1": "Extended: wykresy podsumowań",
+  "S3-2": "Main: dane partycji i zapis arkuszy",
+  "S3-3": "Pakowanie XLSX",
+  "S3-4": "CSV analytics: dashboard",
+  "S3-5": "CSV Summary: skoroszyt i walidacja grupowania",
+  "S3-6": "Import i Review: parsowanie i zapis",
+  "S3-7": "SQL i ładowanie w oknach dialogowych",
+  "S3-8": "Responsywność GUI przy dużym grupowaniu",
+  "S3-9": "Anulowanie i zamykanie",
+  "S3-10": "Group Analysis export",
+  "S3-11": "Higiena: start, pamięć, launcher, drobne"
+ },
+ "findings": {
+  "S3-1": [
+   {
+    "id": "A01-F01",
+    "verdict": "Z",
+    "file": "exporting/export_data_thread.py",
+    "line": 3245,
+    "symbol": "render_panel_table._measure_layout",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "spawn",
+    "saving": "Approximately 6-10 s (9-14%) of the 68.8 s Extended flow, if the profiled share transfers to the existing pool. Basis: remove roughly 65-98% of the 13.85% layout share; conservative ceiling near 9.5 s at that baseline, rounded to 10 s. Pool scheduling and first-group serial work require remeasurement. HTML-only with the same matplotlib table path should benefit; no separate HTML timing available.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A01-F02",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 1029,
+    "symbol": "render_histogram_annotations",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "spawn",
+    "saving": "Approximately 1-3 s (1.5-4.5%) of the 68.8 s Extended flow. Basis: 6.51% profiled inclusive share times a conservative 25-65% removable portion (synthetic helper reduction 63%); existing pool means these are estimates, not measured flow gains. No Main-plots-only gain.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A01-F03",
+    "verdict": "K",
+    "file": "exporting/export_data_thread.py",
+    "line": 2934,
+    "symbol": "render_density_line",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "spawn",
+    "saving": "Approximately 0.4-1.5 s (0.6-2.2%) of Extended with seaborn and 216 fitted curves; zero when seaborn is absent/no curve. Basis: ~19 ms/curve synthetic setup delta times 216, amortized across up to four existing render workers, with scheduling/serial uncertainty. Not 4.2 s guaranteed wall time.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A01-F04",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 462,
+    "symbol": "_numeric_array",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML",
+     "EXP-GROUP-ANALYSIS"
+    ],
+    "thread": "spawn",
+    "saving": "Approximately 0.05-0.4 s (<1%) of Extended at the supplied 216k-row scale; possible additional allocation reduction. Basis: ~0.18 CPU s per 216k typed values per eliminated coercion pass, a handful of passes, amortized across current workers and reduced by existing sampling. Treat as low-priority cleanup and measure actual conversion counts first.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A02-F01",
+    "verdict": "Z",
+    "file": "exporting/export_data_thread.py",
+    "line": 6490,
+    "symbol": "ExportDataThread.summary_sheet_fill",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 3-10 s (4-15% of the 68.8 s Extended flow) if Plotstats succeeds for these charts; lower if adapter fallback is frequent. Geometry alone suggests about 1-4 s after worker scaling. Not a measured end-to-end saving; no gain claimed for Main plots with summaries disabled.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A02-F04",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 4695,
+    "symbol": "ExportDataThread._apply_group_assignments",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML",
+     "EXP-GROUP-ANALYSIS"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.2-1.5 s on the grouped 216-header/1500-report scale, plus lower IPC allocation; 0 s with no grouping. This is a planning range, not a measured share of the 68.8 s flow.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A02-F06",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 6088,
+    "symbol": "ExportDataThread._sample_column_for_width",
+    "flows": [
+     "EXP-GROUP-ANALYSIS",
+     "EXP-INDUSTRIAL-CONTEXT"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.05-0.4 s for a 216000-row, ~30-column non-streamed export, with smaller temporary allocation. Approximately 0 s in the supplied streaming Main path.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A03-F02",
+    "verdict": "W",
+    "file": "exporting/export_summary_render_pool.py",
+    "line": 243,
+    "symbol": "SummaryRenderPool.iter_results",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "0-1 s for one large reference; approximately 1-10 s for 4-16 references at ~1 s/group by parallelizing R-1 avoidable serial groups, plus possible tail utilization gains. If many references contain only one group, the loss can be much larger; no precise estimate for the 68.8 s fixture without its partition histogram.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A03-F04",
+    "verdict": "W",
+    "file": "exporting/export_summary_utils.py",
+    "line": 30,
+    "symbol": "_to_numeric_array",
+    "flows": [
+     "EXP-EXTENDED",
+     "EXP-HTML",
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.25-0.32 s CPU per redundant 216k-value pass; about 0.1-1.0 s wall time across Extended/HTML depending on worker count and passes, or 0.2-1.5 s in large CSV/industrial analytics with several histogram passes. No measured GUI-stall reduction is claimed.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A04-F01",
+    "verdict": "Z",
+    "file": "charts/chart_renderer.py",
+    "line": 348,
+    "symbol": "PlotstatsChartRenderer.render_distribution_png / _render_plotstats_payload",
+    "flows": [
+     "EXPORT-MAIN",
+     "EXPORT-EXTENDED"
+    ],
+    "thread": "spawn",
+    "saving": "2-6 s of the 68.8 s Extended flow (roughly 3-9%), conditional on retaining current PNG and dashboard geometry. Planning estimate: avoid a modest part of non-package per-chart preparation across 648 charts; parallel scheduling prevents directly scaling the loaded in-process profile seconds.",
+    "effort": "L",
+    "confidence": "medium"
+   },
+   {
+    "id": "A04-F06",
+    "verdict": "S",
+    "file": "charts/hexafe_plotstats_adapter.py",
+    "line": 652,
+    "symbol": "render_chart_artifact_png / build_chart_artifact",
+    "flows": [
+     "EXPORT-MAIN",
+     "EXPORT-EXTENDED",
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-ANALYTICS"
+    ],
+    "thread": "spawn",
+    "saving": "0-0.8 s of the 68.8 s Extended flow as a low-priority planning range (0-1.2%); zero remains possible if rendering dominates or PNGs are simple. Do not claim the 30% artifact bucket is recoverable. Needs an encoder-only probe and end-to-end confirmation before admission.",
+    "effort": "M",
+    "confidence": "low"
+   },
+   {
+    "id": "B01-F01",
+    "verdict": "W",
+    "file": "charts/chart_render_spec.py",
+    "line": 39,
+    "symbol": "_resolve_violin_density_shape",
+    "flows": [
+     "EXPORT-MAIN",
+     "EXPORT-EXTENDED"
+    ],
+    "thread": "worker",
+    "saving": "~0.1–0.6 s from first cold export setup if SciPy is not already loaded; no change to warm export or total export computation expected.",
+    "effort": "S",
+    "confidence": "medium"
+   }
+  ],
+  "S3-2": [
+   {
+    "id": "A02-F02",
+    "verdict": "Z",
+    "file": "exporting/export_data_thread.py",
+    "line": 4096,
+    "symbol": "ExportDataThread._iter_reference_partitions",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.8-2.5 s (3-9% of 27.7 s Main); include index construction and existing row-table conversion in the comparison. Potentially much larger for many missing-reference partitions, not quantified. Do not treat all of the profiled 12% as removable.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A02-F03",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 4657,
+    "symbol": "ExportDataThread._sort_header_group",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.6-1.5 s (2-5% of 27.7 s Main), based on reducing only part of the 9% sort share. Additional scoped normalization reuse could help but is not included.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A02-F05",
+    "verdict": "W",
+    "file": "exporting/export_data_thread.py",
+    "line": 5183,
+    "symbol": "ExportDataThread.add_measurements_horizontal_sheet",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0-0.5 s total flow latency through overlap; first chart submission could start roughly 0.5-2 s earlier for a single large reference. Main benefit is avoiding roughly 50-100 MB of eager staging at this illustrative shape; actual process-tree RSS saving is unmeasured. Do not add these timing gains to F03 without measuring their overlap.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A03-F05",
+    "verdict": "W",
+    "file": "exporting/export_backends.py",
+    "line": 565,
+    "symbol": "_extract_table_columns_and_rows",
+    "flows": [
+     "EXP-MAIN-OPTIONS",
+     "EXP-EXTENDED-OPTIONS"
+    ],
+    "thread": "worker",
+    "saving": "Roughly 0.3-1.2 s and 80-275 MB transient memory on a 216k x 38 DataFrame-backed sheet; 0 s on the already streamed default Main flow. Chunking retains compact bulk columns until close, so it does not make total writer memory constant.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A09a-F06",
+    "verdict": "S",
+    "file": "reports/report_query_service.py",
+    "line": 536,
+    "symbol": "_append_industrial_context_to_export_query",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED"
+    ],
+    "thread": "worker",
+    "saving": "0 s for standard export; provisional 0.1-1.0 s for 216000-row industrial-context export with several candidates/report. Validate before scheduling; may be negligible when there are no candidates.",
+    "effort": "M",
+    "confidence": "low"
+   },
+   {
+    "id": "A18-F02",
+    "verdict": "W",
+    "file": "analytics/row_table.py",
+    "line": 283,
+    "symbol": "RowTable.__getitem__ / RowTable.drop",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXT"
+    ],
+    "thread": "worker",
+    "saving": "0.5-1.1 s (roughly 2-4% of the 27.7 s Main baseline), assuming 40-80% of the approximately 5% materialization envelope is removable. Extended may benefit, but no separate quantified share is available. This is an estimate, not an optimized flow measurement.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "B04-F01",
+    "verdict": "Z",
+    "file": "exporting/export_query_service.py",
+    "line": 245,
+    "symbol": "load_export_partition_dataframe",
+    "flows": [
+     "EXPORT-MAIN"
+    ],
+    "thread": "worker",
+    "saving": "~1–8 s (roughly 4–29% of the 27.7 s flow); estimate only, from avoiding repeated scoped scans/materializations across partitions.",
+    "effort": "M",
+    "confidence": "medium"
+   }
+  ],
+  "S3-3": [
+   {
+    "id": "A03-F01",
+    "verdict": "D",
+    "file": "exporting/export_backends.py",
+    "line": 612,
+    "symbol": "ExcelExportBackend.close_writer",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED"
+    ],
+    "thread": "worker",
+    "saving": "LIKELY 3-7 s (11-25%) of the 27.7 s Main flow, if real-data close has comparable compression share: 27.7 * 0.53 * roughly 0.2-0.45. No reliable Extended estimate without separating PNG/chart/XML packaging. Conditional on the output-contract decision; 0 s if exact compressed bytes must remain identical.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A03-F06",
+    "verdict": "W",
+    "file": "exporting/export_sheet_writer.py",
+    "line": 293,
+    "symbol": "create_measurement_formats",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED",
+     "EXP-HTML"
+    ],
+    "thread": "worker",
+    "saving": "0-0.01 s per normal export; bounds retained format-cache memory to the active workbook and prevents invalid XLSX styles/rework. No seconds-level gain or measured RSS leak size is claimed; ranked last by time saving, but correctness deserves separate priority.",
+    "effort": "S",
+    "confidence": "high"
+   }
+  ],
+  "S3-9": [
+   {
+    "id": "A03-F03",
+    "verdict": "W",
+    "file": "exporting/export_backends.py",
+    "line": 717,
+    "symbol": "ExcelExportBackend.run",
+    "flows": [
+     "EXP-MAIN-CANCEL",
+     "EXP-EXTENDED-CANCEL"
+    ],
+    "thread": "worker",
+    "saving": "0 s on successful exports; roughly 1-15 s cancellation/failure cleanup latency after substantial Main work, less on early cancel. Avoids serializing/compressing output destined for deletion. This overlaps F01 and is not additive to successful-flow savings.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F08",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_workflow.py",
+    "line": 994,
+    "symbol": "_write_dashboard",
+    "flows": [
+     "CSV-ANALYTICS-CANCEL",
+     "IND-CSV-ANALYTICS-CANCEL"
+    ],
+    "thread": "worker",
+    "saving": "0 s on successful runs; approximately 0-34 s of avoidable post-cancel work depending on where cancellation arrives, with a target of checking at each metric/chart/serialization boundary. Native single-chart sections may still be noninterruptible.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A11-F06",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 187,
+    "symbol": "build_production_dashboard_manifest",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "0 s on successful runs; 0-29 s avoidable remaining build work after a cancel request, or 0-5.7 s during writer, on the supplied flow scale. These are separate worst-position stage estimates, not additive flow speedups. One in-flight fit/render still bounds achievable latency.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A13-F03",
+    "verdict": "S",
+    "file": "ui/main_window.py",
+    "line": 1680,
+    "symbol": "MainWindow._recover_abandoned_realtime_staging",
+    "flows": [
+     "DB-SELECT",
+     "EXP-DB-SELECT"
+    ],
+    "thread": "GUI",
+    "saving": "0-0.05 s GUI blocking on an already-ready uncontended database; roughly 0.1-15.1 s of GUI blocking avoided for slow cleanup/write-lock contention (three 5 s lock waits plus two 0.05 s retry sleeps; schema work may add more). These are conditional bounds, not expected measured-flow savings. Worker routing mostly relocates latency: total database-ready time need not improve.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A13-F04",
+    "verdict": "S",
+    "file": "ui/main_window.py",
+    "line": 1482,
+    "symbol": "MainWindow._resolve_realtime_session_before_discard",
+    "flows": [
+     "REALTIME-SESSION-SAVE",
+     "REALTIME-REBIND",
+     "APP-CLOSE"
+    ],
+    "thread": "GUI",
+    "saving": "Potential 0.1-2 s of GUI freeze avoided for an illustrative 10-100 MB populated session on local storage; 0 s when no temporary data needs saving, and possibly longer on slow storage. This is a sizing hypothesis requiring measurement, not a STEP3 wall-time reduction: backup/integrity/fsync still take the same time.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A13-F05",
+    "verdict": "S",
+    "file": "ui/export_dialog.py",
+    "line": 277,
+    "symbol": "reveal_file_in_explorer",
+    "flows": [
+     "EXP-RESULT-OPEN"
+    ],
+    "thread": "GUI",
+    "saving": "Potential 0.05-1 s of GUI blocking per cold file-manager launch; 0 s export-computation saving. Actual delay is unmeasured and a hung child has no finite bound. Do not count this in Main/Extended export throughput estimates.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A14-F07",
+    "verdict": "W",
+    "file": "ui/modify_db_records.py",
+    "line": 231,
+    "symbol": "RecordTableModel.first_rows_by_key",
+    "flows": [
+     "MODIFYDB-CONFIRM",
+     "MODIFYDB-CLOSE-DIRTY"
+    ],
+    "thread": "GUI",
+    "saving": "0.03-0.06 s per confirmation or dirty-close check for a last-position edit at 216k rows; near 0 s for early edits. Avoided scan needs no full-row index memory.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A14-F08",
+    "verdict": "W",
+    "file": "ui/modify_db_records.py",
+    "line": 379,
+    "symbol": "cancel_load_thread",
+    "flows": [
+     "MODIFYDB-CANCEL-LOAD",
+     "MODIFYDB-CLOSE",
+     "GROUPING-CANCEL",
+     "CHAR-MAPPING-CANCEL"
+    ],
+    "thread": "GUI",
+    "saving": "0 s claimed on normal successful open; potentially 0.05-2 s less GUI blocking for slow Grouping/Mapping cancellation and up to 3 s or an unbounded wait removed from Modify DB cancellation. Not a finite end-to-end shutdown speedup guarantee.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15a-F02",
+    "verdict": "W",
+    "file": "ui/industrial_data_dialog.py",
+    "line": 862,
+    "symbol": "IndustrialDataDialog._stop_oznak_status_check / _stop_analytics_load",
+    "flows": [
+     "INDUSTRIAL-OPEN/close",
+     "INDUSTRIAL-CSV/cancel or close"
+    ],
+    "thread": "GUI",
+    "saving": "0-2.0 s of GUI blocking per pending worker (0 when already complete), up to 4.0 s for both sequential waits on close; normal-case wall-time distribution needs a close/cancel probe. Expected gain is immediate close/cancel feedback, with worker completion and cleanup continuing asynchronously.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15a-F06",
+    "verdict": "S",
+    "file": "ui/industrial_data_dialog.py",
+    "line": 524,
+    "symbol": "IndustrialDataDialog.create_database_file / _resolve_temporary_cache_before_discard",
+    "flows": [
+     "cold/INDUSTRIAL-SAVE/save cache as",
+     "cold/INDUSTRIAL-CLOSE/save populated temporary cache"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.1-5 s of GUI blocking for the stated illustrative cache sizes/storage rates; approximately 0 s total I/O time saved by merely moving work to a worker. No gain claimed for the measured ordinary-open path.",
+    "effort": "M",
+    "confidence": "high"
+   }
+  ],
+  "S3-4": [
+   {
+    "id": "A04-F02",
+    "verdict": "W",
+    "file": "charts/hexafe_plotstats_adapter.py",
+    "line": 575,
+    "symbol": "build_plotstats_dashboard_spec / build_chart_artifact",
+    "flows": [
+     "CHART-VISUAL-PREVIEW",
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-ANALYTICS"
+    ],
+    "thread": "GUI",
+    "saving": "About 1-2.5 s of synchronous preview work per histogram refresh (five unused fits requested twice; warm-fit timing still needed); 0.5-4 s per grouped analytics run depending on group/metric counts, sampled populations and selected fit families. No claimed saving from required full-population statistical rows.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A04-F03",
+    "verdict": "W",
+    "file": "charts/chart_numeric_helpers.py",
+    "line": 53,
+    "symbol": "finite_float_list / finite_array / _raw_numeric_items",
+    "flows": [
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-ANALYTICS",
+     "EXPORT-MAIN",
+     "EXPORT-EXTENDED",
+     "EXPORT-DASHBOARD"
+    ],
+    "thread": "worker",
+    "saving": "2-4 s (roughly 6-11%) of the 35.4 s CSV analytics flow if numeric fast paths remove 40-75% of the profiled 15% bucket. Export saving unquantified because payloads are mostly capped at 1200-1500 points. Overlaps F04 and F05; do not add those independently.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A04-F04",
+    "verdict": "W",
+    "file": "charts/hexafe_plotstats_adapter.py",
+    "line": 2538,
+    "symbol": "_canonical_legend_key / _constant_line_axis_and_value",
+    "flows": [
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-ANALYTICS",
+     "EXPORT-DASHBOARD",
+     "CHART-VISUAL-PREVIEW"
+    ],
+    "thread": "worker",
+    "saving": "1-2 s (roughly 3-6%) of CSV analytics, assuming most 6% is ordinary data trace rejection. Overlaps F03 numeric coercion: after F03 the incremental saving is smaller; retain this as the preferable algorithmic removal rather than counting both full buckets.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A04-F05",
+    "verdict": "W",
+    "file": "charts/hexafe_plotstats_adapter.py",
+    "line": 1530,
+    "symbol": "_payload_with_resolved_histogram_bin_count / _ensure_group_histogram_mean_annotations / _mean_precision_from_payload",
+    "flows": [
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-ANALYTICS",
+     "EXPORT-DASHBOARD",
+     "CHART-VISUAL-PREVIEW"
+    ],
+    "thread": "worker",
+    "saving": "0.1-0.6 s of CSV analytics for eight metrics at present sample limits; more at large group counts. This is an additional pass-count opportunity, not an extra 8% bucket: overlaps F03/F04 and F02 grouped-preview work.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A11-F01",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 1740,
+    "symbol": "_build_time_series_charts",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "1.5-3.5 s (~4-10% of the 35.4 s CSV analytics flow) when auto/static group layers replace these traces; near zero for explicitly interactive layers. Estimate, not a measured flow speedup.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A11-F02",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 356,
+    "symbol": "write_production_dashboard",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "0.8-2.0 s (~2-6% of CSV analytics) and fewer payload-sized transient allocations; 1.5 s redundant measurement time in the synthetic 15.7 MB case before clone savings. Not additive with its containing 16.1% writer share.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A11-F03",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 2849,
+    "symbol": "_render_matplotlib_distribution_image",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "LIKELY 0.2-0.8 s (~0.6-2.3% of CSV analytics), with potentially larger gains for dense/high-entropy images. The measured synthetic encoding difference is only a component demonstration; actual raster encoding must be timed.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A11-F04",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 3249,
+    "symbol": "_sample_allocations",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "0 s material saving for the usual few groups; 0.29-4.27 s per allocator invocation at 1,600-3,200 groups in the synthetic checks. Repeated chart/metric calls can multiply this cost; a full high-cardinality flow was not run.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A11-F05",
+    "verdict": "S",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 4733,
+    "symbol": "_render_plotly_runtime",
+    "flows": [
+     "CSV-ANALYTICS:OPEN-HTML",
+     "IND-ANALYTICS:OPEN-HTML"
+    ],
+    "thread": "worker",
+    "saving": "0.5-5 s less first-open blocking for dashboards with tens of substantial offscreen charts; unvalidated estimate and no claimed Python analytics speedup. Total work moves to chart visibility/first interaction rather than disappearing.",
+    "effort": "M",
+    "confidence": "low"
+   },
+   {
+    "id": "A11-F07",
+    "verdict": "W",
+    "file": "industrial/industrial_analytics_dashboard.py",
+    "line": 2903,
+    "symbol": "_chart_payload",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "0.5-2 s avoidable raw-trace preparation for eight 50k-point charts in Snapshots only mode; net full-flow improvement is UNKNOWN until the required time-series snapshot rendering is included. No claimed saving for the supplied default-mode measurement.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "B02-F01",
+    "verdict": "W",
+    "file": "charts/dashboard_visual_options.py",
+    "line": 775,
+    "symbol": "dashboard_visual_group_names_from_grouping_frame",
+    "flows": [
+     "Export window",
+     "CSV analytics"
+    ],
+    "thread": "GUI",
+    "saving": "0.05–0.8 s on a 100k-row frame; proportional to row count and Python normalization cost, not measured in this audit.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "B02-F02",
+    "verdict": "W",
+    "file": "charts/dashboard_plotly_visuals.py",
+    "line": 107,
+    "symbol": "apply_dashboard_visual_settings",
+    "flows": [
+     "Export Main plots",
+     "Extended plots",
+     "CSV analytics",
+     "Industrial analytics dashboard"
+    ],
+    "thread": "worker",
+    "saving": "0.05–1.5 s across a large multi-chart export with hundreds of groups; estimated from removing repeated label scans, not measured.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "B03-F01",
+    "verdict": "W",
+    "file": "charts/export_html_dashboard.py",
+    "line": 609,
+    "symbol": "_write_export_html_dashboard_generation",
+    "flows": [
+     "Export Main with HTML dashboard",
+     "Export Extended with HTML dashboard"
+    ],
+    "thread": "spawn",
+    "saving": "About 0.05–0.5 s per dashboard when it contains hundreds of specs or several MB of Plotly data; lower for small dashboards. Estimate is unmeasured and scales with serialized payload bytes.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "B03-F02",
+    "verdict": "W",
+    "file": "charts/export_html_dashboard.py",
+    "line": 315,
+    "symbol": "summarize_dashboard_chart_payload",
+    "flows": [
+     "Export Main with HTML dashboard",
+     "Export Extended with HTML dashboard"
+    ],
+    "thread": "spawn",
+    "saving": "About 0.1–0.8 s for a dashboard with roughly 100–500 histogram charts and large series; much less for a small dashboard. Estimate is unmeasured and scales with total histogram samples.",
+    "effort": "S",
+    "confidence": "medium"
+   }
+  ],
+  "S3-7": [
+   {
+    "id": "A05-F01",
+    "verdict": "K",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 2555,
+    "symbol": "_update_metric_stats_from_row",
+    "flows": [
+     "CSV-LOAD"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.7-1.4s (15-30% of the measured 4.71s CSV-load flow), estimated by removing 45-65% of stats work plus redundant display/row bookkeeping; not an observed optimized-flow result. Shares and downstream numeric parsing must not be added twice.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A05-F03",
+    "verdict": "W",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 2488,
+    "symbol": "_parse_tabular_numbers",
+    "flows": [
+     "CSV-LOAD",
+     "EXCEL-LOAD"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.05-0.2s (1-4% of 4.71s CSV load) for the observed fallback workload; little/no gain on all-valid data. Upper bound constrained by the supplied ~6% cumulative conversion share.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A05-F04",
+    "verdict": "W",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 1933,
+    "symbol": "_load_tabular_files_into_sqlite",
+    "flows": [
+     "CSV-LOAD",
+     "EXCEL-LOAD"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.05-0.2s (1-4% of 4.71s CSV load) by reusing about one of two per-row parses/formats. Conditional on a timestamp source column; savings could be larger with slow non-ISO literals, which were not measured here.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A05-F06",
+    "verdict": "W",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 1145,
+    "symbol": "TabularSqliteStore.date_bounds",
+    "flows": [
+     "CSV-FILTER-OPEN",
+     "CSV-FILTER-COLUMN",
+     "INDUSTRIAL-CSV-FILTER"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.02-0.08s of GUI stall per repeated 100k-row bounds request; 0.2-0.8s is a scale-based projection at 1M rows, not a measurement. Initial retrieval still costs a scan if moved off-thread without a reusable bound.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A05-F07",
+    "verdict": "W",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 848,
+    "symbol": "TabularSqliteStore.has_rows_for_group_search",
+    "flows": [
+     "CSV-GROUP-SEARCH",
+     "CSV-GROUP-ASSIGN"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.03-0.08s of GUI stall per 100k-row existence request with an early match; less/no gain for missing or late matches. Larger data can amplify it, but no Windows or full-flow improvement was measured.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A06-F04",
+    "verdict": "W",
+    "file": "tabular/grouping_assignment_store.py",
+    "line": 341,
+    "symbol": "TabularGroupingAssignmentStore._prepare_effective_table / group_counts / group_members",
+    "flows": [
+     "CSV-GROUP",
+     "INDUSTRIAL-CSV-GROUP"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.015-0.030 s per count refresh and 0.006-0.010 s per member selection at 100k assigned rows. Larger tables scale with scanned assignments; no measured claim for the 1500-report Grouping-open flow, which uses a different implementation.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A06-F05",
+    "verdict": "W",
+    "file": "tabular/data_grouping_service.py",
+    "line": 242,
+    "symbol": "build_grouping_row_index (identical filtered/full inputs)",
+    "flows": [
+     "GRP-OPEN",
+     "GRP-EDIT",
+     "GRP-REOPEN"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.01-0.02 s per no-filter invalidation/open at 1500 reports, including GUI-stall reduction; profile supports roughly 11 percentage points of the profiled GUI-thread preparation share as an upper bound for removing one of the two builds. Not a claim of 11% of the 0.62 s whole flow.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F02",
+    "verdict": "Z",
+    "file": "reports/report_query_service.py",
+    "line": 665,
+    "symbol": "_distinct_filter_scope",
+    "flows": [
+     "FILTER-OPEN"
+    ],
+    "thread": "worker",
+    "saving": "0.5-0.9 s (39-70% of 1.29 s first filter open), medium transfer estimate; cache hits already cheap. Synthetic query-only saving measured 1.18-1.33 s.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F03",
+    "verdict": "W",
+    "file": "reports/characteristic_mapping_service.py",
+    "line": 120,
+    "symbol": "_metric_source_cte",
+    "flows": [
+     "MAP-OPEN"
+    ],
+    "thread": "worker",
+    "saving": "0.2-0.35 s (25-44% of 0.8 s mapping open), medium transfer estimate from a 46-55% reduction in the 78% hotspot; not end-to-end measured.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F07",
+    "verdict": "W",
+    "file": "reports/report_schema.py",
+    "line": 843,
+    "symbol": "ensure_report_schema._ensure_schema",
+    "flows": [
+     "MDB-OPEN",
+     "FILTER-OPEN",
+     "GROUP-OPEN",
+     "MAP-OPEN",
+     "EXP-MAIN",
+     "IMP-REPLACE"
+    ],
+    "thread": "GUI",
+    "saving": "Near 0-0.02 s on measured modern MDB open; provisional 0.2-2 s per ensure on an upgraded 216000-measurement legacy database, plus a full legacy result allocation avoided. Low confidence in seconds; benefit is conditional on retained legacy tables.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A09b-F04",
+    "verdict": "W",
+    "file": "storage/industrial_schema.py",
+    "line": 458,
+    "symbol": "ensure_industrial_data_schema",
+    "flows": [
+     "RT-DASHBOARD",
+     "RT-POLL",
+     "IND-LOAD"
+    ],
+    "thread": "worker",
+    "saving": "Estimated 0.001-0.01 s per warm explicit-connection ensure on an uncontended local DB, plus avoiding an unnecessary writer lock; no substantial gain claimed for measured Industrial-open/bridge flows. Large-history/lock-wait savings unquantified.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F02",
+    "verdict": "K",
+    "file": "industrial/industrial_tabular_bridge.py",
+    "line": 747,
+    "symbol": "_insert_dynamic_value_facets",
+    "flows": [
+     "IND-CSV-BRIDGE"
+    ],
+    "thread": "worker",
+    "saving": "0.5-1.8 s of the 5.73 s bridge flow on sparse inputs (roughly 9-31%); 36% profile share sets an approximately 2.1 s upper envelope, not a guaranteed saving. Dense/high-cardinality data needs separate measurement.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F03",
+    "verdict": "W",
+    "file": "industrial/industrial_tabular_bridge.py",
+    "line": 673,
+    "symbol": "_insert_base_value_facets",
+    "flows": [
+     "IND-CSV-BRIDGE",
+     "IND-CSV-FILTER"
+    ],
+    "thread": "worker",
+    "saving": "0.6-1.0 s from initial 5.73 s bridge open (10-17%) by deferring unused base facets; this is shifted work if the user later opens every column. Total all-column work is unchanged unless scans are also combined.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F04",
+    "verdict": "W",
+    "file": "industrial/industrial_tabular_bridge.py",
+    "line": 780,
+    "symbol": "_dynamic_field_metadata",
+    "flows": [
+     "IND-CSV-BRIDGE"
+    ],
+    "thread": "worker",
+    "saving": "0.3-0.9 s of bridge open (5-16%) on repeated-value inputs; near zero or negative for mostly unique real-valued measurements. Estimate is conditional, not 34% of the entire flow.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A10-F05",
+    "verdict": "W",
+    "file": "industrial/industrial_tabular_bridge.py",
+    "line": 888,
+    "symbol": "_create_industrial_tabular_view",
+    "flows": [
+     "IND-CSV-BRIDGE",
+     "IND-CSV-ANALYTICS",
+     "IND-CSV-FILTER",
+     "IND-CSV-GROUPING"
+    ],
+    "thread": "worker",
+    "saving": "0.05-0.3 s of bridge preview plus roughly 0.5-2.0 s per full 100k-row count/projected read with 20 mostly-unused fields, based on the 20k probe. Filter-selective/wider schemas can gain more. Do not count these downstream estimates inside the measured 5.73 s bridge baseline.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F09",
+    "verdict": "W",
+    "file": "industrial/industrial_tabular_bridge.py",
+    "line": 520,
+    "symbol": "_metadata_scope_fingerprint",
+    "flows": [
+     "IND-SOURCE-EDIT",
+     "IND-CSV-BRIDGE",
+     "IND-CSV-FILTER"
+    ],
+    "thread": "worker",
+    "saving": "0 s direct latency saving; correctness prerequisite for retaining or expanding the facet caching in A10-F03. Selectively invalidating source-label facets can avoid rebuilding unrelated numeric metadata after a profile rename.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A14-F04",
+    "verdict": "W",
+    "file": "ui/data_grouping.py",
+    "line": 1076,
+    "symbol": "DataGrouping._ensure_group_color_integrity",
+    "flows": [
+     "GROUPING-OPEN",
+     "GROUPING-REOPEN",
+     "GROUPING-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "0.2-0.45 s per population of 1500 rows/216 assigned groups; near 0 s for one default group. Overlaps the population component of F03; do not sum that component twice.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A14-F05",
+    "verdict": "W",
+    "file": "ui/data_grouping.py",
+    "line": 1687,
+    "symbol": "DataGrouping.populate_list_widgets",
+    "flows": [
+     "GROUPING-OPEN",
+     "GROUPING-REOPEN",
+     "GROUPING-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "0.04-0.09 s GUI/flow saving per first open (about 6-15% of 0.62 s); similar duplicate-work saving on refresh, depending on selected-group size. Does not include F04 aggregation savings.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A14-F06",
+    "verdict": "W",
+    "file": "ui/modify_db.py",
+    "line": 513,
+    "symbol": "ModifyDB.populate_tables",
+    "flows": [
+     "MODIFYDB-OPEN",
+     "MODIFYDB-SELECT-DB"
+    ],
+    "thread": "GUI",
+    "saving": "0.03-0.09 s initial-open time/stall saving by deferring hidden tabs and removing per-cell construction; worker queries mainly reduce blocking. More for high-cardinality normalization values, unmeasured.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "B05-F01",
+    "verdict": "W",
+    "file": "industrial/industrial_join_service.py",
+    "line": 314,
+    "symbol": "materialize_industrial_report_links",
+    "flows": [
+     "INDUSTRIAL-LINK-REFRESH (administrative dialog action)"
+    ],
+    "thread": "GUI",
+    "saving": "About 0.1–5 s of GUI stall per refresh for tables in the several-thousand to tens-of-thousands row range if the join is scan-bound; unmeasured and may be negligible on small caches.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "B07-F01",
+    "verdict": "W",
+    "file": "shared/grouping_filter_core.py",
+    "line": 276,
+    "symbol": "DataFrameGroupingIndex._preview_frame",
+    "flows": [
+     "Grouping open",
+     "Grouping selector refresh"
+    ],
+    "thread": "GUI",
+    "saving": "0.05–0.25 s (about 8–40% of the measured 0.62 s Grouping-open flow) on a high-cardinality in-memory dataset; smaller on low-cardinality data.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "B08-F01",
+    "verdict": "W",
+    "file": "ui/industrial_filter_dialog.py",
+    "line": 188,
+    "symbol": "IndustrialFilterDialog.load_database_references",
+    "flows": [
+     "Industrial filter reference load",
+     "Industrial Sync reference load"
+    ],
+    "thread": "GUI",
+    "saving": "0.02–0.3 s of GUI stall per click at ~1,500 reports (estimate; unprofiled); scales with report count",
+    "effort": "M",
+    "confidence": "medium"
+   }
+  ],
+  "S3-8": [
+   {
+    "id": "A05-F02",
+    "verdict": "W",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 1029,
+    "symbol": "TabularSqliteStore.count_source_row_numbers",
+    "flows": [
+     "CSV-LOAD-APPLY",
+     "CSV-GROUP-APPLY",
+     "CSV-FILTER-APPLY"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.1-0.4s of GUI blocking per 100k fully assigned rows across repeated summary refreshes; depends on refresh count, assignment representation, filters and DB/view plan. No steady-state gain when POPULATION is already explicit or grouping is absent.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A06-F02",
+    "verdict": "W",
+    "file": "tabular/grouping_assignment_store.py",
+    "line": 543,
+    "symbol": "_selected_key_predicate / TabularGroupingAssignmentStore._selected_group_keys_query",
+    "flows": [
+     "CSV-GROUP",
+     "INDUSTRIAL-CSV-GROUP"
+    ],
+    "thread": "GUI",
+    "saving": "At 100k rows: approximately 0.5-0.7 s for 50 keys on an unindexed/non-indexable scope; approximately 0.15-1.8 s for 800 indexed keys depending on planner statistics/selectivity. At 200 well-indexed analyzed keys the measured difference was only 0.005 s; at 50 keys staging was 0.029 s slower. Use a measured threshold/serial indexed path rather than staging every request. Also removes the hard failure at about 1000 composite keys. Alternative scenarios are not additive.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A06-F03",
+    "verdict": "S",
+    "file": "tabular/data_grouping_service.py",
+    "line": 106,
+    "symbol": "load_grouping_dataframe (synchronous reopen caller)",
+    "flows": [
+     "GRP-REOPEN"
+    ],
+    "thread": "GUI",
+    "saving": "Provisionally 0.02-0.30 s less GUI blocking per report-scale reopen by moving SQL/DataFrame read off-thread; roughly unchanged total work. This low-confidence planning interval needs a reopen trace and must not be credited as measured flow improvement.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A08b-F03",
+    "verdict": "W",
+    "file": "parsing/parser_profile_handoff.py",
+    "line": 532,
+    "symbol": "validate_profile_handoff",
+    "flows": [
+     "PARSER-PROFILES-ADMIN"
+    ],
+    "thread": "GUI",
+    "saving": "Roughly 0.05-0.08 s and 0.6-0.8 s of uninterrupted GUI occupation for the two synthetic sizes, by moving the work to an owned worker. Total operation time need not decrease; Python-thread GIL contention can retain smaller stalls. PDF/Excel and lock-contention costs are unquantified.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F04",
+    "verdict": "W",
+    "file": "reports/characteristic_mapping_service.py",
+    "line": 294,
+    "symbol": "fetch_mapping_impact_counts",
+    "flows": [
+     "MAP-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "About 0.1-0.2 s of GUI blocking removed per query on this fixture (10 edits currently about 1-2 s of aggregate event-loop occupancy); little total compute saving unless debounce/caching suppresses calls.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F05",
+    "verdict": "W",
+    "file": "reports/report_repository.py",
+    "line": 1443,
+    "symbol": "ReportRepository.update_measurement_fields._update",
+    "flows": [
+     "MDB-APPLY"
+    ],
+    "thread": "GUI",
+    "saving": "At most 0.01-0.05 s on supplied small apply; estimated 0.2-3 s latency/GUI occupancy for a 1000-edit batch, low confidence in seconds. Moving the existing work to a writer removes its event-loop occupancy even if wall time is unchanged.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A09b-F02",
+    "verdict": "W",
+    "file": "reports/report_edit_service.py",
+    "line": 241,
+    "symbol": "ReportEditService.apply_record_updates",
+    "flows": [
+     "MDB-APPLY"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.3-0.7 s total Apply time per 1000 similar edits from connection reuse alone (synthetic delta 0.546 s). Moving persistence to a worker also removes most of its GUI blockage; remaining worker/apply time must still be measured. No material saving promised for the measured single/small-edit 0.05s case.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A09b-F03",
+    "verdict": "W",
+    "file": "reports/characteristic_alias_service.py",
+    "line": 552,
+    "symbol": "import_characteristic_aliases_csv",
+    "flows": [
+     "MAP-IMPORT",
+     "MAP-EXPORT",
+     "MAP-OPEN",
+     "MAP-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.08-0.2 s of GUI blockage per 10000-row valid CSV for service work alone, based on 0.104s synthetic import; asynchronous execution mainly improves responsiveness, not total runtime. Larger UI-table/rendering savings are unquantified and excluded. Small normal mapping sets may save effectively zero.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A14-F01",
+    "verdict": "W",
+    "file": "ui/data_grouping.py",
+    "line": 2077,
+    "symbol": "DataGrouping._select_visible_parts_for_grouping",
+    "flows": [
+     "GROUPING-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "1.5-2.1 s GUI stall per selecting 1000 visible parts in this synthetic shape; proportionally smaller for short references. Not part of the supplied first-open timing.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A14-F02",
+    "verdict": "W",
+    "file": "ui/characteristic_mapping_dialog.py",
+    "line": 398,
+    "symbol": "CharacteristicAliasEditorDialog._refresh_impact_preview",
+    "flows": [
+     "CHAR-MAPPING-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "0.05-0.20 s GUI blocking per resolved edit; roughly 0.3-1.5 s avoided work for a 10-keystroke name after coalescing (plus responsiveness while the remaining query runs). 0 s claimed for initial mapping-open flow.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A14-F03",
+    "verdict": "W",
+    "file": "ui/data_grouping.py",
+    "line": 976,
+    "symbol": "DataGrouping.refresh_data",
+    "flows": [
+     "GROUPING-REOPEN"
+    ],
+    "thread": "GUI",
+    "saving": "0.2-0.6 s less GUI blocking per 1500-report reopen is a planning range; near 0 s guaranteed total-flow reduction. Avoiding a redundant in-flight refresh can save another load, but no additive saving is claimed.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A15a-F01",
+    "verdict": "W",
+    "file": "ui/industrial_analytics_dialog.py",
+    "line": 2081,
+    "symbol": "IndustrialAnalyticsDialog._tabular_grouping_has_population",
+    "flows": [
+     "CSV-ANALYTICS/configure groups and chart options",
+     "INDUSTRIAL-CSV/configure groups and chart options"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.4-0.6 s per unchanged grouped UI refresh at 100k assignments, 0.8-1.1 s at 216k, after the first valid summary. Up to the same GUI stall removed from a click; end-to-end analytics compute time is unchanged. Cold summary work still exists off-thread.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15a-F03",
+    "verdict": "W",
+    "file": "ui/industrial_analytics_dialog.py",
+    "line": 1573,
+    "symbol": "IndustrialAnalyticsDialog._tabular_filtered_row_count",
+    "flows": [
+     "CSV-LOAD/apply loaded result",
+     "CSV-ANALYTICS/apply row filter",
+     "INDUSTRIAL-CSV/apply cached-row filter"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.02-0.5 s of GUI blocking per new filter at 100k rows; complex expressions/wide SQLite views can exceed this. Count-only pandas mask evaluation could also avoid 0.01-0.1 s of temporary-copy work, highly width/selectivity dependent. Estimate is not a demonstrated end-to-end saving.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A15b-F01",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_grouping_dialog.py",
+    "line": 1380,
+    "symbol": "TabularAnalyticsGroupingDialog._apply_group_assignments",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular grouping",
+     "Industrial Data → CSV Summary: tabular grouping"
+    ],
+    "thread": "GUI",
+    "saving": "3.5–4.2 s per 100k-assignment / 216-group restore; larger N/G scale worse. Do not add the full 7.248 s to F02.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A15b-F02",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_grouping_dialog.py",
+    "line": 847,
+    "symbol": "TabularAnalyticsGroupingDialog._selector_color_map",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular grouping",
+     "Industrial Data → CSV Summary: tabular grouping"
+    ],
+    "thread": "GUI",
+    "saving": "1.1–1.3 s per 100k-row selector repaint; roughly 2–3 s of duplicate color work on a 100k saved-assignment restore. These are alternative stages, not an additive flow total.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15b-F03",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_grouping_dialog.py",
+    "line": 1287,
+    "symbol": "TabularAnalyticsGroupingDialog._group_assignments",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular grouping",
+     "Industrial Data → CSV Summary: tabular grouping"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.5–3 s per 100k-row saved pandas-group restore; lower confidence than the completed probes. No saving claimed for first open with no saved groups or for the RowTable branch.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A15b-F04",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_grouping_dialog.py",
+    "line": 2203,
+    "symbol": "TabularAnalyticsGroupingDialog._render_selector_preview",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular grouping",
+     "Industrial Data → CSV Summary: tabular grouping"
+    ],
+    "thread": "GUI",
+    "saving": "0.7–1.1 s per fully selected 1,000-key async page restoration; near zero when no keys are selected. No saving claimed for the already-blocked synchronous route.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A15b-F05",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_grouping_dialog.py",
+    "line": 1479,
+    "symbol": "TabularAnalyticsGroupingDialog._sqlite_selector_preview_should_run_async",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular grouping",
+     "Industrial Data → CSV Summary: tabular grouping"
+    ],
+    "thread": "GUI",
+    "saving": "About 0.45–0.75 s less uninterrupted GUI blocking per such preview; total operation time may remain similar or rise slightly due to thread dispatch. Facet-hit previews can already be cheap.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15b-F06",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_filter_dialog.py",
+    "line": 919,
+    "symbol": "TabularAnalyticsFilterDialog._column_date_bounds",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular row filter",
+     "Industrial Data → CSV Summary: tabular row filter"
+    ],
+    "thread": "GUI",
+    "saving": "0.05–0.10 s per repeated SQLite date-control refresh at 216k rows; ~0.01 s per repeated-date pandas refresh at 100k. Worker loading can remove the first scan from GUI but is not a net latency saving.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A15b-F07",
+    "verdict": "W",
+    "file": "ui/tabular_analytics_filter_dialog.py",
+    "line": 1016,
+    "symbol": "TabularAnalyticsFilterDialog._accept_filter",
+    "flows": [
+     "CSV Summary / Industrial analytics: tabular row filter",
+     "Industrial Data → CSV Summary: tabular row filter"
+    ],
+    "thread": "GUI",
+    "saving": "0.002–0.003 s on the cheap indexed case; about 0.06–0.09 s per Apply on the tested date-scan case by retaining one validation/count instead of four. Expression-heavy or wider tables may save more, unquantified.",
+    "effort": "M",
+    "confidence": "high"
+   }
+  ],
+  "S3-5": [
+   {
+    "id": "A05-F05",
+    "verdict": "S",
+    "file": "tabular/tabular_analytics_service.py",
+    "line": 1558,
+    "symbol": "list_tabular_excel_sheets",
+    "flows": [
+     "EXCEL-SELECT",
+     "EXCEL-LOAD"
+    ],
+    "thread": "GUI",
+    "saving": "Plausible 0.05-0.5s of GUI blocking avoided per ordinary large-workbook selection, potentially >1s for large shared-string workbooks; unmeasured, no gain for CSV. Moving to a worker shifts this latency rather than removing it; sharing workbook metadata can additionally remove duplicate parse work.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A06-F01",
+    "verdict": "K",
+    "file": "tabular/contracts.py",
+    "line": 119,
+    "symbol": "_record_value / validate_grouping_assignments",
+    "flows": [
+     "EXP-MAIN",
+     "EXP-EXTENDED",
+     "EXP-HTML",
+     "CSV-ANALYTICS"
+    ],
+    "thread": "GUI",
+    "saving": "About 0.02-0.04 s before report export for 1500 assignments; about 2-4 s of pre-start GUI blocking and 2-5 s total for tabular analytics IF approximately 100k rows are explicitly assigned, by avoiding redundant reconstruction and reducing normalization. No claim of this saving for ungrouped CSV analytics.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A10-F01",
+    "verdict": "K",
+    "file": "industrial/industrial_workers.py",
+    "line": 352,
+    "symbol": "IndustrialAnalyticsThread.__init__",
+    "flows": [
+     "CSV-ANALYTICS",
+     "IND-CSV-ANALYTICS"
+    ],
+    "thread": "GUI",
+    "saving": "0.8-1.5 s GUI stall removed at this constructor alone for 100k assignments; 2.5-5.0 s total including 2-4 s before worker start if the coordinator also removes the duplicate caller/workflow passes. Near zero without manual grouping. Do not add constructor saving to the coordinated saving.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A15a-F04",
+    "verdict": "S",
+    "file": "ui/industrial_analytics_dialog.py",
+    "line": 1617,
+    "symbol": "IndustrialAnalyticsDialog._populate_tabular_sheet_options",
+    "flows": [
+     "CSV-LOAD/select Excel workbook"
+    ],
+    "thread": "GUI",
+    "saving": "Estimated 0.05-2.0 s of GUI blocking on large Excel selection; approximately 0 s on the measured CSV scenario. Moving metadata discovery changes responsiveness; total flow latency changes only if metadata/workbook-open work can be reused.",
+    "effort": "M",
+    "confidence": "medium"
+   }
+  ],
+  "S3-6": [
+   {
+    "id": "A07-F01",
+    "verdict": "W",
+    "file": "parsing/report_parser_factory.py",
+    "line": 765,
+    "symbol": "_probe_with_cache",
+    "flows": [
+     "REV-PROBE",
+     "REV-META",
+     "IMP-FILTER",
+     "IMP-RUN"
+    ],
+    "thread": "worker",
+    "saving": "0 s for 1500 PDFs/one compatible plugin with intact cache; conditional planning range 1-8 s per 1500-file import with >=2 compatible plugins, by eliminating serial repeated PDF-detector passes. Range is SPECULATIVE and needs an end-to-end capacity-boundary benchmark; do not add it to the measured 9.6 s baseline as an established win.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A07-F02",
+    "verdict": "K",
+    "file": "parsing/report_parser_factory.py",
+    "line": 1330,
+    "symbol": "_ensure_external_plugins_loaded_once",
+    "flows": [
+     "IMP-FILTER",
+     "IMP-RUN",
+     "REV-PROBE",
+     "REV-META",
+     "IMP-CLICK"
+    ],
+    "thread": "worker",
+    "saving": "Estimated 0.4-0.8 s (4-8% of 9.6 s import), assuming 40-80% of the observed 10% refresh share can be removed; profile times under external load are not scaled as absolute timings. More with installed profiles is unquantified. Overlaps F01 resolver overhead; do not sum inclusive profile shares.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A07-F03",
+    "verdict": "W",
+    "file": "parsing/parse_reports_thread.py",
+    "line": 1755,
+    "symbol": "ParseReportsThread._selected_enrichment_identity",
+    "flows": [
+     "IMP-ENRICH"
+    ],
+    "thread": "worker",
+    "saving": "LIKELY 0.15-0.35 s at 1500 accepted reports, 2-5 s at 6000; 0 s when background enrichment is disabled. The optional OCR flow can take minutes, so this is a scaling cleanup rather than its dominant optimization.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A07-F04",
+    "verdict": "W",
+    "file": "parsing/report_parser_factory.py",
+    "line": 1651,
+    "symbol": "invoke_parser_factory",
+    "flows": [
+     "IMP-RUN",
+     "IMP-ENRICH",
+     "REV-META",
+     "REV-PROBE"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 0.03-0.10 s per 1500-file import; quick metadata/fresh Review benefit is similarly small and depends on which optional keywords are passed. Do not attribute the entire 12% inclusive factory share to this fix.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A07-F05",
+    "verdict": "S",
+    "file": "parsing/parse_reports_thread.py",
+    "line": 734,
+    "symbol": "_parse_new_reports",
+    "flows": [
+     "IMP-RUN-TWO-STAGE"
+    ],
+    "thread": "worker",
+    "saving": "0-0 s claimed throughput improvement; the defensible target is bounded memory, not an established latency win. Potential paging/OOM avoidance and cancellation savings require a dedicated opt-in benchmark, so no nonzero seconds estimate is claimed.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A08a-F01",
+    "verdict": "W",
+    "file": "parsing/review_pool.py",
+    "line": 372,
+    "symbol": "read_metadata_in_order",
+    "flows": [
+     "REV-META-FAST"
+    ],
+    "thread": "spawn",
+    "saving": "15-30% of the pooled quick-metadata operation for 1500 CMM PDFs (planning estimate, medium confidence). A corresponding unprofiled quick-metadata wall baseline was not supplied, so no absolute seconds are claimed. Little/no gain for serial, small, custom-parser, OCR, or cache-evicted cases.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A08a-F02",
+    "verdict": "W",
+    "file": "parsing/cmm_report_parser.py",
+    "line": 803,
+    "symbol": "CMMReportParser.open_report",
+    "flows": [
+     "REV-META-FAST",
+     "REV-META-OCR"
+    ],
+    "thread": "worker",
+    "saving": "15-25% of warm quick-metadata flow at the supplied 1500 three-page PDF scale; up to the 28% profile-share ceiling for non-header open work. No gain to preflight scan itself; lower on single-page reports. No independent unprofiled quick-metadata duration was supplied.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A08a-F03",
+    "verdict": "W",
+    "file": "cmm/block_parser.py",
+    "line": 37,
+    "symbol": "_normalize_status_token",
+    "flows": [
+     "REV-SCAN",
+     "REV-META-FAST",
+     "IMP-PREPARE"
+    ],
+    "thread": "spawn",
+    "saving": "About 0.2-0.6 s (2-7%) of the supplied 8.4 s Review scan, planning estimate: 18.6% parser micro improvement x 46% worker-service share gives ~8.6% service upper projection, discounted for pool startup/waits and fixture variability. Import benefit is smaller because persistence is 68% of its service; do not apply 18.6% to the entire import. Metadata benefit shrinks after F01.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A08a-F04",
+    "verdict": "W",
+    "file": "parsing/cmm_report_parser.py",
+    "line": 689,
+    "symbol": "CMMReportParser._extract_first_page_header_items",
+    "flows": [
+     "REV-META-FAST",
+     "REV-META-OCR",
+     "IMP-PREPARE"
+    ],
+    "thread": "worker",
+    "saving": "3-8% of quick-metadata flow at 1500 PDFs, likely lower for tiny first pages; potential memory reduction for image-heavy headers. Import prepare also benefits, but no isolated unprofiled saving is known. This is a planning estimate, not measured output from a proposed backend API.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A08b-F01",
+    "verdict": "W",
+    "file": "parsing/header_ocr_geometry.py",
+    "line": 94,
+    "symbol": "_block_candidates",
+    "flows": [
+     "REV-QUICK-METADATA",
+     "REV-RUN",
+     "IMP-RUN",
+     "METADATA-ENRICH"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 5-8% of the profiled in-process quick-metadata worker stage if 60-90% of this cost disappears. No defensible pooled end-to-end seconds estimate from the supplied profile; do not multiply by the unrelated 8.4 s pooled Review result.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A08b-F02",
+    "verdict": "K",
+    "file": "parsing/declarative_parser_profiles.py",
+    "line": 1499,
+    "symbol": "profile_store_signature",
+    "flows": [
+     "IMP-RUN",
+     "REV-RUN",
+     "REV-QUICK-METADATA"
+    ],
+    "thread": "worker",
+    "saving": "Approximately 3-6% of import worker time by removing redundant checks and path reconstruction; a proportional planning translation is ~0.3-0.6 s of the 9.6 s flow, with lower confidence because CPU profile shares are not wall-time attribution. Installed-profile workloads may gain more, unquantified.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A08b-F04",
+    "verdict": "W",
+    "file": "parsing/declarative_parser_profiles.py",
+    "line": 871,
+    "symbol": "parse_profile_result",
+    "flows": [
+     "IMP-RUN-DECLARATIVE",
+     "PARSER-PROFILES-ADMIN"
+    ],
+    "thread": "worker",
+    "saving": "~0.05-0.15 s per 1500 declarative reports with 144 short rows and one pattern; more with many specs/long text, not quantified. Zero claimed for the supplied CMM-only baseline. Also avoids the second transient match set.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A09a-F01",
+    "verdict": "W",
+    "file": "reports/report_repository.py",
+    "line": 1548,
+    "symbol": "ReportRepository._replace_full_report_payload",
+    "flows": [
+     "IMP-RUN"
+    ],
+    "thread": "worker",
+    "saving": "0.4-1.2 s (4-13% of 9.6 s import), LIKELY if preparation has spare parallel capacity; serial fallback may gain little. Not benchmarked end to end.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A09b-F01",
+    "verdict": "W",
+    "file": "reports/header_ocr_corrections.py",
+    "line": 132,
+    "symbol": "compact_token",
+    "flows": [
+     "REV-QUICK",
+     "REV-OCR",
+     "IMP-PREPARE"
+    ],
+    "thread": "spawn",
+    "saving": "Estimated 0.3-0.8 s (4-10%) of the measured 8.4 s Review-1500 journey, pending complete pooled-flow validation; 0.755 s saved in isolated synthetic metadata stage. Import/OCR whole-flow savings unmeasured and not added to this estimate.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A12-F01",
+    "verdict": "W",
+    "file": "ui/report_planner_model.py",
+    "line": 386,
+    "symbol": "ReportPlannerModel._row_changed",
+    "flows": [
+     "REV-META",
+     "REV-OCR",
+     "REPORTS-EDIT"
+    ],
+    "thread": "GUI",
+    "saving": "LIKELY 0.05-0.20s GUI work for a 1500-report pooled Review/quick-read phase, 0.10-0.40s for less-coalesced in-process feedback, plus shorter worst flushes under bursts. Normal end-to-end Review saving may be 0-0.20s (0-2.4% of 8.4s) when GUI work overlaps worker work. Synthetic measured delta is 0.076s per 1500-row burst; no claim that the profiled 0.4-1.9s inclusive cost is fully recoverable.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A12-F02",
+    "verdict": "W",
+    "file": "ui/metadata_review_worker.py",
+    "line": 59,
+    "symbol": "MetadataReviewThread._on_progress",
+    "flows": [
+     "REV-SCAN",
+     "REV-META",
+     "REV-OCR"
+    ],
+    "thread": "worker",
+    "saving": "LIKELY 0.005-0.05s per 1500-file pass from bounded producer batches/progress deduplication, potentially 0s end-to-end when overlapped. Main benefit is bounding Qt queued objects and stale progress backlog during bursts. Low-confidence timing estimate; do not add profile request cumulative time to F01 savings.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A13-F01",
+    "verdict": "W",
+    "file": "ui/ui_foundation.py",
+    "line": 614,
+    "symbol": "finalize_window_size",
+    "flows": [
+     "REV-RUN",
+     "IMP-RUN",
+     "EXP-MAIN",
+     "EXP-EXTENDED"
+    ],
+    "thread": "GUI",
+    "saving": "LIKELY 0.02-0.10 s per 1500-file import, 0.005-0.04 s per Review and 0.005-0.05 s Main export in cumulative GUI work; potentially 0.02-0.15 s Extended with its higher event count (lower confidence). Based on 26-29 microseconds per finalization in the synthetic probe, supplied call counts, and partial removal of the work. Do not claim the full 95% scheduling share or a reduction in the measured 1.7 s first-export stall.",
+    "effort": "S",
+    "confidence": "high"
+   }
+  ],
+  "S3-11": [
+   {
+    "id": "A10-F06",
+    "verdict": "W",
+    "file": "industrial/industrial_workers.py",
+    "line": 28,
+    "symbol": "<module> (industrial_workers imports industrial_analytics_workflow)",
+    "flows": [
+     "REALTIME-OPEN"
+    ],
+    "thread": "GUI",
+    "saving": "0.05-0.15 s of the 0.40 s first-open flow when these modules are still cold (about 13-38%); negligible if already imported by another feature. Upper bound limited by the nested 37% share.",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A10-F07",
+    "verdict": "S",
+    "file": "industrial/industrial_data_repository.py",
+    "line": 1020,
+    "symbol": "IndustrialDataRepository.promote_staged_industrial_records._promote",
+    "flows": [
+     "IND-SYNC-PROMOTE"
+    ],
+    "thread": "worker",
+    "saving": "0-1 s speculative from reduced allocation churn at 100k rows; primary benefit is reducing promotion Python working memory from whole-run size to a bounded batch. Not part of the measured bridge or CSV analytics time.",
+    "effort": "L",
+    "confidence": "high"
+   },
+   {
+    "id": "A12-F03",
+    "verdict": "S",
+    "file": "ui/report_planner.py",
+    "line": 427,
+    "symbol": "ReportPlanner._show_columns_menu",
+    "flows": [
+     "REPORTS-COLUMNS"
+    ],
+    "thread": "GUI",
+    "saving": "0-0.005s per menu opening expected (not measured); negligible effect on the supplied benchmark flows, which do not repeatedly open this menu. Memory improvement: retain one menu instead of O(number of opens), or release eight actions and one menu after every dismissal; exact retained bytes unmeasured.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A13-F02",
+    "verdict": "W",
+    "file": "ui/ui_foundation.py",
+    "line": 454,
+    "symbol": "apply_metroliza_application_theme",
+    "flows": [
+     "THEME-SWITCH"
+    ],
+    "thread": "GUI",
+    "saving": "LIKELY 0.02-0.06 s (about 12-35% of the supplied 0.17 s theme switch), bounded by the approximately 41% local-refresh profile share. Synthetic duplicate-pass overhead is 6.2-6.6 ms for one small subtree; real benefit depends on retained windows. No expected chart/export throughput gain.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A15a-F05",
+    "verdict": "W",
+    "file": "ui/industrial_data_dialog.py",
+    "line": 706,
+    "symbol": "IndustrialDataDialog._load_cache_status / refresh_status",
+    "flows": [
+     "INDUSTRIAL-OPEN/status",
+     "INDUSTRIAL-CSV/return to launcher",
+     "INDUSTRIAL/configuration or option change"
+    ],
+    "thread": "GUI",
+    "saving": "Approximately 0.01-0.04 s per ordinary status refresh (roughly most of the cited _load_cache_status share, not additive with its parents); potentially much larger under database lock contention or many configured profiles. No seconds extrapolated from the externally loaded profile. The primary benefit is eliminating unnecessary GUI writes/lock waits.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A15a-F07",
+    "verdict": "W",
+    "file": "ui/industrial_data_dialog.py",
+    "line": 1131,
+    "symbol": "IndustrialDataDialog._on_analytics_cache_loaded",
+    "flows": [
+     "INDUSTRIAL-CSV/repeated open, group and close"
+    ],
+    "thread": "GUI",
+    "saving": "0 s demonstrated direct flow-latency gain; avoid O(reopens x assigned rows) retained memory. A 100k-216k two-column pandas assignment frame commonly has several MB to tens of MB of logical deep size per retained child, representation dependent. Latency benefit from avoiding eventual memory pressure is unquantified (0 s accepted estimate, not evidence of zero impact).",
+    "effort": "S",
+    "confidence": "medium"
+   },
+   {
+    "id": "A16-F01",
+    "verdict": "S",
+    "file": "app/gc_policy.py",
+    "line": 70,
+    "symbol": "GuiGcPolicy.collect_due",
+    "flows": [
+     "REVIEW",
+     "IMP-RUN",
+     "MODIFY-DB",
+     "EXPORT-MAIN",
+     "EXPORT-EXTENDED",
+     "CSV-LOAD",
+     "CSV-ANALYTICS",
+     "INDUSTRIAL-TO-CSV",
+     "STARTUP"
+    ],
+    "thread": "GUI",
+    "saving": "Measured synthetic opportunity: 0.033-0.035 s per avoided full sweep, 0.067-0.069 s per 300 synthetic ticks. Tentative representative heavy-flow range 0-0.5 s of GUI work (roughly 0-0.7% of 68.8 s Extended), not a measured end-to-end saving; generation-specific flow receipts are needed to narrow it. The attributable full-sweep stall can disappear or move to an idle boundary; young-generation cleanup still costs time.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A16-F02",
+    "verdict": "S",
+    "file": "shared/compute_worker.py",
+    "line": 28,
+    "symbol": "worker_executable",
+    "flows": [
+     "REVIEW-WINDOWS-OPT-IN",
+     "REVIEW-QUICK-METADATA-WINDOWS-OPT-IN",
+     "IMP-RUN-WINDOWS-OPT-IN",
+     "EXPORT-MAIN-WINDOWS",
+     "EXPORT-EXTENDED-WINDOWS"
+    ],
+    "thread": "worker",
+    "saving": "Illustrative only: 0.03-0.5 s per pool admission if the six components total 30-100 MB and effective warm/cold read+hash throughput is 0.2-1 GB/s. Actual saving can be near zero for tiny/hot packages or larger on slow/antivirus-scanned storage. Removes one of the two local pool-admission passes (about 50% of that hashing), not 50% of the user flow; Windows measurement required.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A16-F03",
+    "verdict": "S",
+    "file": "app/startup_splash.py",
+    "line": 268,
+    "symbol": "QtStartupSplash.finish",
+    "flows": [
+     "STARTUP-QT-SPLASH",
+     "ALL-GUI-FLOWS-AFTER-QT-SPLASH"
+    ],
+    "thread": "GUI",
+    "saving": "No demonstrated wall-latency saving. Illustrative planning range 0-0.15 s GUI CPU per minute of session at 25 frames/s if hidden frame callbacks/decode cost 0-0.1 ms/frame. These frame costs are assumptions, not measurements; actual bundled asset cadence/decode must be profiled and can exceed the range. Also releases retained GIF reader/movie buffers once safely disposed. Do not add this hypothetical CPU amount to end-to-end flow savings.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A19-F01",
+    "verdict": "S",
+    "file": "packaging/launcher/archive.rs",
+    "line": 98,
+    "symbol": "decode_file",
+    "flows": [
+     "START-W1",
+     "START-REPAIR",
+     "START-W2"
+    ],
+    "thread": "worker",
+    "saving": "0-0.5 s on cold/repair extraction and 0-0.1 s on pending verification at ~2156 files; hypothesis only, not additive to known E3 savings. 0 s on completed warm launches. Compare target-Windows allocation/CPU traces before admitting work.",
+    "effort": "M",
+    "confidence": "medium"
+   },
+   {
+    "id": "A19-F02",
+    "verdict": "S",
+    "file": "packaging/launcher/platform/splash_windows.rs",
+    "line": 793,
+    "symbol": "start_splash / close_splash; ProgressWindow::begin / finish",
+    "flows": [
+     "START-W1",
+     "START-W2",
+     "START-WARM",
+     "START-REPAIR",
+     "EXIT"
+    ],
+    "thread": "startup",
+    "saving": "0 s for healthy launches. In a synthetic 10-30 s window-thread stall, a single 2 s readiness/teardown budget would avoid roughly 8-28 s of orchestration delay; a permanently hung thread currently has no finite bound. This is a scenario calculation, not an expected-frequency estimate.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A19-F03",
+    "verdict": "S",
+    "file": "packaging/launcher/platform/splash_windows.rs",
+    "line": 633,
+    "symbol": "window_thread / FRAMES cache",
+    "flows": [
+     "START-W1",
+     "START-W2",
+     "START-WARM",
+     "START-REPAIR",
+     "EXIT"
+    ],
+    "thread": "GUI",
+    "saving": "0 s normal launch latency; release about 10.01 MiB of live pixel allocations after splash handoff (OS working-set saving unmeasured). A rare repair pays a fresh decode, so this is a memory trade-off rather than a startup speedup.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "B06-F01",
+    "verdict": "S",
+    "file": "resources/base64_encoded_files.py",
+    "line": 1,
+    "symbol": "<module: encoded_loading_gif>",
+    "flows": [
+     "STARTUP"
+    ],
+    "thread": "startup",
+    "saving": "Approximately 0.005–0.08 s from pre-first-paint GUI work (estimate only; target-platform measurement required).",
+    "effort": "S",
+    "confidence": "medium"
+   }
+  ],
+  "S3-10": [
+   {
+    "id": "A18-F01",
+    "verdict": "W",
+    "file": "analytics/group_analysis_service.py",
+    "line": 1905,
+    "symbol": "build_group_analysis_payload",
+    "flows": [
+     "EXP-GROUP"
+    ],
+    "thread": "worker",
+    "saving": "1.0-1.6 s at 100k input rows; approximately 2.0-3.4 s at 216k rows by linear scaling of the avoided pass. Conditional on Group Analysis being enabled; no percentage claim for the 27.7/68.8 s runs because their Group Analysis settings are unspecified.",
+    "effort": "M",
+    "confidence": "high"
+   },
+   {
+    "id": "A18-F03",
+    "verdict": "W",
+    "file": "analytics/group_analysis_service.py",
+    "line": 157,
+    "symbol": "_group_table",
+    "flows": [
+     "EXP-GROUP"
+    ],
+    "thread": "worker",
+    "saving": "0.3-0.6 s at 100k rows, approximately 0.6-1.2 s at 216k rows across three grouping passes, allowing overhead and reduced realized gains. Remains after F01: readiness normalization does not perform these three grouping passes.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A18-F04",
+    "verdict": "W",
+    "file": "analytics/distribution_shape_analysis.py",
+    "line": 174,
+    "symbol": "_fit_profile_distributions_by_group",
+    "flows": [
+     "EXP-GROUP"
+    ],
+    "thread": "worker",
+    "saving": "0.2-0.6 s for 216 uncached group profiles with approximately 1500 values each, distributed over metrics that remain below the 10k per-metric fit threshold; scales with actual groups and sample sizes. Zero when profiles are skipped or already cached. No change claimed for Extended histogram calls, which already disable KDE.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A18-F05",
+    "verdict": "W",
+    "file": "analytics/hexafe_groupstats_adapter.py",
+    "line": 691,
+    "symbol": "analyze_group_metric (one-sided capability adaptation)",
+    "flows": [
+     "EXP-GROUP",
+     "CSV-ANALYTICS",
+     "IND-ANALYTICS"
+    ],
+    "thread": "worker",
+    "saving": "0.04-0.07 s per 216 one-sided groups on this fixture; approximately linear in actual qualifying groups. This is a minor cleanup, not an explanation for the 35.4 s CSV analytics flow.",
+    "effort": "S",
+    "confidence": "high"
+   },
+   {
+    "id": "A18-F06",
+    "verdict": "S",
+    "file": "analytics/distribution_fit_service.py",
+    "line": 1300,
+    "symbol": "fit_measurement_distribution_batch",
+    "flows": [
+     "EXP-GROUP"
+    ],
+    "thread": "worker",
+    "saving": "0 s with no cache hits or native backend unavailable. Conditional planning range 0.1-1.0 s for 100 native warm-hit groups if avoided fitting/metrics average 1-10 ms/group; this is an explicit cost model, not observed native throughput. Do not include in an unconditional STEP3 total.",
+    "effort": "M",
+    "confidence": "medium"
+   }
+  ]
+ }
+}

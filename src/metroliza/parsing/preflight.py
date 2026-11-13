@@ -7,25 +7,31 @@ never parser-selection inputs beyond identifying the source container format.
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, replace
 from enum import Enum
-from functools import lru_cache
+from functools import lru_cache, partial
+import hashlib
 from io import BytesIO
+import json
+import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import sqlite3
 import stat
 import tarfile
 from tempfile import TemporaryDirectory
-from typing import BinaryIO, Callable, Iterable
+from typing import BinaryIO, Callable, Iterable, Iterator
 import zipfile
 
 from metroliza.parsing import report_parser_factory
 from metroliza.parsing.cmm_report_parser import CMMReportParser
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
-from metroliza.parsing.source_inspection import SourceInspectionContext
+from metroliza.parsing.source_inspection import SourceInspectionContext, source_stat_signature
 from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
+from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 
 
 _REPORT_EXTENSIONS_BY_SOURCE_FORMAT = {
@@ -44,6 +50,7 @@ _MAX_ARCHIVE_MEMBER_BYTES = 1024 * 1024 * 1024
 _MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_ARCHIVE_COMPRESSION_RATIO = 500
 _ARCHIVE_RATIO_CHECK_MIN_BYTES = 64 * 1024 * 1024
+_CURRENT_PARSE_PREFLIGHT_VERSION = "parse-preflight-v1"
 _TAR_ARCHIVE_EXTENSIONS_BY_COMPRESSION = {
     "tar": frozenset({".tar"}),
     "gz": frozenset({".tar.gz", ".tgz"}),
@@ -385,12 +392,31 @@ class ParseFilePreflight:
     competing_parser_ids: tuple[str, ...] = ()
     registry_generation_id: int | None = None
     diagnostic_detail: str = ""
+    occurrence_id: str = ""
+    # Cheap change signal observed around the fingerprint hash (not part of result_id).
+    # The import may carry the fingerprint forward only while this signal is unchanged.
+    file_size_bytes: int | None = None
+    file_modified_ns: int | None = None
+
+    @property
+    def stat_signature(self) -> tuple[int, int] | None:
+        """Return ``(size, mtime_ns)`` as recorded with the fingerprint, if consistent."""
+
+        if self.file_size_bytes is None or self.file_modified_ns is None:
+            return None
+        return self.file_size_bytes, self.file_modified_ns
 
     @property
     def is_importable(self) -> bool:
         """Return whether this exact content/parser resolution may be imported."""
 
         return self.status is ParsePreflightStatus.READY
+
+    @property
+    def stable_occurrence_id(self) -> str:
+        """Return the source-relative identity used across archive extraction runs."""
+
+        return self.occurrence_id or _normalize_occurrence_id(self.display_name)
 
 
 @dataclass(frozen=True)
@@ -402,6 +428,7 @@ class ParsePreflightResult:
     metadata_parsing_mode: str
     files: tuple[ParseFilePreflight, ...]
     cancelled: bool = False
+    version: str = _CURRENT_PARSE_PREFLIGHT_VERSION
 
     def files_with_status(self, status: ParsePreflightStatus) -> tuple[ParseFilePreflight, ...]:
         return tuple(item for item in self.files if item.status is status)
@@ -447,6 +474,68 @@ class ParsePreflightResult:
     def status_counts(self) -> dict[ParsePreflightStatus, int]:
         return {status: self.count(status) for status in ParsePreflightStatus}
 
+    @property
+    def result_id(self) -> str:
+        """Return a deterministic identity for this exact reviewed result."""
+
+        payload = {
+            "version": self.version,
+            "source_path": str(Path(self.source_path).resolve(strict=False)),
+            "database_path": str(Path(self.database_path).resolve(strict=False)),
+            "metadata_parsing_mode": self.metadata_parsing_mode,
+            "cancelled": self.cancelled,
+            "files": [
+                {
+                    "occurrence_id": item.stable_occurrence_id,
+                    "status": item.status.value,
+                    "reason_codes": item.reason_codes,
+                    "source_format": item.source_format,
+                    "fingerprint": item.fingerprint,
+                    "parser_id": item.parser_id,
+                    "registry_generation_id": item.registry_generation_id,
+                }
+                for item in self.files
+            ],
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+    def atomic_import_candidates(
+        self,
+        *,
+        source_path: str,
+        database_path: str,
+        metadata_parsing_mode: str,
+        registry_generation_id: int | None,
+    ) -> tuple[ParseFilePreflight, ...]:
+        """Return approved candidates for verification, without reading or writing data.
+
+        DUPLICATE is historical destination evidence, not a complete-graph or
+        write decision. Only the atomic repository can make that decision.
+        A selected-plan adapter must additionally intersect its selected set.
+        """
+
+        if (
+            self.cancelled
+            or not source_path
+            or not database_path
+            or registry_generation_id is None
+            or not self.matches_request(
+                source_path=source_path,
+                database_path=database_path,
+                metadata_parsing_mode=metadata_parsing_mode,
+            )
+        ):
+            return ()
+        return tuple(
+            item for item in self.files
+            if item.status in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+            and "duplicate_in_selected_source" not in item.reason_codes
+            and item.fingerprint
+            and item.parser_id
+            and item.registry_generation_id == registry_generation_id
+        )
+
     def matches_request(
         self,
         *,
@@ -463,6 +552,265 @@ class ParsePreflightResult:
             == Path(database_path).resolve(strict=False)
             and self.metadata_parsing_mode == str(metadata_parsing_mode)
         )
+
+
+@dataclass(frozen=True)
+class SelectedReportIdentity:
+    """Content and occurrence identity approved for one selected atomic candidate."""
+
+    occurrence_id: str
+    fingerprint: str
+    parser_id: str
+    registry_generation_id: int
+
+
+@dataclass(frozen=True)
+class ImportPlan:
+    """Immutable destination-bound plan for an explicit reviewed report subset."""
+
+    source_path: str
+    database_path: str
+    metadata_parsing_mode: str
+    run_background_metadata_enrichment: bool
+    preflight_result: ParsePreflightResult
+    preflight_version: str
+    preflight_result_id: str
+    selected_reports: tuple[SelectedReportIdentity, ...]
+    # Values confirmed in the pre-import metadata review (#1100). Each override
+    # is bound to a selected report by occurrence id and content fingerprint.
+    metadata_overrides: tuple[ReportMetadataOverride, ...] = ()
+
+    @classmethod
+    def from_preflight(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+        *,
+        selected_occurrence_ids: Iterable[str],
+        metadata_overrides: Iterable[ReportMetadataOverride] = (),
+    ) -> ImportPlan:
+        """Build a plan from an explicit set of reviewed occurrence identities."""
+
+        validated_request = validate_parse_request(request)
+        if preflight_result.cancelled:
+            raise ValueError("A cancelled preflight result cannot be imported.")
+        if not preflight_result.matches_request(
+            source_path=validated_request.source_directory,
+            database_path=validated_request.db_file,
+            metadata_parsing_mode=validated_request.metadata_parsing_mode,
+        ):
+            raise ValueError("Import plan inputs do not match the reviewed preflight result.")
+        selected_ids = tuple(
+            sorted(
+                (str(value) for value in selected_occurrence_ids),
+                key=lambda value: (value.casefold(), value),
+            )
+        )
+        if len(selected_ids) != len(set(selected_ids)):
+            raise ValueError("Selected report occurrence identities must be unique.")
+
+        files_by_occurrence = _preflight_files_by_occurrence(preflight_result)
+        eligible = {
+            item.stable_occurrence_id
+            for item in _reviewed_atomic_candidates(preflight_result)
+        }
+        selected_reports: list[SelectedReportIdentity] = []
+        for occurrence_id in selected_ids:
+            item = files_by_occurrence.get(occurrence_id)
+            if item is None:
+                raise ValueError(f"Selected report identity is missing from preflight: {occurrence_id}")
+            if occurrence_id not in eligible:
+                raise ValueError(f"Selected report is not an atomic import candidate: {occurrence_id}")
+            if not item.fingerprint or not item.parser_id or item.registry_generation_id is None:
+                raise ValueError(f"Selected READY report has incomplete approval evidence: {occurrence_id}")
+            selected_reports.append(
+                SelectedReportIdentity(
+                    occurrence_id=occurrence_id,
+                    fingerprint=item.fingerprint,
+                    parser_id=item.parser_id,
+                    registry_generation_id=item.registry_generation_id,
+                )
+            )
+
+        plan = cls(
+            source_path=preflight_result.source_path,
+            database_path=preflight_result.database_path,
+            metadata_parsing_mode=validated_request.metadata_parsing_mode,
+            run_background_metadata_enrichment=(
+                validated_request.run_background_metadata_enrichment
+            ),
+            preflight_result=preflight_result,
+            preflight_version=preflight_result.version,
+            preflight_result_id=preflight_result.result_id,
+            selected_reports=tuple(selected_reports),
+            metadata_overrides=tuple(metadata_overrides),
+        )
+        return validate_import_plan(plan)
+
+    @classmethod
+    def all_ready(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+    ) -> ImportPlan:
+        """Compatibility adapter that explicitly selects every READY occurrence."""
+
+        return cls.from_preflight(
+            request,
+            preflight_result,
+            selected_occurrence_ids=(
+                item.stable_occurrence_id for item in preflight_result.ready_files
+            ),
+        )
+
+    @classmethod
+    def all_atomic_candidates(
+        cls,
+        request: ParseRequest,
+        preflight_result: ParsePreflightResult,
+    ) -> ImportPlan:
+        """Explicit compatibility adapter for the current import/verify action."""
+        candidates = _reviewed_atomic_candidates(preflight_result)
+        generation = report_parser_factory.get_registry_snapshot().generation_id
+        if any(item.registry_generation_id != generation for item in candidates):
+            raise ValueError("Reviewed parser generation is stale; scan again.")
+        return cls.from_preflight(
+            request,
+            preflight_result,
+            selected_occurrence_ids=(item.stable_occurrence_id for item in candidates),
+        )
+
+
+def _reviewed_atomic_candidates(preflight: ParsePreflightResult) -> tuple[ParseFilePreflight, ...]:
+    """Use shared eligibility at the recorded generation, without shrinking a plan on drift."""
+    if any(
+        item.status in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+        and "duplicate_in_selected_source" not in item.reason_codes
+        and (not item.fingerprint or not item.parser_id or item.registry_generation_id is None)
+        for item in preflight.files
+    ):
+        raise ValueError("Reviewed report has incomplete approval evidence.")
+    generations = {item.registry_generation_id for item in preflight.files}
+    return tuple(
+        candidate
+        for generation in generations
+        for candidate in preflight.atomic_import_candidates(
+            source_path=preflight.source_path,
+            database_path=preflight.database_path,
+            metadata_parsing_mode=preflight.metadata_parsing_mode,
+            registry_generation_id=generation,
+        )
+    )
+
+
+def _normalize_occurrence_id(value: str) -> str:
+    normalized = PurePosixPath(str(value).replace(os.sep, "/")).as_posix()
+    if normalized in {"", "."} or normalized.startswith("../") or normalized.startswith("/"):
+        raise ValueError("Report occurrence identity must be a non-empty relative path.")
+    return normalized
+
+
+def _preflight_files_by_occurrence(
+    preflight_result: ParsePreflightResult,
+) -> dict[str, ParseFilePreflight]:
+    files_by_occurrence: dict[str, ParseFilePreflight] = {}
+    for item in preflight_result.files:
+        occurrence_id = item.stable_occurrence_id
+        if occurrence_id in files_by_occurrence:
+            raise ValueError(f"Preflight occurrence identity is not unique: {occurrence_id}")
+        files_by_occurrence[occurrence_id] = item
+    return files_by_occurrence
+
+
+def validate_import_plan(plan: ImportPlan) -> ImportPlan:
+    """Fail closed unless a plan exactly binds a current non-cancelled preflight."""
+
+    if not isinstance(plan, ImportPlan):
+        raise ValueError("Import plan must be provided as an ImportPlan instance.")
+    _validate_import_plan_context(plan)
+    _validate_selected_reports(plan)
+    _validate_metadata_overrides(plan)
+    return plan
+
+
+def _validate_import_plan_context(plan: ImportPlan) -> None:
+    preflight = plan.preflight_result
+    if not isinstance(preflight, ParsePreflightResult):
+        raise ValueError("Import plan must bind a ParsePreflightResult instance.")
+    if not isinstance(preflight.files, tuple):
+        raise ValueError("Preflight files must be an immutable tuple.")
+    if preflight.cancelled:
+        raise ValueError("A cancelled preflight result cannot be imported.")
+    if (
+        plan.preflight_version != _CURRENT_PARSE_PREFLIGHT_VERSION
+        or preflight.version != _CURRENT_PARSE_PREFLIGHT_VERSION
+    ):
+        raise ValueError("Import plan uses an unsupported preflight version.")
+    if plan.preflight_result_id != preflight.result_id:
+        raise ValueError("Import plan does not match its reviewed preflight result.")
+    if not isinstance(plan.run_background_metadata_enrichment, bool):
+        raise ValueError("run_background_metadata_enrichment must be a boolean.")
+    if not isinstance(plan.selected_reports, tuple):
+        raise ValueError("Import plan selected_reports must be an immutable tuple.")
+    if not preflight.matches_request(
+        source_path=plan.source_path,
+        database_path=plan.database_path,
+        metadata_parsing_mode=plan.metadata_parsing_mode,
+    ):
+        raise ValueError("Import plan inputs do not match the reviewed preflight result.")
+
+
+def _validate_selected_reports(plan: ImportPlan) -> None:
+    files_by_occurrence = _preflight_files_by_occurrence(plan.preflight_result)
+    eligible = {
+        item.stable_occurrence_id for item in _reviewed_atomic_candidates(plan.preflight_result)
+    }
+    selected_occurrences: set[str] = set()
+    for identity in plan.selected_reports:
+        if not isinstance(identity, SelectedReportIdentity):
+            raise ValueError("Import plan contains an invalid selected report identity.")
+        if identity.occurrence_id in selected_occurrences:
+            raise ValueError("Import plan contains duplicate selected report identities.")
+        selected_occurrences.add(identity.occurrence_id)
+        item = files_by_occurrence.get(identity.occurrence_id)
+        if item is None:
+            raise ValueError(
+                f"Selected report identity is missing from preflight: {identity.occurrence_id}"
+            )
+        approved_identity = SelectedReportIdentity(
+            occurrence_id=item.stable_occurrence_id,
+            fingerprint=item.fingerprint or "",
+            parser_id=item.parser_id or "",
+            registry_generation_id=item.registry_generation_id or 0,
+        )
+        if identity.occurrence_id not in eligible or identity != approved_identity:
+            raise ValueError(
+                f"Selected report identity is not an exact atomic approval: {identity.occurrence_id}"
+            )
+
+
+def _validate_metadata_overrides(plan: ImportPlan) -> None:
+    """Overrides may only target selected reports, by exact identity."""
+
+    if not isinstance(plan.metadata_overrides, tuple):
+        raise ValueError("Import plan metadata_overrides must be an immutable tuple.")
+    selected = {identity.occurrence_id: identity for identity in plan.selected_reports}
+    seen: set[str] = set()
+    for override in plan.metadata_overrides:
+        if not isinstance(override, ReportMetadataOverride):
+            raise ValueError("Import plan contains an invalid metadata override.")
+        if override.occurrence_id in seen:
+            raise ValueError("Import plan contains duplicate metadata overrides.")
+        seen.add(override.occurrence_id)
+        identity = selected.get(override.occurrence_id)
+        if identity is None:
+            raise ValueError(
+                f"Metadata override targets an unselected report: {override.occurrence_id}"
+            )
+        if override.fingerprint != identity.fingerprint:
+            raise ValueError(
+                f"Metadata override does not match the reviewed content: {override.occurrence_id}"
+            )
 
 
 def supported_report_file_extensions() -> set[str]:
@@ -589,7 +937,17 @@ def _unreadable_entry(display_name: str, source_path: Path, detail: str) -> Pars
         fingerprint=None,
         reason_codes=("source_unreadable",),
         diagnostic_detail=str(detail),
+        occurrence_id=_normalize_occurrence_id(display_name),
     )
+
+
+def _consistent_stat_evidence(inspection: SourceInspectionContext) -> dict[str, int]:
+    """Return size/mtime evidence only if the file did not move while it was hashed."""
+
+    observed = (inspection.file_size_bytes, inspection.file_modified_ns)
+    if None in observed or source_stat_signature(inspection.source_path) != observed:
+        return {}
+    return {"file_size_bytes": observed[0], "file_modified_ns": observed[1]}
 
 
 class ParsePreflightService:
@@ -603,9 +961,17 @@ class ParsePreflightService:
         metadata_parsing_mode: str,
         should_cancel: Callable[[], bool] = lambda: False,
         on_progress: Callable[[int, int, str], None] | None = None,
+        workers: int | None = None,
     ) -> ParsePreflightResult:
-        source = Path(source_path)
-        database = Path(database_path)
+        """Classify every report below ``source_path`` without writing anything.
+
+        ``workers`` is the review-pool size; ``None`` lets the compute budget decide
+        (``metroliza.shared.compute_budget.review_workers``) and 0 or 1 keeps the
+        inspection in-process.  Results are identical either way.
+        """
+
+        source = Path(source_path).resolve(strict=False)
+        database = Path(database_path).resolve(strict=False)
         existing_fingerprints = load_existing_report_fingerprints(
             database,
             metadata_parsing_mode=metadata_parsing_mode,
@@ -635,42 +1001,28 @@ class ParsePreflightService:
             if on_progress and discovery_failures:
                 on_progress(processed, total, discovery_failures[-1].display_name)
 
-            for path, display_name in discovered:
-                if should_cancel():
-                    return ParsePreflightResult(
-                        source_path=str(source),
-                        database_path=str(database),
-                        metadata_parsing_mode=str(metadata_parsing_mode),
-                        files=tuple(results),
-                        cancelled=True,
-                    )
-                inspected = self._inspect_file(
-                    path,
-                    display_name=display_name,
-                    existing_fingerprints=existing_fingerprints,
-                )
-                if (
-                    inspected.fingerprint in seen_fingerprints
-                    and inspected.status in {
-                        ParsePreflightStatus.READY,
-                        ParsePreflightStatus.DUPLICATE,
-                    }
-                ):
-                    inspected = replace(
-                        inspected,
-                        status=ParsePreflightStatus.DUPLICATE,
-                        reason_codes=tuple(
-                            dict.fromkeys(
-                                (*inspected.reason_codes, "duplicate_in_selected_source")
-                            )
-                        ),
-                    )
-                if inspected.fingerprint:
-                    seen_fingerprints.add(inspected.fingerprint)
-                results.append(inspected)
-                processed += 1
-                if on_progress:
-                    on_progress(processed, total, display_name)
+            inspections = self._inspections_in_order(
+                discovered,
+                existing_fingerprints=existing_fingerprints,
+                should_cancel=should_cancel,
+                workers=workers,
+            )
+            with closing(inspections):
+                for display_name, inspect_next in inspections:
+                    inspected = None if should_cancel() else inspect_next()
+                    if inspected is None:  # cancelled (a pool ends early only on cancel)
+                        return ParsePreflightResult(
+                            source_path=str(source),
+                            database_path=str(database),
+                            metadata_parsing_mode=str(metadata_parsing_mode),
+                            files=tuple(results),
+                            cancelled=True,
+                        )
+                    inspected = self._mark_duplicate_in_source(inspected, seen_fingerprints)
+                    results.append(inspected)
+                    processed += 1
+                    if on_progress:
+                        on_progress(processed, total, display_name)
 
             return ParsePreflightResult(
                 source_path=str(source),
@@ -682,6 +1034,82 @@ class ParsePreflightService:
         finally:
             if temporary_directory is not None:
                 temporary_directory.cleanup()
+
+    def _inspections_in_order(
+        self,
+        discovered: list[tuple[Path, str]],
+        *,
+        existing_fingerprints: frozenset[str],
+        should_cancel: Callable[[], bool],
+        workers: int | None,
+    ) -> Iterator[tuple[str, Callable[[], ParseFilePreflight | None]]]:
+        """Yield ``(display_name, inspect_next)`` in discovery order.
+
+        ``inspect_next()`` returns the file's inspection (``None`` once a pool stopped on
+        cancellation).  The caller checks cancellation before each call, exactly as the
+        in-process loop always did.  The pool (``review_pool``) runs the same
+        ``_inspect_file`` in worker processes; only the plain service is pooled, so a
+        subclass or a patched inspection stays in-process.
+        """
+
+        def inspect(path: Path, display_name: str) -> ParseFilePreflight:
+            return self._inspect_file(
+                path,
+                display_name=display_name,
+                existing_fingerprints=existing_fingerprints,
+            )
+
+        count = 0
+        if (
+            discovered
+            and type(self) is ParsePreflightService
+            and self._inspect_file is _IN_PROCESS_INSPECT_FILE
+        ):
+            from metroliza.parsing import review_pool
+
+            count = (
+                review_pool.resolve_review_worker_count(len(discovered))
+                if workers is None else max(0, int(workers))
+            )
+        if count < 2:
+            for path, display_name in discovered:
+                yield display_name, partial(inspect, path, display_name)
+            return
+        pooled = review_pool.inspect_in_order(
+            discovered,
+            existing_fingerprints=existing_fingerprints,
+            workers=count,
+            should_cancel=should_cancel,
+            inspect_serial=inspect,
+        )
+        with closing(pooled):
+            for _path, display_name in discovered:
+                yield display_name, partial(next, pooled, None)
+            next(pooled, None)  # let a complete run shut its workers down gracefully
+
+    @staticmethod
+    def _mark_duplicate_in_source(
+        inspected: ParseFilePreflight, seen_fingerprints: set[str]
+    ) -> ParseFilePreflight:
+        """Apply the in-order duplicate rule of one selected source (mutates ``seen``)."""
+
+        if (
+            inspected.fingerprint in seen_fingerprints
+            and inspected.status in {
+                ParsePreflightStatus.READY,
+                ParsePreflightStatus.DUPLICATE,
+            }
+        ):
+            inspected = replace(
+                inspected,
+                status=ParsePreflightStatus.DUPLICATE,
+                reason_codes=tuple(
+                    dict.fromkeys((*inspected.reason_codes, "duplicate_in_selected_source"))
+                ),
+            )
+        if inspected.fingerprint:
+            seen_fingerprints.add(inspected.fingerprint)
+        return inspected
 
     @staticmethod
     def _discover_files(
@@ -714,7 +1142,7 @@ class ParsePreflightService:
                 discovered.append((path, display_name))
         except OSError as exc:
             failures.append(_unreadable_entry(scan_root.name or str(scan_root), scan_root, str(exc)))
-        discovered.sort(key=lambda item: item[1].casefold())
+        discovered.sort(key=lambda item: (item[1].casefold(), item[1]))
         return discovered, failures
 
     @staticmethod
@@ -730,6 +1158,7 @@ class ParsePreflightService:
         if not sha256_value:
             return _unreadable_entry(display_name, path, "Could not read source content")
         fingerprint = f"sha256:{sha256_value}"
+        stat_evidence = _consistent_stat_evidence(inspection)
 
         try:
             diagnostics = report_parser_factory.resolve_parser_with_diagnostics(
@@ -744,11 +1173,13 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.AMBIGUOUS,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=_reason_codes(diagnostics),
                 candidates=_candidate_evidence(diagnostics),
                 competing_parser_ids=tuple(exc.plugin_ids),
                 registry_generation_id=diagnostics.registry_generation_id,
                 diagnostic_detail=str(exc),
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
         except Exception as exc:
             return ParseFilePreflight(
@@ -757,8 +1188,10 @@ class ParsePreflightService:
                 status=ParsePreflightStatus.UNREADABLE,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=("parser_inspection_exception",),
                 diagnostic_detail=f"{type(exc).__name__}: {exc}",
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
 
         evidence = _candidate_evidence(diagnostics)
@@ -775,10 +1208,12 @@ class ParsePreflightService:
                 status=status,
                 source_format=source_format,
                 fingerprint=fingerprint,
+                **stat_evidence,
                 reason_codes=reason_codes,
                 candidates=evidence,
                 competing_parser_ids=tuple(diagnostics.ambiguous_plugin_ids),
                 registry_generation_id=diagnostics.registry_generation_id,
+                occurrence_id=_normalize_occurrence_id(display_name),
             )
 
         selected = diagnostics.selected
@@ -793,9 +1228,15 @@ class ParsePreflightService:
             status=status,
             source_format=source_format,
             fingerprint=fingerprint,
+            **stat_evidence,
             parser_id=str(selected.plugin_id),
             confidence=int(selected.confidence or 0),
             reason_codes=reason_codes,
             candidates=evidence,
             registry_generation_id=diagnostics.registry_generation_id,
+            occurrence_id=_normalize_occurrence_id(display_name),
         )
+
+
+# The inspection the review pool runs in its workers; anything else stays in-process.
+_IN_PROCESS_INSPECT_FILE = ParsePreflightService._inspect_file

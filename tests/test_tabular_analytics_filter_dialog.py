@@ -34,6 +34,126 @@ else:
 _APP = None
 
 
+@pytest.mark.parametrize("initial,current,accepted", [
+    ("value >= 2", "value >=", False), ("value >=", "value >= 2", True),
+])
+def test_review_f1_stale_commit_result_uses_current_validation(initial, current, accepted, monkeypatch):
+    _app()
+    hooks = []
+
+    class LegacyDialog(TabularAnalyticsFilterDialog):
+        def _commit_current_filter_controls(self):
+            hooks.append("commit")
+            if not hasattr(self, "saved_commit_result"):
+                self.saved_commit_result = super()._commit_current_filter_controls()
+            return self.saved_commit_result
+
+    dialog = LegacyDialog(dataframe=pd.DataFrame({"value": [1, 2, 3]}))
+    calls = []
+    try:
+        dialog.expression_input.setText(initial)
+        dialog._commit_current_filter_controls()
+        count = dialog._filtered_row_count
+
+        def counted(filters):
+            calls.append(filters)
+            return count(filters)
+
+        monkeypatch.setattr(dialog, "_filtered_row_count", counted)
+        dialog.expression_input.setText(current)
+        dialog._accept_filter()
+        assert hooks == ["commit", "commit"]
+        assert calls == [()]
+        assert (dialog.result() == dialog.DialogCode.Accepted) is accepted
+        if not accepted:
+            assert dialog.expression_error_label.text().startswith("Invalid advanced expression:")
+    finally:
+        dialog.close()
+
+
+def test_t22_date_bounds_replacement_mutation_and_empty_day(monkeypatch):
+    _app()
+    dialog = TabularAnalyticsFilterDialog(dataframe=pd.DataFrame({"date": ["2026-01-02", "2026-03-04"]}))
+    try:
+        assert dialog._column_date_bounds("date") == (QDate(2026, 1, 2), QDate(2026, 3, 4))
+        dialog.source_dataframe.loc[0, "date"] = "2025-01-01"
+        assert dialog._column_date_bounds("date") == (QDate(2025, 1, 1), QDate(2026, 3, 4))
+        dialog.source_dataframe = pd.DataFrame({"date": ["2024-01-01"]})
+        assert dialog._column_date_bounds("date") == (QDate(2024, 1, 1), QDate(2024, 1, 1))
+        dialog.source_dataframe = pd.DataFrame({"date": [None]})
+
+        class Day:
+            current = QDate(2026, 1, 1)
+
+            @classmethod
+            def currentDate(cls):
+                return cls.current
+
+        monkeypatch.setattr(filter_dialog_module, "QDate", Day)
+        assert dialog._column_date_bounds("date") == (Day.current, Day.current)
+        Day.current = QDate(2026, 1, 2)
+        assert dialog._column_date_bounds("date") == (Day.current, Day.current)
+    finally:
+        dialog.close()
+
+
+def test_t22_apply_literal_valid_invalid_and_pending_status():
+    _app()
+    dialog = TabularAnalyticsFilterDialog(dataframe=pd.DataFrame({"value": [1, 2, 3]}))
+    try:
+        dialog.expression_input.setText("value >= 2")
+        dialog._accept_filter()
+        assert dialog.result() == dialog.DialogCode.Accepted
+        assert dialog.status_label.text() == "Advanced expression, 2 rows"
+        assert not dialog._status_timer.isActive()
+        dialog.setResult(0)
+        dialog.expression_input.setText("value >=")
+        dialog._accept_filter()
+        assert dialog.result() == 0
+        assert dialog.expression_error_label.text().startswith("Invalid advanced expression:")
+        assert not dialog.apply_button.isEnabled()
+        assert not dialog._status_timer.isActive()
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("expression,accepted", [("value >= 2", True), ("value >=", False)])
+def test_t22_accept_keeps_original_validation_count(expression, accepted, monkeypatch):
+    _app()
+    dialog = TabularAnalyticsFilterDialog(dataframe=pd.DataFrame({"value": [1, 2, 3]}))
+    calls = []
+    count = dialog._filtered_row_count
+
+    def counted(filters):
+        calls.append(filters)
+        return count(filters)
+
+    try:
+        monkeypatch.setattr(dialog, "_filtered_row_count", counted)
+        dialog.expression_input.setText(expression)
+        dialog._accept_filter()
+        assert len(calls) == 2
+        assert (dialog.result() == dialog.DialogCode.Accepted) is accepted
+        assert not dialog._status_timer.isActive()
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("commit_result", [None, True, False, "custom"])
+def test_t22_custom_control_commit_keeps_validation_fallback(monkeypatch, commit_result):
+    _app()
+    dialog = TabularAnalyticsFilterDialog(dataframe=pd.DataFrame({"value": [1]}))
+    calls = []
+    try:
+        monkeypatch.setattr(dialog, "_commit_current_filter_controls", lambda: commit_result)
+        monkeypatch.setattr(dialog, "_filtered_row_count", lambda filters: calls.append(filters) or 1)
+        dialog._accept_filter()
+        assert calls == [()]
+        assert dialog.result() == dialog.DialogCode.Accepted
+    finally:
+        dialog.close()
+
+
 def _app():
     if PYQT_IMPORT_ERROR is not None:
         pytest.skip(f"PyQt6 is unavailable in this environment: {PYQT_IMPORT_ERROR}")
@@ -755,6 +875,31 @@ def test_filter_dialog_sqlite_lifecycle_handlers_ignore_stale_results_and_report
         assert loading_label.text.startswith("Canceling value preview")
         assert loading_dialog.closed is True
         assert dialog.matching_status_label.text() == "Value preview canceled."
+    finally:
+        dialog.close()
+        cleanup_tabular_load_result(loaded)
+
+
+def test_preview_terminal_cleanup_deletes_dialog_and_drops_all_widgets(tmp_path):
+    from PyQt6 import sip
+    from PyQt6.QtCore import QCoreApplication, QEvent
+    from metroliza.ui.worker_progress_dialog import create_delayed_worker_progress_dialog
+
+    _app()
+    loaded = _sample_loaded_table(tmp_path)
+    dialog = TabularAnalyticsFilterDialog(dataframe=loaded.dataframe, column_mapping=loaded.column_mapping)
+    try:
+        progress = create_delayed_worker_progress_dialog(
+            dialog, window_title="Preview", initial_status_text="Loading", on_cancel=lambda: None,
+        )
+        for suffix, widget in zip(("dialog", "label", "bar", "gif"), progress):
+            setattr(dialog, "_preview_loading_" + suffix, widget)
+        progress[0].show()
+        dialog._close_preview_loading_dialog()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        assert sip.isdeleted(progress[0])
+        assert all(getattr(dialog, "_preview_loading_" + suffix) is None
+                   for suffix in ("dialog", "label", "bar", "gif"))
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)

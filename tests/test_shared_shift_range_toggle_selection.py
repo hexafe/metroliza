@@ -310,7 +310,7 @@ class TestSharedShiftRangeToggleSelection(unittest.TestCase):
 
             dialog._list_selection_utils.connect_shift_range_behavior.assert_called_once_with(list_widget)
             dialog._list_selection_utils.handle_shift_range_press.assert_called_once_with(list_widget, item)
-            dialog._list_selection_utils.preserve_selection_during_filter.assert_called_once_with(list_widget, "abc")
+            dialog._list_selection_utils.preserve_selection_during_filter.assert_called_once_with(list_widget, "abc", visibility_only=True)
 
     def test_data_grouping_delegates_shift_and_filter_to_shared_helper(self):
         pyqt6, qtcore, qtwidgets, qtgui = _install_qt_stubs()

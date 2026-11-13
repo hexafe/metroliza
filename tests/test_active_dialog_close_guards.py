@@ -195,7 +195,10 @@ def test_export_close_waits_for_active_worker(qapp, monkeypatch, tmp_path):
 
     request = SimpleNamespace(
         paths=SimpleNamespace(excel_file=str(tmp_path / "output.xlsx"), html_dashboard_file=None),
-        options=SimpleNamespace(violin_plot_min_samplesize=6, summary_plot_scale=0),
+        options=SimpleNamespace(
+            violin_plot_min_samplesize=6, summary_plot_scale=0,
+            export_target="excel_xlsx", generate_html_dashboard=False,
+        ),
     )
     monkeypatch.setattr(
         export_dialog_module,

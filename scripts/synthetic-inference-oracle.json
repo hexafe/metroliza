@@ -1,0 +1,25 @@
+{
+  "schema": "metroliza-synthetic-inference-oracle-v1",
+  "authority": "ORCH-1047-RUNTIME-CLOSEOUT-20260916; bounded W06 successful inference",
+  "provenance": "Values authored before execution; independent review 0e6f58e0e1336b820dfcaebb99a83b52c52bd7e5598c96a420e54438337840ca. The comparator recomputes descriptive statistics and effect from these values using only the standard library. The p-value is independently pinned, not derived from application output.",
+  "groups": {
+    "A": [9.90, 9.92, 9.94, 9.96, 10.02],
+    "B": [10.02, 10.04, 10.06, 10.08, 10.10]
+  },
+  "pairwise": {
+    "group_a": "A",
+    "group_b": "B",
+    "test_used": "Student t-test",
+    "effect_type": "cohen_d",
+    "difference": "YES",
+    "flags": "none",
+    "p_value": 0.0020460464568378047
+  },
+  "independent_raw_statistics": {
+    "degrees_of_freedom": 8,
+    "t_statistic": -4.483588306542447,
+    "mean_difference": -0.112,
+    "cohens_d": -2.8356702278342714
+  },
+  "limits": "Only this fixed public synthetic two-group case. No general inference, native parity, real-data or Windows/package claim before the corresponding execution."
+}
