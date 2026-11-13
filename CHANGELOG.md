@@ -1,6 +1,23 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261115) — current version
+## 2026.09 RC1 (build 261119) — current version
+- Main Reports HTML dashboards retain complete long measurement labels while bounding generated asset names.
+- Export failures report a safe stage, original operating-system error codes and next action without exposing paths or measurement details.
+- Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
+- Return or Enter searches CSV filter values without applying the draft; use Apply or Ctrl+S to commit it.
+- Compact CSV grouping wraps long hints, keeps paging controls together and makes footer actions reachable with Tab.
+- Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace.
+- Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys.
+- After import, keep per-report saved, skipped and failed results in view, then review again before importing more.
+- Filter dialogs show hidden selection counts; groups have explicit column and member controls.
+- Choose HTML dashboards and optional workbooks with visible paths and the scope that will be generated.
+- Parser Profiles separates installed profiles from adding a format, with preparation, check, validation and installation stages.
+- Industrial Data shows source setup, access checks, cache readiness and the next available action.
+- Realtime separates polling, last-snapshot freshness and dashboard state, with visible Stop and event review.
+- Offline dashboards use a compact overview, retain sampling warnings, and show local Enter/E/Esc/Q hints.
+- Help opens manuals pinned to this build, including the shared keyboard reference.
+
+## 2026.09 RC1 (build 261115) — superseded candidate build
 - Return or Enter searches CSV filter values without applying the draft; use Apply or Ctrl+S to commit it.
 - Compact CSV grouping wraps long hints, keeps paging controls together and makes footer actions reachable with Tab.
 - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace.

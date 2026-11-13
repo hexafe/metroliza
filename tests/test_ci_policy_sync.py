@@ -20,7 +20,7 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
-def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
+def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(tmp_path):
     import yaml
 
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
@@ -62,9 +62,22 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
     assert set(receipts["with"]["path"].splitlines()) == {
         *(f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")),
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/main-html.zip",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js",
     }
+    archives = set()
+    for run in ('core-dpr-1.0', 'core-dpr-1.25', 'core-dpr-1.5', 'core-native-unavailable'):
+        directory = tmp_path / run
+        directory.mkdir()
+        archive = directory / 'main-html.zip'
+        archive.touch()
+        archives.add(archive)
+        (directory / 'unrelated.zip').touch()
+    (tmp_path / 'qualified-windows-development-package.zip').touch()
+    archive_pattern = next(path for path in receipts['with']['path'].splitlines() if path.endswith('/main-html.zip'))
+    relative_pattern = archive_pattern.removeprefix('${{ runner.temp }}/metroliza-candidate-acceptance/')
+    assert set(tmp_path.glob(relative_pattern)) == archives
     package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
     assert receipts["if"] == "always()" and package["if"] == "success()"
     assert package["with"]["if-no-files-found"] == "error"
@@ -345,18 +358,55 @@ def test_ci_workflow_keeps_packaging_manual_and_google_local_only() -> None:
     assert 'NOTICE_MANIFEST.json' in workflow
 
 
-def test_static_checks_verify_the_pinned_release_docs_ref() -> None:
+def test_static_checks_verify_the_pinned_release_docs_ref(tmp_path, monkeypatch) -> None:
+    import subprocess
+
     import yaml
+
+    from scripts import check_release_docs_ref
 
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
     job = workflow['jobs']['static-checks']
-    checkout = next(step for step in job['steps'] if step.get('name') == 'Checkout')
-    docs_ref = next(step for step in job['steps'] if step.get('name') == 'Release docs ref is immutable and complete')
+    steps = job['steps']
+    checkout = next(step for step in steps if step.get('name') == 'Checkout')
+    fetch = next(step for step in steps if step.get('name') == 'Fetch the pinned release docs commit')
+    docs_ref = next(step for step in steps if step.get('name') == 'Release docs ref is immutable and complete')
 
-    # The pinned commit is only resolvable with full history; the step must not be docs-only gated.
+    # Full branch history can omit a pin retained only through a pull-request ref.
     assert checkout['with']['fetch-depth'] == '0'
+    assert checkout['with']['persist-credentials'] == 'false'
+    assert steps.index(fetch) < steps.index(docs_ref)
+    assert 'if' not in fetch and 'continue-on-error' not in fetch
     assert docs_ref['run'] == 'python scripts/check_release_docs_ref.py'
     assert 'if' not in docs_ref
+    prefix, suffix = "python - <<'PY'\n", '\nPY\n'
+    assert fetch['run'].startswith(prefix) and fetch['run'].endswith(suffix)
+    code = compile(fetch['run'][len(prefix):-len(suffix)], '<docs-ref-fetch-step>', 'exec')
+    pin_file = tmp_path / check_release_docs_ref.DOCS_LINKS_PATH
+    pin_file.parent.mkdir(parents=True)
+    commands = []
+
+    def fetch_commit(command, *, check):
+        assert check is True
+        commands.append(command)
+
+    with monkeypatch.context() as patch:
+        patch.chdir(tmp_path)
+        patch.setattr(subprocess, 'run', fetch_commit)
+        pin = 'a' * 40
+        pin_file.write_text(f'DEFAULT_RELEASE_DOCS_REF = {pin!r}\n')
+        exec(code, {})
+        assert commands == [['git', 'fetch', '--no-tags', '--no-write-fetch-head', 'origin', pin]]
+        for invalid in ('main', 'a' * 7, '--all', 'A' * 40, 'a' * 41):
+            commands.clear()
+            pin_file.write_text(f'DEFAULT_RELEASE_DOCS_REF = {invalid!r}\n')
+            with pytest.raises(SystemExit, match='not a full commit SHA'):
+                exec(code, {})
+            assert not commands
+        pin_file.write_text('DEFAULT_RELEASE_DOCS_REF = "a" * 40\n')
+        with pytest.raises(ValueError, match='must be a string literal'):
+            exec(code, {})
+        assert not commands
 
 
 def test_ci_and_precommit_run_release_hygiene_scan() -> None:
@@ -1238,7 +1288,8 @@ def test_tier_zero_runs_focused_policy_release_and_secret_checks_only():
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
     steps = workflow['jobs']['static-checks']['steps']
     shared = {'Require a successful classification', 'Checkout', 'Setup Python',
-              'Release metadata consistency', 'Release docs ref is immutable and complete',
+              'Release metadata consistency', 'Fetch the pinned release docs commit',
+              'Release docs ref is immutable and complete',
               'Secret scan (diff + repository)', 'Release hygiene scan'}
     focused = {'Install focused documentation dependencies', 'Focused documentation and policy checks'}
     for step in steps:

@@ -565,7 +565,8 @@ def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path
     assert target.read_bytes() == b"last complete NOK workbook"
     if dashboard:
         assert Path(worker.html_dashboard_file) == tmp_path / "out (3)_dashboard.html"
-        assert Path(worker.html_dashboard_assets_dir) == tmp_path / "out (3)_dashboard_assets"
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        assert Path(worker.html_dashboard_assets_dir) == resolve_html_dashboard_assets_dir(worker.html_dashboard_file)
 
 
 def test_save_copy_html_only_retries_race_after_render(tmp_path, qapplication_session, monkeypatch, dialog_host):
@@ -778,3 +779,166 @@ def test_google_fallback_dashboard_cancel_reports_cancellation(tmp_path, monkeyp
     assert canceled == [True]
     assert completed == []
     assert errors == []
+
+
+@pytest.mark.parametrize("stem", ["R" * 235, "測" * 70], ids=["long-ascii", "unicode-bytes"])
+@pytest.mark.parametrize("mode", ["reject", "replace", "locked", "copy", "changed-consent"])
+def test_bounded_dashboard_assets_preserve_publication_policy(tmp_path, monkeypatch, stem, mode):
+    from metroliza.charts.export_html_dashboard import (
+        resolve_html_dashboard_assets_dir, write_export_html_dashboard,
+    )
+    from metroliza.exporting import output_publication as publication
+
+    target = tmp_path / f"{stem}.html"
+    original = publication.write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=resolve_html_dashboard_assets_dir(target),
+        sections=[{"header": "old", "charts": [{
+            "chart_type": "histogram", "image_buffer": b"last complete image",
+        }]}],
+    )
+    old_html = target.read_bytes()
+    old_generation = Path(original["html_dashboard_assets_path"])
+    old_names = {path.name for path in tmp_path.iterdir()}
+    consent = publication.OutputConsent.for_path(target)
+    kwargs = dict(
+        output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target), sections=[],
+        consents=() if mode in {"reject", "copy"} else (consent,),
+        copy_from=target if mode == "copy" else None,
+    )
+    if mode == "locked":
+        def locked(*args, **kwargs):
+            raise PermissionError("locked")
+        monkeypatch.setattr(publication, "_publish_new_output", locked)
+        monkeypatch.setattr(publication.os, "replace", locked)
+    if mode == "changed-consent":
+        target.write_bytes(b"another operation changed the dashboard")
+        old_html = target.read_bytes()
+    if mode in {"reject", "locked", "changed-consent"}:
+        with pytest.raises(PermissionError if mode == "locked" else FileExistsError):
+            publication.write_dashboard_safely(write_export_html_dashboard, **kwargs)
+        assert {path.name for path in tmp_path.iterdir()} == old_names
+    else:
+        result = publication.write_dashboard_safely(write_export_html_dashboard, **kwargs)
+        assert Path(result["html_dashboard_assets_path"]).is_dir()
+        assert Path(result["html_dashboard_path"]).read_bytes() != old_html
+        assert old_generation.exists() == (mode == "copy")
+        if mode == "replace":
+            assert Path(result["html_dashboard_path"]) == target
+    if mode != "replace":
+        assert target.read_bytes() == old_html
+        assert next(old_generation.glob("*.png")).read_bytes() == b"last complete image"
+    assert not list(tmp_path.glob(".metroliza-export-*"))
+
+
+@pytest.mark.parametrize("stem", ["測定", "sample[1]"], ids=["unicode", "literal-glob"])
+def test_copy_detects_bounded_or_legacy_asset_generation_without_html(tmp_path, stem):
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+    from metroliza.exporting.output_publication import conflicting_outputs, free_copy_path
+
+    target = tmp_path / f"{stem}.html"
+    legacy = target.with_name(f"{target.stem}_assets.generation-legacy")
+    legacy.mkdir()
+    (legacy / "kept.png").write_bytes(b"unowned legacy generation")
+    assert legacy in conflicting_outputs((target,))
+    assert free_copy_path(target, html_only=True) != target
+    bounded = resolve_html_dashboard_assets_dir(target)
+    current = bounded.with_name(f"{bounded.name}.generation-current")
+    current.mkdir()
+    assert current in conflicting_outputs((target,))
+    assert (legacy / "kept.png").read_bytes() == b"unowned legacy generation"
+
+
+def test_replacing_legacy_unicode_dashboard_retains_unowned_assets(tmp_path):
+    from metroliza.charts.export_html_dashboard import (
+        resolve_html_dashboard_assets_dir, write_export_html_dashboard,
+    )
+    from metroliza.exporting.output_publication import OutputConsent, write_dashboard_safely
+
+    target = tmp_path / "測定.html"
+    legacy = target.with_name(f"{target.stem}_assets")
+    legacy.mkdir()
+    (legacy / "old.png").write_bytes(b"legacy image")
+    target.write_text(f'<img src="{legacy.name}/old.png">', encoding="utf-8")
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=resolve_html_dashboard_assets_dir(target), sections=[],
+        consents=(OutputConsent.for_path(target),),
+    )
+    assert Path(result["html_dashboard_assets_path"]).is_dir()
+    assert (legacy / "old.png").read_bytes() == b"legacy image"
+
+
+@pytest.mark.parametrize('stem', ['x' * 245, '測' * 81 + 'ø'], ids=['ascii-bytes', 'unicode-bytes'])
+@pytest.mark.parametrize('mode', ['complete', 'cancel', 'error', 'locked'])
+def test_main_workbook_long_selected_name_keeps_atomic_policy(tmp_path, monkeypatch, stem, mode):
+    from metroliza.exporting.export_backends import ExcelExportBackend
+    from metroliza.exporting.output_publication import OutputConsent
+
+    target = tmp_path / (stem + '.xlsx')
+    target.write_bytes(b'last complete workbook')
+    thread = _export_thread(target, cancel=mode == 'cancel')
+    thread.replace_outputs = (OutputConsent.for_path(target),)
+    if mode == 'error':
+        def fail(_writer):
+            raise RuntimeError('pipeline failed')
+        thread.run_export_pipeline = fail
+    backend = ExcelExportBackend()
+    if mode == 'locked':
+        def locked(*_args):
+            raise PermissionError('locked')
+        monkeypatch.setattr(backend, 'replace_workbook', locked)
+    if mode in {'error', 'locked'}:
+        with pytest.raises(RuntimeError if mode == 'error' else PermissionError):
+            backend.run(thread)
+    else:
+        assert bool(backend.run(thread)) == (mode == 'complete')
+    if mode == 'complete':
+        with zipfile.ZipFile(target) as package:
+            assert package.testzip() is None
+            assert b'12.5' in package.read('xl/worksheets/sheet1.xml')
+    else:
+        assert target.read_bytes() == b'last complete workbook'
+    assert set(tmp_path.iterdir()) == {target}
+
+
+@pytest.mark.parametrize('stem', ['x' * 245, '測' * 81 + 'ø'], ids=['ascii-bytes', 'unicode-bytes'])
+def test_generated_main_sidecar_and_copy_share_canonical_names(tmp_path, stem):
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_path, resolve_html_dashboard_assets_dir
+    from metroliza.exporting.export_backends import ExcelExportBackend
+    from metroliza.exporting.output_publication import free_copy_path, output_paths
+
+    target = tmp_path / (stem + '.xlsx')
+    target.write_bytes(b'last complete workbook')
+    sidecar = resolve_html_dashboard_path(target)
+    assert output_paths(target, dashboard=True) == (target, sidecar)
+    assert len(sidecar.name.encode()) <= 180
+    first_copy = free_copy_path(target, dashboard=True)
+    first_sidecar = resolve_html_dashboard_path(first_copy)
+    first_sidecar.write_bytes(b'existing sidecar from another operation')
+    selected_copy = free_copy_path(target, dashboard=True)
+    assert selected_copy != first_copy
+    assert len(selected_copy.name.encode()) <= 180
+    assert selected_copy == free_copy_path(target, dashboard=True)
+    thread = _export_thread(target)
+    thread.copy_output_from = target
+    thread.html_dashboard_file = str(sidecar)
+    thread.completion_metadata = {'local_xlsx_path': str(target)}
+    assert ExcelExportBackend().run(thread)
+    assert Path(thread.excel_file) == selected_copy
+    assert Path(thread.html_dashboard_file) == resolve_html_dashboard_path(selected_copy)
+    assert Path(thread.html_dashboard_assets_dir) == resolve_html_dashboard_assets_dir(thread.html_dashboard_file)
+    assert target.read_bytes() == b'last complete workbook'
+    assert first_sidecar.read_bytes() == b'existing sidecar from another operation'
+    assert thread.completion_metadata['local_xlsx_path'] == str(selected_copy)
+    assert first_copy not in set(tmp_path.iterdir())
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard
+    from metroliza.exporting.output_publication import write_dashboard_safely
+    dashboard = Path(thread.html_dashboard_file)
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=dashboard,
+        assets_dir=resolve_html_dashboard_assets_dir(dashboard), sections=[],
+    )
+    assert Path(result['html_dashboard_path']) == dashboard
+    assert dashboard.is_file()
+    assert Path(result['html_dashboard_assets_path']).is_dir()

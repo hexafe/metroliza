@@ -417,3 +417,25 @@ def test_realtime_dashboard_failed_publication_keeps_previous_generation(
 
     assert output_path.read_text(encoding="utf-8") == "old generation"
     assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_realtime_long_selected_names_preserve_atomic_write_and_cleanup(tmp_path, monkeypatch):
+    import pytest
+
+    for stem in ('h' * 245, '測' * 81 + 'ø'):
+        target = tmp_path / (stem + '.html')
+        target.write_bytes(b'previous complete dashboard')
+        before = set(tmp_path.iterdir())
+        result = write_realtime_dashboard_html(_snapshot(), target)
+        assert result == target
+        assert target.read_text(encoding='utf-8') == render_realtime_dashboard_html(_snapshot())
+        assert set(tmp_path.iterdir()) == before
+        previous = target.read_bytes()
+        with monkeypatch.context() as context:
+            def locked(*_args):
+                raise PermissionError('locked')
+            context.setattr(dashboard_html_module.os, 'replace', locked)
+            with pytest.raises(PermissionError):
+                write_realtime_dashboard_html(_snapshot(), target)
+        assert target.read_bytes() == previous
+        assert set(tmp_path.iterdir()) == before

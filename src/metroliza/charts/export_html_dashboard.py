@@ -7,6 +7,7 @@ from datetime import datetime
 import copy
 import errno
 import html
+from hashlib import sha256
 import json
 import math
 import os
@@ -58,6 +59,7 @@ from metroliza.charts.chart_numeric_helpers import (
     finite_series_list as _finite_series_list,
 )
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
+from metroliza.shared.diagnostic_events import ExportFailureStage, observe_export_stage
 from metroliza.charts.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
     normalize_distribution_stat_legend,
@@ -90,6 +92,12 @@ _PLOTLY_DARK_COLORWAY = [
     "#ff8c73",
     "#b59cff",
 ]
+_GENERATED_COMPONENT_MAX_BYTES = 180
+_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES = 64
+_DASHBOARD_GENERATION_COMPONENT_MAX_BYTES = 80
+_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES = 80
+_DASHBOARD_IDENTITY_HEX_LENGTH = 24
+_GENERATION_SUFFIX_BYTES = len(".generation-") + 32
 _PLOTLY_JS_ASSET_DIRNAME = "html_dashboard_assets"
 _PLOTLY_JS_FILENAME = "plotly-2.27.0.min.js"
 _DASHBOARD_THEME_STORAGE_KEY = DASHBOARD_THEME_STORAGE_KEY
@@ -172,7 +180,10 @@ def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
 
     canonical_dashboard_path = _canonical_path_entry(dashboard_path)
     lock_path = canonical_dashboard_path.with_name(
-        f".{canonical_dashboard_path.name}.publish.lock"
+        _bounded_dashboard_component(
+            f".{canonical_dashboard_path.name}", suffix=".publish.lock",
+            max_bytes=_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES,
+        )
     )
     thread_lock = _dashboard_thread_lock(lock_path)
 
@@ -225,7 +236,7 @@ def resolve_html_dashboard_path(excel_file: str | Path) -> Path:
 
     excel_path = Path(str(excel_file))
     stem = excel_path.stem or "metroliza_export"
-    return excel_path.with_name(f"{stem}_dashboard.html")
+    return excel_path.with_name(_bounded_dashboard_output_component(f"{stem}_dashboard", suffix=".html"))
 
 
 def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
@@ -233,7 +244,10 @@ def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
 
     dashboard_path = Path(str(html_path))
     stem = dashboard_path.stem or "metroliza_dashboard"
-    return dashboard_path.with_name(f"{stem}_assets")
+    return dashboard_path.with_name(_bounded_dashboard_component(
+        stem, suffix="_assets",
+        max_bytes=_DASHBOARD_GENERATION_COMPONENT_MAX_BYTES - _GENERATION_SUFFIX_BYTES,
+    ))
 
 
 def _validate_dashboard_path_pair(dashboard_path: Path, asset_base: Path) -> None:
@@ -458,6 +472,7 @@ def write_export_html_dashboard(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Publish one serialized dashboard generation without mixing writer assets."""
 
@@ -472,7 +487,7 @@ def write_export_html_dashboard(
             f"{asset_base.name}.generation-{generation_id}"
         )
         temporary_dashboard_path = dashboard_path.with_name(
-            f".{dashboard_path.name}.{generation_id}.tmp"
+            f".metroliza-html-{generation_id}.tmp"
         )
 
         try:
@@ -491,13 +506,23 @@ def write_export_html_dashboard(
                 plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
                 plotly_visual_settings=plotly_visual_settings,
                 dashboard_visual_settings=dashboard_visual_settings,
+                diagnostic_stage=diagnostic_stage,
             )
+            observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_PUBLICATION)
             os.replace(temporary_dashboard_path, dashboard_path)
-        except BaseException:
-            temporary_dashboard_path.unlink(missing_ok=True)
-            shutil.rmtree(generation_directory, ignore_errors=True)
+        except BaseException as exc:
+            observe_export_stage(diagnostic_stage, exception=exc)
+            try:
+                temporary_dashboard_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(generation_directory, ignore_errors=True)
+            except Exception:
+                pass
             raise
 
+        observe_export_stage(diagnostic_stage, ExportFailureStage.CLEANUP)
         _remove_obsolete_dashboard_generations(asset_base, keep=generation_directory)
         result["html_dashboard_path"] = str(dashboard_path)
         result["html_dashboard_assets_path"] = str(generation_directory)
@@ -521,6 +546,7 @@ def _write_export_html_dashboard_generation(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Build one isolated HTML dashboard generation."""
 
@@ -537,10 +563,16 @@ def _write_export_html_dashboard_generation(
     for section_index, raw_section in enumerate(sections, start=1):
         charts: list[dict[str, Any]] = []
         for chart_index, raw_chart in enumerate(raw_section.get("charts") or [], start=1):
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PNG_WRITE)
             image_bytes = _coerce_image_bytes(raw_chart.get("image_buffer"))
-            image_name = (
+            image_name = _bounded_dashboard_component(
                 f"section_{section_index:03d}_{_slugify(raw_section.get('header') or 'header')}_"
-                f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}.png"
+                f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}",
+                suffix=".png", max_bytes=_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES,
+                identity=json.dumps([
+                    section_index, str(raw_section.get("header") or "header"),
+                    str(raw_chart.get("chart_type") or "chart"), chart_index,
+                ]),
             )
             image_path = asset_directory / image_name
             asset_start = perf_counter()
@@ -553,6 +585,7 @@ def _write_export_html_dashboard_generation(
             payload_details = extract_dashboard_chart_details(raw_chart.get("payload"))
             timings_s["payload_metadata"] += perf_counter() - metadata_start
             spec_start = perf_counter()
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_SPEC)
             plotly_spec = _build_plotly_chart_spec_bundle(
                 raw_chart.get("payload"),
                 title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
@@ -600,6 +633,7 @@ def _write_export_html_dashboard_generation(
         group_analysis_payload,
         group_analysis_plot_assets,
         asset_directory=asset_directory,
+        diagnostic_stage=diagnostic_stage,
         timings_s=timings_s,
         plotly_visual_settings=plotly_visual_settings,
     )
@@ -607,6 +641,7 @@ def _write_export_html_dashboard_generation(
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
     interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
     plotly_spec_count = interactive_chart_count
+    observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_JSON)
     json_measurement_start = perf_counter()
     plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
@@ -639,6 +674,7 @@ def _write_export_html_dashboard_generation(
             reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
         plotly_budget_reason = ",".join(reasons)
     plotly_runtime_status = "not_needed"
+    observe_export_stage(diagnostic_stage, ExportFailureStage.ASSET_PUBLICATION)
     runtime_asset_start = perf_counter()
     plotly_js_path = (
         _copy_plotly_runtime_asset(asset_directory)
@@ -655,6 +691,7 @@ def _write_export_html_dashboard_generation(
     elif plotly_js_path:
         plotly_runtime_status = "local"
 
+    observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_JSON)
     embedded_json_measurement_start = perf_counter()
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
@@ -694,6 +731,7 @@ def _write_export_html_dashboard_generation(
         "chart_observability_summary": chart_observability_summary or {},
         "backend_diagnostics_lines": [str(line) for line in (backend_diagnostics_lines or []) if str(line).strip()],
     }
+    observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_RENDER)
     render_start = perf_counter()
     html_text = _render_dashboard_html(
         manifest,
@@ -702,6 +740,7 @@ def _write_export_html_dashboard_generation(
     timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
+    observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_WRITE)
     dashboard_path.write_text(html_text, encoding="utf-8")
     timings_s["html_write"] += perf_counter() - write_start
     timings_s["total"] = perf_counter() - total_start
@@ -764,6 +803,51 @@ def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
     destination_path = asset_directory / _PLOTLY_JS_FILENAME
     destination_path.write_bytes(source_path.read_bytes())
     return f"{asset_directory.name}/{destination_path.name}"
+
+
+def _bounded_dashboard_output_component(stem: str, *, suffix: str) -> str:
+    """Retain short valid suggested names; bound only generated long/unsafe ones."""
+    name = stem + suffix
+    if (len(name.encode("utf-8", "surrogatepass")) <= _GENERATED_COMPONENT_MAX_BYTES
+            and re.search(r'[<>:"/\\|?*\x00-\x1f]', name) is None):
+        return name
+    return _bounded_dashboard_component(stem, suffix=suffix)
+
+
+def _bounded_dashboard_component(
+    value: str,
+    *,
+    suffix: str = "",
+    max_bytes: int = _GENERATED_COMPONENT_MAX_BYTES,
+    identity: str | None = None,
+) -> str:
+    """Bound safe ASCII stems in filesystem bytes, retaining complete identity.
+
+    Labels stay intact in dashboard content. The digest uses the complete input;
+    indexed image identities also distinguish labels with the same readable slug.
+    This bounds components only, not the user's parent path or final filename.
+    """
+
+    suffix_bytes = len(suffix.encode("utf-8", "surrogatepass"))
+    minimum_bytes = _DASHBOARD_IDENTITY_HEX_LENGTH + suffix_bytes + 2
+    if max_bytes < minimum_bytes:
+        raise ValueError("Generated component budget cannot retain identity and suffix.")
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).rstrip(". ") or "item"
+    reserved = safe.split(".", 1)[0].upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+    if reserved:
+        safe = f"_{safe}"
+    if identity is None and safe == value and len(safe) + suffix_bytes <= max_bytes:
+        return safe + suffix
+    # Keep case aliases on Windows in the same generated namespace and lock.
+    digest_source = identity if identity is not None else os.path.normcase(value)
+    digest = sha256(digest_source.encode("utf-8", "surrogatepass")).hexdigest()[:_DASHBOARD_IDENTITY_HEX_LENGTH]
+    tail = f"-{digest}{suffix}"
+    tail_bytes = len(tail.encode("utf-8", "surrogatepass"))
+    return safe[:max_bytes - tail_bytes].rstrip(". ") + tail
 
 
 def _slugify(value: str) -> str:
@@ -2535,6 +2619,7 @@ def _normalize_group_analysis_manifest(
     plot_assets: dict[str, Any] | None,
     *,
     asset_directory: Path,
+    diagnostic_stage=None,
     timings_s: dict[str, float] | None = None,
     plotly_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -2568,6 +2653,7 @@ def _normalize_group_analysis_manifest(
             plot_asset = per_metric_assets.get(plot_key) if isinstance(per_metric_assets, dict) else {}
             image_buffer = plot_asset.get("image_data") if isinstance(plot_asset, dict) else None
             spec_start = perf_counter()
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_SPEC)
             plotly_spec = _build_group_analysis_plotly_spec_bundle(
                 metric_name,
                 plot_key,
@@ -2588,7 +2674,12 @@ def _normalize_group_analysis_manifest(
                 continue
             image_relative_path = ""
             if image_buffer is not None:
-                image_name = f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}.png"
+                observe_export_stage(diagnostic_stage, ExportFailureStage.PNG_WRITE)
+                image_name = _bounded_dashboard_component(
+                    f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}",
+                    suffix=".png", max_bytes=_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES,
+                    identity=json.dumps([metric_index, metric_name, plot_key]),
+                )
                 image_path = asset_directory / image_name
                 asset_start = perf_counter()
                 image_path.write_bytes(_coerce_image_bytes(image_buffer))

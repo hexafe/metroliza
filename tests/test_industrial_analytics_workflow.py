@@ -1050,8 +1050,8 @@ def test_run_production_cache_analytics_cancel_removes_temp_outputs(tmp_path) ->
 
     assert not dashboard_file.exists()
     assert not workbook_file.exists()
-    assert not list(tmp_path.glob(".production_analytics.*.tmp.html"))
-    assert not list(tmp_path.glob(".production_analytics.*.tmp.xlsx"))
+    assert not list(tmp_path.glob(".metroliza-analytics-*.tmp.html"))
+    assert not list(tmp_path.glob(".metroliza-analytics-*.tmp.xlsx"))
 
 
 def test_grouping_snapshot_survives_load_recursion_with_same_rows(monkeypatch, tmp_path):
@@ -1113,3 +1113,49 @@ def test_dashboard_cancellation_is_forwarded_and_translated(monkeypatch, tmp_pat
             dashboard_title="Title", dashboard_subtitle="Subtitle", cancel_check=never_cancel)
     assert entered == (["manifest"] if stage == "manifest" else ["manifest", "writer"])
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize('stem', ['a' * 250, '測' * 83 + 'x'], ids=['ascii-bytes', 'unicode-bytes'])
+@pytest.mark.parametrize('long_workbook', [False, True])
+def test_long_analytics_outputs_use_bounded_owned_components(tmp_path, stem, long_workbook):
+    source = tmp_path / 'table.csv'
+    pd.DataFrame({'reference': ['A', 'A', 'B', 'B'], 'value': [10.0, 10.1, 10.2, 10.3]}).to_csv(source, index=False)
+    dashboard = tmp_path / ('dashboard.html' if long_workbook else stem + '.html')
+    workbook = tmp_path / (stem + '.xlsx' if long_workbook else 'report.xlsx')
+    dashboard.write_bytes(b'previous complete dashboard')
+    workbook.write_bytes(b'previous complete workbook')
+    result = run_tabular_file_analytics(
+        input_file=str(source), output_dashboard_file=str(dashboard), output_workbook_file=str(workbook),
+        metric_selection=(ProductionMetricSelection('value'),),
+        chart_selection=ProductionChartSelection(time_series=True, histogram=True, violin=False, box=False, groupstats=False),
+    )
+    assert Path(result.html_dashboard_path) == dashboard
+    assert Path(result.workbook_path) == workbook
+    assets = Path(result.html_dashboard_assets_path)
+    assert assets == workflow_module._dashboard_assets_dir(dashboard)
+    assert len(assets.name.encode()) <= 180
+    content = dashboard.read_text(encoding='utf-8')
+    assert 'table.csv' in content
+    references = re.findall(r'(?:src|href)="([^"]+)"', content)
+    for reference in references:
+        if not reference or reference.startswith(('#', 'data:image/png;base64,')):
+            continue
+        assert not re.match(r'^[A-Za-z]+:', reference)
+        assert (dashboard.parent / reference).is_file()
+    with zipfile.ZipFile(workbook) as package:
+        assert package.testzip() is None
+    assert not list(tmp_path.glob('.metroliza-analytics-*.tmp.*'))
+
+
+def test_analytics_cancel_after_staged_html_preserves_existing_long_output(tmp_path):
+    source = tmp_path / 'table.csv'
+    pd.DataFrame({'reference': ['A', 'A'], 'value': [10.0, 10.1]}).to_csv(source, index=False)
+    target = tmp_path / ('h' * 250 + '.html')
+    target.write_bytes(b'previous complete dashboard')
+    with pytest.raises(AnalyticsCancelled):
+        run_tabular_file_analytics(input_file=str(source), output_dashboard_file=str(target),
+            metric_selection=(ProductionMetricSelection('value'),),
+            chart_selection=ProductionChartSelection(time_series=False, histogram=False, violin=False, box=False, groupstats=False),
+            cancel_check=lambda: bool(list(tmp_path.glob('.metroliza-analytics-*.tmp.html'))))
+    assert target.read_bytes() == b'previous complete dashboard'
+    assert not list(tmp_path.glob('.metroliza-analytics-*.tmp.*'))

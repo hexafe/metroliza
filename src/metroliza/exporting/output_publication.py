@@ -1,6 +1,8 @@
 """Operation-scoped consent and atomic, collision-safe output publication."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+from glob import escape as glob_escape
 import errno
 import os
 from pathlib import Path
@@ -40,10 +42,10 @@ class OutputConsent:
 def output_paths(primary, *, html_only=False, dashboard=False):
     """Return the complete set of final file names used by this export."""
     primary = Path(primary)
-    if html_only:
+    if html_only or not dashboard:
         return (primary,)
-    html = primary.with_name(f"{primary.stem}_dashboard.html")
-    return (primary, html) if dashboard else (primary,)
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_path
+    return (primary, resolve_html_dashboard_path(primary))
 
 
 def conflicting_outputs(paths):
@@ -53,19 +55,27 @@ def conflicting_outputs(paths):
         if os.path.lexists(path):
             conflicts.append(path)
         if path.suffix.lower() == ".html":
-            assets = path.with_name(f"{path.stem}_assets")
-            if assets.exists():
-                conflicts.append(assets)
-            conflicts.extend(assets.parent.glob(f"{assets.name}.generation-*"))
+            from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
+            assets = resolve_html_dashboard_assets_dir(path)
+            legacy_assets = path.with_name(f"{path.stem}_assets")
+            for candidate in dict.fromkeys((assets, legacy_assets)):
+                if os.path.lexists(candidate):
+                    conflicts.append(candidate)
+                conflicts.extend(candidate.parent.glob(f"{glob_escape(candidate.name)}.generation-*"))
     return tuple(conflicts)
 
 
 def free_copy_path(primary, *, html_only=False, dashboard=False):
+    from metroliza.charts.export_html_dashboard import _bounded_dashboard_output_component
+
     primary = Path(primary)
     number = 2
     candidate = primary
     while conflicting_outputs(output_paths(candidate, html_only=html_only, dashboard=dashboard)):
-        candidate = primary.with_name(f"{primary.stem} ({number}){primary.suffix}")
+        candidate = primary.with_name(_bounded_dashboard_output_component(
+            primary.stem, suffix=f" ({number}){primary.suffix}",
+        ))
         number += 1
     return candidate
 
@@ -170,10 +180,18 @@ def _move_dashboard_assets(source, destination):
             time.sleep(0.1)
 
 
-def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, copy_from=None, **kwargs):
+def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, copy_from=None,
+                           before_attempt=None, **kwargs):
     """Render/publish a dashboard, retrying collisions only for Save a copy."""
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
     def publish(target):
-        render_kwargs = dict(kwargs, output_path=target, assets_dir=target.with_name(f"{target.stem}_assets"))
+        try:
+            if before_attempt is not None:
+                before_attempt()
+        except Exception:
+            pass
+        render_kwargs = dict(kwargs, output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target))
         if kwargs.get("source_label") == Path(kwargs["output_path"]).name:
             render_kwargs["source_label"] = target.name
         return _write_dashboard_once(
@@ -183,6 +201,25 @@ def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, 
 
     _target, result = retry_output_copy(publish, kwargs["output_path"], copy_from=copy_from, html_only=True)
     return result
+
+
+@contextmanager
+def _dashboard_scratch_directory(target, diagnostic_stage):
+    from metroliza.shared.diagnostic_events import ExportFailureStage, observe_export_stage
+
+    scratch = tempfile.TemporaryDirectory(prefix=".metroliza-export-", dir=target.parent)
+    try:
+        yield scratch.name
+    except BaseException as exc:
+        observe_export_stage(diagnostic_stage, exception=exc)
+        try:
+            scratch.cleanup()
+        except Exception:
+            pass
+        raise
+    else:
+        observe_export_stage(diagnostic_stage, ExportFailureStage.CLEANUP)
+        scratch.cleanup()
 
 
 def _write_dashboard_once(writer, *, consents, should_cancel, **kwargs):
@@ -198,26 +235,37 @@ def _write_dashboard_once(writer, *, consents, should_cancel, **kwargs):
         _remove_obsolete_dashboard_generations,
     )
 
+    from metroliza.shared.diagnostic_events import ExportFailureStage, observe_export_stage
+
+    diagnostic_stage = kwargs.get("diagnostic_stage")
     target = Path(kwargs["output_path"])
     assets = Path(kwargs["assets_dir"])
     target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".metroliza-export-", dir=target.parent) as scratch:
+    with _dashboard_scratch_directory(target, diagnostic_stage) as scratch:
         stage = Path(scratch)
         staged_kwargs = dict(kwargs, output_path=stage / target.name, assets_dir=stage / assets.name)
         result = writer(**staged_kwargs)
         if should_cancel():
             raise OutputPublicationCanceled()
+        observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_PUBLICATION)
         with _dashboard_publication_lock(target):
             if should_cancel():
                 raise OutputPublicationCanceled()
             staged_assets = Path(result["html_dashboard_assets_path"])
             destination_assets = target.parent / staged_assets.name
+            observe_export_stage(diagnostic_stage, ExportFailureStage.ASSET_PUBLICATION)
             _move_dashboard_assets(staged_assets, destination_assets)
             try:
+                observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_PUBLICATION)
                 publish_output(stage / target.name, target, consents=consents)
-            except BaseException:
-                shutil.rmtree(destination_assets, ignore_errors=True)
+            except BaseException as exc:
+                observe_export_stage(diagnostic_stage, exception=exc)
+                try:
+                    shutil.rmtree(destination_assets, ignore_errors=True)
+                except Exception:
+                    pass
                 raise
+            observe_export_stage(diagnostic_stage, ExportFailureStage.CLEANUP)
             if any(consent.path == _entry_path(target) for consent in consents):
                 _remove_obsolete_dashboard_generations(assets, keep=destination_assets)
         result["html_dashboard_path"] = str(target)

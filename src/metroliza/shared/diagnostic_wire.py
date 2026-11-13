@@ -14,6 +14,10 @@ from metroliza.shared.diagnostic_events import (
     DiagnosticOperation,
     ExceptionDiagnosticEvent,
     ExceptionKind,
+    ExportFailureBackend,
+    ExportFailureCode,
+    ExportFailureDiagnostic,
+    ExportFailureStage,
     InvalidDiagnosticEvent,
     LegacyLogSuppressedEvent,
     RuntimeMode,
@@ -203,7 +207,23 @@ def _startup(payload: object) -> StartupDiagnosticEvent:
     )
 
 
+def decode_export_failure(payload: object) -> ExportFailureDiagnostic:
+    values = _exact_keys(payload, ("invocation_id", "operation_id", "stage", "code", "backend",
+                                   "exception", "cause_kind", "errno", "winerror", "recorder_connected"))
+    return ExportFailureDiagnostic(
+        _uuid(values["invocation_id"]), _uuid(values["operation_id"]),
+        _enum(ExportFailureStage, values["stage"]), _enum(ExportFailureCode, values["code"]),
+        _enum(ExportFailureBackend, values["backend"]), _exception(values["exception"]),
+        _enum(ExceptionKind, values["cause_kind"]), values["errno"], values["winerror"],
+        values["recorder_connected"],
+    )
+
+
 def _workflow(payload: object) -> WorkflowDiagnosticEvent:
+    failure = None
+    if type(payload) is dict and "export_failure" in payload:
+        failure = decode_export_failure(payload["export_failure"])
+        payload = {key: value for key, value in payload.items() if key != "export_failure"}
     values = _exact_keys(
         payload,
         (
@@ -235,6 +255,7 @@ def _workflow(payload: object) -> WorkflowDiagnosticEvent:
         imported_report_count=values["imported_report_count"],
         published_artifact_count=values["published_artifact_count"],
         duration_ms=values["duration_ms"],
+        export_failure=failure,
     )
 
 

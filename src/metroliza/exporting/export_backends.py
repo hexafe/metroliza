@@ -717,7 +717,7 @@ class ExcelExportBackend:
         """Reserve a same-directory temporary workbook path for atomic commit."""
         target_path = Path(excel_file)
         fd, temp_name = tempfile.mkstemp(
-            prefix=f".{target_path.stem}.tmp-",
+            prefix=".metroliza-workbook-",
             suffix=".xlsx",
             dir=str(target_path.parent),
         )
@@ -811,4 +811,5 @@ def _record_workbook_path(thread, published_path):
     if getattr(thread, "html_dashboard_file", None):
         html_path = output_paths(published_path, dashboard=True)[-1]
         thread.html_dashboard_file = str(html_path)
-        thread.html_dashboard_assets_dir = str(html_path.with_name(f"{html_path.stem}_assets"))
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        thread.html_dashboard_assets_dir = str(resolve_html_dashboard_assets_dir(html_path))

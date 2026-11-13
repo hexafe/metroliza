@@ -9,6 +9,7 @@ import heapq
 import html
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -304,6 +305,17 @@ def build_production_dashboard_manifest(
     }
 
 
+def resolve_production_dashboard_assets_dir(output_path: str | Path) -> Path:
+    """Bound this writer's generated assets root without changing its output."""
+    path = Path(output_path)
+    name = f"{path.stem}_assets"
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,180}", name):
+        return path.with_name(name)
+    readable = re.sub(r"[^A-Za-z0-9_.-]+", "-", name)
+    digest = hashlib.sha256(os.path.normcase(name).encode("utf-8", "surrogatepass")).hexdigest()[:24]
+    return path.with_name(f"{readable[:155]}-{digest}")
+
+
 def write_production_dashboard(
     manifest: ProductionDashboardManifest,
     output_path: str | Path,
@@ -341,7 +353,7 @@ def write_production_dashboard(
     asset_directory = (
         Path(assets_dir)
         if assets_dir is not None
-        else destination.with_name(f"{destination.stem}_assets")
+        else resolve_production_dashboard_assets_dir(destination)
     )
     interactivity = _normalize_dashboard_interactivity_options(dashboard_interactivity_options)
     count_budget = _normalize_plotly_budget_value(plotly_spec_count_budget)

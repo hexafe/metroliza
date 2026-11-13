@@ -518,6 +518,7 @@ jobs:
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/main-html.zip
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js
           if-no-files-found: warn
@@ -956,6 +957,22 @@ jobs:
 
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
+
+      - name: Fetch the pinned release docs commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from scripts.check_release_docs_ref import FULL_COMMIT_SHA, pinned_docs_ref
+
+          ref = pinned_docs_ref(Path.cwd())
+          if not FULL_COMMIT_SHA.fullmatch(ref):
+              raise SystemExit("Release docs ref is not a full commit SHA")
+          subprocess.run(
+              ["git", "fetch", "--no-tags", "--no-write-fetch-head", "origin", ref],
+              check=True,
+          )
+          PY
 
       - name: Release docs ref is immutable and complete
         run: python scripts/check_release_docs_ref.py
@@ -1811,6 +1828,27 @@ jobs:
           tests/test_windows_ocr_runtime_diagnostics.py
           tests/test_header_ocr_diagnostics_script.py
           tests/test_windows_ocr_powershell.py
+
+      - name: Run native Windows long-target publication and main HTML qualification tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: >-
+          python -m pytest -v
+          tests/test_windows_candidate_main_html.py
+          tests/test_export_failure_diagnostics.py::test_actual_publication_permission_wrapper_retains_trusted_os_code
+          tests/test_export_failure_diagnostics.py::test_native_windows_publication_os_codes_survive_wrapper
+          tests/test_export_failure_diagnostics.py::test_native_windows_os_code_pair_precedence_does_not_splice_cause_fields
+          tests/test_wave0_export_publication.py::test_main_workbook_long_selected_name_keeps_atomic_policy
+          tests/test_wave0_export_publication.py::test_generated_main_sidecar_and_copy_share_canonical_names
+          tests/test_export_html_dashboard.py::test_generated_sidecar_and_copy_keep_full_identity_after_bounding
+          tests/test_realtime_dashboard_html.py::test_realtime_long_selected_names_preserve_atomic_write_and_cleanup
+          tests/test_industrial_cache_publication.py::test_long_cache_destination_keeps_source_and_cleans_owned_staging
+          tests/test_industrial_export_service.py::test_long_industrial_workbook_names_keep_output_and_owned_cleanup
+          tests/test_industrial_analytics_workflow.py::test_long_analytics_outputs_use_bounded_owned_components
+          tests/test_industrial_analytics_workflow.py::test_analytics_cancel_after_staged_html_preserves_existing_long_output
+          tests/test_industrial_analytics_dashboard.py::test_direct_analytics_writer_bounds_only_generated_assets_and_retains_identity
 
       - name: Run measurement chart-label and workbook publication tests on Windows
         env:

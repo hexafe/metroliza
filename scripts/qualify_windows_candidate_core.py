@@ -40,7 +40,7 @@ _CHILD_FAILURE_STAGES = frozenset({
     "ocr_asset_validation", "ocr_fixture_inspection", "ocr_parser_construction",
     "ocr_parser_execution", "ocr_onnxruntime_import", "ocr_rapidocr_import",
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
-    "ocr_result_validation", "reopen", "tabular", "xlsx",
+    "ocr_result_validation", "reopen", "tabular", "xlsx", "main_html",
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
@@ -61,8 +61,9 @@ REQUIRED_CHECKS = (
     "declared_ocr_model_assets", "image_only_header_provenance",
     "rapidocr_header_inference", "parser_metadata_selection",
     "uiux_reports", "uiux_tabular", "uiux_controls", "uiux_captures",
+    "main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity",
 )
-ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference", "uiux_evidence")
+ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference", "uiux_evidence", "main_html")
 CORE_OBSERVATIONS = {"W03": "passed", "W04": "passed", "W05": "passed", "W06": "passed", "W07": "passed"}
 NATIVE_BINDINGS = (
     "cmm.parse_blocks", "cmm.normalize_measurement_rows", "cmm.persist_measurement_rows",
@@ -102,7 +103,7 @@ _CLOSED_CHILD_FAILURES = frozenset({
     "group_assignment_not_applied", "group_inference_checks_failed",
     "group_metric_missing", "grouped_row_count", "import_count_mismatch",
     "import_deadline", "import_guard_checks_failed", "import_worker_not_started",
-    "invalid_ui_scale", "literal_workbook_checks_failed",
+    "invalid_ui_scale", "literal_workbook_checks_failed", "main_html_checks_failed",
     "literal_workbook_copy_mismatch", "ocr_checks_failed", "ocr_evidence_mismatch",
     "ocr_evidence_schema_mismatch", "ocr_fixture_invalid", "ocr_fixture_missing",
     "ocr_observation_schema_mismatch", "reopen_input_identity_mismatch",
@@ -615,13 +616,14 @@ def _validate_core_artifacts(artifacts: object) -> None:
     if type(artifacts) is not dict or set(artifacts) != set(ARTIFACTS):
         raise CandidateFailure("missing_scenario_artifact")
     seen = set()
-    for record in artifacts.values():
+    for key, record in artifacts.items():
         if type(record) is not dict or set(record) != {"path", "sha256"}:
             raise CandidateFailure("invalid_artifact_record")
         name, digest = record["path"], record["sha256"]
         if (
             type(name) is not str
-            or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}\.(sqlite|xlsx|json)", name) is None
+            or (name != "main-html.zip" if key == "main_html" else
+                re.fullmatch(r"[a-z][a-z0-9_-]{0,63}\.(sqlite|xlsx|json)", name) is None)
             or name in seen
             or type(digest) is not str
             or re.fullmatch(r"[0-9a-f]{64}", digest) is None
@@ -886,6 +888,14 @@ def _check_inference_outputs(paths: dict) -> None:
         raise CandidateFailure("independent_inference_oracle_failed") from None
 
 
+def _verify_main_html(path, *, source, packaged):
+    verifier = _adjacent_module("verify_windows_candidate_main_html.py", "_metroliza_main_html_verifier")
+    try:
+        verifier.verify(path, source=source, packaged=packaged)
+    except Exception:
+        raise CandidateFailure("main_html_retained_verification_failed") from None
+
+
 def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path) -> dict:
     child = work / payload["relative_artifact_dir"]
     _directory(child)
@@ -909,6 +919,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
     except Exception:
         raise CandidateFailure("independent_literal_workbook_oracle_failed") from None
     _check_inference_outputs(actual)
+    _verify_main_html(actual["main_html"], source=payload.get("source_sha"), packaged=payload.get("packaged") is True)
     _assert_artifact_hashes(actual, payload, "scenario_artifact_changed_after_comparison")
     _assert_both_databases_closed(actual, "scenario_database_sidecars_created_after_comparison")
     copied = {}
@@ -927,6 +938,7 @@ def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path
         raise CandidateFailure("retained_outputs_oracle_failed") from None
     retained = {key: output / copied[key]["path"] for key in ARTIFACTS}
     _check_inference_outputs(retained)
+    _verify_main_html(retained["main_html"], source=payload.get("source_sha"), packaged=payload.get("packaged") is True)
     _assert_artifact_hashes(retained, payload, "retained_artifact_changed_after_comparison")
     _assert_both_databases_closed(retained, "retained_database_sidecars_created_after_comparison")
     copied["import_guards_database"] = _verify_import_guard_outputs(child, payload, output, oracle)
@@ -1592,6 +1604,7 @@ def qualify(args) -> dict:
             "ocr_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_ocr.py")),
             "closeout_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_closeout.py")),
             "browser_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_dashboard.py")),
+            "main_html_verifier_sha256": _hash(Path(__file__).with_name("verify_windows_candidate_main_html.py")),
             "ocr_fixture_sha256": _ocr_oracle().FIXTURE_SHA256,
             "literal_xlsx_verifier_sha256": _hash(Path(__file__).with_name("windows_candidate_xlsx.py")),
             "inference_oracle_sha256": _hash(Path(__file__).with_name("synthetic-inference-oracle.json")),

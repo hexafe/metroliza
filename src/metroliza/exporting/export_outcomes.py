@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 import re
+import json
+
+from metroliza.shared.diagnostic_events import (
+    ExportFailureDiagnostic, ExportFailureCode, ExportFailureStage, export_failure_payload,
+)
+from metroliza.shared.diagnostic_wire import decode_export_failure
 from typing import Mapping
 
 
@@ -50,6 +56,7 @@ class ExportRunResult:
     artifacts: tuple[ExportArtifactResult, ...]
     stages: tuple[ExportStageResult, ...]
     diagnostics: tuple[str, ...] = ()
+    failure_diagnostic: ExportFailureDiagnostic | None = None
 
     @property
     def level(self) -> str:
@@ -114,7 +121,6 @@ def _display_path(value) -> str:
 
 
 _SAFE_DIAGNOSTIC_VALUE = re.compile(r"^[A-Za-z0-9_.-]{1,80}$")
-_FAILURE_TYPE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*(?:Error|Exception))\b")
 _SAFE_RENDERED_FAILURE_TYPES = frozenset(
     {
         "ArithmeticError",
@@ -161,8 +167,16 @@ _SAFE_DETAIL_KEYS = {
 }
 
 
+_SAFE_ATTRIBUTE_VALUES = {
+    "chart": frozenset({"iqr", "violin", "histogram", "capability", "unknown"}),
+    "code": frozenset(member.value for member in ExportFailureCode),
+    "stage": frozenset(member.value for member in ExportFailureStage)
+             | {"dashboard_generation", "dashboard_output_validation"},
+}
+
+
 def _safe_diagnostic_value(value) -> str:
-    text = str(value or "").strip()
+    text = value.strip() if type(value) is str else ""
     return text if _SAFE_DIAGNOSTIC_VALUE.fullmatch(text) else ""
 
 
@@ -170,7 +184,7 @@ def _failure_type(value, *, default: str = "") -> str:
     if isinstance(value, Mapping):
         for key in ("exception_class", "error_class", "exception_type", "error_type"):
             candidate = _safe_diagnostic_value(value.get(key))
-            if candidate and _FAILURE_TYPE.fullmatch(candidate):
+            if candidate in _SAFE_RENDERED_FAILURE_TYPES:
                 return candidate
     return default
 
@@ -183,7 +197,7 @@ def _safe_diagnostic_attributes(value, *, default_failure_type: str = "") -> tup
     if isinstance(value, Mapping):
         for source_key, display_key in _SAFE_DETAIL_KEYS.items():
             safe_value = _safe_diagnostic_value(value.get(source_key))
-            if safe_value:
+            if safe_value in _SAFE_ATTRIBUTE_VALUES[display_key]:
                 attributes.append(f"{display_key}={safe_value}")
     return tuple(dict.fromkeys(attributes))
 
@@ -248,6 +262,63 @@ def _diagnostic_lines(metadata, *, terminal_failure: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(lines))
 
 
+def _failure_from_metadata(metadata) -> ExportFailureDiagnostic | None:
+    failure = metadata.get("export_failure")
+    try:
+        export_failure_payload(failure)
+        return failure
+    except Exception:
+        return None
+
+
+def render_export_failure(failure: ExportFailureDiagnostic) -> str:
+    return "export_failure: " + json.dumps(export_failure_payload(failure), sort_keys=True,
+                                           separators=(",", ":"), ensure_ascii=True)
+
+
+def export_failure_message(failure: ExportFailureDiagnostic) -> str:
+    export_failure_payload(failure)
+    reason = {
+        ExportFailureCode.UNEXPECTED: "An unexpected error occurred. Try exporting to a new local folder; if it repeats, share the diagnostic ID.",
+        ExportFailureCode.ACCESS_DENIED: "Access was denied. Close files using this output and check write permission, or choose a new local folder.",
+        ExportFailureCode.TARGET_EXISTS: "The output already exists. Choose Save a copy or explicitly approve Replace.",
+        ExportFailureCode.PATH_TOO_LONG: "An output name or path is too long. Choose a shorter local folder and output name.",
+        ExportFailureCode.OUTPUT_MISSING: "The dashboard output could not be verified. Try a new local folder and review the diagnostic details.",
+    }[failure.code]
+    channel = "" if failure.recorder_connected else " Incident recording is unavailable; copy these details before closing."
+    return (f"Failed stage: {failure.stage.value.replace('_', ' ')}. {reason} "
+            f"Diagnostic ID: {failure.exception.correlation_id.hex}.{channel}")
+
+
+def _sanitize_failure_line(line: str, index: int) -> str:
+    try:
+        if len(line) > 4096:
+            raise ValueError("oversized failure")
+        failure = decode_export_failure(json.loads(line.partition(":")[2]))
+        canonical = render_export_failure(failure)
+        if canonical != line:
+            raise ValueError("noncanonical failure")
+        return canonical
+    except Exception:
+        return f"diagnostic-{index}: detail=redacted"
+
+
+def _legacy_diagnostic_attributes(payload: str, diagnostic_id: str) -> list[str]:
+    attributes = []
+    allowed = dict(_SAFE_ATTRIBUTE_VALUES, failure_type=_SAFE_RENDERED_FAILURE_TYPES)
+    for token in payload.split(";"):
+        match = re.fullmatch(r"(failure_type|chart|code|stage)=([A-Za-z0-9_.-]{1,80})", token.strip())
+        if match is not None:
+            key, value = match.groups()
+            if value in allowed[key]:
+                attributes.append(f"{key}={value}")
+    if diagnostic_id == "terminal_failure" and not any(
+        attribute.startswith("failure_type=") for attribute in attributes
+    ):
+        attributes.insert(0, "failure_type=ExportError")
+    return attributes
+
+
 def sanitize_export_diagnostics(value) -> str:
     """Return diagnostics safe for an on-screen details pane or clipboard.
 
@@ -261,6 +332,9 @@ def sanitize_export_diagnostics(value) -> str:
         line = raw_line.strip()
         if not line:
             continue
+        if line.startswith("export_failure:"):
+            safe_lines.append(_sanitize_failure_line(line, index))
+            continue
         prefix, separator, payload = line.partition(":")
         diagnostic_id = prefix.strip() if separator else ""
         if not _KNOWN_DIAGNOSTIC_ID.fullmatch(diagnostic_id):
@@ -268,21 +342,7 @@ def sanitize_export_diagnostics(value) -> str:
             payload = line
         payload = payload.strip()
 
-        attributes: list[str] = []
-        failure_type_match = re.search(
-            r"(?:^|;\s*)failure_type=([A-Za-z_][A-Za-z0-9_]*)\s*(?:;|$)",
-            payload,
-        )
-        failure_type = failure_type_match.group(1) if failure_type_match else ""
-        if failure_type in _SAFE_RENDERED_FAILURE_TYPES:
-            attributes.append(f"failure_type={failure_type}")
-        elif diagnostic_id == "terminal_failure":
-            attributes.append("failure_type=ExportError")
-        for key, safe_value in re.findall(
-            r"\b(chart|code|stage)=([A-Za-z0-9_.-]{1,80})\b",
-            payload,
-        ):
-            attributes.append(f"{key}={safe_value}")
+        attributes = _legacy_diagnostic_attributes(payload, diagnostic_id)
         safe_lines.append(
             f"{diagnostic_id}: "
             + "; ".join((*dict.fromkeys(attributes), "detail=redacted"))
@@ -402,6 +462,7 @@ def _cancelled_export_result(
         artifacts=tuple(artifacts),
         stages=tuple(stages),
         diagnostics=_diagnostic_lines(metadata, terminal_failure=terminal_failure),
+        failure_diagnostic=_failure_from_metadata(metadata),
     )
 
 
@@ -687,6 +748,7 @@ def _cancel_embedded_export_result(
         artifacts=result.artifacts,
         stages=tuple(stages),
         diagnostics=tuple(diagnostics.splitlines()),
+        failure_diagnostic=result.failure_diagnostic,
     )
 
 
@@ -785,6 +847,7 @@ def derive_export_run_result(
         artifacts=tuple(artifacts),
         stages=tuple(stages),
         diagnostics=_diagnostic_lines(metadata, terminal_failure=terminal_failure),
+        failure_diagnostic=_failure_from_metadata(metadata),
     )
 
 
@@ -800,6 +863,11 @@ def build_export_run_message(result: ExportRunResult) -> tuple[str, str, str]:
         ExportRunStatus.CANCELLED: "The export was cancelled before all outputs completed.",
     }[result.status]
     lines = [opening]
+    if result.failure_diagnostic is not None:
+        try:
+            lines.extend(["", export_failure_message(result.failure_diagnostic)])
+        except Exception:
+            lines.extend(["", "Detailed failure capture is unavailable."])
 
     completed = [
         artifact
@@ -819,7 +887,7 @@ def build_export_run_message(result: ExportRunResult) -> tuple[str, str, str]:
             for artifact in issues
         )
 
-    if result.diagnostics:
+    if result.diagnostics or result.failure_diagnostic is not None:
         lines.extend(["", "Technical details are available under Show Details."])
     return result.level, result.title, "\n".join(lines)
 
@@ -827,4 +895,10 @@ def build_export_run_message(result: ExportRunResult) -> tuple[str, str, str]:
 def format_export_diagnostics(result: ExportRunResult) -> str:
     """Return copyable technical details kept out of primary completion copy."""
 
-    return sanitize_export_diagnostics("\n".join(result.diagnostics))
+    lines = list(result.diagnostics)
+    if result.failure_diagnostic is not None:
+        try:
+            lines.append(render_export_failure(result.failure_diagnostic))
+        except Exception:
+            pass
+    return sanitize_export_diagnostics("\n".join(lines))

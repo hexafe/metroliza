@@ -53,6 +53,7 @@ def _exception_receipt(stage: str, exc: OSError) -> dict[str, int | str | None]:
 
 
 def _assert_no_staging(destination: Path) -> None:
+    assert not list(destination.parent.glob(".metroliza-cache-*.saving"))
     assert not list(destination.parent.glob(f".{destination.name}.*.saving"))
 
 
@@ -282,3 +283,31 @@ def test_cleanup_error_after_commit_keeps_correct_archive_and_reports_success(
     assert len(cleanup_denials) == 1
     assert set(cleanup_denials) == staging_paths
     assert all(path.exists() == (os.name != "nt") for path in staging_paths)
+
+
+@pytest.mark.parametrize('stem', ['c' * 237, '測' * 78 + 'abc'], ids=['ascii-bytes', 'unicode-bytes'])
+@pytest.mark.parametrize('fail', [False, True])
+def test_long_cache_destination_keeps_source_and_cleans_owned_staging(temporary_cache, tmp_path, monkeypatch, stem, fail):
+    destination = tmp_path / (stem + '.db')
+    destination.write_bytes(b'valid directly creatable destination')
+    destination.unlink()
+    source = Path(temporary_cache.cache_db_file)
+    before = _database_snapshot(source)
+    entries = set(tmp_path.iterdir())
+    if fail:
+        def failed(*_args):
+            raise PermissionError('cannot publish')
+        monkeypatch.setattr(cache_target, '_atomic_publish_no_replace', failed)
+        with pytest.raises(PermissionError):
+            cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+        assert not destination.exists()
+        assert set(tmp_path.iterdir()) == entries
+    else:
+        persisted = cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+        assert Path(persisted.cache_db_file) == destination
+        assert _database_snapshot(destination)[1:] == before[1:]
+        assert set(tmp_path.iterdir()) == entries | {destination}
+        with pytest.raises(FileExistsError):
+            cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+        assert _database_snapshot(destination)[1:] == before[1:]
+    assert _database_snapshot(source) == before

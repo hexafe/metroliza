@@ -366,7 +366,7 @@ def test_cached_industrial_export_cancel_removes_temp_workbook(tmp_path):
         )
 
     assert not output_file.exists()
-    assert not (tmp_path / ".industrial_export.tmp.xlsx").exists()
+    assert not list(tmp_path.glob(".metroliza-industrial-*.tmp.xlsx"))
 
 
 def test_live_export_dataframe_preserves_raw_columns_without_reference_requirement():
@@ -463,3 +463,33 @@ def test_live_industrial_export_fetches_and_writes_workbook_without_cache(monkey
     assert exported["station"].tolist() == ["S1"]
     raw_data = pd.read_excel(output_file, sheet_name="Raw Data")
     assert raw_data["event_id"].tolist() == ["ROW-1"]
+
+
+@pytest.mark.parametrize('streaming', [False, True])
+@pytest.mark.parametrize('stem', ['x' * 246, '測' * 82], ids=['ascii-bytes', 'unicode-bytes'])
+@pytest.mark.parametrize('cancel', [False, True])
+def test_long_industrial_workbook_names_keep_output_and_owned_cleanup(tmp_path, streaming, stem, cancel):
+    import pytest
+    from metroliza.industrial.industrial_export_service import IndustrialExportCancelled
+
+    database = str(tmp_path / 'cache.sqlite')
+    _seed_cached_industrial_rows(database)
+    target = tmp_path / (stem + '.xlsx')
+    target.write_bytes(b'previous complete workbook')
+    def canceled():
+        return cancel and bool(list(tmp_path.glob('.metroliza-industrial-*.tmp.xlsx')))
+    def export():
+        if streaming:
+            return export_cached_industrial_workbook(db_file=database, output_file=str(target), include_charts=False, cancel_check=canceled)
+        frame = load_cached_industrial_dataframe(database)
+        return export_industrial_dataframe_workbook(dataframe=frame, output_file=str(target), include_charts=False, cancel_check=canceled)
+    if cancel:
+        with pytest.raises(IndustrialExportCancelled):
+            export()
+        assert target.read_bytes() == b'previous complete workbook'
+    else:
+        export()
+        with zipfile.ZipFile(target) as package:
+            assert package.testzip() is None
+        assert pd.read_excel(target, sheet_name='Industrial Data').shape[0] == 3
+    assert not list(tmp_path.glob('.metroliza-industrial-*.tmp.xlsx'))

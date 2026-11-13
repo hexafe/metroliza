@@ -2582,6 +2582,32 @@ class TestExportHelpers(unittest.TestCase):
 
 
 class TestExportBackendSmoke(unittest.TestCase):
+    def _assert_safe_failed_export(self, thread, errors, *, stage, raw_detail):
+        from metroliza.exporting.export_outcomes import (
+            ExportRunStatus, export_failure_message, format_export_diagnostics,
+        )
+        from metroliza.shared.diagnostic_events import (
+            ExceptionKind, ExportFailureCode, ExportFailureDiagnostic,
+        )
+
+        result = thread.export_run_result
+        self.assertIs(result.status, ExportRunStatus.FAILED)
+        failure = result.failure_diagnostic
+        self.assertIs(type(failure), ExportFailureDiagnostic)
+        self.assertIs(failure, thread._export_failure)
+        self.assertIs(failure.exception.exception_kind, ExceptionKind.RUNTIME_ERROR)
+        self.assertEqual(failure.stage.value, stage)
+        self.assertIs(failure.code, ExportFailureCode.UNEXPECTED)
+        self.assertEqual(failure.backend.value, thread.export_target)
+        self.assertTrue(errors)
+        self.assertTrue(all(message == export_failure_message(failure) for message in errors))
+        diagnostics = format_export_diagnostics(result)
+        self.assertIn(failure.exception.correlation_id.hex, errors[-1])
+        self.assertIn(failure.exception.correlation_id.hex, diagnostics)
+        for private_detail in (raw_detail, thread.db_file, str(thread._primary_output_file)):
+            self.assertTrue(all(private_detail not in message for message in errors))
+            self.assertNotIn(private_detail, diagnostics)
+
     @staticmethod
     def _build_fake_measurement_backend():
         class _FakeWorksheet:
@@ -3397,7 +3423,9 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertEqual(finished, [])
             self.assertFalse(any('Export completed successfully.' in label for label in emitted))
             self.assertTrue(any('HTML dashboard export failed.' in label for label in emitted))
-            self.assertTrue(any('HTML dashboard export failed: renderer exploded' in error for error in errors))
+            self._assert_safe_failed_export(
+                thread, errors, stage='html_generation', raw_detail='renderer exploded',
+            )
 
     def test_excel_backend_records_workbook_close_timing_and_status(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest
@@ -4791,7 +4819,10 @@ class TestExportBackendSmoke(unittest.TestCase):
             self.assertFalse(any('Export completed successfully.' in label for label in emitted))
             self.assertTrue(any('Export failed during local workbook generation.' in label for label in emitted))
             self.assertTrue(errors)
-            self.assertTrue(any('add_measurements_horizontal_sheet' in message for message in errors))
+            self._assert_safe_failed_export(
+                thread, errors, stage='local_output', raw_detail='fatal measurement step failure',
+            )
+            self.assertTrue(all('add_measurements_horizontal_sheet' not in message for message in errors))
 
     def test_google_target_emits_canonical_stage_sequence_on_success(self):
         from modules.contracts import AppPaths, ExportOptions, ExportRequest

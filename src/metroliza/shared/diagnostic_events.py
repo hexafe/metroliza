@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import errno as errno_codes
 import re
 import types
 import uuid
@@ -55,6 +56,10 @@ class ExceptionKind(str, Enum):
     IMPORT_ERROR = "import_error"
     KEY_ERROR = "key_error"
     OS_ERROR = "os_error"
+    PERMISSION_ERROR = "permission_error"
+    FILE_EXISTS_ERROR = "file_exists_error"
+    FILE_NOT_FOUND_ERROR = "file_not_found_error"
+    UNICODE_ERROR = "unicode_error"
     RUNTIME_ERROR = "runtime_error"
     TYPE_ERROR = "type_error"
     VALUE_ERROR = "value_error"
@@ -66,6 +71,12 @@ _KNOWN_EXCEPTION_KINDS = (
     (ImportError, ExceptionKind.IMPORT_ERROR),
     (KeyError, ExceptionKind.KEY_ERROR),
     (OSError, ExceptionKind.OS_ERROR),
+    (PermissionError, ExceptionKind.PERMISSION_ERROR),
+    (FileExistsError, ExceptionKind.FILE_EXISTS_ERROR),
+    (FileNotFoundError, ExceptionKind.FILE_NOT_FOUND_ERROR),
+    (UnicodeError, ExceptionKind.UNICODE_ERROR),
+    (UnicodeEncodeError, ExceptionKind.UNICODE_ERROR),
+    (UnicodeDecodeError, ExceptionKind.UNICODE_ERROR),
     (RuntimeError, ExceptionKind.RUNTIME_ERROR),
     (TypeError, ExceptionKind.TYPE_ERROR),
     (ValueError, ExceptionKind.VALUE_ERROR),
@@ -263,6 +274,10 @@ _EXCEPTION_KIND_LITERALS = (
     (ExceptionKind.IMPORT_ERROR, "import_error"),
     (ExceptionKind.KEY_ERROR, "key_error"),
     (ExceptionKind.OS_ERROR, "os_error"),
+    (ExceptionKind.PERMISSION_ERROR, "permission_error"),
+    (ExceptionKind.FILE_EXISTS_ERROR, "file_exists_error"),
+    (ExceptionKind.FILE_NOT_FOUND_ERROR, "file_not_found_error"),
+    (ExceptionKind.UNICODE_ERROR, "unicode_error"),
     (ExceptionKind.RUNTIME_ERROR, "runtime_error"),
     (ExceptionKind.TYPE_ERROR, "type_error"),
     (ExceptionKind.VALUE_ERROR, "value_error"),
@@ -394,6 +409,152 @@ class ExceptionDiagnosticEvent:
         return _UNKNOWN_EXCEPTION
 
 
+class ExportFailureStage(str, Enum):
+    UNKNOWN = "unknown"
+    PREPARATION = "preparation"
+    LOCAL_OUTPUT = "local_output"
+    CLOUD_CONVERSION = "cloud_conversion"
+    HTML_GENERATION = "html_generation"
+    PNG_WRITE = "png_write"
+    PLOTLY_SPEC = "plotly_spec"
+    PLOTLY_JSON = "plotly_json"
+    HTML_RENDER = "html_render"
+    HTML_WRITE = "html_write"
+    ASSET_PUBLICATION = "asset_publication"
+    HTML_PUBLICATION = "html_publication"
+    HTML_VALIDATION = "html_validation"
+    CLEANUP = "cleanup"
+
+
+class ExportFailureCode(str, Enum):
+    UNEXPECTED = "unexpected_export_failure"
+    ACCESS_DENIED = "output_access_denied"
+    TARGET_EXISTS = "output_target_exists"
+    PATH_TOO_LONG = "output_path_too_long"
+    OUTPUT_MISSING = "dashboard_output_missing"
+
+
+class ExportFailureBackend(str, Enum):
+    UNKNOWN = "unknown"
+    HTML = "html_dashboard"
+    WORKBOOK = "excel_xlsx"
+    CLOUD = "google_sheets_drive_convert"
+
+
+@dataclass(frozen=True, slots=True)
+class ExportFailureDiagnostic:
+    """One failure captured before wrapping, containing no exception payload."""
+
+    invocation_id: uuid.UUID
+    operation_id: uuid.UUID
+    stage: ExportFailureStage
+    code: ExportFailureCode
+    backend: ExportFailureBackend
+    exception: ExceptionDiagnosticEvent
+    cause_kind: ExceptionKind = ExceptionKind.UNKNOWN_EXCEPTION
+    errno: int | None = None
+    winerror: int | None = None
+    recorder_connected: bool = False
+
+    def __post_init__(self) -> None:
+        export_failure_payload(self)
+
+
+def export_failure_payload(failure: ExportFailureDiagnostic) -> dict[str, object]:
+    """Validate exact identities on every sink, including mutated frozen records."""
+    if type(failure) is not ExportFailureDiagnostic:
+        raise DiagnosticEventValidationError("invalid export failure")
+    for value, enum_type in ((failure.stage, ExportFailureStage),
+                             (failure.code, ExportFailureCode),
+                             (failure.backend, ExportFailureBackend)):
+        if type(value) is not enum_type:
+            raise DiagnosticEventValidationError("invalid export failure identity")
+    if type(failure.exception) is not ExceptionDiagnosticEvent:
+        raise DiagnosticEventValidationError("invalid export exception")
+    if type(failure.recorder_connected) is not bool:
+        raise DiagnosticEventValidationError("invalid export recorder state")
+    for value in (failure.errno, failure.winerror):
+        if value is not None and not _bounded_integer(value, 65535):
+            raise DiagnosticEventValidationError("invalid export OS code")
+    return {
+        "invocation_id": _uuid_hex(failure.invocation_id),
+        "operation_id": _uuid_hex(failure.operation_id),
+        "stage": failure.stage.value,
+        "code": failure.code.value,
+        "backend": failure.backend.value,
+        "exception": _exception_payload(failure.exception),
+        "cause_kind": _exception_kind_literal(failure.cause_kind),
+        "errno": failure.errno,
+        "winerror": failure.winerror,
+        "recorder_connected": failure.recorder_connected,
+    }
+
+
+def observe_export_stage(callback, stage=None, exception=None) -> None:
+    """Instrumentation is optional and cannot change the publication outcome."""
+    if callback is not None:
+        try:
+            callback(stage, exception)
+        except Exception:
+            pass
+
+
+def _trusted_os_code_pair(exception: BaseException) -> tuple[int | None, int | None]:
+    approved = (OSError, PermissionError, FileExistsError, FileNotFoundError)
+    if not any(type(exception) is known for known in approved):
+        return None, None
+    values = []
+    for name in ("errno", "winerror"):
+        candidate, available = _base_exception_slot(
+            exception, OSError.__dict__.get(name), OSError,
+        )
+        values.append(candidate if available and _bounded_integer(candidate, 65535) else None)
+    return values[0], values[1]
+
+
+def _causal_os_code_pair(exception: BaseException) -> tuple[int | None, int | None]:
+    """Keep one node's codes; only an explicit bounded cause can supply a fallback."""
+    seen: set[int] = set()
+    current = exception
+    for _ in range(_MAX_EXCEPTION_DEPTH + 1):
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        codes = _trusted_os_code_pair(current)
+        if codes != (None, None):
+            return codes
+        cause, available = _base_exception_slot(current, _BASE_EXCEPTION_CAUSE_DESCRIPTOR, BaseException)
+        if not available or not issubclass(type(cause), BaseException):
+            break
+        current = cause
+    return None, None
+
+
+def build_export_failure_diagnostic(exception: BaseException, *, invocation_id: uuid.UUID,
+                                    operation_id: uuid.UUID, stage: ExportFailureStage,
+                                    backend: ExportFailureBackend,
+                                    code: ExportFailureCode = ExportFailureCode.UNEXPECTED,
+                                    recorder_connected: bool = False,
+                                    ) -> ExportFailureDiagnostic:
+    shape = build_exception_diagnostic_event(
+        exception, operation=DiagnosticOperation.UNHANDLED_EXCEPTION,
+    )
+    cause, _ = _base_exception_slot(exception, _BASE_EXCEPTION_CAUSE_DESCRIPTOR, BaseException)
+    cause_kind = (_exception_kind(cause) if isinstance(cause, BaseException)
+                  and not shape.structure_truncated and not shape.group_count
+                  else ExceptionKind.UNKNOWN_EXCEPTION)
+    os_codes = _causal_os_code_pair(exception)
+    if code is ExportFailureCode.UNEXPECTED:
+        if shape.exception_kind is ExceptionKind.PERMISSION_ERROR:
+            code = ExportFailureCode.ACCESS_DENIED
+        elif shape.exception_kind is ExceptionKind.FILE_EXISTS_ERROR:
+            code = ExportFailureCode.TARGET_EXISTS
+        elif os_codes[0] == errno_codes.ENAMETOOLONG or os_codes[1] == 206:
+            code = ExportFailureCode.PATH_TOO_LONG
+    return ExportFailureDiagnostic(invocation_id, operation_id, stage, code, backend,
+                                   shape, cause_kind, *os_codes, recorder_connected)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeProvenanceEvent:
     """Closed build facts; release identity comes only from reviewed source."""
@@ -450,6 +611,7 @@ class WorkflowDiagnosticEvent:
     imported_report_count: int | None = None
     published_artifact_count: int | None = None
     duration_ms: int | None = None
+    export_failure: ExportFailureDiagnostic | None = None
 
     def __post_init__(self) -> None:
         _workflow_payload(self)
@@ -558,7 +720,7 @@ def _exception_group_shape(
     depth: int,
     remaining_members: int,
 ) -> tuple[list[tuple[BaseException, int]], int, int, bool]:
-    if not isinstance(exception, BaseExceptionGroup):
+    if not issubclass(type(exception), BaseExceptionGroup):
         return [], 0, 0, False
     children, available = _base_exception_slot(
         exception,
@@ -587,7 +749,7 @@ def build_exception_diagnostic_event(
 ) -> ExceptionDiagnosticEvent:
     """Build a structural exception event without reading exception payload text."""
     _operation_literal(operation)
-    if not isinstance(exception, BaseException):
+    if not issubclass(type(exception), BaseException):
         return ExceptionDiagnosticEvent(
             operation=operation,
             exception_kind=ExceptionKind.UNKNOWN_EXCEPTION,
@@ -1070,6 +1232,20 @@ def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
     if event.duration_ms is not None and not _bounded_integer(event.duration_ms, 86_400_000):
         raise DiagnosticEventValidationError("invalid workflow duration")
     _validate_workflow_state(event)
+    extra = {}
+    if event.export_failure is not None:
+        if (event.operation is not WorkflowOperation.LOCAL_EXPORT
+                or event.stage is not WorkflowStage.FINISHED
+                or event.outcome not in (WorkflowOutcome.FAILED,
+                                         WorkflowOutcome.COMPLETED_WITH_OMISSIONS,
+                                         WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+                                         WorkflowOutcome.CANCELLED)):
+            raise DiagnosticEventValidationError("invalid export failure state")
+        failure = export_failure_payload(event.export_failure)
+        if (failure["invocation_id"] != _uuid_hex(event.invocation_id)
+                or failure["operation_id"] != _uuid_hex(event.operation_id)):
+            raise DiagnosticEventValidationError("invalid export failure identity")
+        extra["export_failure"] = failure
     return {
         "event_code": _event_code_literal(DiagnosticEventCode.WORKFLOW_DIAGNOSTIC),
         **_workflow_identity(event),
@@ -1082,6 +1258,7 @@ def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
         "imported_report_count": event.imported_report_count,
         "published_artifact_count": event.published_artifact_count,
         "duration_ms": event.duration_ms,
+        **extra,
     }
 
 

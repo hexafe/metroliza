@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use metroliza_launcher::archive::Payload;
@@ -15,12 +16,23 @@ use metroliza_launcher::pack::{pack, PackOptions};
 const LAUNCHER: &str = env!("CARGO_BIN_EXE_metroliza-launcher");
 const TEST_ENTRY: &str = env!("CARGO_BIN_EXE_launcher-test-entry");
 
+// A foreign test-thread fork can inherit live cache locks until its child execs.
+// Every in-process cache lifecycle/cleanup critical section and every process creation
+// (including calls through platform helpers) must take this gate. Drop it before calling
+// a helper that takes it again, such as run_launcher/status_retrying_busy.
+static TEST_FORK_GATE: Mutex<()> = Mutex::new(());
+
+fn test_fork_guard() -> MutexGuard<'static, ()> {
+    TEST_FORK_GATE.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Run `command`, retrying while the freshly packed executable is still "busy".
 ///
 /// On Linux, a parallel test thread that forks between this test writing the EXE and executing
 /// it briefly holds the write descriptor (until its child execs), so `execve` fails with
 /// ETXTBSY ("Text file busy"). That is a test-harness race, not launcher behaviour.
 fn status_retrying_busy(command: &mut Command) -> std::process::ExitStatus {
+    let _fork = test_fork_guard();
     for _ in 0..100 {
         match command.status() {
             Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
@@ -95,6 +107,7 @@ fn set_completed(root: &Path, dir_name: &str, age_secs: u64) {
 
 #[test]
 fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
+    let _fork = test_fork_guard();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
@@ -155,7 +168,11 @@ fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
         let current = r.dir_name.clone();
         drop(r);
         set_completed(&root, &current, age);
-        cleanup_old_versions(&root, &current);
+        let report = cleanup_old_versions(&root, &current);
+        assert!(
+            !report.busy && report.skipped_in_use.is_empty() && report.failed.is_empty(),
+            "lifecycle cleanup for {current}: {report:?}"
+        );
     }
     assert!(
         !root.join("1.0_11111111").exists(),
@@ -182,6 +199,7 @@ fn fake_sign(packed: &Path) {
 
 #[test]
 fn signed_layout_still_extracts() {
+    let _fork = test_fork_guard();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
@@ -544,14 +562,17 @@ fn a_second_instance_shows_no_splash_and_touches_no_cache() {
     let first_log = tmp.path().join("first.log");
     let record_arg = record.to_str().unwrap();
     let stop_arg = stop.to_str().unwrap();
-    let mut first = Command::new(&exe)
-        .args(["--record", record_arg, "--stop-file", stop_arg, "--sleep-ms", "60000"])
-        .current_dir(exe.parent().unwrap())
-        .env("METROLIZA_RUNTIME_ROOT", &root)
-        .env("METROLIZA_LAUNCHER_LOG", &first_log)
-        .env("METROLIZA_LAUNCHER_NO_UI", "1")
-        .spawn()
-        .unwrap();
+    let mut first = {
+        let _fork = test_fork_guard();
+        Command::new(&exe)
+            .args(["--record", record_arg, "--stop-file", stop_arg, "--sleep-ms", "60000"])
+            .current_dir(exe.parent().unwrap())
+            .env("METROLIZA_RUNTIME_ROOT", &root)
+            .env("METROLIZA_LAUNCHER_LOG", &first_log)
+            .env("METROLIZA_LAUNCHER_NO_UI", "1")
+            .spawn()
+            .unwrap()
+    };
     let _stop = StopOrphan(stop.clone());
     wait_for_record(&record, "started");
     let second = run_launcher(&exe, &root, &log, &["--record", record_arg, "--sleep-ms", "0"]);
@@ -784,12 +805,16 @@ fn persistent_spawn_failure_after_repair_returns_error_without_another_repair() 
         &invalid,
     );
     let payload = Payload::open(&exe).unwrap();
-    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
-    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
-    assert_eq!(runtime.outcome, Outcome::Verified);
-    let dir = runtime.dir.clone();
-    drop(runtime);
-    assert!(is_warm(&dir, &payload));
+    let dir = {
+        let _fork = test_fork_guard();
+        drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+        let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        assert_eq!(runtime.outcome, Outcome::Verified);
+        let dir = runtime.dir.clone();
+        drop(runtime);
+        assert!(is_warm(&dir, &payload));
+        dir
+    };
 
     let run = run_launcher(&exe, &root, &log, &[]);
     assert_eq!(run.code, Some(104), "{}", run.log);
@@ -851,6 +876,7 @@ fn freshly_checked_spawn_failure_does_not_repair(outcome: &str) {
     let (_tmp, exe, root, log) = unspawnable_fixture(&label, &[0; 4096]);
     let dir = root.join(format!("1.0-{label}_abcdef01"));
     if outcome != "cold" {
+        let _fork = test_fork_guard();
         let payload = Payload::open(&exe).unwrap();
         drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
         assert!(dir.join(PENDING_MARKER).is_file());
@@ -898,16 +924,20 @@ fn warm_permission_denied_spawn_does_not_repair() {
     // Windows policy/access-denial codes are covered by the spawn policy unit test there.
     let (_tmp, exe, root, log) = unspawnable_fixture("spawn-denied", b"#!/\n");
     let payload = Payload::open(&exe).unwrap();
-    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
-    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
-    assert_eq!(runtime.outcome, Outcome::Verified);
-    let dir = runtime.dir.clone();
-    drop(runtime);
-    let marker = fs::read(dir.join(MARKER)).unwrap();
-    let error = metroliza_launcher::platform::spawn_entry(&dir.join("entry.exe"), &[], None)
-        .err()
-        .unwrap();
-    assert!(error.detail.contains("os error 13"), "{error}");
+    let (dir, marker) = {
+        let _fork = test_fork_guard();
+        drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+        let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        assert_eq!(runtime.outcome, Outcome::Verified);
+        let dir = runtime.dir.clone();
+        drop(runtime);
+        let marker = fs::read(dir.join(MARKER)).unwrap();
+        let error = metroliza_launcher::platform::spawn_entry(&dir.join("entry.exe"), &[], None)
+            .err()
+            .unwrap();
+        assert!(error.detail.contains("os error 13"), "{error}");
+        (dir, marker)
+    };
 
     let run = run_launcher(&exe, &root, &log, &[]);
     assert_eq!(run.code, Some(104), "{}", run.log);
@@ -931,12 +961,16 @@ fn failed_spawn_repair_preserves_original_launch_error() {
     use std::os::unix::fs::PermissionsExt;
     let (_tmp, exe, root, log) = unspawnable_fixture("spawn-repair-fails", &[0; 4096]);
     let payload = Payload::open(&exe).unwrap();
-    drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
-    let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
-    let dir = runtime.dir.clone();
-    drop(runtime);
-    // Prevent marker invalidation/removal after a repairable ENOEXEC on a Warm cache.
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    let dir = {
+        let _fork = test_fork_guard();
+        drop(ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap());
+        let runtime = ensure_runtime(&root, &payload, &NoProgress, &quick()).unwrap();
+        let dir = runtime.dir.clone();
+        drop(runtime);
+        // Prevent marker invalidation/removal after a repairable ENOEXEC on a Warm cache.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+        dir
+    };
     let run = run_launcher(&exe, &root, &log, &[]);
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(run.code, Some(104), "{}", run.log);
@@ -1038,6 +1072,7 @@ fn a_repair_variable_inherited_from_the_parent_never_reaches_the_restart() {
 
 #[test]
 fn library_repair_runtime_rebuilds_a_warm_runtime() {
+    let _fork = test_fork_guard();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
@@ -1113,6 +1148,7 @@ fn cleanup_preserves_orphan_after_supervisor_and_launcher_exit() {
         ],
     );
     assert_eq!(run.code, Some(0)); // both supervisor and launcher are gone
+    let _fork = test_fork_guard();
     wait_for_record(&record, "started");
     let orphan_name = "1.0-orphan_abcdef01";
     let orphan_dir = root.join(orphan_name);
@@ -1139,7 +1175,8 @@ fn cleanup_preserves_orphan_after_supervisor_and_launcher_exit() {
         set_completed(&root, &current, age);
     }
     let report = cleanup_old_versions(&root, &current);
-    assert_eq!(report.skipped_in_use, vec![orphan_name]);
+    assert!(!report.busy && report.failed.is_empty(), "{report:?}");
+    assert_eq!(report.skipped_in_use, vec![orphan_name], "{report:?}");
     assert_eq!(
         fs::read(orphan_dir.join(PENDING_MARKER)).unwrap(),
         original_marker

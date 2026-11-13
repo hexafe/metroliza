@@ -11,37 +11,121 @@ the actual merge commits, final branch cut and cleanup receipts. This source-lin
 not distribute or publish a packaged candidate.
 
 The 2026-11-13 naming decision maps the current roles to `main` (production/history default),
-`dev` (daily integration) and `rc` (active candidate). The migration renames `rc2` to `rc` for
-hosted-blob redirect compatibility and advances it from the former `release/2026.09-rc1` through
-a reviewed history-preserving PR. This is a ref/configuration change, not new artifact qualification.
+`dev` (daily integration) and `rc` (active frozen candidate). Its native `rc2` to `rc` rename preserves
+hosted-blob redirect compatibility, with the former `release/2026.09-rc1` reconciled through the
+reviewed history-preserving migration. Branch names and governance/configuration do not qualify artifacts.
 Original branch names, source SHA/tree, build identities and receipts below retain their historical
 bindings; do not interpret a current ref tip as the frozen build's source.
 
-## UI workflow source candidate — build 261115
+## Current development build and exact delivery evidence
 
-The UI delivery under [#1159](https://github.com/hexafe/metroliza/issues/1159) uses
-`2026.09 RC1 (build 261115)` on the unchanged `2026.09rc1` line. It brings visible
-commands and workspace navigation, completed report results, clearer filter/group
-controls and output choices, guided Profiles/Industrial/Realtime setup, and a
-compact offline dashboard overview. Broader product epics retain their original
-criteria; these UI additions do not establish their completion.
+The canonical release/build identity is defined in
+[`src/metroliza/app/version.py`](../../src/metroliza/app/version.py). The current main HTML and
+related save-path repair is tracked in [#1220](https://github.com/hexafe/metroliza/issues/1220),
+[#1221](https://github.com/hexafe/metroliza/issues/1221) and
+[PR #1224](https://github.com/hexafe/metroliza/pull/1224).
 
-| Item | State | Evidence / next gate |
+Use the coordinator's exact-source delivery and integration ledger in #1220 / PR #1224 for the
+latest candidate source commit/tree, build identity, required source/manual-workflow CI outcomes,
+canonical Windows run/jobs, retained qualification artifacts, EXE/ZIP hashes and byte sizes,
+local download/finalizer/delivery receipts, independent/GitHub review disposition and actual merge.
+Read the recorded terminal verdict for each boundary; a version assignment, branch tip, one successful
+job or previously delivered artifact is not a substitute for that exact candidate's complete ledger.
+A later prose commit does not change the packaged source recorded by its receipt.
+
+Current development work integrates through `dev`. The frozen `rc` baseline and production/history
+`main` remain distinct; delivering a development test package does not promote either branch or
+assign stable/release-owner approval. The immutable historical package checkpoints below document
+what actually happened, including adverse runs; they do not silently follow later build metadata.
+
+On 2026-11-13 the Product Owner explicitly deferred their private-data retest to the following week
+and instructed implementation/integration and repository cleanup to finish meanwhile. That is an
+explicit retest deferral, not private-data acceptance or a request to stop authorized engineering
+work. Any subsequent user observation must retain its own exact artifact/data-scope binding in the
+existing issue ledger. Physical/device/accessibility, private-report, clean-machine/AV, desktop Excel,
+applicable live-service, notices/legal and release-owner criteria remain separate from automated proof.
+
+## Historical development-package checkpoint — build 261118
+
+This dated checkpoint retains both the actual delivery/qualification proof and the subsequently
+observed adverse workflow result. It is not a globally green CI or release-acceptance claim.
+
+| Item | Observed result | Exact binding / limit |
 |---|---|---|
-| 261115 identity | Assigned by the coordinator after the 261114 build attempt started | Separate identity for the native test fixture DPR-context correction; native source cohorts must pass before a Combined build, whose provenance must record its actual source/tree and UTC build time |
+| 261118 source | `ddad2c78866eb36bc9058eeacf0f2ead43780e7e`, tree `98cc46a09fee16b95697eb504b6e05cb6bb3284f` | `2026.09rc1(261118)`. The final retention change at this checkpoint adds one exact `**/main-html.zip` upload rule, a meaningful four-run/decoy policy test and build metadata; exporter/diagnostic/qualification logic is unchanged from 261117 |
+| 261118 independent retention-delta review | **PASS_SOURCE_DELTA** | [Exact-source report](https://github.com/hexafe/metroliza/pull/1224#issuecomment-6856800998); source-only verdict, with unchanged earlier product reviews retaining their own bindings |
+| 261118 primary source CI | **PASS** | [Run 43449127438](https://github.com/hexafe/metroliza/actions/runs/43449127438) completed successfully on exact ddad source; native Windows job 131966455212 included 67 PASS / 0 SKIP in 30.56s |
+| 261118 Combined and downloaded user ZIP jobs | **PASS** | [Run 43449763500](https://github.com/hexafe/metroliza/actions/runs/43449763500): Combined job 131968550806 and downloaded-user-ZIP verifier job 131979266861. One same-package diagnostics/core chain at DPR 1.0/1.25/1.5 and forced native-unavailable, with six actual main exports per run; qualified onedir retained through launcher packing, smoke and user ZIP |
+| 261118 actual retained qualification evidence | **PASS** | Acceptance artifact 14051817233: 42929123 B, SHA-256 `45c43962290439eeb2e0f4dc77c15394d3d4a57027317d13eca9432a80dec15a`, 151 members including exactly four run-relative `main-html.zip` files. Unchanged strict local finalizer exited 0 in 6.6478s with exact native-receipt equality and original inputs unchanged |
+| 261118 local ZIP/EXE identity and handoff | **PASS for the delivered development-test bytes** | Local downloaded ZIP/EXE identity and strict finalizer matched the CI receipts; the package was handed to the user on 2026-11-13 (coordinator's 15:36 handoff). The whole-workflow failure below was observed by the coordinator after handoff; the Unit failure had already occurred before handoff and remains adverse |
+| 261118 user ZIP | `metroliza_2026.09rc1_261118_windows.zip`, 284804594 B | SHA-256 `a983eaacd4bb3dd0e1e4d742d18ece7fedcd9f0943fdec9fb095ec61489fc0dd` |
+| 261118 launcher EXE | `metroliza_2026.09rc1_261118_launcher.exe`, 335066896 B, PE32+ x86-64 | SHA-256 `970870544e9176096569ad1defa5b6648873075ef5588ad86db812b2262a6660`; payload content SHA-256 `0035dfa3f3058985f81e094435ddf378c23804f707f25eb1490b5ddbd4cc7d43`. Actual smoke-tested EXE/local-vs-CI downloaded receipt identity preserved |
+| 261118 manual workflow overall | **FAIL**, despite the package-job successes above | Run 43449763500's duplicate Unit job 131968761529 failed at the unchanged diagnostic-launcher test cleanup `join(1)` boundary: Unit step FAIL at 15:36:25 UTC, job exit at 15:36:27 UTC, before the package handoff. The coordinator subsequently observed this adverse result through the merge operator. The same-head primary source run passed. The actual FAIL and its separate diagnosis/disposition remain in #1220 / PR #1224; do not infer merge readiness or relabel the whole workflow green from the package receipts |
+| 261118 private user retest / manual or release approval | **Deferred by the user; acceptance not granted by this checkpoint** | The 2026-11-13 instruction deferred private retest to the following week while implementation/repository closeout continued. No private-data cause/retest, physical comfort, screen-reader, clean-machine/desktop Excel, live-service, legal or release-owner acceptance follows from these automated results |
+
+A separate controlled investigation reproduced the same cleanup assertion when a real resolver
+storage-directory fsync was held behind a test barrier, despite close returning SAVED in 0.75010s,
+final_saved=true and all incident assertions passing. The ordinary unchanged stalled case passed
+in 1.06s, and all workers stopped after the barrier was released. This establishes the teardown
+mechanism and supports the admitted test-fixture-only repair; it does not identify the actual CI
+worker's blocked frame or prove that the injected storage stall caused the historical CI failure.
+The pre-correction launcher/store/test bytes matched accepted dev `0c4a357d`. The admitted fixture
+control subsequently recorded old-cleanup FAIL in 2.11s and repaired-fixture PASS in 1.08s, with
+close returning SAVED in 0.75032s. These are source control results; the final candidate's CI,
+package, delivery and integration outcomes remain authoritative in the issue/PR ledger.
+
+Any correction or later build has its own source/tree, identity and exact receipt ledger. This table
+preserves the 261118 outcomes rather than predicting the result, merge or delivery of a future build.
+
+## Historical export-correction attempts — builds 261116 and 261117
+
+- `261116`: [run 43434896238](https://github.com/hexafe/metroliza/actions/runs/43434896238), source
+  `86561ff691fe00f25b6358b7eca6a4acbb3e1fd1`, was **CANCELLED** after a new original-OS-error-code
+  boundary finding required correction. Combined/source qualification did not complete; **NOT_DELIVERED**.
+- `261117`: source `b3ee75615588e4e2a7df51d083b28f0ca2f77776`, tree
+  `86afc02a29ed377277da834f9677e5d5ad7feea7`; actual runtime Combined qualification **PASS** in
+  [run 43444061065, job 131948804883](https://github.com/hexafe/metroliza/actions/runs/43444061065/job/131948804883).
+  The separately downloaded user ZIP also passed its identity checks. However, retained Actions
+  receipts artifact `14048196167` omitted all four required `main-html.zip` outputs. Actual downloaded
+  artifact digest/size matched, and the unchanged strict local finalizer failed with `FileNotFoundError`
+  for `core-dpr-1.0/main-html.zip`; the other three required run archives were also absent.
+  **RETAINED_EVIDENCE_FAIL / NOT_DELIVERED**. Runtime PASS and downloaded ZIP identity PASS remain valid
+  within their own scopes; neither substitutes for the missing retained qualification evidence.
+  Earlier environment-setup failures remain distinct from that reproduced artifact failure.
+- `261118` is a new build identity for that exact bounded retention-rule/test correction; no archive
+  is reconstructed, validator weakened or earlier failed/cancelled attempt relabelled PASS.
+
+## Delivered UI workflow development package — build 261115
+
+The UI delivery under [#1159](https://github.com/hexafe/metroliza/issues/1159) used
+`2026.09 RC1 (build 261115)` on the unchanged `2026.09rc1` line. It brought visible
+commands and workspace navigation, completed report results, clearer filter/group controls and
+output choices, guided Profiles/Industrial/Realtime setup, and a compact offline dashboard overview.
+It was delivered on 2026-11-13 as a qualified development test package. Broader product epics retain
+their original criteria; these UI additions do not establish their completion.
+
+| Item | State | Evidence / scope |
+|---|---|---|
+| 261115 delivered source | `ed8b6ccf35614c005d9e04281e03380a26fc4f25`, tree `6ebee9551e51e787ccf21d31ac8820480e68c7ce` | [PR #1215](https://github.com/hexafe/metroliza/pull/1215) merged as `dd10cdd7cf6db6aec0ccbf26e65cd880dabe9310` with the identical tree. Later branch tips or prose commits do not redefine these package bytes |
+| 261115 final source CI | **PASS** | [PR run 43383599732](https://github.com/hexafe/metroliza/actions/runs/43383599732) completed successfully on the exact source: 10621 PASS / 149 SKIP / 419 subtests plus nine appended cohorts; coverage 84.05% / 87.50% against 80%. Independent/GitHub review and root integration adjudication are preserved in [the final record](https://github.com/hexafe/metroliza/pull/1215#issuecomment-6847485588) |
+| 261115 Combined + launcher + downloaded ZIP | **PASS / DELIVERED development test package** | [Run 43386007818](https://github.com/hexafe/metroliza/actions/runs/43386007818), Combined job 131754547854: same-package diagnostics/core at DPR 1.0/1.25/1.5 and forced native-unavailable, independent data/offline-output checks, unchanged-onedir launcher packing, cold/warm/incident/cache smoke and downloaded user ZIP verification. Strict local re-verification used the exact Windows CRLF source representation and produced a receipt identical to the native result |
+| 261115 user ZIP | `metroliza_2026.09rc1_261115_windows.zip`, 284762864 B | SHA-256 `aeb862b160f69111608ba867475c17e381f1695a23a10abeadb447aeec9df831`; contains the smoke-tested launcher, source provenance, notices/inventory and instructions |
+| 261115 launcher EXE | `metroliza_2026.09rc1_261115_launcher.exe`, 335027792 B, PE32+ x86-64 | SHA-256 `4bf2e9fb9523070d8d9beb86a445778267308f1fec1633cbeb0fb918e45644db`; payload content SHA-256 `ccc54808b84dda04f9070c0738ab60daabb1cd3ca2aace81c46ec5ea3935e57b`. Local and CI downloaded-ZIP receipts agree; this is the actual smoke-tested EXE |
+| 261115 notices and inventory | Bytes/source/build inventory match; 0 drift/problems in the delivery adjudication | 79 Python / 126 Rust entries; metadata matching does not constitute legal review or release-owner approval |
+| 261115 manual set | Committed and pinned | [Immutable manuals](https://github.com/hexafe/metroliza/tree/964241e1d872bec158f2def4bad4fdbd3c0e6bc9/docs/user_manual), including the central keyboard reference; the same full SHA is the default Help/export docs ref |
+| 261115 human / release acceptance | **NOT_RUN / NOT_GRANTED** beyond the recorded automated/visual scope | Thirty genuine native captures were inspected; that does not prove physical Polish-keyboard/AltGr/hand comfort, screen-reader use, clean-machine/desktop Excel, representative private reports or applicable live-service/legal acceptance. Remaining #1159 acceptance and release-owner decision stay separately tracked |
 | Superseded candidate 261114 | Build attempt started; no accepted package claimed | PR #1215 Windows core job 131502055816 ended 614 PASS / 1 FAIL / 1 SKIP: all six real completed-result corruption controls passed, then the native fixture lacked required expected-DPR context. Original FAIL retained; the build attempt does not qualify 261115 |
 | Superseded candidate 261113 | Build attempt started; no accepted package claimed | PR #1215 Windows core job 131492860207 failed an assertion comparing native Windows and POSIX path spellings after the real read-only SQLite connection succeeded. Original FAIL retained; the build attempt does not qualify 261114. The original 261113 assignment check at 20:35 UTC on 2026-11-12 covered reachable version history, current refs/tags, three releases and latest 100 of 2,894 artifacts |
-| Manual set | Committed and pinned | [Immutable manuals](https://github.com/hexafe/metroliza/tree/964241e1d872bec158f2def4bad4fdbd3c0e6bc9/docs/user_manual), including the central keyboard reference; the same full SHA is the default Help/export docs ref. Published-link verification remains part of final preparation |
-| Source review | Leaf reviews are source-only; finalization and aggregate acceptance pending | Preserve each leaf's exact source/review binding and the final independent/GitHub review gates |
-| Local Stage A checks | PASS on `b5e1f629`: 70 focused tests, one declared DPR 1.5 geometry case and full security audit | Earlier preliminary security FAIL remains retained. The six unchanged SQL finding rebindings and one public fixture placeholder passed the strict local gate; this evidence does not replace final-source CI |
-| Final source CI | Pending for the final 261115 source/tree | Full coverage, security, native Windows source cohorts and required current-base checks/GitHub review must finish on the admitted head |
-| 261115 package and downloaded ZIP | **NOT_RUN** | One Combined build must preserve the same qualified onedir through launcher/ZIP, followed by exact downloaded artifact, provenance, notices and dependency-inventory verification |
-| 261115 manual / release acceptance | **NOT_RUN** | Physical Windows/Polish-keyboard/hand/screen-reader observations, clean-machine/desktop Excel and applicable live-service/data evidence remain separate. No stable promotion or published release is assigned by this metadata change |
-| Historical source build 261112 | Retained at source `7b0de056` and its accepted integration history | The new UI source uses 261115; historical 261112 source/CI evidence stays bound to its original bytes |
+| Earlier local Stage A checks | PASS on `b5e1f629`: 70 focused tests, one declared DPR 1.5 geometry case and full security audit | Earlier preliminary security FAIL remains retained. The six unchanged SQL finding rebindings and one public fixture placeholder passed the strict local gate; this evidence is earlier than the final-source CI |
+| Historical source build 261112 | Retained at source `7b0de056` and its accepted integration history | Historical 261112 source/CI evidence stays bound to its original bytes |
 
-The frozen qualified `261031` package and its still-open manual acceptance remain
-as recorded below. This new source candidate does not move the archived source,
-package hashes, review receipts or acceptance state of that build.
+The later [#1220 export investigation](https://github.com/hexafe/metroliza/issues/1220) does not erase
+261115's actual delivery/qualification results, and those results do not prove the later correction
+or the user's original failure cause. Preserve the earlier download interruption, hardlink and
+source-representation failures beside the successful byte-bound re-verification.
+
+The frozen qualified `261031` package and its still-open manual acceptance remain as recorded
+below. The development packages above do not move its archived source, hashes, receipts or acceptance.
 
 ## Frozen RC qualification and existing decisions
 
@@ -50,8 +134,8 @@ package hashes, review receipts or acceptance state of that build.
 | Integration order | #1109, #1142, one STEP2+STEP3 aggregate, #1063; merge commits | #1153, current-base checks and independent reviews per merge |
 | Current RC source line | `rc` (formerly `release/2026.09-rc1`) | Original cut from accepted final develop; exact frozen SHA/tree in #1153 and the rows below |
 | STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
-| Final build identity | `261031`: Combined, launcher smoke and ZIP gates **PASS** in CI (scope in the rows below); `261029` stays bound to the historical bytes below | Synchronized source metadata under #1158 (#1189); changed binaries never reuse 261029 |
-| Current candidate source (261031) | `6dc0554667a842e107bd547fc86aeefedc52aec4`, tree `710332799cb9d7b6f58e59603b8e4630fb2f34d0` | Head of `release/2026.09-rc1` after sync #1190 (#1185, #1186, #1188, #1189); RC tree equals `develop` `d558a430` |
+| Frozen RC build identity | `261031`: Combined, launcher smoke and ZIP gates **PASS** in CI (scope in the rows below); `261029` stays bound to the historical bytes below | Synchronized source metadata under #1158 (#1189); changed binaries never reuse 261029 |
+| Frozen candidate source (261031) | `6dc0554667a842e107bd547fc86aeefedc52aec4`, tree `710332799cb9d7b6f58e59603b8e4630fb2f34d0` | Head of `release/2026.09-rc1` after sync #1190 (#1185, #1186, #1188, #1189); RC tree equals `develop` `d558a430` |
 | 261031 Combined + launcher + ZIP (one build) | **PASS** in run [41154237127](https://github.com/hexafe/metroliza/actions/runs/41154237127): diagnostics, core at DPR 1.0/1.25/1.5, forced native-unavailable, fresh reopen, onedir unchanged by acceptance, launcher packed from that onedir without rebuild, launcher smoke in four scenarios (normal/cold, normal/verified reopen, hard exit/warm, preview/warm; warm is the cache state), ZIP completeness, inventory gate, downloaded-ZIP re-check | Job 124397401592 `combined-candidate-receipt.json` (package tree `1461ef3a…`, `qualified-windows-development-package.zip` `799760d3…`, artifact 13024638914). Onedir content hash (packer definition) `6b8ce7372494c77def5005dd456bd68bc77828239bbf4d23fe63508fa0a56ae1` = EXE payload. Job 124401380755 verified the downloaded ZIP. Packing the qualified onedir does not by itself accept the launcher start path beyond the smoke scenarios |
 | 261031 user ZIP | One launcher EXE, original provenance, visible `.licenses`, README; unsigned | `metroliza_2026.09rc1_261031_windows.zip` SHA-256 `7005d05e13ea9159bcc7ec6b10de6224ff7fb4f19d0b11162f8ed92552699c20`, 284555192 B; EXE `metroliza_2026.09rc1_261031_launcher.exe` SHA-256 `2ee40bd389f9547cf9a0f52294d4c8943e2c509c184f91c6c09957cc2c778952`, 334822568 B; runtime cache `2026.09rc1_261031-6b8ce7372494_6dc05546`. Actions artifact 13024584128 (`windows-release-zip`, wrapper `987009e3…`), retained until 2027-01-29. Re-verified locally after download on 2026-10-31 |
 | 261031 notices and inventory | ZIP notices equal the RC source; inventory equals this build (79 Python, 126 Rust packages) | `release/third-party-inventory.json` PASS, 0 differences, compared with the frozen build venv and 27 bundled dist-info; Rust list over-approximates (all targets and kinds). `review_status` unchanged: metadata not reviewed, no release-owner or legal sign-off |
@@ -124,5 +208,7 @@ Stable promotion and a stable tag remain No-Go without the applicable manual gat
 The [2026-08-22 transition decision](rc2_branch_transition_decision_2026-08-22.md) remains valid
 historical evidence. Original release-status content is preserved at
 [the STEP3 snapshot](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/release_checks/release_status.md).
-It does not designate June RC2 as the current candidate after this decision. Both historical
-refs remain unchanged. No abandonment, promotion, tag movement or cycle closeout is implied.
+It does not designate June RC2 as the current candidate. The original snapshot preserves the
+then-current refs and gate state; later June RC2 closure without a release under #901 and immutable
+recovery under `archive/2026.06-rc2/final` remain separate historical decisions. The current main/dev/rc
+names do not rewrite those receipts or grant September candidate/release approval.
