@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import uuid
 
@@ -13,6 +14,36 @@ from metroliza.shared.diagnostic_events import (
     BuildPackager, DiagnosticEventValidationError, RuntimeMode, RuntimeProvenanceEvent,
 )
 from metroliza.shared.diagnostic_wire import decode_event, encode_event
+
+
+def test_app_identity_facade_exports_the_exact_shared_contract_objects():
+    from metroliza.app import release_identity as facade
+    from metroliza.shared import release_identity as canonical
+
+    for name in facade.__all__:
+        assert getattr(facade, name) is getattr(canonical, name)
+    assert type(facade.ReleaseIdentity.parse("0.8.0-dev.1")) is canonical.ReleaseIdentity
+    assert facade.pe_resource_text(canonical.ReleaseIdentity.parse("0.8.0-dev.1"))
+
+
+def test_shared_diagnostics_import_without_loading_any_app_module():
+    # A fresh interpreter prevents an already cached compatibility facade hiding a reverse import.
+    code = """
+import importlib.abc
+import sys
+sys.path.insert(0, sys.argv[1])
+class BlockApp(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path, target=None):
+        if fullname == 'metroliza.app' or fullname.startswith('metroliza.app.'):
+            raise AssertionError('shared diagnostics imported application code')
+sys.meta_path.insert(0, BlockApp())
+from metroliza.shared import diagnostic_events, diagnostic_wire, release_identity
+assert diagnostic_events.ReleaseIdentity is release_identity.ReleaseIdentity
+assert diagnostic_wire.ReleaseIdentity is release_identity.ReleaseIdentity
+assert not any(n == 'metroliza.app' or n.startswith('metroliza.app.') for n in sys.modules)
+"""
+    subprocess.run([sys.executable, "-c", code, str(Path(__file__).resolve().parents[1] / "src")],
+                   check=True, capture_output=True, text=True)
 
 
 @pytest.mark.parametrize("label, numeric", [

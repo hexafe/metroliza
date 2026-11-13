@@ -103,6 +103,15 @@ def _matched_paths(
     ]
 
 
+def test_neutral_release_identity_has_one_pending_build_identity_owner() -> None:
+    ledger = _repository_ledger()
+    path = "src/metroliza/shared/release_identity.py"
+    owners = [rule for rule in ledger["rules"] if COVERAGE.rule_matches(rule, path)]
+    assert [rule["id"] for rule in owners] == ["application-build-identity"]
+    assert owners[0]["audit_status"] == "pending"
+    assert owners[0]["terminal_snapshot"] is None
+
+
 def _terminalize_rule(
     ledger: dict[str, object],
     rule_id: str,

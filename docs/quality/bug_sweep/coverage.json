@@ -1442,7 +1442,8 @@
       "include": [
         "src/metroliza/app/build_provenance.py",
         "src/metroliza/app/version.py",
-        "src/metroliza/app/release_identity.py"
+        "src/metroliza/app/release_identity.py",
+        "src/metroliza/shared/release_identity.py"
       ],
       "exclude": [],
       "class": "canonical runtime",
@@ -2260,7 +2261,8 @@
         "src/metroliza/shared/stats_number_formatting.py",
         "src/metroliza/shared/stats_utils.py",
         "src/metroliza/shared/datetime_parsing.py",
-        "src/metroliza/shared/parse_contracts.py"
+        "src/metroliza/shared/parse_contracts.py",
+        "src/metroliza/shared/release_identity.py"
       ],
       "class": "canonical runtime",
       "primary_owner": 984,

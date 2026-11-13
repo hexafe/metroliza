@@ -7,7 +7,7 @@ import re
 import uuid
 from collections.abc import Callable
 
-from metroliza.app.release_identity import ReleaseIdentity
+from metroliza.shared.release_identity import ReleaseIdentity
 
 from metroliza.shared.diagnostic_events import (
     BuildPackager,

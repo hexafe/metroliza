@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
-from metroliza.app.release_identity import ReleaseIdentity
+from metroliza.shared.release_identity import ReleaseIdentity
 
 
 _MAX_EXCEPTION_NODES = 32
