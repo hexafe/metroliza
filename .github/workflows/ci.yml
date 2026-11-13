@@ -957,6 +957,22 @@ jobs:
       - name: Release metadata consistency
         run: python scripts/sync_release_metadata.py --check
 
+      - name: Fetch the pinned release docs commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+          from scripts.check_release_docs_ref import FULL_COMMIT_SHA, pinned_docs_ref
+
+          ref = pinned_docs_ref(Path.cwd())
+          if not FULL_COMMIT_SHA.fullmatch(ref):
+              raise SystemExit("Release docs ref is not a full commit SHA")
+          subprocess.run(
+              ["git", "fetch", "--no-tags", "--no-write-fetch-head", "origin", ref],
+              check=True,
+          )
+          PY
+
       - name: Release docs ref is immutable and complete
         run: python scripts/check_release_docs_ref.py
 
