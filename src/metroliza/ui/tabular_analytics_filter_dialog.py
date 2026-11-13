@@ -126,6 +126,15 @@ class _FilterBody(QWidget):
             layout.setGeometry(self.rect())
 
 
+class _ValueSearchLineEdit(QLineEdit):
+    """Submit value searches without also invoking the dialog's default Apply."""
+
+    def keyPressEvent(self, event) -> None:
+        super().keyPressEvent(event)
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            event.accept()
+
+
 class TabularAnalyticsFilterDialog(QDialog):
     """Select CSV/Excel rows through user-selected source-column combinations."""
 
@@ -278,7 +287,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         layout.addLayout(column_actions)
 
         layout.addWidget(QLabel("Values for selected column"))
-        self.matching_search = QLineEdit()
+        self.matching_search = _ValueSearchLineEdit()
         self.matching_search.setPlaceholderText("Search values in selected column")
         configure_accessibility(self.matching_search, name="Search CSV row-filter values")
         layout.addWidget(self.matching_search)

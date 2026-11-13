@@ -908,3 +908,110 @@ def test_preview_terminal_cleanup_deletes_dialog_and_drops_all_widgets(tmp_path)
     finally:
         dialog.close()
         cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("key", ["Return", "Enter"])
+def test_sqlite_search_key_keeps_real_owner_modal_until_explicit_apply(
+    qapplication_session, tmp_path, key,
+):
+    import traceback
+    from pathlib import Path
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtTest import QSignalSpy
+    from PyQt6.QtWidgets import QDialog
+    from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog, SOURCE_TABULAR_FILE
+    from tests.qt_key_input import activate_for_key, press_key
+
+    source = tmp_path / "real-filter-search.csv"
+    pd.DataFrame({"Line": ["East", "West", "East", "West"],
+                  "Value": [10, 20, 30, 40]}).to_csv(source, index=False)
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    assert loaded.sqlite_store is not None
+    store_path = Path(loaded.sqlite_store.path)
+    parent = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE,
+                                       tabular_load_result=loaded, input_file=source)
+    baseline = parent.tabular_column_filters
+    children, failures = [], []
+
+    def drive():
+        child = None
+        try:
+            child = qapplication_session.activeModalWidget()
+            assert isinstance(child, TabularAnalyticsFilterDialog)
+            children.append(child)
+            assert child.parentWidget() is parent and child.sqlite_store is loaded.sqlite_store
+            accepted, applied = QSignalSpy(child.accepted), QSignalSpy(child.apply_button.clicked)
+            _select_available_column(child, "line")
+            child.add_column_button.click()
+            _wait_for_value_preview(child, timeout_seconds=20)
+            _select_values(child, {"East"})
+            returned = QSignalSpy(child.matching_search.returnPressed)
+            previous_request = child._preview_request_id
+            child.matching_search.setText("West")
+            assert child._applied_matching_search_text == ""
+            assert child.matching_list.count() == 2
+            press_key(qapplication_session, child.matching_search, key)
+            _wait_for_value_preview(child, timeout_seconds=20)
+            # Search must complete while this real exec owner remains open.
+            assert len(returned) == 1 and child._preview_request_id > previous_request
+            assert child._applied_matching_search_text == "West"
+            assert child.matching_list.count() == 1
+            assert child.matching_list.item(0).data(Qt.ItemDataRole.UserRole) == "West"
+            assert child.isVisible() and qapplication_session.activeModalWidget() is child
+            assert child.apply_button.isDefault()
+            assert len(accepted) == len(applied) == 0
+            assert parent.tabular_column_filters == baseline
+            assert parent._tabular_filtered_row_count() == 4
+            assert child.get_column_filters() == (TabularColumnFilter("line", selected_values=("East",)),)
+            assert "1 hidden selected" in child.value_scope_label.text()
+            child.apply_button.click()
+            assert len(accepted) == len(applied) == 1
+            assert not child.isVisible()
+        except BaseException:
+            failures.append(traceback.format_exc())
+        finally:
+            # Failure-only teardown must not start a discard-confirmation exec.
+            try:
+                if isinstance(child, TabularAnalyticsFilterDialog) and child.isVisible():
+                    _wait_for_value_preview(child, timeout_seconds=20)
+                    child._cleanup_preview_once()
+                    QDialog.reject(child)
+            except BaseException:
+                failures.append(traceback.format_exc())
+
+    def expire():
+        try:
+            failures.append("real filter modal deadline")
+            child = qapplication_session.activeModalWidget()
+            if isinstance(child, TabularAnalyticsFilterDialog) and child in children:
+                QDialog.reject(child)
+        except BaseException:
+            failures.append(traceback.format_exc())
+
+    timer, watchdog = QTimer(parent), QTimer(parent)
+    for clock in (timer, watchdog):
+        clock.setSingleShot(True)
+    timer.timeout.connect(drive)
+    watchdog.timeout.connect(expire)
+    try:
+        parent.show()
+        activate_for_key(qapplication_session, parent.filters_button)
+        timer.start(0)
+        watchdog.start(25000)
+        parent.filters_button.click()  # Actual constructor/exec and actual parent Apply controller.
+        assert len(children) == 1
+        assert not failures, "\n".join(failures)
+        assert parent.tabular_column_filters == (TabularColumnFilter("line", selected_values=("East",)),)
+        assert parent._tabular_filtered_row_count() == 2
+        assert loaded.sqlite_store.count_rows() == 4
+        assert parent.analytics_thread is None and parent.tabular_load_thread is None
+    finally:
+        for clock in (timer, watchdog):
+            clock.stop()
+            clock.deleteLater()
+        for child in children:
+            _wait_for_value_preview(child, timeout_seconds=20)
+        parent.close()
+        qapplication_session.processEvents()
+        cleanup_tabular_load_result(loaded)
+    assert not store_path.exists()
