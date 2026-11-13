@@ -499,6 +499,37 @@ def observe_export_stage(callback, stage=None, exception=None) -> None:
             pass
 
 
+def _trusted_os_code_pair(exception: BaseException) -> tuple[int | None, int | None]:
+    approved = (OSError, PermissionError, FileExistsError, FileNotFoundError)
+    if not any(type(exception) is known for known in approved):
+        return None, None
+    values = []
+    for name in ("errno", "winerror"):
+        candidate, available = _base_exception_slot(
+            exception, OSError.__dict__.get(name), OSError,
+        )
+        values.append(candidate if available and _bounded_integer(candidate, 65535) else None)
+    return values[0], values[1]
+
+
+def _causal_os_code_pair(exception: BaseException) -> tuple[int | None, int | None]:
+    """Keep one node's codes; only an explicit bounded cause can supply a fallback."""
+    seen: set[int] = set()
+    current = exception
+    for _ in range(_MAX_EXCEPTION_DEPTH + 1):
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        codes = _trusted_os_code_pair(current)
+        if codes != (None, None):
+            return codes
+        cause, available = _base_exception_slot(current, _BASE_EXCEPTION_CAUSE_DESCRIPTOR, BaseException)
+        if not available or not issubclass(type(cause), BaseException):
+            break
+        current = cause
+    return None, None
+
+
 def build_export_failure_diagnostic(exception: BaseException, *, invocation_id: uuid.UUID,
                                     operation_id: uuid.UUID, stage: ExportFailureStage,
                                     backend: ExportFailureBackend,
@@ -512,16 +543,7 @@ def build_export_failure_diagnostic(exception: BaseException, *, invocation_id: 
     cause_kind = (_exception_kind(cause) if isinstance(cause, BaseException)
                   and not shape.structure_truncated and not shape.group_count
                   else ExceptionKind.UNKNOWN_EXCEPTION)
-    os_codes = []
-    for name in ("errno", "winerror"):
-        value = None
-        if type(exception) in (OSError, PermissionError, FileExistsError, FileNotFoundError):
-            descriptor = OSError.__dict__.get(name)
-            if type(descriptor) in _SAFE_EXCEPTION_DESCRIPTOR_TYPES:
-                candidate = descriptor.__get__(exception, OSError)
-                if _bounded_integer(candidate, 65535):
-                    value = candidate
-        os_codes.append(value)
+    os_codes = _causal_os_code_pair(exception)
     if code is ExportFailureCode.UNEXPECTED:
         if shape.exception_kind is ExceptionKind.PERMISSION_ERROR:
             code = ExportFailureCode.ACCESS_DENIED

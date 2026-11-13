@@ -324,10 +324,11 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`2026.09 RC1 (build 261116)`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
+Current release highlight (`2026.09 RC1 (build 261117)`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
 
-Build `261116` is the main Reports HTML export and safe diagnostics source candidate
-on the unchanged RC1 line. Earlier `261115`, `261114` and `261113` observations retain
+Build `261117` is the main Reports HTML export and safe diagnostics source candidate
+on the unchanged RC1 line. The `261116` qualification attempt was cancelled and did not qualify an artifact.
+Earlier `261115`, `261114` and `261113` observations retain
 their original source/package bindings and do not qualify this new source.
 Source review/CI and a new Windows package qualification are pending. See [release status](docs/release_checks/release_status.md)
 for the separate source, package and manual acceptance gates. The current
@@ -337,7 +338,7 @@ for the separate source, package and manual acceptance gates. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.09 RC1 (build 261116)`)
+### Changelog highlights (release `2026.09 RC1 (build 261117)`)
 
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
 - Main HTML dashboards retain full measurement labels with compact image and asset-directory names. Windows package verification of these source changes is pending.

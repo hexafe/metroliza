@@ -555,3 +555,118 @@ def test_before_attempt_diagnostic_failure_is_best_effort_and_not_forwarded(tmp_
     )
     assert target.is_file()
     assert result["html_dashboard_path"] == str(target)
+
+
+def test_actual_publication_permission_wrapper_retains_trusted_os_code(monkeypatch, tmp_path):
+    from metroliza.exporting import output_publication as publication
+
+    temporary = tmp_path / "staged.html"
+    target = tmp_path / "out.html"
+    temporary.write_bytes(b"complete staged output")
+    original = PermissionError(13, PRIVATE)
+    def deny(*args, **kwargs):
+        raise original
+    monkeypatch.setattr(publication, "_publish_new_output", deny)
+    with pytest.raises(PermissionError) as caught:
+        publication.publish_output(temporary, target)
+    assert caught.value is not original
+    assert caught.value.__cause__ is original
+    assert caught.value.errno is None
+    failure = _failure(caught.value, ExportFailureStage.HTML_PUBLICATION)
+    assert failure.exception.exception_kind is ExceptionKind.PERMISSION_ERROR
+    assert failure.cause_kind is ExceptionKind.PERMISSION_ERROR
+    assert failure.code is ExportFailureCode.ACCESS_DENIED
+    assert failure.errno == 13
+    assert failure.winerror is None
+    assert PRIVATE not in json.dumps(export_failure_payload(failure))
+    assert not target.exists()
+    assert temporary.read_bytes() == b"complete staged output"
+
+
+def test_os_code_extraction_keeps_outer_pair_and_obeys_explicit_cause_depth_bound():
+    outer = OSError(22, PRIVATE)
+    outer.__cause__ = PermissionError(13, PRIVATE)
+    assert _failure(outer).errno == 22
+    assert _failure(outer).winerror is None
+    for wrappers, expected in ((8, 13), (9, None)):
+        exception = PermissionError(13, PRIVATE)
+        for _ in range(wrappers):
+            wrapped = RuntimeError(PRIVATE)
+            wrapped.__cause__ = exception
+            exception = wrapped
+        failure = _failure(exception)
+        assert failure.exception.exception_kind is ExceptionKind.RUNTIME_ERROR
+        assert failure.errno == expected
+    cyclic = RuntimeError(PRIVATE)
+    cyclic.__cause__ = cyclic
+    assert _failure(cyclic).errno is None
+    assert _failure(cyclic).exception.structure_truncated
+    contextual = RuntimeError(PRIVATE)
+    contextual.__context__ = PermissionError(13, PRIVATE)
+    assert _failure(contextual).errno is None
+    grouped = ExceptionGroup(PRIVATE, [PermissionError(13, PRIVATE)])
+    assert _failure(grouped).errno is None
+
+
+def test_os_cause_extraction_never_reads_hostile_attributes_or_class_comparisons():
+    class HostileType(type):
+        def __eq__(cls, other):
+            raise AssertionError("class equality executed")
+        def __hash__(cls):
+            raise AssertionError("class hash executed")
+    class Hostile(PermissionError, metaclass=HostileType):
+        def __getattribute__(self, name):
+            raise AssertionError("attribute executed")
+        def __str__(self):
+            raise AssertionError("str executed")
+        def __repr__(self):
+            raise AssertionError("repr executed")
+    hostile = Hostile(13, PRIVATE)
+    wrapped = RuntimeError(PRIVATE)
+    wrapped.__cause__ = hostile
+    failure = _failure(wrapped)
+    assert failure.errno is None
+    assert failure.winerror is None
+    assert failure.cause_kind is ExceptionKind.UNKNOWN_EXCEPTION
+    assert PRIVATE not in json.dumps(export_failure_payload(failure))
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="native builtin winerror requires Windows")
+@pytest.mark.parametrize("winerror", [32, 5, 206])
+def test_native_windows_publication_os_codes_survive_wrapper(monkeypatch, tmp_path, winerror):
+    from metroliza.exporting import output_publication as publication
+
+    temporary = tmp_path / "staged.html"
+    temporary.write_bytes(b"complete staged output")
+    target = tmp_path / "out.html"
+    original = OSError(0, PRIVATE, None, winerror)
+    assert original.winerror == winerror
+    original_codes = (original.errno, original.winerror)
+    def deny(*args, **kwargs):
+        raise original
+    monkeypatch.setattr(publication, "_publish_new_output", deny)
+    with pytest.raises(OSError) as caught:
+        publication.publish_output(temporary, target)
+    if winerror in (32, 5):
+        assert type(original) is PermissionError
+        assert caught.value.__cause__ is original
+    else:
+        assert caught.value is original
+    failure = _failure(caught.value, ExportFailureStage.HTML_PUBLICATION)
+    assert (failure.errno, failure.winerror) == original_codes
+    expected = ExportFailureCode.PATH_TOO_LONG if winerror == 206 else ExportFailureCode.ACCESS_DENIED
+    assert failure.code is expected
+    assert PRIVATE not in json.dumps(export_failure_payload(failure))
+    assert not target.exists()
+    assert temporary.read_bytes() == b"complete staged output"
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="native builtin winerror requires Windows")
+def test_native_windows_os_code_pair_precedence_does_not_splice_cause_fields():
+    cause = PermissionError(13, PRIVATE, None, 32)
+    for outer in (PermissionError(13, PRIVATE), PermissionError(13, PRIVATE, None, 5)):
+        outer.__cause__ = cause
+        failure = _failure(outer)
+        assert failure.errno == outer.errno
+        assert failure.winerror == getattr(outer, "winerror", None)
+        assert failure.winerror != cause.winerror

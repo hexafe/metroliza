@@ -1820,6 +1820,9 @@ jobs:
         run: >-
           python -m pytest -v
           tests/test_windows_candidate_main_html.py
+          tests/test_export_failure_diagnostics.py::test_actual_publication_permission_wrapper_retains_trusted_os_code
+          tests/test_export_failure_diagnostics.py::test_native_windows_publication_os_codes_survive_wrapper
+          tests/test_export_failure_diagnostics.py::test_native_windows_os_code_pair_precedence_does_not_splice_cause_fields
           tests/test_wave0_export_publication.py::test_main_workbook_long_selected_name_keeps_atomic_policy
           tests/test_wave0_export_publication.py::test_generated_main_sidecar_and_copy_share_canonical_names
           tests/test_export_html_dashboard.py::test_generated_sidecar_and_copy_keep_full_identity_after_bounding
