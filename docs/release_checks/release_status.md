@@ -16,7 +16,9 @@ The #960 topology decision names the frozen candidate `rc`, normal integration `
 production/history `main`. The migration preserves RC1 product source at
 `6dc0554667a842e107bd547fc86aeefedc52aec4` plus reviewed migration config/docs/tests;
 it promotes no later UI content and changes no artifact, build identity or qualification verdict.
-Original ref names in the dated receipts below remain provenance. The coordinator verifies native
+The qualification rows below preserve the frozen 2026-10-30 checkpoint; the active status hub is
+on `dev`. Current branch-role labels follow #960, while original ref names in dated receipts remain
+provenance. The coordinator verifies native
 `rc2` → `rc` hosted blob redirects before/after the history-preserving RC1 reconciliation.
 
 ## Current decisions
@@ -24,7 +26,7 @@ Original ref names in the dated receipts below remain provenance. The coordinato
 | Item | State | Evidence / next gate |
 |---|---|---|
 | Integration order | #1109, #1142, one STEP2+STEP3 aggregate, #1063; merge commits | #1153, current-base checks and independent reviews per merge |
-| Current RC source line | `release/2026.09-rc1` | Cut from accepted final develop; exact SHA/tree in #1153 |
+| Current RC source line | `rc` (formerly `release/2026.09-rc1`) | Cut from accepted final develop; exact SHA/tree in #1153 |
 | STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
 | Final build identity | Assigned `261031` to the next candidate (pinned Help docs ref, one user ZIP); `261029` stays bound to the historical bytes below. 261031 is not yet built or qualified | Synchronized source metadata under #1158; changed binaries never reuse 261029 |
 | Accepted candidate source (historical, fixed) | `b2510e0aa651e8c96363e5a9c224c841318cc9d0`, tree `e165267b09b437b7fe5a1556b5809e87123f1c9a` | Head of `release/2026.09-rc1` when run [40991278786](https://github.com/hexafe/metroliza/actions/runs/40991278786) was dispatched. Later commits on `develop`, including this document, do not move or replace it |
@@ -36,8 +38,8 @@ Original ref names in the dated receipts below remain provenance. The coordinato
 | Manual EXE acceptance | **NOT_RUN** | Native dialogs and mouse focus, desktop Excel lock, clean machine with antivirus, representative real reports, Help/manual, notices/legal, #1143 disposition and Google smoke, all on the exact tester EXE (#1158) |
 | Durable archive | Original Actions archives, EXE, receipts, job logs | Tag `archive/2026.09-rc1/build-261029`, unpublished draft release; see [archive record](../archive/2026/build-261029-provenance/README.md). Actions retention ends 2027-01-28 |
 | Core-flow Qt retain at exit | Open follow-up, not a gate for the Combined PASS | [#1184](https://github.com/hexafe/metroliza/issues/1184) |
-| Promotion to master / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
-| Historical RC lines | Retained, cycle closure pending | `rc2` and `release/2026.06-rc2`, separate #901/#924 decisions |
+| Promotion to main / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
+| Historical RC lines (2026-10-30 checkpoint) | Historical retention snapshot; current ref inventory is governed by #960 | `rc2` and `release/2026.06-rc2`, separate #901/#924 decisions |
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
