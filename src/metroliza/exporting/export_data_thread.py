@@ -3816,8 +3816,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception:
             return
 
-    def _restore_failure_after_successful_retry(self, previous_failure):
-        # A successful Save a copy retry has handled its intermediate collision.
+    def _restore_export_failure_baseline(self, previous_failure):
+        # Only failures that predate this dashboard operation remain primary.
         if self._export_failure is previous_failure:
             return
         self._export_failure = previous_failure
@@ -3924,11 +3924,17 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         self._emit_stage_progress('finalize', 0.45)
         previous_failure = self._export_failure
+
+        def before_dashboard_attempt():
+            self._restore_export_failure_baseline(previous_failure)
+            self._observe_export_failure_stage(ExportFailureStage.HTML_GENERATION)
+
         self._observe_export_failure_stage(ExportFailureStage.HTML_GENERATION)
         try:
             dashboard_result = write_dashboard_safely(
                 _write_export_html_dashboard,
                 diagnostic_stage=self._observe_export_failure_stage,
+                before_attempt=before_dashboard_attempt,
                 consents=getattr(self, "replace_outputs", ()),
                 should_cancel=lambda: self.export_canceled,
                 copy_from=(self.copy_output_from if html_only_export else self.html_dashboard_file)
@@ -3976,7 +3982,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             return
 
-        self._restore_failure_after_successful_retry(previous_failure)
+        self._restore_export_failure_baseline(previous_failure)
         self._observe_export_failure_stage(ExportFailureStage.HTML_VALIDATION)
         dashboard_output_error = self._html_dashboard_output_error(dashboard_result)
         if dashboard_output_error:
@@ -4000,6 +4006,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             return
 
+        # Validation succeeded; later metadata/logging errors are not missing output.
+        self._observe_export_failure_stage(ExportFailureStage.UNKNOWN)
         dashboard_timings = dashboard_result.get('html_dashboard_timings_s')
         if isinstance(dashboard_timings, dict):
             self._record_stage_timing(
@@ -6324,6 +6332,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return column_width
         except Exception as e:
             self.log_and_exit(e)
+            raise
 
     def _record_summary_sheet_warning(self, header, chart_name, exception):
         chart_context = f" ({chart_name})" if chart_name else ""

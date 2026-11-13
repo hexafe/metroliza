@@ -363,3 +363,195 @@ def test_legacy_token_shaped_private_values_and_partial_attributes_are_redacted(
     for text in ("dashboard-1: stage=PRIVATE_STAGE; code=PRIVATE_CODE; chart=PRIVATE_LABEL",
                  "dashboard-1: stage=html_write/private; code=output_access_denied#private"):
         assert sanitize_export_diagnostics(text) == "dashboard-1: detail=redacted"
+
+
+def _copy_retry_worker(tmp_path, html_only):
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+
+    original = tmp_path / ("out.html" if html_only else "out.xlsx")
+    original.write_bytes(b"previous complete output")
+    candidate = tmp_path / ("out (2).html" if html_only else "out (2).xlsx")
+    if not html_only:
+        candidate.write_bytes(b"completed copy workbook")
+    worker = ExportDataThread(ExportRequest(
+        AppPaths(str(tmp_path / "data.sqlite"), None if html_only else str(candidate),
+                 str(candidate) if html_only else None),
+        ExportOptions(export_target="html_dashboard" if html_only else "excel_xlsx",
+                      generate_html_dashboard=True),
+        copy_output_from=str(original),
+    ))
+    worker.completion_metadata["local_export_outcome"] = "completed"
+    return worker, original
+
+
+@pytest.mark.parametrize("html_only,with_previous_failure", [(True, False), (False, False), (False, True)])
+@pytest.mark.parametrize("second_attempt", ["denied", "success", "cancelled"])
+def test_copy_retry_discards_handled_collision_before_observing_next_attempt(
+    monkeypatch, tmp_path, html_only, with_previous_failure, second_attempt,
+):
+    from pathlib import Path
+    from metroliza.exporting import output_publication as publication
+
+    worker, original = _copy_retry_worker(tmp_path, html_only)
+    previous_failure = None
+    if with_previous_failure:
+        previous_failure = _failure(TypeError(PRIVATE), ExportFailureStage.PLOTLY_SPEC)
+        worker._export_failure = previous_failure
+        worker.completion_metadata.update({
+            "export_failure": previous_failure, "summary_sheet_requested": True,
+            "summary_sheet_warnings": ["A previous summary chart was omitted."],
+        })
+    publish_new = publication._publish_new_output
+    calls = []
+    denied = PermissionError(13, PRIVATE)
+    def race_then_publish(temporary, target):
+        calls.append(Path(target))
+        if len(calls) == 1:
+            target.write_text("complete competing output")
+        elif second_attempt == "denied":
+            raise denied
+        elif second_attempt == "cancelled":
+            raise publication.OutputPublicationCanceled()
+        return publish_new(temporary, target)
+    monkeypatch.setattr(publication, "_publish_new_output", race_then_publish)
+    if second_attempt == "denied" and html_only:
+        with pytest.raises(RuntimeError) as caught:
+            worker._write_html_dashboard_if_requested()
+        assert caught.value.__cause__.__cause__ is denied
+        worker.log_and_exit(caught.value)
+    elif second_attempt == "cancelled":
+        with pytest.raises(publication.OutputPublicationCanceled):
+            worker._write_html_dashboard_if_requested()
+        worker._set_export_run_result(cancelled=True)
+    else:
+        worker._write_html_dashboard_if_requested()
+        worker._set_export_run_result()
+    assert len(calls) == 2 and calls[0] != calls[1]
+    assert calls[0].read_text() == "complete competing output"
+    assert original.read_bytes() == b"previous complete output"
+    assert not list(tmp_path.glob(".metroliza-export-*"))
+    result = worker.export_run_result
+    if second_attempt == "denied":
+        failure = result.failure_diagnostic
+        assert failure is worker._export_failure
+        if previous_failure is None:
+            assert failure.exception.exception_kind is ExceptionKind.PERMISSION_ERROR
+            assert failure.cause_kind is ExceptionKind.PERMISSION_ERROR
+            assert failure.code is ExportFailureCode.ACCESS_DENIED
+            assert failure.stage is ExportFailureStage.HTML_PUBLICATION
+        else:
+            assert failure is previous_failure
+        expected = ExportRunStatus.FAILED if html_only else ExportRunStatus.COMPLETE_WITH_OMISSIONS
+        assert result.status is expected
+        assert not calls[1].exists()
+    elif second_attempt == "success":
+        expected = ExportRunStatus.COMPLETE if previous_failure is None else ExportRunStatus.COMPLETE_WITH_OMISSIONS
+        assert result.status is expected
+        assert result.failure_diagnostic is previous_failure
+        assert worker._export_failure is previous_failure
+        assert worker.completion_metadata.get("export_failure") is previous_failure
+        assert calls[1].is_file()
+    else:
+        assert result.status is ExportRunStatus.CANCELLED
+        assert result.failure_diagnostic is previous_failure
+        assert worker._export_failure is previous_failure
+        assert not calls[1].exists()
+    if not html_only:
+        assert Path(worker.excel_file).read_bytes() == b"completed copy workbook"
+        assert any(artifact.artifact_id == "workbook" and artifact.status.value == "complete"
+                   for artifact in result.artifacts)
+
+
+def test_error_after_successful_html_validation_does_not_claim_output_missing(monkeypatch, tmp_path):
+    from pathlib import Path
+
+    worker, _original = _copy_retry_worker(tmp_path, True)
+    original = ValueError(PRIVATE)
+    log_stage = worker._log_export_stage
+    def fail_after_validation(message, **kwargs):
+        if kwargs.get("stage") == "dashboard_completed":
+            raise original
+        return log_stage(message, **kwargs)
+    monkeypatch.setattr(worker, "_log_export_stage", fail_after_validation)
+    with pytest.raises(ValueError) as caught:
+        worker._write_html_dashboard_if_requested()
+    assert caught.value is original
+    assert Path(worker.html_dashboard_file).is_file()
+    worker.log_and_exit(caught.value)
+    failure = worker.export_run_result.failure_diagnostic
+    assert failure.exception.exception_kind is ExceptionKind.VALUE_ERROR
+    assert failure.stage is ExportFailureStage.UNKNOWN
+    assert failure.code is ExportFailureCode.UNEXPECTED
+
+
+@pytest.mark.parametrize("fail_width", [True, False])
+def test_column_width_failure_rethrows_through_real_caller_and_finishes_failed(monkeypatch, tmp_path, caplog, fail_width):
+    import logging
+    from types import SimpleNamespace
+    from metroliza.exporting.execution import ExportStageOutcome
+
+    worker, _original = _copy_retry_worker(tmp_path, False)
+    worker.generate_html_dashboard = False
+    worker.completion_metadata["html_dashboard_requested"] = False
+    original = PermissionError(13, PRIVATE)
+    class Value:
+        def __str__(self):
+            if fail_width:
+                raise original
+            return "Synthetic"
+    class Table:
+        columns = ["synthetic"]
+        shape = (1, 1)
+        def __getitem__(self, key):
+            return [Value()]
+    widths = []
+    worksheet = SimpleNamespace(
+        autofilter=lambda *args: None, freeze_panes=lambda *args: None,
+        set_column=lambda first, last, width: widths.append(width),
+    )
+    def run_backend(thread):
+        thread.write_data_to_excel(Table(), "Synthetic", object())
+        return ExportStageOutcome.completed()
+    backend = SimpleNamespace(run=run_backend, list_sheet_names=lambda writer: set(),
+                              write_dataframe=lambda *args: None, get_worksheet=lambda *args: worksheet)
+    monkeypatch.setattr(worker, "get_export_backend", lambda: backend)
+    monkeypatch.setattr(worker, "_ensure_chart_executor", lambda: None)
+    monkeypatch.setattr(worker, "_prepare_export_snapshot", lambda: None)
+    monkeypatch.setattr(worker, "_write_html_dashboard_if_requested", lambda: None)
+    caplog.set_level(logging.INFO, logger="metroliza.shared.workflow_diagnostics")
+    completed = []
+    worker.completed.connect(lambda: completed.append(True))
+    worker.run()
+    terminal = [record.msg for record in caplog.records
+                if type(record.msg) is WorkflowDiagnosticEvent and record.msg.stage is WorkflowStage.FINISHED]
+    assert len(terminal) == 1
+    if fail_width:
+        assert not widths
+        assert not completed
+        assert worker.export_run_result.status is ExportRunStatus.FAILED
+        assert terminal[0].outcome is WorkflowOutcome.FAILED
+        assert terminal[0].export_failure is worker._export_failure
+        assert terminal[0].export_failure.exception.exception_kind is ExceptionKind.PERMISSION_ERROR
+    else:
+        assert widths == [12]
+        assert completed == [True]
+        assert worker.export_run_result.status is ExportRunStatus.COMPLETE
+        assert terminal[0].outcome is WorkflowOutcome.COMPLETED
+        assert terminal[0].export_failure is None
+        assert worker.calculate_column_width([]) == 12
+
+
+def test_before_attempt_diagnostic_failure_is_best_effort_and_not_forwarded(tmp_path):
+    from metroliza.charts.export_html_dashboard import write_export_html_dashboard, resolve_html_dashboard_assets_dir
+    from metroliza.exporting.output_publication import write_dashboard_safely
+
+    target = tmp_path / "out.html"
+    def broken_diagnostics():
+        raise RuntimeError(PRIVATE)
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target),
+        sections=[], before_attempt=broken_diagnostics,
+    )
+    assert target.is_file()
+    assert result["html_dashboard_path"] == str(target)

@@ -180,11 +180,17 @@ def _move_dashboard_assets(source, destination):
             time.sleep(0.1)
 
 
-def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, copy_from=None, **kwargs):
+def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, copy_from=None,
+                           before_attempt=None, **kwargs):
     """Render/publish a dashboard, retrying collisions only for Save a copy."""
     from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
 
     def publish(target):
+        try:
+            if before_attempt is not None:
+                before_attempt()
+        except Exception:
+            pass
         render_kwargs = dict(kwargs, output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target))
         if kwargs.get("source_label") == Path(kwargs["output_path"]).name:
             render_kwargs["source_label"] = target.name
