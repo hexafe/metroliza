@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import struct
+import sys
 import zipfile
 import zlib
 
@@ -881,3 +882,61 @@ def test_completed_component_bytes_survive_failed_host_without_becoming_host_pas
     assert uiux.load_json(output / 'uiux-observation.json')['status'] == 'passed'  # Component only.
     assert core._json(output / core.FAILED_DIAGNOSTIC_FILE)['status'] == 'failed'  # Host remains failed.
     assert not (output / 'core-driver-receipt.json').exists()
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='Natural modal focus return requires native Windows')
+def test_actual_three_slices_and_independent_retained_assets(qapplication_session, tmp_path, monkeypatch):
+    import json
+    import subprocess
+    import time
+    from metroliza.app import windows_candidate_qualification as producer
+    from scripts import qualify_windows_candidate_core as host
+
+    assert qapplication_session.platformName() == 'windows'
+    dpr = qapplication_session.primaryScreen().devicePixelRatio()
+    assert dpr in (1.0, 1.25, 1.5)
+    checkout = Path(__file__).resolve().parents[1]
+    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
+    assert len(source) == 40 and all(character in '0123456789abcdef' for character in source)
+    for key in ('METROLIZA_STARTUP_SMOKE', 'METROLIZA_WINDOWS_CANDIDATE_QUALIFICATION'):
+        monkeypatch.setenv(key, '1')
+    monkeypatch.setenv('METROLIZA_WINDOWS_CANDIDATE_DPR', str(dpr))
+    fixtures, output = tmp_path / 'staged', tmp_path / 'output'
+    fixtures.mkdir(mode=0o700)
+    output.mkdir(mode=0o700)
+    old = checkout / 'tests/fixtures/windows_candidate'
+    for path in (*old.glob('*.csv'), *(old / 'reports').glob('*.pdf')):
+        shutil.copyfile(path, fixtures / path.name)
+    assert {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in fixtures.iterdir()} == host.PUBLIC_FIXTURE_HASHES
+    host._stage_uiux_fixtures(checkout, fixtures)
+    fixture_before = {str(path.relative_to(fixtures)): hashlib.sha256(path.read_bytes()).hexdigest()
+                      for path in fixtures.rglob('*') if path.is_file()}
+    receipt = dict(packaged=False, source_sha=source, artifacts={}, facets={})
+    started = time.monotonic()
+    producer._run_uiux_slice(output, fixtures, receipt)
+    producer_seconds = time.monotonic() - started
+    (output / 'source-slice-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    assert producer_seconds <= 300
+    assert receipt['facets'] == dict.fromkeys(
+        ('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed')
+    value = uiux.load_json(output / 'uiux-observation.json')
+    oracle, _ = uiux.load_inputs(FIXTURES)
+    options = dict(source=source, packaged=False, dpr=dpr, qpa='windows')
+    uiux.verify(output, value, oracle, **options)
+    snapshot = uiux.snapshot_assets(output, value['evidence']['captures']['metadata'],
+                                    value['evidence']['data'], dpr=dpr)
+    assert len(snapshot) == 17
+    snapshot['uiux-observation.json'] = (output / 'uiux-observation.json').read_bytes()
+    retained = tmp_path / 'independent-retained'
+    retained.mkdir(mode=0o700)
+    host._write_uiux_snapshot(retained, snapshot)
+    assert {str(path.relative_to(retained)): path.read_bytes()
+            for path in retained.rglob('*') if path.is_file()} == snapshot
+    reread = uiux.load_json(retained / 'uiux-observation.json')
+    assert reread == value
+    uiux.verify(retained, reread, oracle, **options)
+    assert {str(path.relative_to(fixtures)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in fixtures.rglob('*') if path.is_file()} == fixture_before
+    assert qapplication_session.activeModalWidget() is None
+    assert not any(widget.isVisible() for widget in qapplication_session.topLevelWidgets())

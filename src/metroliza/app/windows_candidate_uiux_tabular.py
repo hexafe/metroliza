@@ -99,9 +99,6 @@ class _Journey:
         while expected_modal is not None and not (expected_modal.isWindow() and expected_modal.isModal()):
             expected_modal = expected_modal.parentWidget()
         self.reveal(target)
-        window.activateWindow()
-        if target is not window:
-            target.setFocus()
         def ready():
             focus = self.app.focusWidget()
             owned = focus is not None and focus.window() is window
@@ -109,6 +106,10 @@ class _Journey:
                     and self.app.activeModalWidget() is expected_modal
                     and ((owned or (focus is None and QGuiApplication.focusWindow() is window.windowHandle()))
                          if target is window else owned and (target.focusProxy() or target).hasFocus()))
+        if not ready():
+            window.activateWindow()
+            if target is not window:
+                target.setFocus()
         self.wait(ready)
 
     def key(self, target, sequence):

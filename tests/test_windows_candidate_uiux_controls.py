@@ -218,7 +218,9 @@ def test_post_owner_admission_failure_closes_real_owner_and_joins_worker(
     assert not (root / 'controls-uiux').exists() and not capture.metadata
 
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='Natural modal focus return requires native Windows')
 def test_real_controls_and_shared_capture_leaf(qapplication_session, tmp_path, monkeypatch):
+    assert qapplication_session.platformName() == 'windows'
     _gates(monkeypatch)
     fixtures = _stage(tmp_path)
     root = tmp_path / 'output'
