@@ -1,6 +1,7 @@
 """Operation-scoped consent and atomic, collision-safe output publication."""
 
 from dataclasses import dataclass
+from glob import escape as glob_escape
 import errno
 import os
 from pathlib import Path
@@ -53,10 +54,14 @@ def conflicting_outputs(paths):
         if os.path.lexists(path):
             conflicts.append(path)
         if path.suffix.lower() == ".html":
-            assets = path.with_name(f"{path.stem}_assets")
-            if assets.exists():
-                conflicts.append(assets)
-            conflicts.extend(assets.parent.glob(f"{assets.name}.generation-*"))
+            from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
+            assets = resolve_html_dashboard_assets_dir(path)
+            legacy_assets = path.with_name(f"{path.stem}_assets")
+            for candidate in dict.fromkeys((assets, legacy_assets)):
+                if os.path.lexists(candidate):
+                    conflicts.append(candidate)
+                conflicts.extend(candidate.parent.glob(f"{glob_escape(candidate.name)}.generation-*"))
     return tuple(conflicts)
 
 
@@ -172,8 +177,10 @@ def _move_dashboard_assets(source, destination):
 
 def write_dashboard_safely(writer, *, consents=(), should_cancel=lambda: False, copy_from=None, **kwargs):
     """Render/publish a dashboard, retrying collisions only for Save a copy."""
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
     def publish(target):
-        render_kwargs = dict(kwargs, output_path=target, assets_dir=target.with_name(f"{target.stem}_assets"))
+        render_kwargs = dict(kwargs, output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target))
         if kwargs.get("source_label") == Path(kwargs["output_path"]).name:
             render_kwargs["source_label"] = target.name
         return _write_dashboard_once(

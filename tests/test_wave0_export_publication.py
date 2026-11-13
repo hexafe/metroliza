@@ -778,3 +778,91 @@ def test_google_fallback_dashboard_cancel_reports_cancellation(tmp_path, monkeyp
     assert canceled == [True]
     assert completed == []
     assert errors == []
+
+
+@pytest.mark.parametrize("stem", ["R" * 235, "測" * 70], ids=["long-ascii", "unicode-bytes"])
+@pytest.mark.parametrize("mode", ["reject", "replace", "locked", "copy", "changed-consent"])
+def test_bounded_dashboard_assets_preserve_publication_policy(tmp_path, monkeypatch, stem, mode):
+    from metroliza.charts.export_html_dashboard import (
+        resolve_html_dashboard_assets_dir, write_export_html_dashboard,
+    )
+    from metroliza.exporting import output_publication as publication
+
+    target = tmp_path / f"{stem}.html"
+    original = publication.write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=resolve_html_dashboard_assets_dir(target),
+        sections=[{"header": "old", "charts": [{
+            "chart_type": "histogram", "image_buffer": b"last complete image",
+        }]}],
+    )
+    old_html = target.read_bytes()
+    old_generation = Path(original["html_dashboard_assets_path"])
+    old_names = {path.name for path in tmp_path.iterdir()}
+    consent = publication.OutputConsent.for_path(target)
+    kwargs = dict(
+        output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target), sections=[],
+        consents=() if mode in {"reject", "copy"} else (consent,),
+        copy_from=target if mode == "copy" else None,
+    )
+    if mode == "locked":
+        def locked(*args, **kwargs):
+            raise PermissionError("locked")
+        monkeypatch.setattr(publication, "_publish_new_output", locked)
+        monkeypatch.setattr(publication.os, "replace", locked)
+    if mode == "changed-consent":
+        target.write_bytes(b"another operation changed the dashboard")
+        old_html = target.read_bytes()
+    if mode in {"reject", "locked", "changed-consent"}:
+        with pytest.raises(PermissionError if mode == "locked" else FileExistsError):
+            publication.write_dashboard_safely(write_export_html_dashboard, **kwargs)
+        assert {path.name for path in tmp_path.iterdir()} == old_names
+    else:
+        result = publication.write_dashboard_safely(write_export_html_dashboard, **kwargs)
+        assert Path(result["html_dashboard_assets_path"]).is_dir()
+        assert Path(result["html_dashboard_path"]).read_bytes() != old_html
+        assert old_generation.exists() == (mode == "copy")
+        if mode == "replace":
+            assert Path(result["html_dashboard_path"]) == target
+    if mode != "replace":
+        assert target.read_bytes() == old_html
+        assert next(old_generation.glob("*.png")).read_bytes() == b"last complete image"
+    assert not list(tmp_path.glob(".metroliza-export-*"))
+
+
+@pytest.mark.parametrize("stem", ["測定", "sample[1]"], ids=["unicode", "literal-glob"])
+def test_copy_detects_bounded_or_legacy_asset_generation_without_html(tmp_path, stem):
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+    from metroliza.exporting.output_publication import conflicting_outputs, free_copy_path
+
+    target = tmp_path / f"{stem}.html"
+    legacy = target.with_name(f"{target.stem}_assets.generation-legacy")
+    legacy.mkdir()
+    (legacy / "kept.png").write_bytes(b"unowned legacy generation")
+    assert legacy in conflicting_outputs((target,))
+    assert free_copy_path(target, html_only=True) != target
+    bounded = resolve_html_dashboard_assets_dir(target)
+    current = bounded.with_name(f"{bounded.name}.generation-current")
+    current.mkdir()
+    assert current in conflicting_outputs((target,))
+    assert (legacy / "kept.png").read_bytes() == b"unowned legacy generation"
+
+
+def test_replacing_legacy_unicode_dashboard_retains_unowned_assets(tmp_path):
+    from metroliza.charts.export_html_dashboard import (
+        resolve_html_dashboard_assets_dir, write_export_html_dashboard,
+    )
+    from metroliza.exporting.output_publication import OutputConsent, write_dashboard_safely
+
+    target = tmp_path / "測定.html"
+    legacy = target.with_name(f"{target.stem}_assets")
+    legacy.mkdir()
+    (legacy / "old.png").write_bytes(b"legacy image")
+    target.write_text(f'<img src="{legacy.name}/old.png">', encoding="utf-8")
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=resolve_html_dashboard_assets_dir(target), sections=[],
+        consents=(OutputConsent.for_path(target),),
+    )
+    assert Path(result["html_dashboard_assets_path"]).is_dir()
+    assert (legacy / "old.png").read_bytes() == b"legacy image"

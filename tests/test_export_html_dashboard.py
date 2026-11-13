@@ -7,11 +7,14 @@ import re
 import tempfile
 from threading import Barrier, Event, Thread
 import unittest
+
+import pytest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from metroliza.charts.export_html_dashboard import (
+    _bounded_dashboard_component,
     _build_group_analysis_plotly_spec,
     _build_group_analysis_plotly_spec_bundle,
     _build_plotly_chart_spec,
@@ -151,6 +154,96 @@ def test_render_plotly_shell_exposes_chart_key_for_point_marks() -> None:
     assert 'data-plotly-spec-light=' in html_markup
     assert 'class="plotly-runtime-fallback" role="status"' in html_markup
     assert "saved dashboard" in html_markup
+
+
+def test_bounded_components_distinguish_full_identity_and_windows_case_aliases(monkeypatch):
+    import ntpath
+
+    labels = ["L" * 240, "L" * 239 + "X", "測定", "測定😀", "A/B", "A:B"]
+    names = [_bounded_dashboard_component("same-slug", suffix=".png", identity=label) for label in labels]
+    assert len(set(name.casefold() for name in names)) == len(labels)
+    assert all(re.fullmatch(r"same-slug-[a-f0-9]{24}\.png", name) for name in names)
+    assert all(re.fullmatch(r"[A-Za-z0-9_.-]+", _bounded_dashboard_component(label)) for label in labels)
+    for reserved in ("CON", "con.txt", "LPT9.log"):
+        assert _bounded_dashboard_component(reserved).startswith("_")
+    monkeypatch.setattr("metroliza.charts.export_html_dashboard.os.path.normcase", ntpath.normcase)
+    upper = _bounded_dashboard_component("R" * 235, suffix=".publish.lock")
+    lower = _bounded_dashboard_component("r" * 235, suffix=".publish.lock")
+    assert upper.casefold() == lower.casefold()
+
+
+@pytest.mark.parametrize("asset_kind", ["section", "group"])
+def test_dashboard_asset_components_bound_labels_without_losing_identity(tmp_path, asset_kind):
+    labels = ["L" * 240, "L" * 239 + "X", "測定😀" * 100, "A/B", "A:B"]
+    sections = [
+        {"header": label, "charts": [{
+            "chart_type": "histogram" * 40,
+            "title": label,
+            "image_buffer": f"section-{index}".encode(),
+        }]}
+        for index, label in enumerate(labels)
+    ] if asset_kind == "section" else []
+    group_payload = {"metric_rows": [{"metric": label} for label in labels]}
+    group_assets = {"metrics": {
+        label: {key: {"image_data": f"group-{index}-{key}".encode()}
+                for key in ("violin", "histogram")}
+        for index, label in enumerate(labels)
+    }}
+    previous_names = None
+    for run in range(2):
+        target = tmp_path / f"dashboard-{run}.html"
+        result = write_export_html_dashboard(
+            output_path=target, assets_dir=resolve_html_dashboard_assets_dir(target),
+            sections=sections,
+            group_analysis_payload=group_payload if asset_kind == "group" else None,
+            group_analysis_plot_assets=group_assets if asset_kind == "group" else None,
+        )
+        generation = Path(result["html_dashboard_assets_path"])
+        names = sorted(path.name for path in generation.glob("*.png"))
+        expected_count = len(labels) * (2 if asset_kind == "group" else 1)
+        assert len(names) == expected_count == len(set(name.casefold() for name in names))
+        assert all(len(name.encode("utf-8")) <= 180 for name in names)
+        assert all(re.fullmatch(r"[A-Za-z0-9_.-]+", name) for name in names)
+        if previous_names is not None:
+            assert names == previous_names
+        previous_names = names
+        content = html.unescape(target.read_text(encoding="utf-8"))
+        for label in labels:
+            assert label in content
+        sources = re.findall(r'<img[^>]+src="([^"]+)"', content)
+        expected_bytes = (
+            {f"section-{index}".encode() for index in range(len(labels))}
+            if asset_kind == "section" else
+            {f"group-{index}-{key}".encode()
+             for index in range(len(labels)) for key in ("violin", "histogram")}
+        )
+        assert {Path(source).name for source in sources} == set(names)
+        assert {target.parent.joinpath(source).read_bytes() for source in sources} == expected_bytes
+
+
+@pytest.mark.parametrize("stem", ["R" * 235, "測" * 70], ids=["long-ascii", "unicode-bytes"])
+def test_dashboard_generated_paths_bound_long_output_stems_and_preserve_on_failure(tmp_path, stem):
+    target = tmp_path / f"{stem}.html"
+    assets = resolve_html_dashboard_assets_dir(target)
+    first = write_export_html_dashboard(
+        output_path=target, assets_dir=assets,
+        sections=[{"header": "L" * 240, "charts": [{
+            "chart_type": "histogram", "image_buffer": b"last complete image",
+        }]}],
+    )
+    old_html = target.read_bytes()
+    old_generation = Path(first["html_dashboard_assets_path"])
+    with patch("metroliza.charts.export_html_dashboard.os.replace", side_effect=PermissionError("locked")):
+        with pytest.raises(PermissionError):
+            write_export_html_dashboard(output_path=target, assets_dir=assets, sections=[])
+    assert target.read_bytes() == old_html
+    assert old_generation.is_dir()
+    assert next(old_generation.glob("*.png")).read_bytes() == b"last complete image"
+    assert all(len(path.name.encode("utf-8")) <= 180 for path in tmp_path.iterdir() if path != target)
+    second = write_export_html_dashboard(output_path=target, assets_dir=assets, sections=[])
+    assert not old_generation.exists()
+    assert Path(second["html_dashboard_assets_path"]).is_dir()
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 class TestExportHtmlDashboard(unittest.TestCase):
@@ -400,7 +493,9 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertNotIn('Workbook-matching PNG snapshot.', html_text)
             generation_name = Path(result['html_dashboard_assets_path']).name
             self.assertIn(
-                f'{generation_name}/section_001_diameter-x_histogram_01.png',
+                f'{generation_name}/' + next(
+                    Path(result['html_dashboard_assets_path']).glob('section_001_diameter-x_histogram_01-*.png')
+                ).name,
                 html_text,
             )
             self.assertIn('data-plotly-spec-light=', html_text)

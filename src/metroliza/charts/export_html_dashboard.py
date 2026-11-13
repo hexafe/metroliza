@@ -7,6 +7,7 @@ from datetime import datetime
 import copy
 import errno
 import html
+from hashlib import sha256
 import json
 import math
 import os
@@ -90,6 +91,8 @@ _PLOTLY_DARK_COLORWAY = [
     "#ff8c73",
     "#b59cff",
 ]
+_GENERATED_COMPONENT_MAX_BYTES = 180
+_GENERATION_SUFFIX_BYTES = len(".generation-") + 32
 _PLOTLY_JS_ASSET_DIRNAME = "html_dashboard_assets"
 _PLOTLY_JS_FILENAME = "plotly-2.27.0.min.js"
 _DASHBOARD_THEME_STORAGE_KEY = DASHBOARD_THEME_STORAGE_KEY
@@ -172,7 +175,7 @@ def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
 
     canonical_dashboard_path = _canonical_path_entry(dashboard_path)
     lock_path = canonical_dashboard_path.with_name(
-        f".{canonical_dashboard_path.name}.publish.lock"
+        _bounded_dashboard_component(f".{canonical_dashboard_path.name}", suffix=".publish.lock")
     )
     thread_lock = _dashboard_thread_lock(lock_path)
 
@@ -233,7 +236,10 @@ def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
 
     dashboard_path = Path(str(html_path))
     stem = dashboard_path.stem or "metroliza_dashboard"
-    return dashboard_path.with_name(f"{stem}_assets")
+    return dashboard_path.with_name(_bounded_dashboard_component(
+        f"{stem}_assets",
+        max_bytes=_GENERATED_COMPONENT_MAX_BYTES - _GENERATION_SUFFIX_BYTES,
+    ))
 
 
 def _validate_dashboard_path_pair(dashboard_path: Path, asset_base: Path) -> None:
@@ -472,7 +478,7 @@ def write_export_html_dashboard(
             f"{asset_base.name}.generation-{generation_id}"
         )
         temporary_dashboard_path = dashboard_path.with_name(
-            f".{dashboard_path.name}.{generation_id}.tmp"
+            _bounded_dashboard_component(f".{dashboard_path.name}", suffix=f".{generation_id}.tmp")
         )
 
         try:
@@ -538,9 +544,14 @@ def _write_export_html_dashboard_generation(
         charts: list[dict[str, Any]] = []
         for chart_index, raw_chart in enumerate(raw_section.get("charts") or [], start=1):
             image_bytes = _coerce_image_bytes(raw_chart.get("image_buffer"))
-            image_name = (
+            image_name = _bounded_dashboard_component(
                 f"section_{section_index:03d}_{_slugify(raw_section.get('header') or 'header')}_"
-                f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}.png"
+                f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}",
+                suffix=".png",
+                identity=json.dumps([
+                    section_index, str(raw_section.get("header") or "header"),
+                    str(raw_chart.get("chart_type") or "chart"), chart_index,
+                ]),
             )
             image_path = asset_directory / image_name
             asset_start = perf_counter()
@@ -764,6 +775,37 @@ def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
     destination_path = asset_directory / _PLOTLY_JS_FILENAME
     destination_path.write_bytes(source_path.read_bytes())
     return f"{asset_directory.name}/{destination_path.name}"
+
+
+def _bounded_dashboard_component(
+    value: str,
+    *,
+    suffix: str = "",
+    max_bytes: int = _GENERATED_COMPONENT_MAX_BYTES,
+    identity: str | None = None,
+) -> str:
+    """Bound generated names in ASCII bytes, retaining identity after sanitizing.
+
+    Labels stay intact in dashboard content. The digest uses the complete input;
+    indexed image identities also distinguish labels with the same readable slug.
+    This bounds components only, not the user's parent path or final filename.
+    """
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).rstrip(". ") or "item"
+    reserved = safe.split(".", 1)[0].upper() in {
+        "CON", "PRN", "AUX", "NUL",
+        *(f"COM{index}" for index in range(1, 10)),
+        *(f"LPT{index}" for index in range(1, 10)),
+    }
+    if reserved:
+        safe = f"_{safe}"
+    if identity is None and safe == value and len(safe + suffix) <= max_bytes:
+        return safe + suffix
+    # Keep case aliases on Windows in the same generated namespace and lock.
+    digest_source = identity if identity is not None else os.path.normcase(value)
+    digest = sha256(digest_source.encode("utf-8", "surrogatepass")).hexdigest()[:24]
+    tail = f"-{digest}{suffix}"
+    return safe[:max_bytes - len(tail)].rstrip(". ") + tail
 
 
 def _slugify(value: str) -> str:
@@ -2588,7 +2630,11 @@ def _normalize_group_analysis_manifest(
                 continue
             image_relative_path = ""
             if image_buffer is not None:
-                image_name = f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}.png"
+                image_name = _bounded_dashboard_component(
+                    f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}",
+                    suffix=".png",
+                    identity=json.dumps([metric_index, metric_name, plot_key]),
+                )
                 image_path = asset_directory / image_name
                 asset_start = perf_counter()
                 image_path.write_bytes(_coerce_image_bytes(image_buffer))
