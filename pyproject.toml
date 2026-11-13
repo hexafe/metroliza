@@ -10,6 +10,9 @@ exclude = [
   "dist",
 ]
 
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 # Optional test runner normalization for contributors/tools that use pytest.
 testpaths = ["tests"]
