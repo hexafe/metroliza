@@ -900,7 +900,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         for widget, minimum_height in pane_specs:
             widget.setMinimumHeight(minimum_height)
             widget.setMinimumSize(widget.minimumWidth(), minimum_height)
-            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            # Column lists keep their 120px minimum without promoting their
+            # preferred height above the member commands in the scroll body.
+            vertical_policy = (
+                QSizePolicy.Policy.Ignored
+                if widget in (self.available_columns_list, self.selected_columns_list)
+                else QSizePolicy.Policy.Expanding
+            )
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, vertical_policy)
             widget.updateGeometry()
         layout = self.layout()
         if layout is not None:
