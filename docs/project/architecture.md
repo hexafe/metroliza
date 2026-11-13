@@ -272,8 +272,8 @@ Native acceleration is optional and policy-controlled.
 
 | Risk | Evidence | Treatment |
 |---|---|---|
-| Default/development branch divergence | GitHub still defaults to `master` while normal Issue-driven work belongs on `develop` | #921 repository-default/protection decision; select PR bases explicitly |
-| Incomplete release promotion evidence | current `release/2026.09-rc1` source still needs exact packaged/manual qualification; June RC2 refs retain separate historical #901/#924 cycle closure | keep release evidence authoritative and do not promote `master` before the release-owner decision |
+| Default/development role confusion | GitHub default `main` is the production/history anchor; normal Issue-driven work targets `dev` | Select PR bases explicitly under the accepted [branching strategy](../release_checks/branching_strategy.md) and [#960](https://github.com/hexafe/metroliza/issues/960); preserve #921 protection requirements |
+| Incomplete release promotion evidence | current `rc` source still needs exact packaged/manual qualification; historical source/build receipts and immutable recovery refs remain distinct | Keep release evidence authoritative; naming/redirect recovery does not qualify artifacts or authorize promotion to `main` before the applicable [current release status](../release_checks/release_status.md), [release candidate checklist](../release_checks/release_candidate_checklist.md) gates and release-owner decision |
 | Exporter concentration | `export_data_thread.py` is about 306 KB and owns mixed concerns | #903 incremental seams |
 | Dashboard concentration | controls/options/spec modules embed large shared behavior surfaces | #904 contract-preserving split |
 | Compatibility ambiguity in tests | behavior tests still use many `modules.*` imports | #905 measured burn-down, shims retained |
