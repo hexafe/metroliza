@@ -1524,8 +1524,14 @@ class IndustrialAnalyticsDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, self.windowTitle(), f"Could not open dashboard visuals: {exc}")
 
+    def _tabular_source_busy(self) -> bool:
+        # The terminal handler releases ownership after all worker signals finish.
+        return not self.is_production_source and (
+            self.tabular_load_thread is not None or self.analytics_thread is not None
+        )
+
     def _handle_tabular_source_changed(self, _text: str = "") -> None:
-        if self.is_production_source:
+        if self.is_production_source or self._tabular_source_busy():
             return
         if self.input_file and (self.tabular_load_result is not None or self.metric_candidates):
             self._tabular_reload_notice = "Reload CSV/Excel data after changing the selected sheet."
@@ -1540,7 +1546,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def _handle_tabular_column_changed(self, _text: str = "") -> None:
-        if self.is_production_source:
+        if self.is_production_source or self._tabular_source_busy():
             return
         if not self.metric_candidates:
             return
@@ -1759,6 +1765,8 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"Cached production rows: {counts.records}; sources: {counts.source_profiles}"
 
     def select_input_file(self) -> None:
+        if self._tabular_source_busy():
+            return
         action_started_at = monotonic()
         filenames, _ = QFileDialog.getOpenFileNames(
             self,
@@ -1766,7 +1774,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self.input_file or "",
             "CSV / Excel (*.csv *.xlsx *.xls);;CSV (*.csv);;Excel (*.xlsx *.xls);;All files (*)",
         )
-        if not filenames:
+        if not filenames or self._tabular_source_busy():
             return
         selected_files = tuple(str(Path(filename)) for filename in filenames)
         self._auto_group_selected_files = False
@@ -1823,6 +1831,8 @@ class IndustrialAnalyticsDialog(QDialog):
         return result == QMessageBox.StandardButton.Yes
 
     def handle_load_metrics_clicked(self) -> None:
+        if self._tabular_source_busy():
+            return
         if self.is_production_source:
             self.load_metrics()
             return
@@ -1950,6 +1960,8 @@ class IndustrialAnalyticsDialog(QDialog):
             self._sync_ui_state()
 
     def load_metrics(self) -> None:
+        if self._tabular_source_busy():
+            return
         action_started_at = monotonic()
         try:
             if self.is_production_source:
@@ -2508,6 +2520,16 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.clear_groups_button.setEnabled(bool(not self.is_production_source and self.grouping_applied))
         self.load_metrics_button.setEnabled(source_ready)
+        if not self.is_production_source:
+            source_idle = not self._tabular_source_busy()
+            self.browse_input_button.setEnabled(source_idle)
+            self.load_metrics_button.setEnabled(source_ready and source_idle)
+            self.timestamp_column_combo.setEnabled(source_idle)
+            self.reference_column_combo.setEnabled(source_idle)
+            self.sheet_name_combo.setEnabled(
+                source_idle and len(self._selected_input_files()) == 1
+                and Path(self.input_file).suffix.lower() in {".xlsx", ".xls"}
+            )
         if self.is_production_source:
             self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
         elif self.is_preloaded_tabular_source:
@@ -2608,6 +2630,8 @@ class IndustrialAnalyticsDialog(QDialog):
             self._analytics_action_started_at = None
 
     def show_tabular_load_screen(self, *, action_started_at=None) -> None:
+        if self._tabular_source_busy():
+            return
         action_started_at = monotonic() if action_started_at is None else action_started_at
         if self.is_production_source:
             self.load_metrics()
@@ -2621,8 +2645,6 @@ class IndustrialAnalyticsDialog(QDialog):
             return
         if not input_files:
             QMessageBox.warning(self, self.windowTitle(), "Select a CSV or Excel file first.")
-            return
-        if self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = (
             create_worker_progress_dialog(
@@ -2657,6 +2679,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_load_thread.cancelled.connect(self.on_tabular_load_cancelled)
         self.tabular_load_thread.update_label.connect(self.loading_label.setText)
         self.tabular_load_thread.finished.connect(self.on_tabular_load_thread_stopped)
+        self._sync_ui_state()
         self.tabular_load_thread.start()
         self.loading_dialog.show()
 
@@ -2853,6 +2876,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.analytics_thread.cancelled.connect(self.on_analytics_cancelled)
         self.analytics_thread.update_label.connect(self.loading_label.setText)
         self.analytics_thread.finished.connect(self.on_analytics_thread_stopped)
+        if not self.is_production_source:
+            self._sync_ui_state()
         self.start_button.setEnabled(False)
         self.readiness_label.setText("Generating analytics. Ctrl+Shift+S requests stop.")
         self.analytics_thread.start()
