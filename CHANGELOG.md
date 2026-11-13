@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261117) — current version
+## 2026.09 RC1 (build 261118) — current version
 - Main Reports HTML dashboards retain complete long measurement labels while bounding generated asset names.
 - Export failures report a safe stage, original operating-system error codes and next action without exposing paths or measurement details.
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.

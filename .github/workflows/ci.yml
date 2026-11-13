@@ -518,6 +518,7 @@ jobs:
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/main-html.zip
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js
           if-no-files-found: warn

@@ -20,7 +20,7 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
-def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
+def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(tmp_path):
     import yaml
 
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
@@ -62,9 +62,22 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
     assert set(receipts["with"]["path"].splitlines()) == {
         *(f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")),
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/main-html.zip",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js",
     }
+    archives = set()
+    for run in ('core-dpr-1.0', 'core-dpr-1.25', 'core-dpr-1.5', 'core-native-unavailable'):
+        directory = tmp_path / run
+        directory.mkdir()
+        archive = directory / 'main-html.zip'
+        archive.touch()
+        archives.add(archive)
+        (directory / 'unrelated.zip').touch()
+    (tmp_path / 'qualified-windows-development-package.zip').touch()
+    archive_pattern = next(path for path in receipts['with']['path'].splitlines() if path.endswith('/main-html.zip'))
+    relative_pattern = archive_pattern.removeprefix('${{ runner.temp }}/metroliza-candidate-acceptance/')
+    assert set(tmp_path.glob(relative_pattern)) == archives
     package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
     assert receipts["if"] == "always()" and package["if"] == "success()"
     assert package["with"]["if-no-files-found"] == "error"
