@@ -6,13 +6,13 @@ and cleanup, as it does for the existing synchronous workbook export.
 """
 from __future__ import annotations
 
-from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
 import shutil
-import sqlite3
 import zipfile
+
+from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 
 CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html")
 FACETS = ("main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity")
@@ -26,7 +26,7 @@ def _sha(path):
 def _synthetic_database(database):
     if any(database.with_name(database.name + suffix).exists() for suffix in ("-wal", "-shm", "-journal")):
         raise ValueError("main_html_database_not_closed")
-    with closing(sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+    with sqlite_readonly_connection_scope(str(database), immutable=True) as connection:
         rows = connection.execute("SELECT header,ax,nominal,tol_plus,tol_minus,meas,dev,outtol FROM report_measurements ORDER BY id").fetchall()
     if rows != [("SMOKE FEATURE", "X", 10.0, 0.1, -0.1, 10.02, 0.02, 0.0)] * 2:
         raise ValueError("main_html_fixture_mismatch")
@@ -78,7 +78,7 @@ def run_main_html_checks(child: Path, database: Path, *, source_sha, packaged: b
         copied = scratch / (name + ".sqlite")
         shutil.copyfile(database, copied)
         copies[name] = copied
-    with closing(sqlite3.connect(copies["long"])) as connection, connection:
+    with sqlite_connection_scope(str(copies["long"])) as connection, connection:
         changed = connection.execute("UPDATE report_measurements SET header=? WHERE header=?", (LONG_HEADER, "SMOKE FEATURE")).rowcount
         if changed != 2:
             raise ValueError("main_html_fixture_mismatch")
