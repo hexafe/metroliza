@@ -314,6 +314,17 @@ class _GroupingInputLineEdit(QLineEdit):
             event.accept()
 
 
+class _GroupingColumnsLayout(QGridLayout):
+    """Use real row minima before optional list preview height in the scroll body."""
+
+    def heightForWidth(self, width: int) -> int:
+        if width > 0 and self.count():
+            minimum = super().minimumHeightForWidth(width)
+            if minimum >= 0:
+                return max(minimum, self.minimumSize().height())
+        return super().heightForWidth(width)
+
+
 class TabularAnalyticsGroupingDialog(QDialog):
     """Create manual row groups from user-selected CSV/Excel selector columns."""
 
@@ -446,7 +457,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         layout.addWidget(self.context_status_label)
 
         column_area = QWidget()
-        columns_grid = QGridLayout(column_area)
+        columns_grid = _GroupingColumnsLayout(column_area)
         columns_grid.setContentsMargins(0, 0, 0, 0)
         columns_grid.setHorizontalSpacing(10)
         columns_grid.setVerticalSpacing(6)
