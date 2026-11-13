@@ -533,11 +533,11 @@ class _Journey:
                    for name in ('_oznak_status_thread', '_analytics_load_thread', 'link_refresh_thread',
                                 'poll_thread', 'dashboard_thread', '_validation_thread')]
         for owner in owners:
-            if owner is not None:
+            if owner is not None and not sip.isdeleted(owner):
                 owner.close()
         for worker in workers + self.filter_workers:
             self.delivery.join(self, worker)
-        self.wait(lambda: all(owner is None or not owner.isVisible() for owner in owners))
+        self.wait(lambda: all(owner is None or sip.isdeleted(owner) or not owner.isVisible() for owner in owners))
         if self.window is not None:
             close_report_owner(self.window, self.app)
         _require((self.window is None or not self.window.isVisible())
