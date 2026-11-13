@@ -34,6 +34,10 @@ CAPTURE_STATES = {
     'reports-partial-error': {'rows': 12, 'saved': 11, 'failed': 1, 'unknown': 0, 'attention': 1, 'viewport': 'top'},
     'reports-partial-cancel': {'rows': 12, 'saved': 1, 'failed': 0, 'unknown': 11, 'attention': 11, 'viewport': 'top'},
 }
+MEASUREMENT_FIELDS = ('row_order', 'header', 'section_name', 'feature_label',
+                      'characteristic_name', 'characteristic_family', 'description',
+                      'ax', 'nominal', 'tol_plus', 'tol_minus', 'bonus', 'meas', 'dev',
+                      'outtol', 'is_nok', 'status_code')
 CASE_KEYS = ('review_counts', 'batch_counts', 'row_facts', 'receipt_states', 'database_counts',
              'numeric_digests', 'rereview_counts', 'context', 'preservation')
 CONTEXT_KEYS = ('same_owner', 'same_result', 'approval_invalidated', 'worker_running_at_cancel',
@@ -89,10 +93,14 @@ def _stage(fixtures, destination):
 def _snapshot(database, oracle, saved):
     from metroliza.reports.db import sqlite_readonly_connection_scope
     reports, counts = {}, {}
+    _require(oracle['measurement_fields'] == list(MEASUREMENT_FIELDS), 'reports_fixture_invalid')
     with sqlite_readonly_connection_scope(str(database), timeout_s=0.1) as connection:
         with closing(connection.cursor()) as cursor:
-            for table in ('parsed_reports', 'report_measurements', 'report_metadata'):
-                counts[table] = cursor.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0]
+            counts = {
+                'parsed_reports': cursor.execute('SELECT COUNT(*) FROM parsed_reports').fetchone()[0],
+                'report_measurements': cursor.execute('SELECT COUNT(*) FROM report_measurements').fetchone()[0],
+                'report_metadata': cursor.execute('SELECT COUNT(*) FROM report_metadata').fetchone()[0],
+            }
             rows = cursor.execute('''SELECT pr.id,sf.sha256,sfl.file_name,pr.measurement_count,pr.has_nok,
                 rm.reference,rm.report_date,rm.sample_number,rm.sample_number_kind
                 FROM parsed_reports pr JOIN source_files sf ON sf.id=pr.source_file_id
@@ -100,9 +108,10 @@ def _snapshot(database, oracle, saved):
                 JOIN report_metadata rm ON rm.report_id=pr.id ORDER BY sf.sha256''').fetchall()
             _require(len(rows) <= 12)
             for report_id, sha, name, declared, nok, *metadata in rows:
-                values = cursor.execute('SELECT ' + ','.join(oracle['measurement_fields'])
-                                        + ' FROM report_measurements WHERE report_id=? ORDER BY row_order,id',
-                                        (report_id,)).fetchall()
+                values = cursor.execute('''SELECT row_order,header,section_name,feature_label,
+                    characteristic_name,characteristic_family,description,ax,nominal,tol_plus,
+                    tol_minus,bonus,meas,dev,outtol,is_nok,status_code
+                    FROM report_measurements WHERE report_id=? ORDER BY row_order,id''', (report_id,)).fetchall()
                 _require(sha not in reports and len(values) == 144)
                 reports[sha] = dict(name=name, declared=declared, actual=len(values), has_nok=nok,
                                     metadata=metadata, measurements_sha256=hashlib.sha256(json.dumps(
