@@ -350,7 +350,8 @@ class _Journey:
         self.passed('reports_tab_initial_ready', 'reports_tab_review_result', 'reports_tab_busy')
 
     def routes(self):
-        self.phase, pages, owners = 'routes', [], {}
+        self.phase, pages = 'routes', []
+        owners = dict.fromkeys(('csv', 'industrial', 'realtime', 'profiles'), False)
         for index, page in enumerate(('home', 'reports', 'csv_summary', 'industrial_data', 'realtime_monitor'), 1):
             self.key(self.window, f'Ctrl+{index}')
             _require(self.window.navigation_combo.currentData() == page)
@@ -570,6 +571,9 @@ def run_controls_checks(scratch, fixtures, *, expected_dpr, capture):
                 journey.cleanup()
             except Exception:
                 result['error_codes'].append('controls_cleanup_failed')
+                if evidence['failure'] is None:
+                    evidence['failure'] = dict(phase='cleanup', code='controls_cleanup_failed',
+                                               callback_errors=['controls_callback_failed'] * min(8, len(journey.callback_errors)))
     if not result['error_codes'] and all(value == 'passed' for value in result['facets'].values()):
         result['status'] = 'passed'
     _require(len(json.dumps(result).encode()) <= 48 * 1024)
