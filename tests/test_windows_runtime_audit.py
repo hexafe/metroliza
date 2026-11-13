@@ -708,6 +708,55 @@ def _observe_held_other_command(api, process, root):
     (root / "control-helper-finish").touch()
 
 
+def _observe_version_roles_once(process):
+    # As in the concurrent control, retain the verified identities and wait
+    # for final Job accounting instead of querying short-lived helpers again.
+    if len(process._observations) < 3:
+        process.observe()
+
+
+def _pre_phase_native_observation(error, *, owned_primary):
+    detail = error.native_observation
+    if detail is None:
+        return None
+    # job_observations assigns this phase after this diagnostic callback.
+    # Bind a copy for the receipt; never mutate or replace the original error.
+    phase = "owned_job_observation" if owned_primary else "job_observation"
+    return detail.with_phase(phase).receipt()
+
+
+def test_version_control_does_not_requery_verified_ephemeral_helpers():
+    calls = []
+    process = SimpleNamespace(_observations={1: None})
+
+    def observe():
+        calls.append("identity")
+        process._observations.update({2: None, 3: None})
+
+    process.observe = observe
+    _observe_version_roles_once(process)
+    _observe_version_roles_once(process)
+    assert calls == ["identity"]
+    assert len(process._observations) == 3
+
+
+@pytest.mark.parametrize("owned_primary", [False, True])
+def test_pre_phase_native_diagnostic_preserves_original_win32_failure(owned_primary):
+    detail = qualification._NativeIdentityObservation(
+        None, "image", "false", 31, "unknown"
+    )
+    error = qualification.QualificationFailure("scenario_failed", native_observation=detail)
+    projected = _pre_phase_native_observation(error, owned_primary=owned_primary)
+    assert projected["winerror"] == 31
+    assert projected["api"] == "image"
+    assert projected["phase"] == (
+        "owned_job_observation" if owned_primary else "job_observation"
+    )
+    assert error.native_observation is detail
+    assert detail.phase is None
+    assert error.failure_id == "scenario_failed"
+
+
 def test_other_command_observation_is_confined_to_held_interval(tmp_path):
     observed = []
     process = SimpleNamespace(
@@ -866,9 +915,10 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
             except qualification.QualificationFailure as error:
                 # Still inside the original query-handle lifetime, before the
                 # outer rejected() callback can add a new probe identity.
-                detail = error.native_observation
-                entry["original_native"] = detail.receipt() if detail is not None else None
                 try:
+                    entry["original_native"] = _pre_phase_native_observation(
+                        error, owned_primary=kwargs["owned_primary"]
+                    )
                     entry["markers_at_failure"] = {
                         name: (root / name).is_file()
                         for name in ("control-ready", "control-done", "control-finish")
@@ -965,6 +1015,8 @@ def test_native_journal_correlates_owned_roles_and_survives_hard_exit(tmp_path, 
                         single_released = True
                     elif mode in {"other", "late_other"}:
                         _observe_held_other_command(api, process, tmp_path / "0")
+                    elif mode == "late_ver":
+                        _observe_version_roles_once(process)
                     else:
                         # Identity-bearing observation belongs to the held
                         # phase; an exit-phase image query races with teardown.
