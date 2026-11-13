@@ -621,6 +621,32 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     assert verify > max(i for i, step in enumerate(steps) if 'qualify' in step['name'].lower())
 
 
+def test_first_run_timeline_selects_only_the_launcher_when_both_routes_exist() -> None:
+    from fnmatch import fnmatchcase
+    import json
+    import re
+    import subprocess
+    import sys
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    step = next(step for step in workflow['jobs']['windows-first-run-timeline']['steps']
+                if step['name'] == 'Pack the same onedir with the baseline launcher and a next-version PoC EXE')
+    command = step['run']
+    names = json.loads(subprocess.check_output(
+        [sys.executable, 'scripts/release_identity.py', 'names'], cwd=CI_WORKFLOW_PATH.parents[2], text=True,
+    ))
+    # Exercise the workflow's declared selection with the envelope and unrelated EXEs present.
+    pattern = re.search(r"\$launcher = .*?-Filter '([^']+)'", command).group(1)
+    files = [names['portable'], names['launcher'], names['nuitka'], 'Metroliza-unrelated.exe']
+    selected = [name for name in files if fnmatchcase(name, pattern)]
+    predicate = re.search(r'Where-Object \{ \$_\.Name -eq \$artifactNames\.(\w+) \}', command)
+    if predicate:
+        selected = [name for name in selected if name == names[predicate.group(1)]]
+    assert selected == [names['launcher']]
+
+
 def test_startup_benchmark_measures_the_shipped_route_not_the_legacy_onefile_spec() -> None:
     import yaml
 

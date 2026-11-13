@@ -2030,11 +2030,14 @@ jobs:
       - name: Pack the same onedir with the baseline launcher and a next-version PoC EXE
         shell: pwsh
         run: |
-          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe')
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.launcher })
           if ($launcher.Count -ne 1) { throw 'Expected exactly one PoC launcher EXE' }
           $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
           if ($onedir.Count -ne 1) { throw 'Expected exactly one onedir' }
-          $version = ([IO.Path]::GetFileNameWithoutExtension($launcher[0].Name)) -replace '^Metroliza-(.+)-windows-x64$', '$1'
+          $version = [string]$artifactNames.version
           $sha = (git rev-parse HEAD).Trim()
           git fetch --no-tags --depth=1 origin $env:BASELINE_LAUNCHER_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the baseline commit' }
