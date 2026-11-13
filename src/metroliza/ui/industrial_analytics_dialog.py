@@ -1530,6 +1530,9 @@ class IndustrialAnalyticsDialog(QDialog):
             self.tabular_load_thread is not None or self.analytics_thread is not None
         )
 
+    def _tabular_reload_busy(self) -> bool:
+        return not self.is_production_source and self.tabular_load_thread is not None
+
     def _handle_tabular_source_changed(self, _text: str = "") -> None:
         if self.is_production_source or self._tabular_source_busy():
             return
@@ -1865,6 +1868,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def open_tabular_filter_dialog(self) -> None:
+        if self._tabular_reload_busy():
+            return
         if self.tabular_load_result is None:
             self.show_tabular_load_screen()
             return
@@ -1889,6 +1894,9 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        self._apply_tabular_filter_dialog(dialog)
+
+    def _apply_tabular_filter_dialog(self, dialog) -> None:
         filters = dialog.get_column_filters()
         expression = dialog.get_filter_expression()
         loaded = self.tabular_load_result
@@ -2054,6 +2062,8 @@ class IndustrialAnalyticsDialog(QDialog):
         return f"CSV/Excel table: {row_count} rows"
 
     def open_metrics_dialog(self) -> None:
+        if self._tabular_reload_busy():
+            return
         if not self.metric_candidates:
             self.load_metrics()
         if not self.metric_candidates:
@@ -2072,6 +2082,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self._apply_metric_selection(dialog.selected_metrics())
 
     def open_limits_dialog(self) -> None:
+        if self._tabular_reload_busy():
+            return
         if not self.metric_candidates:
             self.load_metrics()
         metrics = self._selected_metrics()
@@ -2085,7 +2097,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def open_grouping_dialog(self) -> None:
-        if self.is_production_source:
+        if self.is_production_source or self._tabular_reload_busy():
             return
         if self.tabular_load_result is None:
             self.load_metrics()
@@ -2502,12 +2514,13 @@ class IndustrialAnalyticsDialog(QDialog):
             else bool(self._selected_input_files())
         )
         candidate_count = len(self.metric_candidates)
+        source_stable = not self._tabular_reload_busy()
         filtered_row_count = None
         if not self.is_production_source and self.tabular_load_result is not None:
             filtered_row_count = self._tabular_filtered_row_count()
-        self.choose_metrics_button.setEnabled(bool(candidate_count))
-        self.edit_limits_button.setEnabled(bool(candidate_count and metrics))
-        self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source))
+        self.choose_metrics_button.setEnabled(bool(candidate_count) and source_stable)
+        self.edit_limits_button.setEnabled(bool(candidate_count and metrics) and source_stable)
+        self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source) and source_stable)
         self.clear_filter_button.setEnabled(
             bool(
                 not self.is_production_source
@@ -2569,9 +2582,10 @@ class IndustrialAnalyticsDialog(QDialog):
         charts_ready = self._chart_selection().has_any
         workbook_ready = not self.workbook_checkbox.isChecked() or bool(self.output_workbook_file)
         tabular_rows_ready = self.is_production_source or filtered_row_count is None or filtered_row_count > 0
-        self.filters_button.setEnabled(self.is_production_source or self.tabular_load_result is not None)
+        self.filters_button.setEnabled((self.is_production_source or self.tabular_load_result is not None) and source_stable)
         ready = bool(
-            source_ready
+            source_stable
+            and source_ready
             and metrics
             and self.output_dashboard_file
             and charts_ready
@@ -2585,6 +2599,9 @@ class IndustrialAnalyticsDialog(QDialog):
                 + (", workbook." if self.workbook_checkbox.isChecked() else ".")
             )
             set_status_variant(self.readiness_label, "success")
+        elif not source_stable:
+            self.readiness_label.setText("Loading CSV/Excel data. Wait before creating analytics.")
+            set_status_variant(self.readiness_label, "info")
         elif not source_ready:
             self.readiness_label.setText("Select a source before creating analytics.")
             set_status_variant(self.readiness_label, "warning")

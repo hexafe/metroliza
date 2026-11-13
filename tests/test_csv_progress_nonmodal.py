@@ -298,3 +298,135 @@ def test_busy_csv_commands_preserve_borrowed_sqlite_until_real_analytics_finishe
             _join_after_release(qapplication_session, dialog, worker, 'analytics_thread')
     assert dialog.close()
     assert not store_path.exists()  # Cleanup remains owned by the finished dialog.
+
+
+@contextmanager
+def _observe_and_cancel_owned_children(app, owner):
+    from metroliza.ui.industrial_analytics_dialog import MetricLimitsDialog, MetricSelectionDialog
+    from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+    from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+
+    kinds = (MetricLimitsDialog, MetricSelectionDialog, TabularAnalyticsFilterDialog, TabularAnalyticsGroupingDialog)
+    seen, errors = [], []
+    timer = QTimer(owner)
+    timer.setInterval(10)
+
+    def observe():
+        try:
+            child = app.activeModalWidget()
+            if isinstance(child, kinds) and child.parentWidget() is owner:
+                if child not in seen:
+                    seen.append(child)
+                child.reject()  # Actual clean Cancel; never replace exec() or its outcome.
+        except BaseException as error:
+            errors.append(type(error).__name__)
+
+    timer.timeout.connect(observe)
+    timer.start()
+    try:
+        yield seen, errors, kinds
+    finally:
+        timer.stop()
+        timer.deleteLater()
+
+
+def test_real_reload_blocks_stale_children_and_start_then_restores_analytics_children(
+    owner, qapplication_session, tmp_path, monkeypatch,
+):
+    from pathlib import Path
+    from metroliza.industrial import industrial_workers
+    from metroliza.tabular.tabular_analytics_service import load_tabular_analytics_file
+
+    window, dialog, source = owner
+    old = load_tabular_analytics_file(source, force_sqlite=True)
+    dialog._apply_tabular_load_result(old)
+    old_path = Path(old.sqlite_store.path)
+    output = tmp_path / 'after-reload.html'
+    dialog.output_dashboard_file = str(output)
+    dialog.workbook_checkbox.setChecked(False)
+    dialog._sync_ui_state()
+    controls = (dialog.filters_button, dialog.edit_groups_button,
+                dialog.choose_metrics_button, dialog.edit_limits_button, dialog.start_button)
+    assert all(control.isEnabled() for control in controls)
+    with source.open('a', newline='') as stream:
+        csv.writer(stream).writerow(('LOT-9', '2026-01-09', 90))
+    application, audit_errors = [], []
+    original_apply = dialog._apply_tabular_load_result
+
+    def observe_application(loaded, **kwargs):
+        try:
+            application.append((dialog.tabular_load_result is old, old_path.is_file(),
+                                old.sqlite_store.row_ids(), loaded is not old))
+        except BaseException as error:
+            audit_errors.append(type(error).__name__)
+        return original_apply(loaded, **kwargs)
+
+    monkeypatch.setattr(dialog, '_apply_tabular_load_result', observe_application)
+    with _observe_and_cancel_owned_children(qapplication_session, dialog) as (children, child_errors, kinds):
+        with _delegating_barrier(monkeypatch, industrial_workers, 'load_tabular_analytics_files') as (entered, release, errors):
+            worker = None
+            try:
+                started = time.monotonic()
+                dialog.load_metrics_button.click()
+                worker = dialog.tabular_load_thread
+                assert worker is not None
+                result = QSignalSpy(worker.result_ready)
+                _wait(qapplication_session, entered.is_set, 4)
+                _wait(qapplication_session, lambda: dialog.loading_dialog.isVisible() and time.monotonic() - started >= 1.05, 4)
+                _navigate_while_busy(qapplication_session, window, dialog, worker, 'tabular_load_thread')
+                assert all(not control.isEnabled() for control in controls)
+                assert 'Loading CSV/Excel data' in dialog.readiness_label.text()
+                for open_child in (dialog.open_filters_dialog, dialog.open_tabular_filter_dialog,
+                                   dialog.open_grouping_dialog, dialog.open_metrics_dialog, dialog.open_limits_dialog):
+                    open_child()
+                for button in controls:
+                    button.click()
+                for sequence in ('Ctrl+Shift+F', 'Ctrl+G', 'Ctrl+F', 'Ctrl+Shift+G', 'Ctrl+S'):
+                    press_key(qapplication_session, dialog, sequence)
+                assert not children and not child_errors
+                assert dialog.tabular_load_result is old and old_path.is_file()
+                assert old.sqlite_store.row_ids() == list(range(1, 9))
+                assert dialog.tabular_load_thread is worker and worker.isRunning()
+                assert dialog.analytics_thread is None and not output.exists()
+                release.set()
+                _wait(qapplication_session, lambda: dialog.tabular_load_thread is None)
+                new = dialog.tabular_load_result
+                assert len(result) == 1 and result[0][0] is new and new is not old
+                assert application == [(True, True, list(range(1, 9)), True)] and not audit_errors
+                assert not old_path.exists() and new.sqlite_store is not None
+                assert new.sqlite_store.row_ids() == list(range(1, 10))
+                assert new.sqlite_store.read_dataframe(columns=('value',))['value'].tolist() == list(range(10, 91, 10))
+                assert all(control.isEnabled() for control in controls) and not errors
+            finally:
+                release.set()
+                _join_after_release(qapplication_session, dialog, worker, 'tabular_load_thread')
+        monkeypatch.setattr(dialog, '_apply_tabular_load_result', original_apply)
+        with (
+            _owned_notifications(qapplication_session, dialog) as (notification_errors, notifications),
+            _delegating_barrier(monkeypatch, industrial_workers, 'run_tabular_file_analytics') as (entered, release, errors),
+        ):
+            worker = None
+            try:
+                dialog.start_button.click()
+                worker = dialog.analytics_thread
+                assert worker is not None
+                result = QSignalSpy(worker.result_ready)
+                request = worker.request
+                _wait(qapplication_session, entered.is_set, 4)
+                assert all(control.isEnabled() for control in controls[:-1])
+                for button in controls[:-1]:
+                    button.click()  # Four real children remain reachable while analytics borrows a stable source.
+                assert {type(child) for child in children} == set(kinds) and len(children) == 4
+                assert not child_errors and qapplication_session.activeModalWidget() is None
+                assert worker.isRunning() and worker.request is request and request.tabular_load_result is new
+                assert Path(new.sqlite_store.path).is_file()
+                release.set()
+                _wait(qapplication_session, lambda: dialog.analytics_thread is None)
+                assert len(result) == 1 and result[0][0].row_count == 9
+                assert output.is_file() and result[0][0].html_dashboard_path == str(output)
+                assert not errors and not notification_errors and len(notifications) == 1
+            finally:
+                release.set()
+                _join_after_release(qapplication_session, dialog, worker, 'analytics_thread')
+    new_path = Path(new.sqlite_store.path)
+    assert dialog.close() and not old_path.exists() and not new_path.exists()
