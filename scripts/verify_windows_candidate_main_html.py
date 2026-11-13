@@ -42,9 +42,8 @@ def _case_names(case):
     else:
         stem = selected_stem
     # The generated base reserves 44 bytes for .generation- plus UUID32.
-    asset_input = stem + '_assets'
-    asset_digest = hashlib.sha256(asset_input.encode()).hexdigest()[:24]
-    asset_base = asset_input[:111] + '-' + asset_digest
+    asset_digest = hashlib.sha256(stem.encode()).hexdigest()[:24]
+    asset_base = stem[:4] + '-' + asset_digest + '_assets'
     return stem + '.html', selected_stem + '.xlsx' if workbook else None, asset_base
 
 
@@ -147,9 +146,9 @@ def _html(files, case, names):
     for name in pngs | scripts:
         parts = name.split('/')
         require(len(parts) == 3 and re.fullmatch(re.escape(asset_base) + r'\.generation-[0-9a-f]{32}', parts[1])
-                and len(parts[1].encode()) <= 180
+                and len(parts[1].encode()) <= 80
                 and re.fullmatch(r'[A-Za-z0-9_.-]+', parts[2])
-                and len(parts[2].encode()) <= 180, "main_html_asset_component")
+                and len(parts[2].encode()) <= 64, "main_html_asset_component")
     for name in pngs:
         _png(files[name])
     script = next(iter(scripts))

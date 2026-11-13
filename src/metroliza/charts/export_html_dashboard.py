@@ -93,6 +93,10 @@ _PLOTLY_DARK_COLORWAY = [
     "#b59cff",
 ]
 _GENERATED_COMPONENT_MAX_BYTES = 180
+_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES = 64
+_DASHBOARD_GENERATION_COMPONENT_MAX_BYTES = 80
+_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES = 80
+_DASHBOARD_IDENTITY_HEX_LENGTH = 24
 _GENERATION_SUFFIX_BYTES = len(".generation-") + 32
 _PLOTLY_JS_ASSET_DIRNAME = "html_dashboard_assets"
 _PLOTLY_JS_FILENAME = "plotly-2.27.0.min.js"
@@ -176,7 +180,10 @@ def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
 
     canonical_dashboard_path = _canonical_path_entry(dashboard_path)
     lock_path = canonical_dashboard_path.with_name(
-        _bounded_dashboard_component(f".{canonical_dashboard_path.name}", suffix=".publish.lock")
+        _bounded_dashboard_component(
+            f".{canonical_dashboard_path.name}", suffix=".publish.lock",
+            max_bytes=_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES,
+        )
     )
     thread_lock = _dashboard_thread_lock(lock_path)
 
@@ -238,8 +245,8 @@ def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
     dashboard_path = Path(str(html_path))
     stem = dashboard_path.stem or "metroliza_dashboard"
     return dashboard_path.with_name(_bounded_dashboard_component(
-        f"{stem}_assets",
-        max_bytes=_GENERATED_COMPONENT_MAX_BYTES - _GENERATION_SUFFIX_BYTES,
+        stem, suffix="_assets",
+        max_bytes=_DASHBOARD_GENERATION_COMPONENT_MAX_BYTES - _GENERATION_SUFFIX_BYTES,
     ))
 
 
@@ -480,7 +487,7 @@ def write_export_html_dashboard(
             f"{asset_base.name}.generation-{generation_id}"
         )
         temporary_dashboard_path = dashboard_path.with_name(
-            _bounded_dashboard_component(f".{dashboard_path.name}", suffix=f".{generation_id}.tmp")
+            f".metroliza-html-{generation_id}.tmp"
         )
 
         try:
@@ -561,7 +568,7 @@ def _write_export_html_dashboard_generation(
             image_name = _bounded_dashboard_component(
                 f"section_{section_index:03d}_{_slugify(raw_section.get('header') or 'header')}_"
                 f"{_slugify(raw_chart.get('chart_type') or 'chart')}_{chart_index:02d}",
-                suffix=".png",
+                suffix=".png", max_bytes=_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES,
                 identity=json.dumps([
                     section_index, str(raw_section.get("header") or "header"),
                     str(raw_chart.get("chart_type") or "chart"), chart_index,
@@ -814,13 +821,17 @@ def _bounded_dashboard_component(
     max_bytes: int = _GENERATED_COMPONENT_MAX_BYTES,
     identity: str | None = None,
 ) -> str:
-    """Bound generated names in ASCII bytes, retaining identity after sanitizing.
+    """Bound safe ASCII stems in filesystem bytes, retaining complete identity.
 
     Labels stay intact in dashboard content. The digest uses the complete input;
     indexed image identities also distinguish labels with the same readable slug.
     This bounds components only, not the user's parent path or final filename.
     """
 
+    suffix_bytes = len(suffix.encode("utf-8", "surrogatepass"))
+    minimum_bytes = _DASHBOARD_IDENTITY_HEX_LENGTH + suffix_bytes + 2
+    if max_bytes < minimum_bytes:
+        raise ValueError("Generated component budget cannot retain identity and suffix.")
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).rstrip(". ") or "item"
     reserved = safe.split(".", 1)[0].upper() in {
         "CON", "PRN", "AUX", "NUL",
@@ -829,13 +840,14 @@ def _bounded_dashboard_component(
     }
     if reserved:
         safe = f"_{safe}"
-    if identity is None and safe == value and len(safe + suffix) <= max_bytes:
+    if identity is None and safe == value and len(safe) + suffix_bytes <= max_bytes:
         return safe + suffix
     # Keep case aliases on Windows in the same generated namespace and lock.
     digest_source = identity if identity is not None else os.path.normcase(value)
-    digest = sha256(digest_source.encode("utf-8", "surrogatepass")).hexdigest()[:24]
+    digest = sha256(digest_source.encode("utf-8", "surrogatepass")).hexdigest()[:_DASHBOARD_IDENTITY_HEX_LENGTH]
     tail = f"-{digest}{suffix}"
-    return safe[:max_bytes - len(tail)].rstrip(". ") + tail
+    tail_bytes = len(tail.encode("utf-8", "surrogatepass"))
+    return safe[:max_bytes - tail_bytes].rstrip(". ") + tail
 
 
 def _slugify(value: str) -> str:
@@ -2665,7 +2677,7 @@ def _normalize_group_analysis_manifest(
                 observe_export_stage(diagnostic_stage, ExportFailureStage.PNG_WRITE)
                 image_name = _bounded_dashboard_component(
                     f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}",
-                    suffix=".png",
+                    suffix=".png", max_bytes=_DASHBOARD_IMAGE_COMPONENT_MAX_BYTES,
                     identity=json.dumps([metric_index, metric_name, plot_key]),
                 )
                 image_path = asset_directory / image_name

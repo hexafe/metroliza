@@ -338,6 +338,8 @@ module remains as a compatibility import for existing scripts.
 
 ### Changelog highlights (release `2026.09 RC1 (build 261116)`)
 
+- Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
+- Main HTML dashboards retain full measurement labels with compact image and asset-directory names. Windows package verification of these source changes is pending.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
 Sync docs from release metadata:

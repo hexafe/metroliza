@@ -3,6 +3,7 @@
 ## 2026.09 RC1 (build 261116) — current version
 - Main Reports HTML dashboards retain complete long measurement labels while bounding generated asset names.
 - Export failures report a safe stage and next action without exposing paths or measurement details.
+- Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
 - Return or Enter searches CSV filter values without applying the draft; use Apply or Ctrl+S to commit it.
 - Compact CSV grouping wraps long hints, keeps paging controls together and makes footer actions reachable with Tab.
 - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace.

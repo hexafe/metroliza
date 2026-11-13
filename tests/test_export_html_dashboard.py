@@ -202,7 +202,8 @@ def test_dashboard_asset_components_bound_labels_without_losing_identity(tmp_pat
         names = sorted(path.name for path in generation.glob("*.png"))
         expected_count = len(labels) * (2 if asset_kind == "group" else 1)
         assert len(names) == expected_count == len(set(name.casefold() for name in names))
-        assert all(len(name.encode("utf-8")) <= 180 for name in names)
+        assert all(len(name.encode("utf-8")) <= 64 for name in names)
+        assert len(generation.name.encode("utf-8")) <= 80
         assert all(re.fullmatch(r"[A-Za-z0-9_.-]+", name) for name in names)
         if previous_names is not None:
             assert names == previous_names
@@ -239,7 +240,7 @@ def test_dashboard_generated_paths_bound_long_output_stems_and_preserve_on_failu
     assert target.read_bytes() == old_html
     assert old_generation.is_dir()
     assert next(old_generation.glob("*.png")).read_bytes() == b"last complete image"
-    assert all(len(path.name.encode("utf-8")) <= 180 for path in tmp_path.iterdir() if path != target)
+    assert all(len(path.name.encode("utf-8")) <= 80 for path in tmp_path.iterdir() if path != target)
     second = write_export_html_dashboard(output_path=target, assets_dir=assets, sections=[])
     assert not old_generation.exists()
     assert Path(second["html_dashboard_assets_path"]).is_dir()
@@ -494,7 +495,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             generation_name = Path(result['html_dashboard_assets_path']).name
             self.assertIn(
                 f'{generation_name}/' + next(
-                    Path(result['html_dashboard_assets_path']).glob('section_001_diameter-x_histogram_01-*.png')
+                    Path(result['html_dashboard_assets_path']).glob('section_001_*.png')
                 ).name,
                 html_text,
             )
@@ -2132,3 +2133,50 @@ def test_generated_sidecar_and_copy_keep_full_identity_after_bounding(tmp_path):
     assert len({path.name.casefold() for path in sidecars}) == len(stems)
     assert len({path.name.casefold() for path in copies}) == len(stems)
     assert all(len(path.name.encode()) <= 180 for path in sidecars + copies)
+
+
+@pytest.mark.parametrize('stem', ['report_dashboard', 'report_' + 'r' * 60], ids=['ordinary-name', 'longer-name'])
+def test_real_staged_png_path_fits_ordinary_windows_parent_model(tmp_path, monkeypatch, stem):
+    """Measure real writer paths, then model one Windows parent; no native claim."""
+    from pathlib import PureWindowsPath
+    from metroliza.exporting.output_publication import write_dashboard_safely
+
+    written = []
+    original = Path.write_bytes
+    def observe(path, data):
+        if path.suffix == '.png':
+            written.append(path.relative_to(tmp_path))
+        return original(path, data)
+    monkeypatch.setattr(Path, 'write_bytes', observe)
+    header = 'MEASUREMENT_' + 'L' * 240
+    target = tmp_path / (stem + '.html')
+    result = write_dashboard_safely(
+        write_export_html_dashboard, output_path=target,
+        assets_dir=resolve_html_dashboard_assets_dir(target),
+        sections=[{'header': header, 'charts': [{
+            'chart_type': 'histogram', 'title': header, 'image_buffer': b'synthetic PNG payload',
+        }]}],
+    )
+    assert len(written) == 1
+    relative = written[0]
+    assert relative.parts[0].startswith('.metroliza-export-')
+    modeled = str(PureWindowsPath('C:/Users/Example/Documents/Reports').joinpath(*relative.parts))
+    counts = dict(png_bytes=len(relative.name.encode()), generation_bytes=len(relative.parent.name.encode()),
+                  modeled_windows_utf16_units=len(modeled.encode('utf-16-le')) // 2)
+    (tmp_path / 'path-model.json').write_text(json.dumps(counts), encoding='utf-8')
+    assert counts['modeled_windows_utf16_units'] < 260, counts
+    assert counts['png_bytes'] <= 64
+    assert counts['generation_bytes'] <= 80
+    assert header in html.unescape(target.read_text(encoding='utf-8'))
+    assert (Path(result['html_dashboard_assets_path']) / relative.name).read_bytes() == b'synthetic PNG payload'
+
+
+@pytest.mark.parametrize('value', ['x' * 100, '測' * 100], ids=['ascii', 'unicode'])
+@pytest.mark.parametrize('suffix', ['.png', '.é'], ids=['ascii-suffix', 'unicode-suffix'])
+def test_component_budget_keeps_digest_suffix_and_one_readable_byte(value, suffix):
+    minimum = 26 + len(suffix.encode('utf-8'))
+    with pytest.raises(ValueError, match='budget'):
+        _bounded_dashboard_component(value, suffix=suffix, max_bytes=minimum - 1)
+    name = _bounded_dashboard_component(value, suffix=suffix, max_bytes=minimum)
+    assert len(name.encode('utf-8')) == minimum
+    assert name.endswith(suffix)

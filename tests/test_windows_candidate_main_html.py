@@ -89,7 +89,7 @@ def test_closed_case_contract_requires_both_full_length_selected_targets():
     assert dashboard == 't' * 150 + '-' + digest + '.html'
     assert len(html_name.encode()) == len(workbook.encode()) == 250
     assert len(dashboard.encode()) == 180
-    assert len(html_assets.encode()) == len(workbook_assets.encode()) == 136
+    assert len(html_assets.encode()) == len(workbook_assets.encode()) == 36
 
 
 def test_closed_archive_reads_all_six_cases(tmp_path):
@@ -196,7 +196,7 @@ def test_archive_rejects_missing_or_false_qualification_evidence(tmp_path, mutat
     elif mutation == 'hash':
         record['files'][png] = '0' * 64
     elif mutation == 'long_component':
-        renamed = png.rsplit('/', 1)[0] + '/' + 'p' * 181 + '.png'
+        renamed = png.rsplit('/', 1)[0] + '/' + 'p' * 65 + '.png'
         files[renamed] = files.pop(png)
         del record['files'][png]
         record['files'][renamed] = hashlib.sha256(files[renamed]).hexdigest()
