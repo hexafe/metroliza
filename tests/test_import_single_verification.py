@@ -423,3 +423,62 @@ def test_mtime_change_before_transaction_is_classified_without_a_dialog(
         (0, 1, 0) if change_content else (1, 0, 0)
     )
     assert dialogs == []
+
+
+def test_atomic_cmm_persistence_error_finishes_real_worker_and_rolls_back_failed_graph(
+    tmp_path, monkeypatch, qapplication_session
+):
+    import hashlib
+    import time
+
+    from PyQt6.QtTest import QTest
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    source = tmp_path / "reports"
+    reports = _write_reports(source, 3)
+    database = tmp_path / "atomic-error.sqlite3"
+    ensure_report_schema(str(database))
+    failed_digest = hashlib.sha256(reports[1].read_bytes()).hexdigest()
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(f"""CREATE TRIGGER synthetic_report_failure
+            BEFORE INSERT ON parsed_reports
+            WHEN (SELECT sha256 FROM source_files WHERE id=NEW.source_file_id) = '{failed_digest}'
+            BEGIN SELECT RAISE(ABORT, 'synthetic persistence failure'); END""")
+        connection.commit()
+    _review, plan = _plan(source, database)
+    assert len(plan.selected_reports) == 3
+    legacy_notifications = []
+    monkeypatch.setattr(CMMReportParser, "log_and_exit", lambda _self, exc: legacy_notifications.append(exc))
+    worker = ParseReportsThread(plan)
+    try:
+        worker.start()
+        deadline = time.monotonic() + 20
+        while worker.isRunning() and time.monotonic() < deadline:
+            qapplication_session.processEvents()
+            QTest.qWait(5)
+        assert worker.wait(5000), "Real atomic worker failed its native join"
+        result = worker.last_parse_result
+        assert (result.total_files, result.selected_files, result.imported_files,
+                result.failed_files, result.cancelled_files, result.preflight_changed_files) == (3, 3, 2, 1, 0, 0)
+        assert {receipt.occurrence_id: receipt.state for receipt in worker.last_report_outcomes} == {
+            "report-0.pdf": "saved", "report-1.pdf": "failed", "report-2.pdf": "saved",
+        }
+        assert len(worker.last_report_outcomes) == 3
+        assert legacy_notifications == []
+        accepted = {hashlib.sha256(report.read_bytes()).hexdigest() for report in (reports[0], reports[2])}
+        assert _imported_hashes(database) == accepted
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone()[0] == 2
+            assert connection.execute("SELECT COUNT(*) FROM report_metadata").fetchone()[0] == 2
+            assert connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone()[0] == 2
+            assert {row[0] for row in connection.execute(
+                "SELECT file_name FROM source_file_locations WHERE is_active=1"
+            )} == {"report-0.pdf", "report-2.pdf"}
+            assert connection.execute(
+                "SELECT COUNT(*) FROM source_files WHERE sha256=?", (failed_digest,),
+            ).fetchone()[0] == 0
+    finally:
+        worker.stop_parsing()
+        assert worker.wait(5000), "Real atomic worker retained after cleanup"
+        qapplication_session.processEvents()

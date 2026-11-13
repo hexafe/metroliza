@@ -18,7 +18,7 @@ def geometry_snapshot(window, *, requested: tuple[int, int], pinned: tuple[str, 
 def _snapshot(window, requested, pinned):
     from PyQt6.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QPoint, QRect
     from PyQt6.QtGui import QFontInfo
-    from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea, QTabWidget
+    from PyQt6.QtWidgets import QApplication, QLabel, QScrollArea, QStackedWidget, QTabWidget
 
     def size(value):
         return [value.width(), value.height()]
@@ -26,9 +26,39 @@ def _snapshot(window, requested, pinned):
     def rectangle(value):
         return [value.x(), value.y(), value.width(), value.height()]
 
-    def layout_info(widget):
+    def minimum_hfw(item, width):
+        getter = getattr(item, "minimumHeightForWidth", None)
+        return getter(width) if callable(getter) else {"unavailable": True}
+
+    def direct_items(layout):
+        if layout is None:
+            return None
+        rows = []
+        for index in range(min(layout.count(), 8)):
+            try:
+                item = layout.itemAt(index)
+                widget, nested = item.widget(), item.layout()
+                rows.append({
+                    "index": index,
+                    "kind": "widget" if widget is not None else "layout" if nested is not None else "spacer",
+                    "class": type(widget if widget is not None else nested).__name__[:64],
+                    "geometry": rectangle(item.geometry()),
+                    "minimum": size(item.minimumSize()), "hint": size(item.sizeHint()),
+                    "has_hfw": item.hasHeightForWidth(),
+                    "hfw": item.heightForWidth(item.geometry().width()),
+                    "minimum_hfw": minimum_hfw(item, item.geometry().width()),
+                    "stretch": layout.stretch(index) if hasattr(layout, "stretch") else None,
+                })
+            except Exception as error:
+                rows.append({"index": index, "geometry_diagnostic_error": type(error).__name__})
+        return {"count": layout.count(), "items": rows, "not_measured": max(0, layout.count() - 8)}
+
+    def get_layout(widget):
         value = getattr(widget, "layout", None)
-        layout = value() if callable(value) else value
+        return value() if callable(value) else value
+
+    def layout_info(widget):
+        layout = get_layout(widget)
         if layout is None:
             return None
         width = widget.width()
@@ -40,6 +70,7 @@ def _snapshot(window, requested, pinned):
             "constraint": layout.sizeConstraint().name,
             "has_hfw": layout.hasHeightForWidth(),
             "hfw": layout.heightForWidth(width),
+            "minimum_hfw": minimum_hfw(layout, width),
             "total_hfw": layout.totalHeightForWidth(width),
         }
 
@@ -85,6 +116,8 @@ def _snapshot(window, requested, pinned):
         "size": size(window.size()),
         "frame": rectangle(window.frameGeometry()),
         "root": widget_info(window),
+        "root_items": direct_items(get_layout(window)),
+        "native_window_minimum": size(window.windowHandle().minimumSize()) if window.windowHandle() is not None else None,
         "finalization": finalization,
         "qt": QT_VERSION_STR,
         "pyqt": PYQT_VERSION_STR,
@@ -98,6 +131,7 @@ def _snapshot(window, requested, pinned):
         "pinned": [],
         "tabs": [],
         "scrolls": [],
+        "footers": [],
     }
     for name in pinned[:16]:
         widget = getattr(window, name, None)
@@ -111,6 +145,7 @@ def _snapshot(window, requested, pinned):
         result["tabs"].append({
             **widget_info(tab), "current": tab.currentIndex(), "page_count": tab.count(),
             "pages": [widget_info(tab.widget(index)) for index in range(min(tab.count(), 4))],
+            "stacked": [widget_info(stack) for stack in tab.findChildren(QStackedWidget)[:1]],
         })
     scrolls = window.findChildren(QScrollArea)
     result["scroll_count"] = len(scrolls)
@@ -121,6 +156,29 @@ def _snapshot(window, requested, pinned):
             "vertical_range": [scroll.verticalScrollBar().minimum(), scroll.verticalScrollBar().maximum()],
             "content": widget_info(scroll.widget()) if scroll.widget() is not None else None,
         })
+    controls = tuple(control for name in ("apply_button", "cancel_button", "close_button")
+                     if (control := getattr(window, name, None)) is not None)
+    root_layout = get_layout(window)
+    if root_layout is not None:
+        for index in range(min(root_layout.count(), 8)):
+            item = root_layout.itemAt(index)
+            widget, nested = item.widget(), item.layout()
+            members = () if nested is None else tuple(
+                nested.itemAt(offset).widget() for offset in range(min(nested.count(), 8))
+            )
+            owns_controls = (widget is not None and any(widget is control or widget.isAncestorOf(control)
+                                                       for control in controls)) or any(
+                member is control for member in members for control in controls
+            )
+            if owns_controls and len(result["footers"]) < 3:
+                footer_layout = get_layout(widget) if widget is not None else nested
+                result["footers"].append({
+                    "root_item_index": index,
+                    "widget": widget_info(widget) if widget is not None else None,
+                    "layout_items": direct_items(footer_layout),
+                    "minimum_hfw": minimum_hfw(footer_layout, item.geometry().width())
+                    if footer_layout is not None else None,
+                })
     labels = window.findChildren(QLabel)
     result["label_count"] = len(labels)
     # Include the largest HFW/minimum contributors; retain lengths, never text.

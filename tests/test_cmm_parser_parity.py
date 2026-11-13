@@ -68,7 +68,8 @@ def test_cmm_report_parser_wired_to_interface_layer():
     assert "parse_blocks_with_backend_and_telemetry(self.pdf_raw_text, use_native=False)" not in parser_source
 
 
-def test_cmm_to_sqlite_reraises_repository_failures(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry", ["legacy-default", "legacy-replace", "atomic-prepared", "atomic-unprepared"])
+def test_cmm_to_sqlite_reraises_repository_failures(tmp_path, monkeypatch, entry):
     report_file = tmp_path / "broken.pdf"
     report_file.write_bytes(b"%PDF-1.7")
     parser = CMMReportParser(str(report_file), str(tmp_path / "reports.db"))
@@ -87,21 +88,45 @@ def test_cmm_to_sqlite_reraises_repository_failures(tmp_path, monkeypatch):
     parser._normalized_rows_for_persistence = lambda: [{"is_nok": False}]
     parser.build_report_identity_hash = lambda: "identity"
 
+    failure = RuntimeError("persist failed")
+
     class FailingRepository:
         def __init__(self, *_args, **_kwargs):
             pass
 
         def persist_parsed_report(self, **_kwargs):
-            raise RuntimeError("persist failed")
+            raise failure
+
+        import_report_if_absent = persist_parsed_report
 
     logged_errors = []
     parser.log_and_exit = lambda exc: logged_errors.append(exc)
     monkeypatch.setitem(CMMReportParser.to_sqlite.__globals__, "ReportRepository", FailingRepository)
 
-    with pytest.raises(RuntimeError, match="persist failed"):
-        parser.to_sqlite()
+    parse_calls = []
+    if entry == "atomic-unprepared":
+        parser.blocks_text = []
+        parser.open_report = lambda: parse_calls.append("open")
 
-    assert [str(error) for error in logged_errors] == ["persist failed"]
+        def split():
+            parse_calls.append("split")
+            parser.blocks_text = [("Feature", ["measurement"])]
+
+        parser.split_text_to_blocks = split
+        parser.add_tolerances = lambda: parse_calls.append("tolerances")
+        parser.extract_metadata = lambda: parse_calls.append("metadata")
+    with pytest.raises(RuntimeError, match="persist failed") as caught:
+        if entry == "legacy-default":
+            parser.to_sqlite()
+        elif entry == "legacy-replace":
+            parser.replace_existing_report()
+        else:
+            parser.import_prepared_report_if_absent()
+
+    assert caught.value is failure
+    assert logged_errors == ([failure] if entry.startswith("legacy") else [])
+    assert parse_calls == (["open", "split", "tolerances", "metadata"]
+                           if entry == "atomic-unprepared" else [])
 
 
 def test_cmm_to_sqlite_raises_structured_failure_for_empty_measurements(tmp_path):

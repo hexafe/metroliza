@@ -142,7 +142,7 @@ def test_invalid_page_return_keeps_validator_and_does_not_save(dialog, qapplicat
     assert dialog.isVisible()
 
 
-def _assert_full_member_labels_visible(window, artifact_dir, key):
+def _assert_full_member_labels_visible(window, artifact_dir, key, *, expected_width):
     """Check actual row/text layout, and retain the real 980px rendering when requested."""
     import json
     from math import ceil
@@ -152,7 +152,12 @@ def _assert_full_member_labels_visible(window, artifact_dir, key):
 
     listing = window.group_members_list
     scroll = window.grouping_body_scroll
-    assert window.width() == 980
+    available = window.screen().availableGeometry()
+    assert window.width() == expected_width
+    print('GROUPING_MEMBER_SURFACE ' + json.dumps({
+        'screen': [available.width(), available.height()], 'window': [window.width(), window.height()],
+        'expected_width': expected_width, 'dpr': window.devicePixelRatioF(), 'capture': bool(artifact_dir),
+    }))
     observations = []
     for index, row_id in enumerate((1, 13, 25)):
         item = listing.item(index)
@@ -270,7 +275,17 @@ def test_sqlite_search_return_stays_open_without_committing_parent(
             assert child.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("DUP-1212",)
             assert parent.df_for_grouping is saved
             pd.testing.assert_frame_equal(parent.df_for_grouping, baseline)
-            _assert_full_member_labels_visible(child, os.environ.get("METROLIZA_GROUPING_MEMBER_ARTIFACT_DIR"), key)
+            # Readability includes the user's body scroll; evaluate search/no-commit first.
+            activate_for_key(qapplication_session, child.grouping_body_scroll)
+            QTest.keyClick(child.grouping_body_scroll, Qt.Key.Key_PageDown)
+            qapplication_session.processEvents()
+            artifact_dir = os.environ.get("METROLIZA_GROUPING_MEMBER_ARTIFACT_DIR")
+            available_width = child.screen().availableGeometry().width()
+            expected_width = min(980, max(320, available_width - 40))
+            if artifact_dir:
+                assert available_width >= 980 + 40, 'The declared 980px capture needs its real screen surface'
+                expected_width = 980
+            _assert_full_member_labels_visible(child, artifact_dir, key, expected_width=expected_width)
         except BaseException:
             # Assertions/diagnostics must never escape a Qt timer callback.
             failures.append(traceback.format_exc())

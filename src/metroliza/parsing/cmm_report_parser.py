@@ -413,10 +413,11 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             self.split_text_to_blocks()
             self.add_tolerances()
             self.extract_metadata()
-            return self.to_sqlite(import_if_absent=True)
         except Exception as e:
             self.log_and_exit(e)
             raise
+        # Persistence failures belong to the atomic import's owning workflow.
+        return self.to_sqlite(import_if_absent=True)
 
     def replace_existing_report(self):
         """Deliberately replace this report's existing persisted graph."""
@@ -1377,7 +1378,8 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 self.log_and_exit(e)
             raise
         except Exception as e:
-            self.log_and_exit(e)
+            if not import_if_absent:
+                self.log_and_exit(e)
             raise
 
     def _normalized_rows_for_persistence(self, use_native=False):
