@@ -10,6 +10,15 @@ the ordered #1109, #1142, STEP2+STEP3 and #1063 integrations. The live execution
 the actual merge commits, final branch cut and cleanup receipts. This source-line decision does
 not distribute or publish a packaged candidate.
 
+## Branch-name migration — 2026-11-13
+
+The #960 topology decision names the frozen candidate `rc`, normal integration `dev` and
+production/history `main`. The migration preserves RC1 product source at
+`6dc0554667a842e107bd547fc86aeefedc52aec4` plus reviewed migration config/docs/tests;
+it promotes no later UI content and changes no artifact, build identity or qualification verdict.
+Original ref names in the dated receipts below remain provenance. The coordinator verifies native
+`rc2` → `rc` hosted blob redirects before/after the history-preserving RC1 reconciliation.
+
 ## Current decisions
 
 | Item | State | Evidence / next gate |

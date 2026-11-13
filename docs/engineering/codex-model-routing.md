@@ -240,7 +240,7 @@ tag/deploy, migration, credentials, billing and destructive operations retain se
 
 ## 9. Metroliza-specific evidence binding
 
-Normal base/target: `develop`; `master` is production/history, with the frozen release references
+Normal base/target: `dev`; `main` is production/history, with frozen candidate `rc`
 controlled by the branch decision, not changed by model policy. Canonical `src/metroliza`,
 compatibility-only `modules`, local-first/confidential data, SQLite transactions/publication,
 bounded processing, deterministic cleanup/fallback and offline dashboards remain mandatory.

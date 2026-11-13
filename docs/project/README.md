@@ -151,24 +151,22 @@ a durable project decision. Record it in an Issue, pull request, ADR or active d
 
 ## Repository and branch state
 
-Current decision: 2026-10-27 under [#1153](https://github.com/hexafe/metroliza/issues/1153).
-`release/2026.09-rc1` is the current RC source line, cut from accepted develop after the ordered
-integrations. Final build identity and packaged Windows acceptance remain pending. The two June
-RC2 refs are retained historical evidence with separate #901/#924 cycle closure. No master
-promotion or published release is authorized.
+Current topology decision: 2026-11-13 under [#960](https://github.com/hexafe/metroliza/issues/960).
 
-Historical branch-transition decision date: 2026-08-22. The authoritative rationale and release evidence are in the
-[RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
-and the active [release status](../release_checks/release_status.md).
+- `main` preserves the original `master` production/history product tree; no RC/dev promotion.
+- `dev` continues `develop` as the canonical normal Issue base and PR target.
+- `rc` preserves the frozen RC1 source `6dc0554667a842e107bd547fc86aeefedc52aec4` plus reviewed
+  migration config/docs/tests. Approved release fixes/evidence target it and reconcile into `dev`.
+- Other remote branches are genuinely open, unmerged work with named ownership.
 
-- `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.09-rc1` is the current RC source/evidence branch; distribution needs final artifact qualification.
-- `release/2026.06-rc2` is a retained historical frozen evidence branch.
-- `rc2` is a temporary historical transition/reference alias, not a routine development base.
-- `master` remains the current production/history anchor and is unchanged pending the separate
-  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
-- Normal work branches from and targets `develop`; approved release fixes target the frozen line
-  and must be reconciled into `develop`.
+The original #1153 release cut and
+[2026-08-22 transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+remain historical evidence. Original names, full SHAs, build/receipt provenance and immutable
+bug-sweep baseline are preserved. Native `rc2` → `rc` rename plus history-preserving RC1
+reconciliation must retain frozen-artifact hosted blob redirects, verified by the coordinator.
+See [branching strategy](../release_checks/branching_strategy.md) for current policy and
+[release status](../release_checks/release_status.md) for qualification. Naming does not authorize
+release, candidate UI promotion or new artifact acceptance.
 
 ## Delivery model
 
@@ -185,7 +183,7 @@ product requirement / evidence
 ### Working rules
 
 - Start meaningful implementation from an Issue with testable acceptance criteria.
-- Branch normal work from and target `develop`; use `release/2026.09-rc1` only for approved
+- Branch normal work from and target `dev`; use `rc` only for approved
   release fixes and evidence.
 - Use one primary Issue/outcome per pull request; split broad work before coding.
 - Keep behavior changes separate from structural refactors.

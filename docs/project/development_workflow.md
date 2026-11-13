@@ -17,16 +17,17 @@ slices, use several pull requests and keep the Issue open until all acceptance c
 
 ## 2. Active branch policy
 
-The branch decision and exact validation evidence are recorded in
+Current main/dev/rc roles are defined in [branching strategy](../release_checks/branching_strategy.md).
+The historical branch decision and exact validation evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md).
 
 ### Steady-state repository shape
 
-Keep the remote branch set intentionally small: `master`, `develop`, at most the currently active
-`release/*` line, and branches that are heads of genuinely active PRs. Temporary delivery
+Keep the remote branch set intentionally small: `main`, `dev`, `rc`, and genuinely open, unmerged
+work branches. Temporary delivery
 integration/acceptance branches are explicit exceptions, not a permanent layer.
-The [2026-10-27 branch decision](../release_checks/branching_strategy.md)
-names the two retained historical RC refs and post-RC dependency branches as current finite exceptions.
+The [2026-11-13 topology decision](../release_checks/branching_strategy.md) preserves historical
+source/build provenance while retaining only genuinely open, unmerged work beyond those roles.
 
 Branches are disposable work refs. PRs, commit/tree SHAs, CI runs, artifacts and tags preserve
 history/evidence; keeping an old branch name does not add evidence. Merge closeout marks the source
@@ -39,59 +40,53 @@ and expected-old-value guards.
 
 ### Normal development
 
-- `develop` is the canonical development base.
-- Create feature, fix, refactor, test, security, documentation, and chore branches from `develop`
+- `dev` is the canonical development base.
+- Create feature, fix, refactor, test, security, documentation, and chore branches from `dev`
   unless the Issue is explicitly release-specific.
-- Normal pull requests target `develop`.
-- Broad new work must not target `release/2026.09-rc1`, `rc2`, `release/2026.06-rc2`, or the current production `master`.
+- Normal pull requests target `dev`.
+- Broad new work must not target frozen `rc` or production/history `main`.
 
 ### Current release candidate
 
-- `release/2026.09-rc1` is the current source candidate/evidence line under
-  [#1153](https://github.com/hexafe/metroliza/issues/1153), cut from accepted develop after the ordered integrations.
+- `rc` is the current source candidate/evidence line under
+  [#1153](https://github.com/hexafe/metroliza/issues/1153), originally cut from accepted `develop` (now `dev`) after the ordered integrations.
 - Final candidate build identity and packaged Windows acceptance are pending; qualify the exact artifact before RC distribution.
-- `rc2` and `release/2026.06-rc2` are retained historical evidence, with separate #901/#924 cycle closure.
+- Original `release/2026.09-rc1`, `rc2` and June ref names remain historical evidence; see the topology decision for recovery and redirect compatibility.
 - Only release-blocking fixes, packaging/evidence work, release metadata/notes, and narrowly
-  approved security/legal changes target `release/2026.09-rc1`.
-- Every accepted release-line change is reconciled into `develop` through a reviewed PR or an
+  approved security/legal changes target `rc`.
+- Every accepted release-line change is reconciled into `dev` through a reviewed PR or an
   explicitly recorded equivalent; do not allow a release-only fix to disappear from future work.
 
 ### Transitional and production branches
 
-- `rc2` is retained as a historical transition/reference branch. Do not start new routine work from
-  it or target new routine pull requests at it after #900.
-- `master` remains unchanged until exact candidate automation plus all applicable #901 packaged,
+- `main` remains unchanged until exact candidate automation plus all applicable #901 packaged,
   clean-machine Windows, Google, notices, and legal evidence receives a release-owner Go decision.
 - No force-push, history rewrite, or synthetic branch reconciliation is permitted.
-- GitHub still presents `master` as the default branch, so select the PR base explicitly:
-  `develop` for normal work or `release/2026.09-rc1` for approved current release work.
+- The accepted topology designates `main` as default; select the PR base explicitly:
+  `dev` for normal work or `rc` for approved current release work.
 
 ### PR template publication
 
 [GitHub serves PR templates from the default branch](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/creating-a-pull-request-template-for-your-repository).
-Merging this policy to `develop` activates repository guidance but does not update the form
-auto-filled from `master`. The coordinator owns the following mandatory interim procedure for
+Merging this policy to `dev` activates repository guidance but does not update the form
+auto-filled from `main`. The coordinator owns the following mandatory interim procedure for
 new PRs and the next safe update of an existing PR:
 
-1. Read `.github/pull_request_template.md` from an exact accepted `develop` commit. Before #1063
+1. Read `.github/pull_request_template.md` from an exact accepted `dev` commit. Before #1063
    merges, use the exact candidate template admitted by the #1061 packet and identify it as such.
 2. Explicitly apply that template to the PR body (for example, edit a local body file and use
    `gh pr create --body-file` or `gh pr edit --body-file`). Merge required fields into an existing
    body without losing its evidence. Do not rely on the automatically selected template.
 3. Record the template source commit and verify the published body contains its lifecycle,
    routing/authority and closeout controls, with applicable evidence or explicit pending status.
-   Check repository links in the PR-body context; absolute `blob/develop/...` links are used in
+   Check repository links in the PR-body context; absolute `blob/dev/...` links are used in
    the template. Bind acceptance evidence separately to immutable commits, not those moving links.
 
-Default-branch synchronization is tracked in #1061 and belongs to the release owner. In the next
-approved release synchronization packet, include the exact accepted develop template among the
-documentation promoted through the reviewed release PR into `master`. If the frozen RC is used,
-first obtain the narrowly scoped documentation approval and triage required by the release rules;
-all existing #901 evidence and release-owner Go gates remain. After authorized promotion, compare
-the template blob on `master` with the accepted source and verify the auto-filled PR body. Only
-then record automatic-template activation in #1061. Until then the explicit procedure above remains
-mandatory. This policy does not authorize an early write to `master`, a default-branch change or a
-release bypass. A template-only early synchronization would require its own explicit PO packet.
+The 2026-11-13 #960 topology packet admits a governance-only synchronization of the accepted
+template to default `main`, separately from product release promotion. After that reviewed change,
+compare its blob with the exact accepted `dev` source and verify the auto-filled PR body before
+recording activation in #1061. Until verified, the explicit procedure above remains mandatory.
+Template synchronization does not waive candidate qualification or authorize release promotion.
 
 ## 3. Issue lifecycle
 
@@ -136,7 +131,7 @@ An Issue is ready when:
 - [ ] intended outcome and non-goals are stated;
 - [ ] acceptance criteria are testable;
 - [ ] affected package/workflow is identified;
-- [ ] target branch (`develop` or approved release branch) is identified;
+- [ ] target branch (`dev` or approved release branch) is identified;
 - [ ] compatibility/data migration risk is identified;
 - [ ] validation tier and likely focused tests are named;
 - [ ] dependencies are resolved or linked;
@@ -156,7 +151,7 @@ docs/<issue>-short-description
 test/<issue>-short-description
 security/<issue>-short-description
 chore/<issue>-short-description
-release/YYYY.MM-rcN
+rc
 hotfix/<version>-short-description
 ```
 
@@ -180,7 +175,7 @@ Implementation rules:
 - Do not commit generated local artifacts unless the repository explicitly tracks that artifact
   and its regeneration contract.
 - Release-line work must remain within the frozen candidate scope and name its reconciliation path
-  to `develop`.
+  to `dev`.
 
 ### 3.5 Pull request
 
@@ -193,7 +188,7 @@ A pull request must:
 - identify validation tier and exact commands/results;
 - call out schema, public contract, packaging, security, native, Google, dashboard, or compatibility
   impact;
-- explain release-to-`develop` reconciliation when it targets a release branch;
+- explain release-to-`dev` reconciliation when it targets a release branch;
 - remain small enough to review or explain why a larger integration PR is unavoidable.
 
 Do not use “tests pass” as evidence without the command, result, or CI run. Do not mark a manual gate
@@ -211,7 +206,7 @@ Review checks:
 - sensitive data is absent;
 - documentation/release evidence is synchronized;
 - rollback is possible;
-- release fixes have a documented reconciliation path into `develop`.
+- release fixes have a documented reconciliation path into `dev`.
 
 Preferred merge style for normal work is squash when repository policy/settings allow it, so one
 Issue slice becomes one understandable commit. Release reconciliation may use a different method
@@ -224,7 +219,7 @@ only when history/evidence requires it.
 - [ ] CI is terminal for the exact merged content/tree.
 - [ ] Documentation and changelog/release evidence are updated when applicable.
 - [ ] Compatibility/data migration and rollback are complete.
-- [ ] Release-line work is reconciled into `develop` or has an explicit tracked blocker.
+- [ ] Release-line work is reconciled into `dev` or has an explicit tracked blocker.
 - [ ] Temporary files/flags/dead plans are removed or explicitly tracked.
 - [ ] Follow-up work has separate Issues rather than hidden TODOs.
 - [ ] The primary Issue is closed by the merge or closed with a final evidence comment.
@@ -405,12 +400,12 @@ Historical June RC2 flow (preserved for separate cycle closure):
 
 Current September RC1 and future normal flow:
 
-1. develop features/refactors on Issue branches from `develop`;
-2. cut `release/YYYY.MM-rcN` when scope freezes;
+1. develop features/refactors on Issue branches from `dev`;
+2. prepare approved feature-freeze scope on existing `rc` through a reviewed release PR;
 3. allow only fixes, evidence, version metadata, and release documentation on the release branch;
 4. validate exact head automatically and manually;
-5. merge approved release into `master` and tag `vYYYY.MM`;
-6. sync the production result back to `develop`;
+5. merge approved release into `main` and tag `vYYYY.MM`;
+6. sync the production result back to `dev`;
 7. archive completed release plans/evidence appropriately.
 
 ## 9. AI-assisted development rules
@@ -419,7 +414,7 @@ AI tools may inspect GitHub, propose plans, edit bounded branches, create Issues
 results. They do not replace review/evidence.
 
 - Begin from the Issue and read current branch/code/docs before proposing a change.
-- Verify the target branch explicitly; do not rely on GitHub's default `master` selection.
+- Verify the target branch explicitly; do not rely on GitHub's default `main` selection.
 - Do not invent repository state or claim tests were run without an actual result.
 - Do not make one product-wide commit when the work can be reviewed in slices.
 - Keep private reasoning out of commits/Issues; record the decision, evidence, and trade-off.

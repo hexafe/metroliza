@@ -119,12 +119,12 @@ on hosted runners.
 - [ ] The RC is merged only after evidence review:
 
 ```bash
-RELEASE_BRANCH="release/YYYY.MM-rcN" # Exact approved branch from the dated release evidence.
-git checkout master
-git pull --ff-only origin master
+RELEASE_BRANCH="rc" # Exact approved source SHA/build is bound in dated release evidence.
+git checkout main
+git pull --ff-only origin main
 git merge --no-ff "$RELEASE_BRANCH"
 ```
 
 - [ ] The release tag is created from the reviewed merge commit and pushed.
-- [ ] The production result is reconciled into `develop` through a reviewed PR.
+- [ ] The production result is reconciled into `dev` through a reviewed PR.
 - [ ] Final artifact hashes, publication location, announcement, and post-release monitoring owner are recorded.

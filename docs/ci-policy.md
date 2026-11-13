@@ -7,8 +7,8 @@ This policy defines the **required CI checks** and Tier-0 selection implemented 
 
 - CI is triggered on:
   - every `pull_request`, without path or target-branch filtering;
-  - direct `push` to `master`, `main`, `develop`, `rc2`, `integrate/**`, `release/**`,
-    `hotfix/**` and `build/**` (RC artifacts are cut from build branches), including
+  - direct `push` to `main`, `dev`, `rc` (plus transition compatibility `master`, `develop`,
+    `rc2`), `integrate/**`, `release/**`, `hotfix/**` and `build/**` (RC artifacts are cut from build branches), including
     nested names;
   - `workflow_dispatch`, with the existing opt-in qualification inputs.
 - Topic branches use PR CI only. A topic push without an open PR has no automatic CI;

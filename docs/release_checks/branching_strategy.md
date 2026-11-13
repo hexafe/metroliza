@@ -5,26 +5,28 @@ work. Current RC roles and qualification are recorded in [release status](releas
 The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
-## 0) Active repository state — decision 2026-10-27
+## 0) Active repository state — topology decision 2026-11-13
 
-Under [#1153](https://github.com/hexafe/metroliza/issues/1153), integrate #1109, #1142, the accepted
-STEP2+STEP3 aggregate and refreshed #1063 into develop using merge commits, then cut
-`release/2026.09-rc1` from the accepted final develop. Exact commits, trees and gates are in that
-execution ledger. Current candidate source is distinct from final packaged qualification.
+The accepted [#960 cleanup](https://github.com/hexafe/metroliza/issues/960) establishes literal
+`main`, `dev`, `rc`, plus genuinely open, unmerged work. `main` retains the old `master` product
+state; `dev` continues `develop`; `rc` retains the frozen RC1 source
+`6dc0554667a842e107bd547fc86aeefedc52aec4` plus reviewed migration configuration/docs/tests.
+This changes no build identity and promotes no newer development/UI content to RC or production.
 
-Keep seven refs after the finite cleanup: master, develop, release/2026.09-rc1, historical rc2,
-historical release/2026.06-rc2, and the dependency branches for #972/#973. The two historical refs
-and two dependency branches are named exceptions to the ordinary small branch set. They remain
-until their own lifecycle/update criteria are met. No master promotion or published release.
+The migration uses GitHub's native historical `rc2` → `rc` rename, then a history-preserving PR
+from the active RC1 line. Verify old `blob/rc2/` links redirect and all six scaffold paths resolve
+before and after reconciliation: frozen artifacts still generate those links. Do not recreate
+`rc2`; retain immutable archive/recovery refs and original adverse receipts. Remote execution,
+settings, exact-ref retirement and redirect acceptance belong to the coordinator's #960 ledger.
 
-Final build identity and Windows packaged EXE acceptance are pending. Before RC distribution,
-qualify the exact final artifact per release_status and the RC checklist; do not reuse historical
-build261021 metadata. Archive source/provenance separately. Preserve history, retained recovery
-refs, original adverse receipts and expected-old-SHA deletion guards.
+The original RC cut under [#1153](https://github.com/hexafe/metroliza/issues/1153) and historical
+source/build receipts keep their original ref names. Renaming is separate from distribution,
+packaged qualification, cycle closure and release-owner Go. Select `dev` for normal Issue work
+and `rc` only for approved frozen-candidate fixes/evidence; never infer a base from GitHub default.
 
-Newly admitted release work must select its base explicitly: normally `develop`, or the current
-`release/2026.09-rc1` after its source cut. The June base selection in the historical decision below
-applies only to explicitly admitted historical cycle work; it is not the current RC default.
+Dependabot version updates target `dev`; GitHub reads the configuration from default `main`.
+Security updates target the default branch separately and require applicable reviewed
+reconciliation into `dev` and `rc`. Schedules, groups and limits remain unchanged.
 
 ## 0.1) Historical repository state — decision 2026-08-22
 
@@ -50,7 +52,7 @@ third-party notice/artifact, and legal/release-owner evidence remains open in #9
 - branch reorganization: **Go**;
 - `master` promotion/stable tag: **No-Go pending #901**.
 
-Because GitHub still presents `master` as the default branch, every new pull request must select
+At that historical decision, GitHub presented `master` as default; each pull request had to select
 its base explicitly: normally `develop`, or `release/2026.06-rc2` for approved release work.
 
 Dependabot is an explicit platform exception. The checked-in `.github/dependabot.yml` policy sets
@@ -63,17 +65,17 @@ must be reconciled into `develop` and any active release line where applicable.
 
 ## 1) Branch purposes
 
-### `master`
+### `main`
 
-`master`: current production-ready branch and historical/default production anchor. It represents
+`main`: current production-ready branch and historical/default production anchor. It represents
 the last accepted production state; the historical `2026.06 RC2` candidate is not approved for
 promotion while #901 remains open. Only reviewed, release-owner-approved candidate merges and
 minimal production hotfixes belong here.
 
-`master` is not a development base. Its default-branch status does not authorize feature/refactor
+`main` is not a development base. Its default-branch status does not authorize feature/refactor
 work or promotion from an unvalidated branch.
 
-### `develop`
+### `dev`
 
 Integration branch for active Issue-driven development:
 
@@ -83,40 +85,39 @@ Integration branch for active Issue-driven development:
 - tests, documentation, security, dependencies, and shared-package work;
 - future release preparation before feature freeze.
 
-Normal Issue branches start from and target `develop`.
+Normal Issue branches start from and target `dev`.
 
-### `release/2026.09-rc1`
+### `rc`
 
-Current candidate source/evidence line, cut from accepted develop under #1153. Only approved
+Current candidate source/evidence line, originally cut from accepted `develop` under #1153. Only approved
 release fixes, qualification evidence and reviewed candidate metadata belong here after freeze.
-Reconcile accepted fixes into develop. Final build/EXE qualification and release-owner Go remain
+Reconcile accepted fixes into `dev`. Final build/EXE qualification and release-owner Go remain
 separate from the source cut and repository cleanup.
 
-### `release/2026.06-rc2`
+### Historical `release/2026.06-rc2`
 
-Historical frozen stabilization/evidence branch; retain it unchanged for separate #901/#924
-cycle closure. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
+Historical frozen stabilization/evidence source; preserve its original recovery/provenance for #901/#924
+cycle closure. Its old branch name is not a standing retention requirement. The following original restrictions continue for explicitly admitted historical fixes. Allowed changes are limited to:
 
 - release-blocking defects;
 - packaging/clean-machine fixes;
 - release checks, evidence, notes, and metadata;
 - narrowly approved security/legal-notice changes.
 
-Every accepted release-line fix must be reconciled into `develop`. No feature expansion, broad
+Every accepted release-line fix must be reconciled into `dev`. No feature expansion, broad
 refactor, convenience dependency upgrade, or visual redesign enters this branch without the formal
 late-scope exception process.
 
-### `rc2`
+### Historical `rc2`
 
-Historical transition/reference branch. It preserves the long-running ad-hoc RC development line
-and external references during the transition. Do not branch new work from it or target routine
-pull requests at it after #900. Retire it only through a separate explicit cleanup after release
-reconciliation.
+Historical transition/reference source. The native #960 rename to `rc` preserves hosted
+`blob/rc2/` redirects for frozen artifacts. Do not recreate the old ref or target new work at it.
+Archive tags retain the original exact commit/tree; a redirect is compatibility, not immutable content.
 
 ### `hotfix/*`
 
-Urgent production-fix branches cut from `master` after a stable release. They merge into `master`
-and are then reconciled into `develop` and any active release line as applicable.
+Urgent production-fix branches cut from `main` after a stable release. They merge into `main`
+and are then reconciled into `dev` and any active release line as applicable.
 
 ### Issue branches
 
@@ -148,54 +149,50 @@ branches instead of one product-wide change set.
 
 ## 3) Release and hotfix naming
 
-- Release candidate branches: `release/YYYY.MM-rcN`
-  - Current: `release/2026.09-rc1`
-  - Historical retained example: `release/2026.06-rc2`
-- Hotfix branches: `hotfix/<version>-<description>`
-  - Example: `hotfix/2026.09.1-startup-fix`
+- The active candidate uses persistent `rc`; version/tag names retain `YYYY.MM-rcN` numbering.
+- Hotfix branches: `hotfix/<version>-<description>` (for example `hotfix/2026.09.1-startup-fix`).
 
-Future candidate creation:
+At feature freeze, prepare the approved exact `dev` scope on existing `rc` through a reviewed,
+history-preserving PR and release decision. Do not reset or recreate it. Candidate iterations
+advance the same `rc` with reviewed fixes and fresh immutable candidate tags/evidence.
 
 ```bash
-git checkout develop
-git pull --ff-only origin develop
-git checkout -b release/2026.09-rc1
-git push -u origin release/2026.09-rc1
+git checkout rc
+git pull --ff-only origin rc
+# Prepare the approved dev scope through a reviewed release PR; do not merge unapproved scope.
 ```
-
-Do not reuse the historical bare `rc2` naming pattern for future cycles.
 
 ## 4) Merge directions
 
 ### Normal development
 
 ```text
-Issue branch -> develop
+Issue branch -> dev
 ```
 
 ### Current/future release stabilization
 
 ```text
-develop -> release/YYYY.MM-rcN    (branch cut at feature freeze)
-release-fix branch -> release/YYYY.MM-rcN
-accepted release fix -> develop   (reviewed reconciliation)
-approved release/YYYY.MM-rcN -> master
-master -> develop                  (post-release synchronization)
+dev -> rc                         (reviewed approved feature-freeze scope)
+release-fix branch -> rc
+accepted release fix -> dev   (reviewed reconciliation)
+approved rc -> main
+main -> dev                  (post-release synchronization)
 ```
 
 ### Production hotfix
 
 ```text
-master -> hotfix/<version>-...
-hotfix -> master
-hotfix result -> develop and active release branch where applicable
+main -> hotfix/<version>-...
+hotfix -> main
+hotfix result -> dev and active release branch where applicable
 ```
 
-No direct feature/refactor merge into `master`, `rc2`, or a frozen release branch.
+No direct feature/refactor merge into `main` or frozen `rc`.
 
 ## 5) Allowed change types per branch
 
-### `master`
+### `main`
 
 Allowed:
 
@@ -210,7 +207,7 @@ Not allowed:
 - broad refactors;
 - work based on stale branch assumptions.
 
-### `develop`
+### `dev`
 
 Allowed:
 
@@ -225,7 +222,7 @@ Not allowed:
 - unrelated scope bundled into one branch;
 - secret/proprietary fixtures.
 
-### `release/*`
+### `rc`
 
 Allowed:
 
@@ -245,11 +242,6 @@ Late-scope exception: after feature freeze, a scope-expanding change enters the 
 `implementation_item_triage.md` records the rationale, owner, target RC, test evidence,
 rollback/deferral option, and explicit release-owner approval. Manual release evidence still
 applies.
-
-### `rc2`
-
-Allowed only for an explicit transition-maintenance decision before retirement. Routine work is not
-allowed.
 
 ### `hotfix/*`
 
@@ -272,7 +264,7 @@ Not allowed:
 - CI evidence must be terminal for the exact PR head/content tree.
 - Behavior changes and structural refactors should be separate PRs.
 - A large integration PR must explain why it could not be safely split.
-- Release-line PRs must document reconciliation into `develop`.
+- Release-line PRs must document reconciliation into `dev`.
 - Avoid force-push after release evidence/review starts; if unavoidable, invalidate and rerun exact
   head evidence.
 - Prefer squash merge for normal Issue slices when repository settings permit it.
@@ -281,9 +273,9 @@ Not allowed:
 
 ## 7) Tagging rules
 
-- Tag each approved release candidate on the matching `release/*` branch using an annotated tag:
+- Tag each approved release candidate on the matching `rc` branch using an annotated tag:
   `vYYYY.MM-rcN`.
-- After production promotion, tag the approved merge commit on `master` as `vYYYY.MM`.
+- After production promotion, tag the approved merge commit on `main` as `vYYYY.MM`.
 - Do not move or recreate a published tag. Create a new `-rcN` or patch version.
 - Hotfix versions must progress monotonically according to the selected release scheme.
 - Do not tag `release/2026.06-rc2` as stable until #901 and the final release-owner decision are
@@ -294,9 +286,9 @@ Not allowed:
 The intended steady state is deliberately small:
 
 ```text
-master                 # production/history anchor (rename to main is a separate repository decision)
-develop                # canonical integration branch
-release/YYYY.MM-rcN    # only while that release/evidence cycle is active
+main                  # production/history anchor
+dev                   # canonical integration branch
+rc                    # frozen candidate/evidence line
 <active PR heads>      # feature/fix/docs/test/chore/etc. currently being reviewed or integrated
 ```
 
@@ -342,7 +334,7 @@ the branch list shorter.
 
 ### Temporary integration stacks are exceptions
 
-Normal work starts from and targets `develop`. A delivery may temporarily use an integration branch
+Normal work starts from and targets `dev`. A delivery may temporarily use an integration branch
 and, when genuinely required, one acceptance/package branch. Such a stack must have:
 
 - one delivery owner;
@@ -393,8 +385,6 @@ long-lived refs plus genuinely active PR heads.
 
 ### Long-lived and historical release refs
 
-Keep `develop` and `master` in their current roles. Keep an active `release/*` branch only while
-its release/evidence cycle is open. Prefer immutable tags for historical release points rather than
-keeping old release branches indefinitely. Retire the historical `rc2` only through its recorded
-release-transition decision; default-branch renaming and release promotion remain separate actions.
-
+Keep `main`, `dev` and `rc` in their accepted roles. Preserve historical release points through
+verified immutable recovery tags/refs. Retire superseded source branches only through the exact-ref
+cleanup gate; source-name cleanup and release promotion remain separate actions.
