@@ -858,7 +858,10 @@ def test_d2_typing_round_trip_preserves_applied_async_preview_and_assignment(tmp
         dialog.selector_search.setText("line=A")
         dialog.selector_search.returnPressed.emit()
         read_allowed.set()
-        assert _process_events_until(lambda: not dialog._selector_preview_threads)
+        assert _process_events_until(lambda: (
+            dialog._selector_preview_rendered_request_id == request
+            and not dialog._selector_preview_threads
+        ))
         assert dialog.selector_list.count() == 2, "typing discarded the applied predicate's preview"
         assert dialog._selector_preview_request_id == request
         assert dialog._selector_preview_loading_dialog is None, "dropped request left the duck open"
