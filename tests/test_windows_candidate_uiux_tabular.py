@@ -24,7 +24,7 @@ EXPECTED_CAPTURES = {'csv-busy', 'csv-resumed', 'grouping-members', 'filter-scop
 
 def _closed(observation):
     assert set(observation) == {'schema_version', 'status', 'facets', 'error_codes', 'evidence'}
-    assert observation['schema_version'] == 1 and observation['status'] in {'PASS', 'FAIL'}
+    assert observation['schema_version'] == 1 and observation['status'] in {'passed', 'failed'}
     assert set(observation['facets']) == EXPECTED_FACETS
     assert all(value in {'passed', 'failed'} for value in observation['facets'].values())
     assert all(code in checks.ERROR_CODES for code in observation['error_codes'])
@@ -32,7 +32,7 @@ def _closed(observation):
     assert set(evidence) == {'fixture_hashes', 'csv', 'filter', 'grouping', 'captures', 'cleanup', 'failure'}
     if evidence['failure'] is not None:
         assert set(evidence['failure']) == {'phase', 'type', 'callback_errors'}
-    if observation['status'] != 'PASS':
+    if observation['status'] != 'passed':
         assert observation['error_codes']
         return
     assert not observation['error_codes'] and evidence['failure'] is None
@@ -66,7 +66,7 @@ def test_tabular_acceptance_import_and_missing_gate_are_lazy(tmp_path):
 import json, sys
 from metroliza.app.windows_candidate_uiux_tabular import run_tabular_checks
 r = run_tabular_checks('.', '.', expected_dpr=1, capture=None)
-assert r['status'] == 'FAIL' and r['error_codes'] == ['tabular_gate_missing']
+assert r['status'] == 'failed' and r['error_codes'] == ['tabular_gate_missing']
 assert not any(n == 'PyQt6' or n.startswith('PyQt6.') or n.startswith('metroliza.ui.') for n in sys.modules)
 print(json.dumps(r))
 '''
@@ -171,7 +171,7 @@ def test_actual_tabular_journeys_and_real_source_capture_contract(qapplication_s
     (tmp_path / 'capture-scope.json').write_text(json.dumps({'implementation': 'real source-test QWidget.grab',
                                                           'shared_capture_host_integration': 'NOT_RUN'}, indent=2)+'\n')
     _closed(result)
-    assert result['status'] == 'PASS', {key: result[key] for key in ('status', 'facets', 'error_codes', 'evidence')}
+    assert result['status'] == 'passed', {key: result[key] for key in ('status', 'facets', 'error_codes', 'evidence')}
     evidence = result['evidence']
     assert evidence['csv']['source_rows'] == 8 and evidence['csv']['rows'] == 4
     assert evidence['csv']['values'] == [10, 30, 50, 70]

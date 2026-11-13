@@ -605,7 +605,7 @@ class _Journey:
 
 def run_tabular_checks(scratch, fixtures, *, expected_dpr, capture):
     """Run only inside the existing double opt-in, using its retained QApplication."""
-    observation = {'schema_version': SCHEMA_VERSION, 'status': 'FAIL', 'facets': {name: 'failed' for name in FACETS},
+    observation = {'schema_version': SCHEMA_VERSION, 'status': 'failed', 'facets': {name: 'failed' for name in FACETS},
                    'error_codes': [], 'evidence': {'fixture_hashes': {}, 'csv': None, 'filter': None, 'grouping': None,
                    'captures': {}, 'cleanup': None, 'failure': None}}
     journey = None
@@ -636,5 +636,5 @@ def run_tabular_checks(scratch, fixtures, *, expected_dpr, capture):
                 if observation['evidence']['failure'] is None:
                     observation['evidence']['failure'] = {'phase': 'cleanup', 'type': type(error).__name__, 'callback_errors': journey.callback_errors[:8]}
     if not observation['error_codes'] and all(value == 'passed' for value in observation['facets'].values()):
-        observation['status'] = 'PASS'
+        observation['status'] = 'passed'
     return observation
