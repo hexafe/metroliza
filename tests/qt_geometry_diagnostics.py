@@ -53,9 +53,12 @@ def _snapshot(window, requested, pinned):
                 rows.append({"index": index, "geometry_diagnostic_error": type(error).__name__})
         return {"count": layout.count(), "items": rows, "not_measured": max(0, layout.count() - 8)}
 
-    def layout_info(widget):
+    def get_layout(widget):
         value = getattr(widget, "layout", None)
-        layout = value() if callable(value) else value
+        return value() if callable(value) else value
+
+    def layout_info(widget):
+        layout = get_layout(widget)
         if layout is None:
             return None
         width = widget.width()
@@ -113,7 +116,7 @@ def _snapshot(window, requested, pinned):
         "size": size(window.size()),
         "frame": rectangle(window.frameGeometry()),
         "root": widget_info(window),
-        "root_items": direct_items(window.layout()),
+        "root_items": direct_items(get_layout(window)),
         "native_window_minimum": size(window.windowHandle().minimumSize()) if window.windowHandle() is not None else None,
         "finalization": finalization,
         "qt": QT_VERSION_STR,
@@ -155,7 +158,7 @@ def _snapshot(window, requested, pinned):
         })
     controls = tuple(control for name in ("apply_button", "cancel_button", "close_button")
                      if (control := getattr(window, name, None)) is not None)
-    root_layout = window.layout()
+    root_layout = get_layout(window)
     if root_layout is not None:
         for index in range(min(root_layout.count(), 8)):
             item = root_layout.itemAt(index)
@@ -168,7 +171,7 @@ def _snapshot(window, requested, pinned):
                 member is control for member in members for control in controls
             )
             if owns_controls and len(result["footers"]) < 3:
-                footer_layout = widget.layout() if widget is not None else nested
+                footer_layout = get_layout(widget) if widget is not None else nested
                 result["footers"].append({
                     "root_item_index": index,
                     "widget": widget_info(widget) if widget is not None else None,
