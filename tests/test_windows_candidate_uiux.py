@@ -116,7 +116,9 @@ def test_actual_sql_mutation_rejects_even_if_producer_claims_passed(tmp_path, re
             elif defect == 'source_identity':
                 connection.execute("UPDATE source_files SET sha256=? WHERE id=1", ('0' * 64,))
             elif defect == 'extra_measurement':
-                connection.execute('INSERT INTO report_measurements(report_id,row_order) VALUES(1,999)')
+                connection.execute('''INSERT INTO report_measurements(report_id,row_order,status_code)
+                    SELECT report_id,999,status_code FROM report_measurements ORDER BY id LIMIT 1''')
+                assert connection.execute('SELECT COUNT(*) FROM report_measurements WHERE report_id=1').fetchone() == (145,)
             else:
                 connection.execute("INSERT INTO source_files(sha256,source_format,discovered_at) VALUES(?,'pdf','2026')", ('a' * 64,))
             connection.commit()

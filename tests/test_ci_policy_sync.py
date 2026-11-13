@@ -674,6 +674,7 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'tests/test_industrial_onboarding_presentation.py',
         'tests/test_industrial_onboarding_delta.py',
         'tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters',
+        'tests/test_csv_progress_nonmodal.py',
     ]
 
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
