@@ -923,7 +923,8 @@ def test_actual_three_slices_and_independent_retained_assets(qapplication_sessio
     value = uiux.load_json(output / 'uiux-observation.json')
     oracle, _ = uiux.load_inputs(FIXTURES)
     options = dict(source=source, packaged=False, dpr=dpr, qpa='windows')
-    uiux.verify(output, value, oracle, **options)
+    evidence = uiux.validate(value, oracle, **options)
+    uiux.verify_assets(output, evidence, oracle, dpr=dpr, inert=True)
     snapshot = uiux.snapshot_assets(output, value['evidence']['captures']['metadata'],
                                     value['evidence']['data'], dpr=dpr)
     assert len(snapshot) == 17
