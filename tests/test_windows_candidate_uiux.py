@@ -360,11 +360,13 @@ def test_oversized_xlsx_declaration_is_rejected_before_openpyxl(tmp_path, monkey
 
 def _authored_html():
     charts = ''.join(f'<section id="chart-{name}-value"></section>' for name in ('time-series', 'histogram', 'violin', 'box'))
+    lightbox = ('<dialog id="chart-lightbox"><div id="chart-lightbox-title"></div>'
+                '<button id="chart-lightbox-close">Close</button><div id="chart-lightbox-plotly"></div></dialog>')
     return ('<!doctype html><html><head><title>Metroliza CSV Summary Dashboard</title>'
             '<script src="analysis_assets/plotly-2.27.0.min.js"></script></head><body>'
             '<header id="dashboard-start">analysis.csv</header><details id="run-notes">'
             'Rows rendered 4 Metrics 1 Filters Applied CSV/Excel row filter reduced rows from 8 to 4.'
-            ' Min 10.000 Max 70.000 Mean 40.000 Samples 4</details>' + charts + '</body></html>')
+            ' Min 10.000 Max 70.000 Mean 40.000 Samples 4</details>' + charts + lightbox + '</body></html>')
 
 
 def test_static_html_oracle_preserves_authored_input(tmp_path):
@@ -375,7 +377,8 @@ def test_static_html_oracle_preserves_authored_input(tmp_path):
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize('defect', ['row_count', 'mean', 'hidden_markers', 'external_script', 'missing_chart', 'extra_chart'])
+@pytest.mark.parametrize('defect', ['row_count', 'mean', 'hidden_markers', 'external_script', 'missing_chart', 'extra_chart',
+    'missing_lightbox', 'unknown_lightbox', 'duplicate_lightbox', 'wrong_lightbox_tag', 'duplicate_chart', 'wrong_chart_tag'])
 def test_html_requires_literal_text_outside_scripts_and_known_local_resources(tmp_path, defect):
     path = tmp_path / 'analysis.html'
     text = _authored_html()
@@ -389,8 +392,20 @@ def test_html_requires_literal_text_outside_scripts_and_known_local_resources(tm
         text = text.replace('analysis_assets/plotly-2.27.0.min.js', 'https://invalid.example/plotly.js')
     elif defect == 'missing_chart':
         text = text.replace('id="chart-box-value"', 'id="missing-box"')
-    else:
+    elif defect == 'extra_chart':
         text += '<section id="chart-extra-value"></section>'
+    elif defect == 'missing_lightbox':
+        text = text.replace('id="chart-lightbox-plotly"', 'id="missing-lightbox-plotly"')
+    elif defect == 'unknown_lightbox':
+        text += '<div id="chart-lightbox-unknown"></div>'
+    elif defect == 'duplicate_lightbox':
+        text += '<button id="chart-lightbox-close">Close</button>'
+    elif defect == 'wrong_lightbox_tag':
+        text = text.replace('<dialog id="chart-lightbox">', '<div id="chart-lightbox">').replace('</dialog>', '</div>')
+    elif defect == 'duplicate_chart':
+        text += '<section id="chart-box-value"></section>'
+    else:
+        text = text.replace('<section id="chart-box-value"></section>', '<div id="chart-box-value"></div>')
     path.write_text(text)
     with pytest.raises(uiux.UiuxVerificationFailure):
         uiux.html(path)

@@ -262,6 +262,7 @@ class _HtmlFacts(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.hidden, self.parts, self.ids, self.resources = 0, [], {}, []
+        self.tags = {}
 
     def handle_starttag(self, tag, attrs):
         if tag in ('script', 'style'):
@@ -270,6 +271,7 @@ class _HtmlFacts(HTMLParser):
             if key == 'id':
                 require(type(value) is str and len(value) <= 256 and len(self.ids) < 2048)
                 self.ids[value] = self.ids.get(value, 0) + 1
+                self.tags[value] = tag
             if key in ('src', 'href') and value and not value.startswith(('data:', '#')):
                 require(len(self.resources) < 16)
                 self.resources.append((tag, key, value))
@@ -295,8 +297,12 @@ def html(path):
                    'Min 10.000', 'Max 70.000', 'Mean 40.000', 'Samples 4'):
         require(phrase in visible, 'uiux_html_mismatch')
     charts = {name: count for name, count in facts.ids.items() if name.startswith('chart-')}
-    literal(charts, dict.fromkeys(('chart-time-series-value', 'chart-histogram-value',
-                                  'chart-violin-value', 'chart-box-value'), 1))
+    elements = {name: 'section' for name in ('chart-time-series-value', 'chart-histogram-value',
+                                             'chart-violin-value', 'chart-box-value')}
+    elements.update({'chart-lightbox': 'dialog', 'chart-lightbox-title': 'div',
+                     'chart-lightbox-close': 'button', 'chart-lightbox-plotly': 'div'})
+    literal(charts, dict.fromkeys(elements, 1))
+    literal({name: facts.tags[name] for name in charts}, elements)
     require(facts.ids.get('dashboard-start') == facts.ids.get('run-notes') == 1, 'uiux_html_mismatch')
     literal(facts.resources, [('script', 'src', 'analysis_assets/plotly-2.27.0.min.js')])
     require(sha(path) == before, 'uiux_asset_changed')
