@@ -29,18 +29,29 @@ under `docs/release_checks/`.
 
 ## 2. Current repository and product state
 
-Current RC source-line decision: 2026-10-27 under #1153. Historical branch-transition rationale remains in
-[`rc2_branch_transition_decision_2026-08-22.md`](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
-and [`release_status.md`](../release_checks/release_status.md).
+Current topology decision: 2026-11-13 under
+[#960](https://github.com/hexafe/metroliza/issues/960), as defined by the accepted
+[branching strategy](../release_checks/branching_strategy.md).
 
-- `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.09-rc1` is the current RC source/evidence line; exact accepted source and cut receipt are in #1153.
-- The 2026.06 RC2 cycle closed without a release (#901); `release/2026.06-rc2` was retired (recovery tag `archive/2026.06-rc2/final`).
-- `rc2` is a temporary historical transition/reference alias, not a routine development base.
-- `master` remains the current production/history anchor and is unchanged pending the separate
-  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
-- Canonical release metadata lives in `src/metroliza/app/version.py`. The September RC1 source cut
-  does not assign a new final build identity or replace packaged/manual evidence required for distribution and promotion.
+- `dev` is the canonical branch for normal Issue-driven development and integration.
+- `rc` is the frozen candidate source/evidence line, continuing the original `release/2026.09-rc1`
+  cut under #1153; original accepted source/cut receipts retain their historical names and SHAs.
+- `main` is the GitHub default and production/history anchor. The name changes do not promote
+  development or candidate product code or satisfy the release-owner decision.
+- Historical June RC2 source is recoverable through `archive/2026.06-rc2/final`, not an accepted
+  release. The historical `rc2` name was renamed to `rc` for hosted-blob compatibility; preserve
+  the redirect and immutable recovery controls in #960.
+- Canonical release metadata lives in `src/metroliza/app/version.py`. Branch topology does not
+  assign a new build identity or replace exact packaged/manual evidence required for distribution
+  and promotion under the [current release status](../release_checks/release_status.md),
+  [release candidate checklist](../release_checks/release_candidate_checklist.md) and release-owner decision.
+
+The original 2026-10-27 source cut under #1153, the
+[2026-08-22 branch-transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+and [release status](../release_checks/release_status.md) retain their historical evidence and
+separate qualification/release gates. References to [#901](https://github.com/hexafe/metroliza/issues/901)
+below identify the historical June RC2 cycle, closed without a release; its closure does not satisfy
+current candidate promotion gates.
 
 ## 3. Roadmap overview
 
@@ -120,7 +131,7 @@ planning sources.
 - every remote branch has a documented role/disposition;
 - no active work depends only on a chat or stale roadmap checklist;
 - the accepted candidate content and branch decision are recorded without force-push/history rewrite;
-- `develop` is named as the canonical development base;
+- `dev` is named as the canonical development base under the accepted #960 branching strategy;
 - repository settings support issue/PR-driven work;
 - `docs/project/` is the planning entry point and `docs/release_checks/` remains release evidence.
 
