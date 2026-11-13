@@ -159,6 +159,65 @@ def _stage(tmp_path):
     return root
 
 
+def test_post_owner_admission_failure_closes_real_owner_and_joins_worker(
+    qapplication_session, tmp_path, monkeypatch,
+):
+    from threading import Event
+    from PyQt6 import sip
+    from metroliza.app import windows_candidate_native_check as native
+    from metroliza.parsing.preflight import ParsePreflightService
+    _gates(monkeypatch)
+    fixtures = _stage(tmp_path)
+    root = tmp_path / 'negative-output'
+    root.mkdir()
+    started, closed, created, workers = Event(), [], [], []
+    original_start = checks._Journey.start
+    original_scan = ParsePreflightService.scan_source
+    original_close = native.close_report_owner
+    active = []
+
+    def delegated(service, **kwargs):
+        started.set()
+        if not active[0].release.wait(5):
+            raise RuntimeError('owned negative scan barrier deadline')
+        return original_scan(service, **kwargs)
+
+    def fail_after_real_start(journey):
+        original_start(journey)
+        active.append(journey)
+        assert journey.window.isVisible() and journey.workspace is not None
+        created.append(journey.window)
+        assert journey.window.set_directory(str(journey.child / 'pdf'))
+        assert journey.window.set_db_file(str(journey.child / 'admission.sqlite'))
+        journey.workspace.scan_button.click()
+        journey.wait(started.is_set, 4)
+        worker = journey.workspace.preflight_thread
+        assert worker is not None and worker.isRunning()
+        workers.append(worker)
+        raise checks.ControlsChecksFailure('controls_fixture_invalid')
+
+    def canonical_close(window, app):
+        closed.append(window)
+        return original_close(window, app)
+
+    monkeypatch.setattr(ParsePreflightService, 'scan_source', delegated)
+    monkeypatch.setattr(checks._Journey, 'start', fail_after_real_start)
+    monkeypatch.setattr(native, 'close_report_owner', canonical_close)
+    capture = checks.make_capture(root, expected_dpr=qapplication_session.primaryScreen().devicePixelRatio())
+    result = checks.run_controls_checks(root, fixtures,
+        expected_dpr=qapplication_session.primaryScreen().devicePixelRatio(), capture=capture)
+    _closed(result)
+    assert result['status'] == 'failed' and result['error_codes'] == ['controls_fixture_invalid']
+    assert result['evidence']['failure'] == dict(phase='admission', code='controls_fixture_invalid', callback_errors=[])
+    assert len(created) == len(workers) == 1 and closed == created
+    assert sip.isdeleted(created[0])
+    assert all(sip.isdeleted(worker) or not worker.isRunning() for worker in workers)
+    assert qapplication_session.activeModalWidget() is None
+    assert result['facets']['controls_cleanup'] == 'passed'
+    assert result['evidence']['cleanup'] == dict(joined=True, closed=True, temporary_data_removed=True, sources_unchanged=True, observer_errors=[])
+    assert not (root / 'controls-uiux').exists() and not capture.metadata
+
+
 def test_real_controls_and_shared_capture_leaf(qapplication_session, tmp_path, monkeypatch):
     _gates(monkeypatch)
     fixtures = _stage(tmp_path)

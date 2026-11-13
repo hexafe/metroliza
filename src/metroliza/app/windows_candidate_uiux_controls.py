@@ -212,27 +212,30 @@ class _Journey:
         from PyQt6.QtCore import Qt, QSettings
         from metroliza.app.windows_candidate_uiux_tabular import _Journey as Delivery, FIXTURE_HASHES
         from metroliza.app.windows_candidate_uiux_reports import _stage
-        from metroliza.app.ui_entrypoint import load_main_window_factory
-        from metroliza.ui.ui_preferences import UiPreferences
         self.app, self.Qt, self.delivery = _admit(dpr), Qt, Delivery
         self.root, self.child, self.capture = scratch, scratch / 'controls-uiux', capture
         self.child.mkdir(mode=0o700)
         self.result, self.evidence = result, result['evidence']
         self.deadline, self.phase, self.csv = time.monotonic() + 45, 'admission', None
+        self.window, self.workspace = None, None
         self.loaded, self.filter_workers = None, []
         self.callback_errors, self.modals, self.release = [], [], Event()
         self.oracle = _stage(fixtures / 'uiux/reports', self.child / 'pdf')
         self.analysis = fixtures / 'uiux/tabular/analysis.csv'
         _require(_sha(self.analysis) == FIXTURE_HASHES['analysis.csv'], 'controls_fixture_invalid')
         self.source_hashes = {p.name: _sha(p) for p in (self.child / 'pdf').iterdir()}
-        settings = QSettings(str(self.child / 'settings.ini'), QSettings.Format.IniFormat)
-        self.window = load_main_window_factory()('UIUX controls', None, ui_preferences=UiPreferences(settings))
+        self.settings = QSettings(str(self.child / 'settings.ini'), QSettings.Format.IniFormat)
+
+    def start(self):
+        from metroliza.app.ui_entrypoint import load_main_window_factory
+        from metroliza.ui.ui_preferences import UiPreferences
+        self.window = load_main_window_factory()('UIUX controls', None, ui_preferences=UiPreferences(self.settings))
         self.window.show()
         self.workspace = self.window.launch_parsing_dialog()
         _require(not self.workspace._ocr_unavailable_reason(), 'controls_fixture_invalid')
         screen = self.app.primaryScreen()
         self.evidence['context'] = dict(execution='packaged' if getattr(sys, 'frozen', False) else 'source', qpa=self.app.platformName(),
-                                       dpr=dpr, screen=[screen.geometry().width(), screen.geometry().height()],
+                                       dpr=self.app.primaryScreen().devicePixelRatio(), screen=[screen.geometry().width(), screen.geometry().height()],
                                        available_screen=[screen.availableGeometry().width(), screen.availableGeometry().height()])
 
     def wait(self, predicate, seconds=20):
@@ -510,6 +513,8 @@ class _Journey:
         self.passed('modal_shared_key_owner', 'active_child_capture')
 
     def cleanup(self):
+        from PyQt6 import sip
+        from PyQt6.QtCore import QCoreApplication, QEvent
         from metroliza.app.windows_candidate_native_check import close_report_owner
         from metroliza.app.windows_candidate_uiux_tabular import FIXTURE_HASHES
         from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
@@ -521,8 +526,9 @@ class _Journey:
                 if worker is not None:
                     cancel()
                     self.delivery.join(self, worker)
-        owners = (self.window.industrial_data_dialog, self.window.realtime_monitoring_dialog,
-                  self.window.parser_plugin_wizard_dialog)
+        owners = (() if self.window is None else
+                  (self.window.industrial_data_dialog, self.window.realtime_monitoring_dialog,
+                   self.window.parser_plugin_wizard_dialog))
         workers = [getattr(owner, name, None) for owner in owners if owner is not None
                    for name in ('_oznak_status_thread', '_analytics_load_thread', 'link_refresh_thread',
                                 'poll_thread', 'dashboard_thread', '_validation_thread')]
@@ -532,13 +538,21 @@ class _Journey:
         for worker in workers + self.filter_workers:
             self.delivery.join(self, worker)
         self.wait(lambda: all(owner is None or not owner.isVisible() for owner in owners))
-        close_report_owner(self.window, self.app)
-        _require(not self.window.isVisible() and self.app.activeModalWidget() is None, 'controls_cleanup_failed')
+        if self.window is not None:
+            close_report_owner(self.window, self.app)
+        _require((self.window is None or not self.window.isVisible())
+                 and self.app.activeModalWidget() is None, 'controls_cleanup_failed')
         store = Path(self.loaded.sqlite_store.path) if self.loaded is not None else None
         cleanup_tabular_load_result(self.loaded)
         _require(store is None or not store.exists(), 'controls_cleanup_failed')
         _require({p.name: _sha(p) for p in (self.child / 'pdf').iterdir()} == self.source_hashes
                  and _sha(self.analysis) == FIXTURE_HASHES['analysis.csv'], 'controls_cleanup_failed')
+        self.settings.sync()
+        if self.window is not None and not sip.isdeleted(self.window):
+            self.window.deleteLater()
+            QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            self.app.processEvents()
+            _require(sip.isdeleted(self.window), 'controls_cleanup_failed')
         shutil.rmtree(self.child)
         _require(not self.child.exists() and not self.callback_errors, 'controls_cleanup_failed')
         self.evidence['cleanup'] = dict(joined=True, closed=True, temporary_data_removed=True, sources_unchanged=True, observer_errors=[])
@@ -556,6 +570,7 @@ def run_controls_checks(scratch, fixtures, *, expected_dpr, capture):
         scratch, fixtures = Path(scratch).resolve(), Path(fixtures).resolve()
         _require(scratch.is_dir() and fixtures.is_dir(), 'controls_fixture_invalid')
         journey = _Journey(scratch, fixtures, expected_dpr, capture, result)
+        journey.start()
         journey.reports()
         journey.routes()
         journey.dialogs()
