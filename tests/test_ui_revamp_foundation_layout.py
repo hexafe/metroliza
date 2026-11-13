@@ -81,7 +81,12 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
 
         self.assertLessEqual(payload["main_size"][0], payload["available"][0])
         self.assertLessEqual(payload["parsing_size"][0], payload["available"][0])
-        self.assertEqual(payload["home_actions"], ["Choose reports in Reports"])
+        self.assertEqual(payload["home_actions"], [
+            "Choose reports in Reports [Ctrl+2]", "Open Reports [Ctrl+2]",
+            "Open CSV Summary [Ctrl+3]", "Open Industrial Data [Ctrl+4]",
+            "Open Realtime Monitor [Ctrl+5]", "Open Parser Profiles [Ctrl+Shift+F]",
+            "Database maintenance tools [Ctrl+Shift+T]",
+        ])
         self.assertTrue(payload["reports_owns_export"])
         self.assertIn("Export Workbook", payload["main_buttons"])
         self.assertIn("Source: not selected", payload["source_status"])
@@ -223,7 +228,7 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         for button in payload["button_bounds"]:
             self.assertGreaterEqual(button["left"], 0, button)
             self.assertLessEqual(button["right"], payload["dialog_size"][0], button)
-        self.assertIn("Export", {button["text"] for button in payload["button_bounds"]})
+        self.assertIn("Export [Ctrl+S]", {button["text"] for button in payload["button_bounds"]})
 
 
 if __name__ == "__main__":

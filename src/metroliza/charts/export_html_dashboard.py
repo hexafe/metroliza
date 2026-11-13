@@ -31,12 +31,14 @@ from metroliza.charts.dashboard_shell import (
     dashboard_key_takeaway_rows,
     humanize_dashboard_reason_code,
     render_dashboard_hero,
+    render_dashboard_compact_hero_css,
     should_hide_dashboard_debug_text,
 )
 from metroliza.charts.dashboard_html_controls import (
     DASHBOARD_THEME_STORAGE_KEY,
     latest_dashboard_timestamp,
     render_dashboard_control_bar,
+    render_dashboard_component_keys_js,
     render_dashboard_controls_css,
     render_dashboard_semantic_css,
     render_dashboard_snapshot_metadata,
@@ -3049,7 +3051,7 @@ def _render_dashboard_html(
             preview_labels=visual_preview_labels,
         )
         if interactive_plotly_available
-        else ""
+        else render_dashboard_component_keys_js()
     )
     theme_bootstrap_script = render_dashboard_theme_bootstrap_script()
     theme_runtime_helpers = render_dashboard_theme_runtime_helpers(
@@ -3763,6 +3765,7 @@ def _render_dashboard_html(
       color: var(--muted);
       line-height: 1.55;
     }}
+{render_dashboard_compact_hero_css()}
     @media (max-width: 780px) {{
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
       .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 8px; }}
@@ -3782,9 +3785,9 @@ def _render_dashboard_html(
       {group_analysis_block}
     </main>
   </div>
-  <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart">
+  <dialog id="chart-lightbox" class="lightbox" aria-label="Enlarged chart" data-dashboard-key-component tabindex="-1">
     <div class="lightbox-shell">
-      <button type="button" class="lightbox-close" id="chart-lightbox-close">Close</button>
+      <button type="button" class="lightbox-close" id="chart-lightbox-close">Close (Esc; Q in viewer)</button>
       <div class="lightbox-body">
         <figure class="lightbox-image-shell lightbox-pane" id="chart-lightbox-image-shell">
           <img id="chart-lightbox-image" src="" alt="">
@@ -4273,6 +4276,7 @@ def _render_dashboard_html(
       }});
 
       closeButton.addEventListener('click', closeLightbox);
+      bindDashboardComponentKeys(lightbox, {{ close: closeButton }});
       lightbox.addEventListener('close', resetLightboxState);
       lightbox.addEventListener('click', (event) => {{
         if (event.target === lightbox) closeLightbox();

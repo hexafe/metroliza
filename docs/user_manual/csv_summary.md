@@ -2,40 +2,43 @@
 
 ## Keyboard shortcuts
 
-**F1** opens this window's manual. In the CSV Summary launcher:
+**F1** opens this window's manual. Ctrl/Shift commands are primary; the Alt
+alternatives below remain available. In the CSV Summary launcher:
 
-| Shortcut | Action |
+| Primary shortcut (secondary alternative) | Action |
 |---|---|
-| Alt+B | Browse for input files |
-| Alt+M | Load or refresh data and metrics |
-| Alt+F / Alt+T | Filter rows / Clear filter |
-| Alt+O / Alt+L | Choose metrics / Edit limits |
-| Alt+E / Alt+G | Edit groups / Clear groups |
-| Alt+R / Alt+W | Browse for dashboard / workbook output |
-| Alt+A | Show or hide advanced options |
-| Alt+Y | Create analytics |
-| Alt+C | Close |
+| Ctrl+D (Alt+B) | Browse for input files |
+| Ctrl+R (Alt+M) | Load or refresh data and metrics |
+| Ctrl+Shift+F / Ctrl+Shift+R (Alt+F / Alt+T) | Filter rows / Clear filter |
+| Ctrl+F / Ctrl+Shift+G (Alt+O / Alt+L) | Choose metrics / Edit limits |
+| Ctrl+G / Ctrl+Shift+Q (Alt+E / Alt+G) | Edit groups / Clear groups |
+| Ctrl+Shift+D / Ctrl+Shift+E (Alt+R / Alt+W) | Browse for dashboard / workbook output |
+| Tab, then Space (Alt+A) | Show or hide advanced options |
+| Ctrl+S / Ctrl+Shift+S (Alt+Y for Create) | Create analytics / Stop active work |
+| Ctrl+W (Alt+C) | Close |
 
-Button tooltips also show these shortcuts. Disabled or hidden controls do nothing;
-an open modal dialog owns its own keyboard commands. The launcher has no search
-field, so it does not bind Ctrl+F. The Industrial cache presentation uses the same
-visible button shortcuts and its own Industrial Data manual on F1.
+Buttons and tooltips show the primary commands. Disabled or hidden controls do
+nothing; an open modal dialog owns its commands. The launcher has no search field:
+Ctrl+F opens Choose metrics. The Industrial cache presentation uses the same
+commands and its own Industrial Data manual on F1.
 
-In the **Filter rows** and **Edit groups** dialogs, **Ctrl+F** focuses and selects
-the search for the list that has focus: available columns, selected columns, or
-matching values/rows. From elsewhere it selects the available-columns search.
-Searching keeps the existing rules: press Enter where the field requires it.
-F1 opens this CSV Summary manual from either dialog.
+In **Filter rows** and **Edit groups**, **Ctrl+F** selects the search for the focused
+list: available columns, selected columns, or matching values/rows. From elsewhere
+it selects the available-columns search. F1 opens this CSV Summary manual.
+Return/Enter in the matching-values search submits the search without applying the
+filter. Use **Ctrl+S** or **Apply** to commit it. Grouping also keeps Return/Enter
+local to its search fields.
 
-| Dialog | Shortcut | Action |
+| Dialog | Primary shortcut | Action |
 |---|---|---|
-| Filter rows | Alt+D / Alt+M / Alt+L | Add column / Remove selected column / Clear columns |
-| Filter rows | Alt+V / Alt+R | Clear values / Reset filter |
-| Filter rows | Alt+A / Alt+C | Apply filter / Cancel |
-| Edit groups | Alt+F / Alt+A | Assign all filtered rows / Assign selected row values |
-| Edit groups | Alt+R / Alt+D | Rename group / Delete group |
-| Edit groups | Alt+L / Alt+S | Clear selection / Reset changes |
-| Edit groups | Alt+U / Alt+C | Use grouping / Cancel |
+| Filter rows / Edit groups | Ctrl+E / Ctrl+Shift+E | Add / Remove selected column; bare E in the available list, R in the selected list |
+| Filter rows | Ctrl+S / Ctrl+Shift+R / Ctrl+W | Apply / Reset draft / Cancel (secondary Alt+A / Alt+R / Alt+C) |
+| Filter rows | Tab, then Space | Clear columns or current values and dates (secondary Alt+L / Alt+V); Alt+D / Alt+M also add / remove a column |
+| Edit groups | Ctrl+R / Ctrl+G | Assign all matching rows / Assign selected row values (secondary Alt+F / Alt+A) |
+| Edit groups | Ctrl+Shift+G / Ctrl+Shift+D | Rename / Delete group (secondary Alt+R / Alt+D) |
+| Edit groups | Ctrl+D | Remove selected members; bare R in the member list |
+| Edit groups | Ctrl+Q / Ctrl+Shift+R | Clear selection / Reset changes (secondary Alt+L / Alt+S) |
+| Edit groups | Ctrl+S / Ctrl+W | Use grouping / Cancel (secondary Alt+U / Alt+C) |
 
 ## When To Use CSV Summary
 
@@ -142,6 +145,25 @@ before creating analytics.
 ### 2. Filter Rows
 
 Click **Filter rows** when you want the summary to use only part of the selected file.
+
+The editor distinguishes **Values: All** from **Selected (n)** and reports matching
+choices plus hidden selections. Search changes the choice list, never the data predicate;
+SQLite value search still requires Enter. Clearing a search preserves hidden selections.
+The draft/applied summary retains the last applied columns, dates and expression until Apply.
+
+- **Clear searches** resets list visibility only.
+- **Clear selection (All values)** removes value choices from the current column, preserving its dates.
+- **Clear condition (values + dates)** removes both conditions from that column.
+- **Clear expression** removes only the advanced expression.
+- **Reset draft [Ctrl+Shift+R]** resets all draft conditions after confirmation.
+
+Use **Ctrl+E / Ctrl+Shift+E** to add/remove the current column. E/R are quick alternatives
+only while the corresponding column list has focus; typing and AltGr remain text input.
+**Ctrl+S** applies, **Ctrl+W / Esc** cancels through the discard guard, and **Ctrl+F** searches.
+Invalid expressions or reversed dates block Apply. Applying an unchanged predicate keeps
+groups; a real narrowing still warns before dropping assignments. The body scrolls on short
+screens while Apply/Cancel remain visible. Existing Alt mnemonics are secondary alternatives.
+
 The filter dialog lets you add source columns, search column names, and select matching
 value combinations such as `TraceCode | Batch`. Filtering is applied before grouping,
 aggregation, charts, groupstats, dashboard output, and workbook output.
@@ -171,9 +193,11 @@ Click **Edit groups** when you want export-style groups for the CSV/Excel rows. 
 single input file, the grouping dialog starts empty and leaves every row in
 **POPULATION** until you create a custom group. For multiple CSV files, accepting the
 auto-create prompt starts the dialog with one group per file name and no **POPULATION**
-rows. Search for a source column and double-click it to choose the first column used to
-select parts, such as `TraceCode`. Double-click another available column when you want to
-refine the visible combinations, or double-click a selected column to remove it. The
+rows. Search for a source column, select it, and use **Add column (Ctrl+E)** to
+choose a column such as `TraceCode`. **Remove column (Ctrl+Shift+E)** removes the
+current visible selected column. Double-clicking remains available for both operations.
+See [grouping controls](csv_grouping_controls.md) for focused E/R commands, member removal,
+source identity/date labels and draft behavior. The
 matching list shows each selected column chain as values like `TraceCode | Cavity`, so you
 can select the rows for a named group and leave the remaining rows in **POPULATION** for
 selected-vs-rest comparisons when you choose to create that population manually.
@@ -371,3 +395,12 @@ Nothing is saved between sessions. Actions warn you if a file was moved or delet
 locate it or run the analysis again.
 Dashboard diagnostics, groupstats sections, detailed statistical-test tables, and chart
 statistics are collapsed by default; open only the sections you need to inspect.
+
+Searching selected filter columns only changes the visible choices. If the current
+column is hidden, its value/date editor clears while its condition remains in the
+draft. Clearing search reveals the choices without activating one; select a column
+to edit its saved draft values and dates. Search does not scan another column for
+date bounds.
+
+See the [keyboard command matrix](keyboard_shortcuts.md) for primary keys, active-window
+behavior and secondary shortcuts.

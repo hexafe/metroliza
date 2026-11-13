@@ -281,27 +281,19 @@ def test_run_tabular_file_analytics_reuses_shared_dashboard_and_parameter_workbo
     assert Path(result.html_dashboard_path).exists()
     assert Path(result.workbook_path).exists()
     html_text = dashboard_file.read_text(encoding="utf-8")
+    hero = html_text.split('<header class="hero"', 1)[1].split('</header>', 1)[0]
+    run_notes = html_text.split('<details id="run-notes"', 1)[1].split('</details>', 1)[0]
     assert "<title>Metroliza CSV Summary Dashboard</title>" in html_text
     assert '<header class="hero" id="dashboard-start">' in html_text
-    assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in html_text
-    assert "<h1>table.csv</h1>" in html_text
-    assert '<section class="overview-grid">' in html_text
-    assert '<div class="metric-label">Source</div>' in html_text
-    assert '<span class="metric-value-line">table.csv</span>' in html_text
-    assert '<div class="metric-label">Rows rendered</div>' in html_text
-    assert '<div class="metric-label">Dashboard interactivity</div>' in html_text
-    assert (
-        '<span class="metric-value-line">All rows</span>'
-        not in html_text
-    )
-    assert (
-        '<span class="metric-value-line">All rows; 24 MB dashboard size limit</span>'
-        in html_text
-    )
-    assert '<div class="metric-label">Large group layers</div>' in html_text
-    assert (
-        '<span class="metric-value-line">Auto</span>'
-    ) in html_text
+    assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in hero
+    assert "<h1>table.csv</h1>" in hero
+    assert '<section class="overview-grid">' in hero
+    assert '<div class="metric-label">Rows rendered</div>' in hero
+    assert 'Dashboard interactivity' not in hero
+    assert 'Large group layers' not in hero
+    assert '<li>Dashboard interactivity: All rows</li>' not in run_notes
+    assert '<li>Dashboard interactivity: All rows; 24 MB dashboard size limit</li>' in run_notes
+    assert '<li>Large group layers: Auto</li>' in run_notes
     assert "Metroliza CSV Summary Dashboard" in html_text
     assert "Cached production data dashboard" not in html_text
     assert result.source_kind == "tabular_file"
@@ -454,9 +446,11 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
         "aggregate tables, group comparison, and workbook output use all selected rows."
     )
     html_text = dashboard_file.read_text(encoding="utf-8")
+    hero = html_text.split('<header class="hero"', 1)[1].split('</header>', 1)[0]
+    run_notes = html_text.split('<details id="run-notes"', 1)[1].split('</details>', 1)[0]
 
     assert result.row_count == row_count
-    assert sampling_note in html_text
+    assert f'<li>{sampling_note}</li>' in run_notes
     assert any(
         diagnostic.code == "tabular_dashboard_fast_sample"
         and diagnostic.message == sampling_note
@@ -466,23 +460,23 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
     assert (
         '<div class="metric-label">Rows rendered</div><div class="metric-value">'
         '<span class="metric-value-line">5000</span></div>'
-        in html_text
+        in hero
     )
     assert (
         '<div class="metric-label">Source rows</div><div class="metric-value">'
         '<span class="metric-value-line">5001</span></div>'
-        in html_text
+        in hero
     )
     assert (
-        '<div class="metric-label">Dashboard interactivity</div><div class="metric-value">'
-        '<span class="metric-value-line">Auto, 5,000 interactive random sample limit; '
-        '24 MB dashboard size limit</span></div>'
-        in html_text
+        '<li>Dashboard interactivity: Auto, 5,000 interactive random sample limit; '
+        '24 MB dashboard size limit</li>'
+        in run_notes
     )
+    assert 'Dashboard interactivity' not in hero
     assert (
         '<div class="metric-label">Large group layers</div><div class="metric-value">'
         '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
-        in html_text
+        in hero
     )
     assert (
         "Interactive charts use a reproducible random sample of up to 5,000 rows; "
@@ -490,8 +484,8 @@ def test_run_tabular_file_analytics_sampled_dashboard_renders_sampling_copy(
         not in html_text
     )
     assert "<title>Metroliza CSV Summary Dashboard</title>" in html_text
-    assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in html_text
-    assert "<h1>sampled_dashboard_table.csv</h1>" in html_text
+    assert '<p class="eyebrow">Metroliza CSV Summary Dashboard</p>' in hero
+    assert "<h1>sampled_dashboard_table.csv</h1>" in hero
     assert "Cached production data dashboard" not in html_text
 
 
@@ -550,6 +544,8 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
     )
 
     html_text = dashboard_file.read_text(encoding="utf-8")
+    hero = html_text.split('<header class="hero"', 1)[1].split('</header>', 1)[0]
+    run_notes = html_text.split('<details id="run-notes"', 1)[1].split('</details>', 1)[0]
     chart = _embedded_dashboard_charts(html_text)[0]
     spec = chart["plotly_spec"]
 
@@ -557,14 +553,15 @@ def test_run_tabular_file_analytics_static_population_for_small_dataset_uses_all
     assert [trace["name"] for trace in spec["data"]] == ["POPULATION static layer"]
     assert spec["layout"]["images"][0]["metroliza_static_population_layer_label"] == "POPULATION"
     assert (
-        '<span class="metric-value-line">Interactive random sample, all 5,000 rows rendered; '
-        '24 MB dashboard size limit</span>'
-        in html_text
+        '<li>Dashboard interactivity: Interactive random sample, all 5,000 rows rendered; '
+        '24 MB dashboard size limit</li>'
+        in run_notes
     )
+    assert 'Dashboard interactivity' not in hero
     assert (
         '<div class="metric-label">Large group layers</div><div class="metric-value">'
         '<span class="metric-value-line">Static image in 1 chart(s)</span></div>'
-        in html_text
+        in hero
     )
     assert "Interactive charts use all selected rows; random sampling was not needed." not in html_text
 

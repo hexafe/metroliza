@@ -395,3 +395,35 @@ does not connect back to the production line database.
 - If saved credentials do not reappear, remember that Metroliza stores them only after a
   successful access check or fetch. Re-enter the username and password, check **Remember
   on this computer**, and run **Check access** again.
+
+## Current stage and keyboard commands
+
+The Industrial Data header names the next action from the current source and local
+cache state. No enabled source leads to Configure; a configured empty cache leads
+to Fetch and its Check access step. Cached rows remain available for Analyze and
+Export after a remote failure. Access history in the launcher describes the last
+fetch, not a live connection check. Source scope, cache location and temporary or
+saved storage remain visible; **Diagnostics → Show connector details** contains
+connector versions and capability details.
+
+Industrial Data uses **Ctrl+D Configure sources**, **Ctrl+R Fetch to cache**,
+**Ctrl+S Analyze cache**, **Ctrl+E Export workbook** and **Ctrl+W Close**. Analyze
+opens the existing CSV Summary workflow for the selected cached source; Export
+keeps its separate workbook filter/group scope.
+
+In Fetch industrial data, use **Ctrl+D Configure sources**, **Ctrl+R Check access**,
+**Ctrl+S Fetch to cache**, **Ctrl+Shift+E Fetch to CSV Summary**, **Ctrl+Shift+S Stop**
+and **Ctrl+W Close**. Check access uses the existing bounded read and saves no
+production rows. Stop requests cancellation; wait for the worker to settle before
+Close. Completed cache data stays separate from a pending fetch. A failed source
+check points to credentials/source settings and retry; credentials and fetch
+limits are not changed by these shortcuts. Disabled actions and modal child
+windows keep the same guards as their buttons.
+
+After a fetch, the next action depends on the actual local cache. A successful
+zero-row fetch does not make an empty cache analyzable: review the source/scope
+and Check access before fetching again. If other rows already exist, Analyze and
+Export remain useful even when this fetch returned zero, warnings or failure.
+If the cache cannot be read, readiness stays unconfirmed rather than showing an
+empty or successful cache. Changing the source YAML from the fetch window takes
+effect for its parent before in-window result refreshes and cache handoffs.

@@ -123,7 +123,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertIn("Enable HTML dashboard output", payload["dashboard_visuals_tooltip"])
         self.assertFalse(payload["has_html_only_checkbox"])
         self.assertIn("HTML dashboard only", payload["preset_labels"])
-        self.assertEqual(payload["close_label"], "Close")
+        self.assertEqual(payload["close_label"], "Close [Ctrl+W / Esc]")
         self.assertEqual(payload["db_text"], "None selected")
         self.assertEqual(payload["excel_text"], "None selected")
         self.assertEqual(payload["pre_finished_values"], ["1", "-5"])
@@ -217,7 +217,7 @@ class TestExportDialogLayout(unittest.TestCase):
         )
 
         self.assertEqual(payload["selected_preset"], "HTML dashboard only")
-        self.assertEqual(payload["output_label"], "Dashboard file:")
+        self.assertEqual(payload["output_label"], "Dashboard:")
         self.assertTrue(payload["output_path"].endswith("_dashboard.html"))
         self.assertTrue(payload["html_checked"])
         self.assertFalse(payload["html_enabled"])

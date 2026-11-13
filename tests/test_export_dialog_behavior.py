@@ -289,7 +289,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert not dialog.generate_html_dashboard_checkbox.isEnabled()
         assert not dialog.include_google_sheets_checkbox.isChecked()
         assert not dialog.include_google_sheets_checkbox.isEnabled()
-        assert dialog.select_excel_label.text() == "Dashboard file:"
+        assert dialog.select_excel_label.text() == "Dashboard:"
         assert str(dialog.excel_file).endswith("_dashboard.html")
         assert "HTML dashboard selected" in dialog.path_readiness_label.text()
         assert not dialog.dashboard_visuals_button.isHidden()
@@ -299,7 +299,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         _set_combo_to_existing_label(dialog.preset_combobox, "Main plots")
         dialog._sync_html_dashboard_only_state()
 
-        assert dialog.select_excel_label.text() == "Excel file:"
+        assert dialog.select_excel_label.text() == "Output workbook:"
         assert str(dialog.excel_file).endswith("source.xlsx")
         assert dialog.include_google_sheets_checkbox.isEnabled()
     finally:
@@ -311,7 +311,7 @@ def test_deliverables_summary_tracks_export_context(monkeypatch, tmp_path):
     try:
         summary = dialog.deliverables_summary_label.text()
         assert "Database: not selected" in summary
-        assert "Workbook: not selected" in summary
+        assert "Output workbook: not selected" in summary
         assert "Preset: Main plots" in summary
         assert "HTML dashboard: off" in summary
         assert "Google Sheets: off" in summary
@@ -329,7 +329,7 @@ def test_deliverables_summary_tracks_export_context(monkeypatch, tmp_path):
 
         summary = dialog.deliverables_summary_label.text()
         assert "Database: source.db" in summary
-        assert "Workbook: export.xlsx" in summary
+        assert "Output workbook: export.xlsx" in summary
         assert "HTML dashboard: on (grouping)" in summary
         assert "Google Sheets: on" in summary
         assert "Grouping: on" in summary
@@ -532,12 +532,10 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         dialog.violin_plot_min_samplesize.setText("7")
         dialog.summary_plot_scale.setText("3")
 
-        export_request = types.SimpleNamespace(
-            paths=types.SimpleNamespace(excel_file=str(tmp_path / "validated.xlsx"), html_dashboard_file=None),
-            options=types.SimpleNamespace(
-                violin_plot_min_samplesize=7, summary_plot_scale=3,
-                export_target="excel_xlsx", generate_html_dashboard=False,
-            ),
+        from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+        export_request = ExportRequest(
+            paths=AppPaths(db_file=str(tmp_path / "source.db"), excel_file=str(tmp_path / "validated.xlsx")),
+            options=ExportOptions(violin_plot_min_samplesize=7, summary_plot_scale=3),
         )
         validation_calls = {}
         monkeypatch.setattr(

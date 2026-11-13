@@ -514,7 +514,8 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "<th>Statistic</th><th>Value</th>" in html_text
     assert "grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));" in html_text
     assert '<div class="metric-label">Summary points</div>' in html_text
-    assert '<div class="metric-label">Groups</div>' in html_text
+    hero_context = html_text.split('<dl class="dashboard-context"', 1)[1].split("</dl>", 1)[0]
+    assert "<dt>Groups</dt><dd>Pasted reference cohorts</dd>" in hero_context
     assert "Pasted reference cohorts" in html_text
     assert '<div class="metric-label">Reference rows</div>' in html_text
     assert '<div class="metric-label">Group comparison</div>' in html_text

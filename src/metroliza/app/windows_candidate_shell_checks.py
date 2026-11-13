@@ -216,6 +216,57 @@ def _close_shell_owner(window, app) -> None:
         raise ShellChecksFailure("window_owner_cleanup_failed") from error
 
 
+def _verify_import_results(window, workspace, reviewed_occurrences: dict[str, str]) -> None:
+    """Read the completed five-file UI facts without creating another import plan."""
+    from PyQt6.QtCore import Qt
+    model_module = import_module("metroliza.ui.report_planner_model")
+    ExecutionStatus, ReportExecutionRow = model_module.ExecutionStatus, model_module.ReportExecutionRow
+
+    planner = workspace.report_planner
+    model = planner.model
+    expected_names = {f"REF001_2024-01-01_{number}.pdf" for number in range(5)}
+    saved_names = {f"REF001_2024-01-01_{number}.pdf" for number in (1, 3)}
+    rows = model.execution_rows
+    _require(set(reviewed_occurrences) == expected_names
+             and len(set(reviewed_occurrences.values())) == 5,
+             "import_results_review_identity")
+    _require(isinstance(rows, tuple) and len(rows) == 5
+             and all(isinstance(row, ReportExecutionRow) for row in rows)
+             and ReportExecutionRow.__dataclass_params__.frozen,
+             "import_results_immutable_rows")
+    observed = {row.display_name: row.stable_occurrence_id for row in rows}
+    _require(observed == reviewed_occurrences
+             and len({row.stable_occurrence_id for row in rows}) == 5,
+             "import_results_occurrences")
+    _require(all(row.status is (ExecutionStatus.SAVED if row.display_name in saved_names
+                                else ExecutionStatus.SKIPPED) for row in rows)
+             and model.execution_counts == {"saved": 2, "skipped": 3},
+             "import_results_statuses")
+    _require(not model.valid and model._review is None and model.metadata_rows == {}
+             and model.selected_ids == () and model.selected_count == 0 and not model.selectable_ids
+             and workspace._preflight_result is None
+             and workspace._review_approval()[:2] == (False, False)
+             and not workspace.parse_button.isEnabled(),
+             "import_results_stale_approval")
+    _require(model.rowCount() == planner.proxy.rowCount() == 5
+             and planner.table.model() is planner.proxy and planner.table.isVisibleTo(workspace),
+             "import_results_visible_rows")
+    for number, row in enumerate(rows):
+        checkbox = model.index(number, model.CHECKBOX_COLUMN)
+        _require(model.data(checkbox, Qt.ItemDataRole.CheckStateRole) is None
+                 and model.data(checkbox, Qt.ItemDataRole.UserRole) == row.stable_occurrence_id
+                 and model.data(model.index(number, model.STATUS_COLUMN)) == (
+                     "Saved" if row.status is ExecutionStatus.SAVED else "Skipped"),
+                 "import_results_display")
+        _require(all(not model.flags(model.index(number, column)) & (
+            Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable)
+            for column in range(model.columnCount())), "import_results_editable")
+    _require(all(text in planner.counts.text() for text in (
+        "5 report results", "2 saved", "0 already present", "3 skipped", "0 failed", "0 unknown")),
+        "import_results_counts")
+    _require(window.export_button.isEnabled(), "import_results_export_unavailable")
+
+
 def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
          result: dict[str, Any]) -> None:
     from PyQt6.QtCore import QSettings
@@ -250,6 +301,8 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
         model = workspace.report_planner.model
         _require(model.valid and model.counts["total"] == 5 and model.counts["ready"] == 5,
                  "review_counts_mismatch")
+        reviewed_occurrences = {item.display_name: item.stable_occurrence_id
+                                for item in model._review.files}
         result["facets"]["single_planner_owner"] = "passed"
 
         window.resize(720, 480)
@@ -273,6 +326,7 @@ def _run(scratch: Path, fixtures: Path, app, expected_dpr: float | None,
                  "import_outcome_mismatch")
         _require(database.is_file(), "import_database_missing")
         import_oracle = _import_oracle(database)
+        _verify_import_results(window, workspace, reviewed_occurrences)
         result["facets"]["real_review_import"] = "passed"
 
         screen = app.primaryScreen()

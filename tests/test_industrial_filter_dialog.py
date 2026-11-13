@@ -226,7 +226,7 @@ def test_filter_dialog_exposes_count_accessibility_and_semantic_actions():
     assert dialog.apply_button.isDefault()
     assert dialog.cancel_button.property("buttonRole") == "secondary"
     assert dialog.clear_button.property("buttonRole") == "quiet"
-    assert dialog.clear_button.text() == "Reset filters"
+    assert dialog.clear_button.text() == "Reset filters [Ctrl+Shift+R]"
     dialog.close()
 
 

@@ -13,3 +13,14 @@ docs/engineering/performance-boost-step3-poc/*.patch -whitespace
 # Windows and Linux; keep one line ending on every checkout.
 THIRD_PARTY_NOTICES.md text eol=lf
 docs/release_checks/third_party_inventory.json text eol=lf
+
+# UIUX qualification fixtures are staged and verified by their exact authored bytes.
+tests/fixtures/windows_uiux/tabular/analysis.csv -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_uiux/tabular/grouping.csv -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_uiux/tabular/saved-groups.csv -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_uiux/tabular/oracles.json -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_uiux/reports/reports-12.zip -text whitespace=-blank-at-eol,cr-at-eol
+tests/fixtures/windows_uiux/reports/oracles.json -text whitespace=-blank-at-eol,cr-at-eol
+
+# The generated offline dashboard copies this asset byte-for-byte.
+src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js -text

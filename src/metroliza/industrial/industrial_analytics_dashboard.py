@@ -40,6 +40,8 @@ from metroliza.charts.dashboard_shell import (
     dashboard_key_takeaway_rows,
     humanize_dashboard_reason_code,
     render_dashboard_hero,
+    render_dashboard_compact_hero_css,
+    render_dashboard_context,
     render_dashboard_message_section,
     render_dashboard_overview_cards,
     render_dashboard_takeaways_section,
@@ -3943,7 +3945,7 @@ def _render_dashboard_html(
         else ""
     )
     lightbox_markup = _render_chart_lightbox() if plotly_charts else ""
-    cards = _render_summary_cards(summary)
+    cards, context_markup, configuration_notes = _summary_presentation(summary)
     diagnostics_groups = classify_dashboard_diagnostics(diagnostics)
     takeaways_markup = render_dashboard_takeaways_section(
         _dashboard_takeaway_rows(
@@ -3960,10 +3962,11 @@ def _render_dashboard_html(
         css_class="dashboard-messages attention-needed",
         collapsed=False,
     )
+    run_notes = (*diagnostics_groups.run_notes, *configuration_notes)
     run_notes_markup = render_dashboard_message_section(
         section_id="run-notes",
-        title=f"Run notes ({len(diagnostics_groups.run_notes)})",
-        messages=diagnostics_groups.run_notes,
+        title=f"Run notes ({len(run_notes)})",
+        messages=run_notes,
         css_class="dashboard-messages run-notes",
         collapsed=True,
     )
@@ -4023,7 +4026,7 @@ def _render_dashboard_html(
         nav_items.append({"id": "key-takeaways", "label": "Key takeaways"})
     if diagnostics_groups.attention:
         nav_items.append({"id": "attention-needed", "label": "Attention needed"})
-    if diagnostics_groups.run_notes:
+    if run_notes:
         nav_items.append({"id": "run-notes", "label": "Run notes"})
     if groupstats_markup:
         nav_items.append({"id": "groupstats", "label": "Group comparison"})
@@ -4053,6 +4056,7 @@ def _render_dashboard_html(
         lede_markup=lede_markup,
         controls_markup=dashboard_controls_markup,
         notice_markup=plotly_budget_notice,
+        context_markup=context_markup,
         overview_markup=cards,
         nav_markup=nav_markup,
     )
@@ -4558,6 +4562,7 @@ def _render_dashboard_html(
       font-weight: 650;
       white-space: nowrap;
     }}
+{render_dashboard_compact_hero_css()}
     @media (max-width: 640px) {{
       .shell {{
         width: min(100vw - 20px, 1480px);
@@ -4586,8 +4591,8 @@ def _render_dashboard_html(
   <div class="shell">
     {hero_markup}
     <main>
-    {takeaways_markup}
     {attention_markup}
+    {takeaways_markup}
     {run_notes_markup}
     {groupstats_markup}
     {chart_markup}
@@ -4688,11 +4693,11 @@ def _render_chart_section(chart: dict[str, Any], *, section_id: str) -> str:
 
 def _render_chart_lightbox() -> str:
     return (
-        '<dialog id="chart-lightbox" class="chart-lightbox" aria-label="Enlarged chart">'
+        '<dialog id="chart-lightbox" class="chart-lightbox" aria-label="Enlarged chart" data-dashboard-key-component tabindex="-1">'
         '<div class="chart-lightbox-panel">'
         '<div class="chart-lightbox-header">'
         '<div id="chart-lightbox-title" class="chart-lightbox-title">Chart</div>'
-        '<button type="button" id="chart-lightbox-close" class="chart-lightbox-close">Close</button>'
+        '<button type="button" id="chart-lightbox-close" class="chart-lightbox-close">Close (Esc; Q in viewer)</button>'
         '</div>'
         '<div id="chart-lightbox-plotly" class="chart-lightbox-plotly" aria-label="Enlarged interactive chart"></div>'
         '</div>'
@@ -5033,9 +5038,30 @@ def _render_plotly_runtime(
     if (lightboxClose) {
       lightboxClose.addEventListener('click', closeLightbox);
     }
+    bindDashboardComponentKeys(lightbox, { close: lightboxClose });
   </script>
 """
     )
+
+
+def _summary_presentation(summary: dict[str, Any]) -> tuple[str, str, tuple[str, ...]]:
+    """Partition existing display rows; do not recalculate analytics or alter the manifest."""
+    context_labels = {"Sheet", "Filters", "Time bucket", "Aggregation", "Groups"}
+    technical_labels = {"Dashboard interactivity"}
+    static_layer = summary.get("static_population_layer")
+    if not (isinstance(static_layer, dict) and _summary_int(static_layer.get("applied_chart_count"))):
+        technical_labels.add("Large group layers")
+    counts, context, notes = [], [], []
+    for label, value in _summary_card_rows(summary):
+        if label == "Source":
+            continue  # The identical source label is already the hero headline.
+        if label in technical_labels:
+            notes.append(f"{label}: {value}")
+        elif label in context_labels:
+            context.append((label, value))
+        else:
+            counts.append((label, value))
+    return render_dashboard_overview_cards(counts), render_dashboard_context(context), tuple(notes)
 
 
 def _render_summary_cards(summary: dict[str, Any]) -> str:

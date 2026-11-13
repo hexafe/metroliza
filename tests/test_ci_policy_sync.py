@@ -17,6 +17,7 @@ RELEASE_BRANCHING_PLAYBOOK_PATH = Path('docs/release_checks/release_branching_pl
 BEGINNER_RELEASE_PLAYBOOK_PATH = Path('docs/release_checks/release_playbook_beginner.md')
 GOOGLE_SMOKE_LOG_PATH = Path('docs/release_checks/google_conversion_smoke.md')
 GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
+NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
 def test_combined_candidate_workflow_preserves_authority_and_same_package_gate():
@@ -60,7 +61,9 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate()
     receipts = next(step for step in uploads if step["with"]["name"] == "windows-candidate-acceptance-receipts")
     receipt_root = "${{ runner.temp }}/metroliza-candidate-acceptance/**/*"
     assert set(receipts["with"]["path"].splitlines()) == {
-        f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")
+        *(f"{receipt_root}.{extension}" for extension in ("json", "sqlite", "xlsx", "html")),
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png",
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js",
     }
     package = next(step for step in uploads if step["with"]["path"].endswith(".zip"))
     assert receipts["if"] == "always()" and package["if"] == "success()"
@@ -148,9 +151,12 @@ def test_candidate_required_native_contracts_include_actual_closeout_owners():
     assert step["env"]["QT_QPA_PLATFORM"] == "windows"
     assert step["env"]["METROLIZA_EXPECT_QT_PLATFORM"] == "windows"
     assert "Set-DisplayResolution -Width 1920 -Height 1080 -Force" in step["run"]
-    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership"):
+    for name in ("shell_checks", "lifecycle_checks", "privacy_checks", "closeout", "final_receipts", "launch_ownership", "uiux_reports", "uiux_tabular", "uiux_controls", "uiux"):
         assert f"tests/test_windows_candidate_{name}.py" in step["run"]
     assert "if" not in step and "continue-on-error" not in step and " -k " not in step["run"]
+    geometry = next(item for item in workflow["jobs"]["windows-core-smoke"]["steps"]
+                    if "tests/test_industrial_native_geometry.py" in item.get("run", ""))
+    assert "tests/test_csv_progress_nonmodal.py" in geometry["run"]
 
 
 def test_native_windows_report_planner_step_preserves_real_platform_and_scope() -> None:
@@ -221,7 +227,7 @@ def test_native_windows_grouping_preview_step_keeps_complete_file_and_order() ->
     assert 'tests/test_tabular_analytics_grouping_dialog.py' in step
     assert ' -k ' not in step
     assert 'continue-on-error' not in step
-    assert 'if:' not in step
+    assert f'if: {NATIVE_DIAGNOSTIC_CONDITION}' in step
     assert workflow.index(f'- name: {name}') < workflow.index(f'- name: {ocr_name}')
     assert name in policy
     assert 'complete `tests/test_tabular_analytics_grouping_dialog.py` file' in policy
@@ -599,7 +605,43 @@ def test_ci_workflow_runs_blocking_windows_core_smoke() -> None:
     assert '| Windows core smoke | `windows-core-smoke` |' in ci_policy
 
 
+def test_windows_core_collects_independent_ui_evidence_after_failure_but_stays_blocking() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    job = workflow['jobs']['windows-core-smoke']
+    steps = job['steps']
+    install = next(step for step in steps if step.get('name') == 'Install dependencies')
+    assert install['id'] == 'windows-core-dependencies'
+    assert sum(step.get('id') == install['id'] for step in steps) == 1
+    assert install['run'].splitlines() == [
+        'python -m pip install --upgrade pip',
+        'python -m pip install -r requirements-dev.txt',
+    ]
+    assert 'if' not in install
+    independent = {
+        'Run native Windows report workspace tests',
+        'Run native Windows specialist geometry tests',
+        'Run native Windows grouping-preview lifecycle tests',
+    }
+    assert {step['name'] for step in steps if 'if' in step} == independent
+    for step in steps:
+        assert 'continue-on-error' not in step
+        if step['name'] in independent:
+            # No implicit success() gate: earlier failures still yield evidence.
+            # Cancelled/failed/skipped installation cannot run these processes.
+            assert step['if'] == NATIVE_DIAGNOSTIC_CONDITION
+            assert steps.index(step) > steps.index(install)
+            assert 'python -m pytest' in step['run']
+    # Failures retain the existing required job; no job-level waiver or new job.
+    assert job['name'] == 'Windows core smoke'
+    assert 'continue-on-error' not in job
+    assert job['if'] == "${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}"
+
+
 def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:
+    import shlex
+
     import yaml
 
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
@@ -614,9 +656,26 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'QT_QPA_PLATFORM': 'windows',
         'METROLIZA_EXPECT_QT_PLATFORM': 'windows',
         'METROLIZA_EXPECT_INDUSTRIAL_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_TEST_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_SCOPE_SCREEN': '1920x1080',
+        'METROLIZA_FILTER_SCOPE_DPR': '1',
     }
+    assert specialist['if'] == NATIVE_DIAGNOSTIC_CONDITION
+    assert 'continue-on-error' not in specialist
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in specialist['run']
     assert 'python -m pytest -vv -s tests/test_industrial_native_geometry.py' in specialist['run']
+    assert shlex.split(specialist['run'].splitlines()[-1]) == [
+        'python', '-m', 'pytest', '-vv', '-s',
+        'tests/test_industrial_native_geometry.py',
+        'tests/test_output_request_presentation.py',
+        'tests/test_filter_presentation.py',
+        'tests/test_curation_presentation.py',
+        'tests/test_parser_profile_onboarding.py',
+        'tests/test_industrial_onboarding_presentation.py',
+        'tests/test_industrial_onboarding_delta.py',
+        'tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters',
+        'tests/test_csv_progress_nonmodal.py',
+    ]
 
     ci_policy = CI_POLICY_PATH.read_text(encoding='utf-8')
     assert 'Run native Windows specialist geometry tests' in ci_policy

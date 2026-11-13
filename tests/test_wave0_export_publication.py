@@ -1,5 +1,6 @@
 """#1159: no workbook or HTML output is replaced without operation-specific consent."""
 
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 import errno
@@ -81,27 +82,60 @@ def test_export_cancel_keeps_old_target(tmp_path):
     assert set(tmp_path.iterdir()) == {target}
 
 
-def _request(database, target, *, dashboard=False):
-    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+def _request(database, target, *, dashboard=False, html_only=False):
+    from metroliza.exporting.export_dialog_service import build_validated_export_request
 
-    return ExportRequest(AppPaths(database, str(target)), ExportOptions(generate_html_dashboard=dashboard))
-
-
-def _dialog_host(choice):
-    return SimpleNamespace(
-        _choose_output_collision=lambda *_: choice,
-        _set_path_field_value=lambda *_: None, excel_file_text_label=None,
+    return build_validated_export_request(
+        db_file=database, excel_file=target,
+        selected_preset="html_dashboard_only" if html_only else "fast_diagnostics",
+        export_type="Line", export_target="html_dashboard" if html_only else "excel_xlsx",
+        sorting_parameter="Date", violin_input="6", summary_scale_input="0",
+        hide_ok_results=False, generate_html_dashboard=dashboard,
+        filter_query=None, grouping_df=None,
     )
 
 
+@pytest.fixture
+def dialog_host(qapplication_session, monkeypatch, tmp_path):
+    from metroliza.exporting.export_preset_utils import get_export_preset_label
+    from tests.test_export_dialog_behavior import _build_dialog
+
+    owned = []
+
+    def create(choice, request):
+        dialog = _build_dialog(monkeypatch, tmp_path, db_file=request.paths.db_file)
+        owned.append(dialog)
+        dialog.preset_combobox.setCurrentText(get_export_preset_label(request.options.preset))
+        dialog.export_type_combobox.setCurrentText(request.options.export_type.title())
+        dialog.sort_measurements_combobox.setCurrentText("Date" if request.options.sorting_parameter == "date" else "Sample #")
+        dialog.violin_plot_min_samplesize.setText(str(request.options.violin_plot_min_samplesize))
+        dialog.summary_plot_scale.setText(str(request.options.summary_plot_scale))
+        dialog.hide_ok_results_checkbox.setChecked(request.options.hide_ok_results)
+        dialog.include_google_sheets_checkbox.setChecked(request.options.export_target == "google_sheets_drive_convert")
+        dialog.generate_html_dashboard_checkbox.setChecked(request.options.generate_html_dashboard)
+        dialog.include_industrial_context_checkbox.setChecked(request.options.include_industrial_context)
+        dialog.dashboard_visual_settings = deepcopy(request.options.dashboard_visual_settings)
+        dialog.filter_query = request.filter_query
+        dialog.df_for_grouping = request.grouping_df
+        dialog.excel_file = Path(request.paths.excel_file or request.paths.html_dashboard_file)
+        dialog._set_path_field_value(dialog.excel_file_text_label, dialog.excel_file)
+        monkeypatch.setattr(dialog, "_choose_output_collision", lambda *_: choice)
+        monkeypatch.setattr(dialog, "log_and_exit", lambda error: pytest.fail(f"Unexpected export error: {error}"))
+        return dialog
+
+    yield create
+    for dialog in reversed(owned):
+        assert dialog.close()
+
+
 @pytest.mark.parametrize("choice", ["copy", "replace", "cancel"])
-def test_export_operation_decision_copy_replace_cancel_and_db_switch(tmp_path, choice):
+def test_export_operation_decision_copy_replace_cancel_and_db_switch(tmp_path, choice, dialog_host):
     from metroliza.ui.export_dialog import ExportDialog
 
     target = tmp_path / "output.xlsx"
     target.write_bytes(b"old")
-    host = _dialog_host(choice)
     request = _request("first.sqlite", target)
+    host = dialog_host(choice, request)
     result = ExportDialog._confirm_output_publication(host, request)
     if choice == "cancel":
         assert result is None
@@ -115,6 +149,43 @@ def test_export_operation_decision_copy_replace_cancel_and_db_switch(tmp_path, c
         assert ExportDialog._confirm_output_publication(host, _request("other.DB", target)) is None
         assert prompts == ["other.DB"]
     assert target.read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("changed", ["visual", "grouping"])
+def test_real_publication_scope_rejects_consent_changes_then_accepts_restored_attempt(
+    tmp_path, monkeypatch, dialog_host, changed,
+):
+    from metroliza.ui.export_dialog import ExportDialog
+    from PyQt6.QtWidgets import QMessageBox
+
+    target = tmp_path / "guarded.xlsx"
+    target.write_bytes(b"last complete workbook")
+    request = _request("selected.db", target)
+    host = dialog_host("copy", request)
+    messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: messages.append(_args[-1]))
+
+    def change_during_consent(*_args):
+        if changed == "visual":
+            host.dashboard_visual_settings["marker_size"] = 17.0
+        else:
+            host.df_for_grouping = ({"REPORT_ID": 1, "GROUP": "new group"},)
+        return "copy"
+
+    monkeypatch.setattr(host, "_choose_output_collision", change_during_consent)
+    assert ExportDialog._confirm_output_publication(host, request) is None
+    assert messages and "Settings changed" in messages[0]
+    assert host.excel_file == target
+    assert target.read_bytes() == b"last complete workbook"
+    assert not target.with_stem("guarded (2)").exists()
+    host.dashboard_visual_settings = deepcopy(request.options.dashboard_visual_settings)
+    host.df_for_grouping = request.grouping_df
+    monkeypatch.setattr(host, "_choose_output_collision", lambda *_: "copy")
+    result = ExportDialog._confirm_output_publication(host, request)
+    assert result.paths.excel_file == str(target.with_stem("guarded (2)"))
+    assert result.copy_output_from == str(target)
+    assert not result.replace_outputs
+    assert target.read_bytes() == b"last complete workbook"
 
 
 def test_collision_prompt_defaults_to_copy_and_shows_database_and_paths(monkeypatch, qapplication_session, tmp_path):
@@ -135,13 +206,14 @@ def test_collision_prompt_defaults_to_copy_and_shows_database_and_paths(monkeypa
     assert all(value in seen[0][1] for value in ("selected.sqlite3", str(target), str(copy)))
 
 
-def test_default_copy_publishes_new_workbook_and_keeps_old_bytes(tmp_path):
+def test_default_copy_publishes_new_workbook_and_keeps_old_bytes(tmp_path, dialog_host):
     from metroliza.ui.export_dialog import ExportDialog
     from metroliza.exporting.export_backends import ExcelExportBackend
 
     target = tmp_path / "out.xlsx"
     target.write_bytes(b"last complete NOK workbook")
-    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("chosen.DB", target))
+    request = _request("chosen.DB", target)
+    request = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     copied = Path(request.paths.excel_file)
     assert ExcelExportBackend().run(_export_thread(copied))
     assert copied.exists() and target.read_bytes() == b"last complete NOK workbook"
@@ -188,13 +260,14 @@ def test_dashboard_publication_protects_old_html_and_assets(tmp_path, replace_ex
         assert old_asset.read_bytes() == b"old NOK asset"
 
 
-def test_copy_avoids_sidecar_collision_as_well_as_workbook(tmp_path):
+def test_copy_avoids_sidecar_collision_as_well_as_workbook(tmp_path, dialog_host):
     from metroliza.ui.export_dialog import ExportDialog
 
     target = tmp_path / "out.xlsx"
     (tmp_path / "out_dashboard.html").write_text("existing dashboard")
     (tmp_path / "out (2)_dashboard_assets").mkdir()
-    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("chosen.db", target, dashboard=True))
+    request = _request("chosen.db", target, dashboard=True)
+    request = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     assert request.paths.excel_file == str(tmp_path / "out (3).xlsx")
     assert request.paths.html_dashboard_file == str(tmp_path / "out (3)_dashboard.html")
 
@@ -229,20 +302,21 @@ def test_dashboard_cancel_after_render_keeps_old_html_and_cleans_staging(tmp_pat
     assert set(tmp_path.iterdir()) == {target}
 
 
-def test_collision_consent_does_not_cover_a_file_changed_while_prompt_open(tmp_path):
+def test_collision_consent_does_not_cover_a_file_changed_while_prompt_open(tmp_path, dialog_host):
     from metroliza.ui.export_dialog import ExportDialog
     from metroliza.exporting.export_backends import ExcelExportBackend
 
     target = tmp_path / "out.xlsx"
     target.write_bytes(b"original")
-    host = _dialog_host("replace")
+    original_request = _request("selected.db", target)
+    host = dialog_host("replace", original_request)
 
     def choose(*_):
         target.write_bytes(b"another writer during confirmation")
         return "replace"
 
     host._choose_output_collision = choose
-    request = ExportDialog._confirm_output_publication(host, _request("selected.db", target))
+    request = ExportDialog._confirm_output_publication(host, original_request)
     thread = _export_thread(target)
     thread.replace_outputs = request.replace_outputs
     with pytest.raises(FileExistsError, match="changed after confirmation"):
@@ -295,17 +369,13 @@ def test_dashboard_target_created_after_render_is_preserved(tmp_path):
     assert set(tmp_path.iterdir()) == {target, tmp_path / f".{target.name}.publish.lock"}
 
 
-def test_html_only_collision_copy_keeps_existing_dashboard(tmp_path):
+def test_html_only_collision_copy_keeps_existing_dashboard(tmp_path, dialog_host):
     from metroliza.ui.export_dialog import ExportDialog
-    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
 
     target = tmp_path / "dashboard.html"
     target.write_text("old NOK dashboard")
-    request = ExportRequest(
-        AppPaths("selected.sqlite", html_dashboard_file=str(target)),
-        ExportOptions(export_target="html_dashboard"),
-    )
-    result = ExportDialog._confirm_output_publication(_dialog_host("copy"), request)
+    request = _request("selected.sqlite", target, html_only=True)
+    result = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     assert result.paths.excel_file is None
     assert result.paths.html_dashboard_file == str(tmp_path / "dashboard (2).html")
     assert not result.replace_outputs
@@ -341,14 +411,15 @@ def test_windows_publication_uses_no_replace_rename_policy(monkeypatch, tmp_path
     assert calls == [(temporary, target)]
 
 
-def test_replacement_consent_survives_validation_and_worker_creation(tmp_path, qapplication_session):
+def test_replacement_consent_survives_validation_and_worker_creation(tmp_path, qapplication_session, dialog_host):
     from metroliza.exporting.contracts import validate_export_request
     from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.ui.export_dialog import ExportDialog
 
     target = tmp_path / "out.xlsx"
     target.write_bytes(b"last complete NOK workbook")
-    request = ExportDialog._confirm_output_publication(_dialog_host("replace"), _request("selected.sqlite3", target))
+    request = _request("selected.sqlite3", target)
+    request = ExportDialog._confirm_output_publication(dialog_host("replace", request), request)
     validated = validate_export_request(request)
     worker = ExportDataThread(validated)
     assert worker.replace_outputs == request.replace_outputs
@@ -470,7 +541,7 @@ def test_unsupported_hardlinks_do_not_blame_excel_for_folder_permissions(monkeyp
 
 
 @pytest.mark.parametrize("dashboard", [False, True])
-def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path, qapplication_session, dashboard):
+def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path, qapplication_session, dashboard, dialog_host):
     from metroliza.exporting.contracts import validate_export_request
     from metroliza.exporting.export_backends import ExcelExportBackend
     from metroliza.exporting.export_data_thread import ExportDataThread
@@ -478,7 +549,8 @@ def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path
 
     target = tmp_path / "out.xlsx"
     target.write_bytes(b"last complete NOK workbook")
-    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("selected.db", target, dashboard=dashboard))
+    request = _request("selected.db", target, dashboard=dashboard)
+    request = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     worker = ExportDataThread(validate_export_request(request))
     first_copy = Path(worker.excel_file)
     worker.run_export_pipeline = _export_thread(first_copy, race=True).run_export_pipeline
@@ -496,16 +568,15 @@ def test_save_copy_retries_publication_race_and_reports_actual_workbook(tmp_path
         assert Path(worker.html_dashboard_assets_dir) == tmp_path / "out (3)_dashboard_assets"
 
 
-def test_save_copy_html_only_retries_race_after_render(tmp_path, qapplication_session, monkeypatch):
+def test_save_copy_html_only_retries_race_after_render(tmp_path, qapplication_session, monkeypatch, dialog_host):
     from metroliza.charts.export_html_dashboard import write_export_html_dashboard
     from metroliza.exporting import export_data_thread
-    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
     from metroliza.ui.export_dialog import ExportDialog
 
     target = tmp_path / "dashboard.html"
     target.write_text("last complete NOK dashboard")
-    request = ExportRequest(AppPaths("selected.db", html_dashboard_file=str(target)), ExportOptions(export_target="html_dashboard"))
-    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), request)
+    request = _request("selected.db", target, html_only=True)
+    request = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     worker = export_data_thread.ExportDataThread(request)
     occupied = tmp_path / "dashboard (2).html"
     calls = []
@@ -570,14 +641,15 @@ def test_hardlink_fallback_failure_leaves_no_final_file(monkeypatch, tmp_path):
     assert temporary.read_bytes() == b"next NOK workbook"
 
 
-def test_save_copy_publication_stops_after_twenty_races_without_replacing(monkeypatch, tmp_path, qapplication_session):
+def test_save_copy_publication_stops_after_twenty_races_without_replacing(monkeypatch, tmp_path, qapplication_session, dialog_host):
     from metroliza.exporting import export_backends
     from metroliza.exporting.export_data_thread import ExportDataThread
     from metroliza.ui.export_dialog import ExportDialog
 
     target = tmp_path / "out.xlsx"
     target.write_bytes(b"last complete NOK workbook")
-    request = ExportDialog._confirm_output_publication(_dialog_host("copy"), _request("selected.db", target))
+    request = _request("selected.db", target)
+    request = ExportDialog._confirm_output_publication(dialog_host("copy", request), request)
     worker = ExportDataThread(request)
     worker.run_export_pipeline = _export_thread(target).run_export_pipeline
     calls = []

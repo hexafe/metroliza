@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, replace
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +45,8 @@ from metroliza.industrial.industrial_credentials import (
     load_industrial_credentials,
     save_industrial_credentials,
 )
+from metroliza.ui.curation_presentation import bind_button
+from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
 from metroliza.industrial.industrial_source_config import (
@@ -66,11 +70,12 @@ from metroliza.industrial.industrial_workers import (
     IndustrialOznakAccessCheckThread,
     IndustrialOznakSyncThread,
 )
-from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_window_size,
+    configure_dialog_button_roles,
     section_label,
     set_status_variant,
     status_chip,
@@ -141,6 +146,7 @@ class IndustrialSqlQueryDialog(QDialog):
         self.save_button.clicked.connect(parent.save_sql_recipe)
         self.preview_button.clicked.connect(self._preview_sql)
         self.close_button.clicked.connect(self.close)
+        install_button_commands(self, "industrial_sql")
 
         self.sync_from_parent()
         apply_metroliza_theme(self)
@@ -242,8 +248,11 @@ class IndustrialSyncDialog(QDialog):
         self.link_refresh_thread: IndustrialLinkRefreshThread | None = None
         self.sql_editor_window: IndustrialSqlQueryDialog | None = None
         self.setWindowTitle("Fetch industrial data")
-        configure_window_size(self, minimum=(960, 520), initial=(1000, 840))
+        configure_window_size(self, minimum=(680, 480), initial=(1000, 840))
 
+        self.stage_label = status_chip("Choose a source to check access or fetch.", "neutral")
+        self.configure_sources_button = QPushButton("Configure sources")
+        self.configure_sources_button.clicked.connect(self.configure_sources)
         self.status_label = status_chip(
             "Select a production source and enter production database credentials.",
             "neutral",
@@ -331,7 +340,7 @@ class IndustrialSyncDialog(QDialog):
         self.test_connection_button = QPushButton("Check access")
         self.sync_now_button = QPushButton("Fetch to cache")
         self.fetch_csv_summary_button = QPushButton("Fetch to CSV Summary")
-        self.cancel_sync_button = QPushButton("Cancel")
+        self.cancel_sync_button = QPushButton("Stop")
         self.forget_credentials_button = QPushButton("Forget saved credentials")
         self.close_button = QPushButton("Close")
         self.test_connection_button.setToolTip(
@@ -395,6 +404,11 @@ class IndustrialSyncDialog(QDialog):
         self.forget_credentials_button.setEnabled(False)
 
         self._build_layout()
+        self.command_actions = [bind_button(self, button, sequence) for button, sequence in (
+            (self.configure_sources_button, "Ctrl+D"), (self.test_connection_button, "Ctrl+R"),
+            (self.sync_now_button, "Ctrl+S"), (self.cancel_sync_button, "Ctrl+Shift+S"),
+            (self.fetch_csv_summary_button, "Ctrl+Shift+E"), (self.close_button, "Ctrl+W"),
+        )]
         self._sync_access_only_visibility()
         self.reload_profiles()
         self._sync_filter_fields_from_state()
@@ -412,6 +426,10 @@ class IndustrialSyncDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Production database access and cache fetch"))
+        stage_row = QHBoxLayout()
+        stage_row.addWidget(self.stage_label, 1)
+        stage_row.addWidget(self.configure_sources_button)
+        layout.addLayout(stage_row)
 
         # Keep the action footer reachable while the complete credential and
         # filter surface remains available on compact Windows working areas.
@@ -519,16 +537,83 @@ class IndustrialSyncDialog(QDialog):
         self.content_scroll.setWidget(content)
         layout.addWidget(self.content_scroll, 1)
 
-        actions = QHBoxLayout()
+        actions = QGridLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
-        actions.addStretch(1)
-        actions.addWidget(self.close_button)
-        actions.addWidget(self.test_connection_button)
-        actions.addWidget(self.sync_now_button)
-        actions.addWidget(self.fetch_csv_summary_button)
-        actions.addWidget(self.cancel_sync_button)
+        for index, button in enumerate((self.test_connection_button, self.sync_now_button,
+                                        self.fetch_csv_summary_button, self.cancel_sync_button,
+                                        self.close_button)):
+            actions.addWidget(button, index // 3, index % 3)
         layout.addLayout(actions)
+
+    def configure_sources(self):
+        if self._operation_blocks_close():
+            return
+        from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
+
+        dialog = IndustrialSourceProfilesDialog(self, db_file=None if self.access_only else self.db_file,
+                                                 config_path=self.config_path)
+        dialog.exec()
+        self.config_path = dialog.config_path
+        adopt_config = getattr(self.parent(), "on_industrial_source_config_changed", None)
+        if callable(adopt_config):
+            adopt_config(self.config_path)
+        self.reload_profiles()
+
+    def _present_stage(self, text, primary, *, variant="neutral"):
+        self.stage_label.setText(text)
+        set_status_variant(self.stage_label, variant)
+        buttons = (self.configure_sources_button, self.test_connection_button, self.sync_now_button,
+                   self.fetch_csv_summary_button, self.cancel_sync_button, self.close_button)
+        configure_dialog_button_roles(primary=primary, secondary=tuple(button for button in buttons if button is not primary))
+
+    def _present_ready_stage(self):
+        if self.current_profile() is None:
+            self._present_stage("No enabled source. Next: Configure sources [Ctrl+D].", self.configure_sources_button, variant="warning")
+        else:
+            self._present_stage("Source selected. Next: Check access [Ctrl+R]; the one-row check saves nothing.", self.test_connection_button)
+
+    def _cache_has_rows(self):
+        """Bounded outcome-only observation; never initialize or change the live cache."""
+        if not self.db_file:
+            return None
+        try:
+            with sqlite_readonly_connection_scope(self.db_file, timeout_s=0.1) as connection:
+                with closing(connection.execute("SELECT 1 FROM industrial_records LIMIT 1")) as cursor:
+                    return cursor.fetchone() is not None
+        except (sqlite3.Error, OSError, ValueError):
+            return None
+
+    def _present_fetch_outcome(self, text, *, variant):
+        cached = self._cache_has_rows()
+        if cached is True:
+            self._present_stage(text + " Cached rows are available. Next: Close [Ctrl+W], then Analyze or Export in Industrial Data.",
+                                self.close_button, variant=variant)
+        elif cached is False:
+            target = self.test_connection_button if self.current_profile() else self.configure_sources_button
+            action = "review source/scope and Check access [Ctrl+R] before fetching again" if self.current_profile() else "Configure sources [Ctrl+D]"
+            self._present_stage(text + f" The local cache is empty. Next: {action}.", target, variant="warning")
+        else:
+            self._present_stage(text + " Cache readiness could not be confirmed. Next: Close [Ctrl+W] and check the local cache.",
+                                self.close_button, variant="warning")
+
+    def _present_result_stage(self, result):
+        if self._active_batch_total > 1:
+            return  # the existing aggregate completion owns the final batch presentation
+        status = result.get("status", "unknown")
+        if not result.get("test_only"):
+            outcome = {"succeeded": "Fetch finished.", "completed_with_warnings": "Fetch finished with warnings.",
+                       "cancelled": "Fetch stopped.", "failed": "Fetch failed."}.get(status, "Fetch outcome needs attention.")
+            self._present_fetch_outcome(outcome, variant="success" if status == "succeeded" else "warning")
+        elif status not in {"succeeded", "completed_with_warnings"}:
+            text = "Access check stopped." if status == "cancelled" else "Access check failed. Check credentials and source settings."
+            self._present_stage(text + " Next: Check access [Ctrl+R].", self.test_connection_button, variant="warning")
+        else:
+            variant = "warning" if status == "completed_with_warnings" else "neutral"
+            if self.access_only:
+                self._present_stage("Access check completed; nothing saved. Next: Close [Ctrl+W] to choose a local cache.", self.close_button, variant=variant)
+            else:
+                self._present_stage(f"Check completed: {int(result.get('row_count', 0) or 0):,} row(s) visible; nothing saved. Next: Fetch [Ctrl+S] for the selected scope.", self.sync_now_button, variant=variant)
 
     def _preserve_source_picker_height(self) -> None:
         """Apply the themed action-row height to the adjacent source list."""
@@ -635,6 +720,7 @@ class IndustrialSyncDialog(QDialog):
         self.status_label.setText(message)
         set_status_variant(self.status_label, "neutral" if enabled else "warning")
         self._sync_action_buttons()
+        self._present_ready_stage()
 
     def current_profile(self) -> IndustrialSourceProfile | None:
         profile = self.profile_combo.currentData()
@@ -644,6 +730,8 @@ class IndustrialSyncDialog(QDialog):
         self._load_stored_credentials_for_current_profile()
         self._ensure_checked_source_selection()
         self._sync_action_buttons()
+        if not self._loading_profiles:
+            self._present_ready_stage()
 
     def select_all_sources(self) -> None:
         self.source_check_list.blockSignals(True)
@@ -1013,6 +1101,7 @@ class IndustrialSyncDialog(QDialog):
         return "sql" if self.mode_tabs.currentIndex() == 1 else "guided"
 
     def cancel_sync(self) -> None:
+        self._present_stage("Stop requested. Wait for the current operation to finish before Close.", self.cancel_sync_button)
         self._batch_operations.clear()
         if self._active_batch_total > 1:
             self._active_batch_total = len(self._batch_results) + 1
@@ -1099,6 +1188,7 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "neutral")
         self._set_action_buttons_enabled(False)
         self.cancel_sync_button.setEnabled(True)
+        self._present_stage("Remote operation running. Next: Stop [Ctrl+Shift+S] to request cancellation; Close waits for completion.", self.cancel_sync_button)
         self._batch_results = []
         self._active_batch_total = len(operations)
         self._batch_operations = list(operations)
@@ -1268,6 +1358,7 @@ class IndustrialSyncDialog(QDialog):
             self.timeout_spin.setEnabled(True)
             return
         for button in (
+            self.configure_sources_button,
             self.profile_combo,
             self.source_check_list,
             self.select_all_sources_button,
@@ -1298,6 +1389,7 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "neutral")
 
     def on_oznak_result(self, result: dict[str, Any]) -> None:
+        self._present_result_stage(result)
         self._save_pending_credentials_after_success(result)
         active_operation = self._active_operation
         if active_operation is not None:
@@ -1491,6 +1583,9 @@ class IndustrialSyncDialog(QDialog):
         )
 
     def _finish_batch_fetch_ui_actions(self) -> None:
+        clean = bool(self._batch_results) and all(result.get("status") == "succeeded" for result in self._batch_results)
+        self._present_fetch_outcome("Batch finished." if clean else "Batch finished with warnings, failures or stopped sources.",
+                                    variant="success" if clean else "warning")
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
@@ -1505,6 +1600,12 @@ class IndustrialSyncDialog(QDialog):
             self.sql_editor_window.set_preview_records(records)
 
     def on_oznak_error(self, message: str) -> None:
+        if self.access_only or (self._active_operation is not None and self._active_operation.test_only):
+            self._present_result_stage({"status": "failed", "test_only": True})
+        else:
+            self._present_fetch_outcome("Operation failed. Review the error and source settings.", variant="warning")
+        self.status_label.setText(f"Operation failed: {redact_sensitive_text(message)}")
+        set_status_variant(self.status_label, "danger")
         self._pending_credential_save = None
         self._pending_sql_preview = False
         self._open_csv_summary_after_fetch = False
@@ -1581,6 +1682,7 @@ class IndustrialSyncDialog(QDialog):
         return True
 
     def _sync_action_buttons(self) -> None:
+        self.configure_sources_button.setEnabled(not self._operation_blocks_close())
         if self._operation_blocks_close():
             self.edit_filter_button.setEnabled(False)
             self.open_sql_button.setEnabled(False)

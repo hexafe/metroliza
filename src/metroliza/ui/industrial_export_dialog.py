@@ -32,6 +32,7 @@ from metroliza.industrial.industrial_workflow_state import IndustrialFilterState
 from metroliza.industrial.industrial_workers import IndustrialExportThread, IndustrialLiveExportThread
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.ui.shortcuts import install_button_commands, install_callback_command
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -138,6 +139,8 @@ class IndustrialExportDialog(QDialog):
         self.password_edit.textChanged.connect(self._sync_ui_state)
 
         self._build_layout()
+        install_button_commands(self, "industrial_export")
+        install_callback_command(self, "Ctrl+Shift+S", self.cancel_export)
         self.reload_live_profiles()
         self._sync_ui_state()
         apply_metroliza_theme(self)
@@ -236,6 +239,7 @@ class IndustrialExportDialog(QDialog):
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
+        actions.addWidget(section_label("Stop active export [Ctrl+Shift+S]"))
         actions.addStretch(1)
         actions.addWidget(self.close_button)
         actions.addWidget(self.start_button)
@@ -479,6 +483,8 @@ class IndustrialExportDialog(QDialog):
                 action_started_at=action_started_at,
             )
         )
+        install_callback_command(self.loading_dialog, "Ctrl+Shift+S", self.cancel_export)
+        self.loading_dialog.setWindowTitle(self.loading_dialog.windowTitle() + " · Stop Ctrl+Shift+S")
         self._progress_widgets = (self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif)
         self.loading_bar.setRange(0, 0)
         self.export_thread = export_thread

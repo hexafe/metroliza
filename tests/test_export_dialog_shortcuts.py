@@ -112,7 +112,40 @@ def test_ctrl_f_selects_search_for_focused_pane_and_active_tab(window):
 def test_ctrl_f_fallback_disabled_and_modal_boundary(window):
     kind, dialog, app = window
     if kind == "export":
-        assert not any(a.shortcut() == QKeySequence("Ctrl+F") for a in dialog.findChildren(QAction))
+        actions = [action for action in dialog.actions() if action.shortcut() == QKeySequence("Ctrl+F")]
+        assert len(actions) == 1
+        assert actions[0].shortcutContext() == Qt.ShortcutContext.WindowShortcut
+        button = dialog.filter_button
+        button.clicked.disconnect()  # retain real QAction/button dispatch, avoid opening a heavy child
+        hits = []
+        button.clicked.connect(lambda: hits.append(True))
+        assert "[Ctrl+F]" in button.text()
+        button.setEnabled(False)
+        _press(dialog, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+        assert not hits
+        button.setEnabled(True)
+        _press(dialog, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+        assert hits == [True]
+        child = QDialog(dialog)
+        child.setModal(True)
+        child.show()
+        child.activateWindow()
+        app.processEvents()
+        try:
+            _press(child, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
+            assert hits == [True]
+        finally:
+            child.hide()
+            child.deleteLater()
+        dialog.activateWindow()
+        dialog.advanced_toggle_button.setChecked(True)
+        edit = dialog.violin_plot_min_samplesize
+        edit.setText("123")
+        edit.setFocus()
+        app.processEvents()
+        _press(edit, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier)
+        assert edit.selectedText() == "123"
+        assert hits == [True]
         return
     field, _ = _search_pairs(kind, dialog)[0]
     field.setText("sample")
@@ -158,7 +191,10 @@ def test_primary_button_mnemonics_unique_and_accessible(window):
         assert not button.shortcut().isEmpty(), name
         assert "&" not in button.accessibleName()
         assert button.accessibleName()
-        assert button.shortcut().toString() in button.toolTip()
+        primary_hint = button.property("metrolizaVisibleShortcut") if kind == "export" else None
+        assert (primary_hint or button.shortcut().toString()) in button.toolTip()
+        if primary_hint:
+            assert f"[{primary_hint}]" in button.text()
     sequences = []
     for action in dialog.findChildren(QAction):
         sequences.extend(sequence.toString() for sequence in action.shortcuts())

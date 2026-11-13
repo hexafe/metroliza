@@ -171,7 +171,7 @@ class _ExportPresetFlowStubCase(unittest.TestCase):
         qtcore_stub.QIODevice = types.SimpleNamespace(OpenModeFlag=types.SimpleNamespace(ReadOnly=0))
         qtcore_stub.QSize = object
         qtcore_stub.QTemporaryFile = object
-        qtcore_stub.Qt = object
+        qtcore_stub.Qt = types.SimpleNamespace(TextFormat=types.SimpleNamespace(PlainText=0))
         qtcore_stub.pyqtSignal = lambda *_args, **_kwargs: object()
 
         class _FakeQUrl:
@@ -1010,6 +1010,14 @@ class TestExportDialogServiceRequestAssembly(unittest.TestCase):
 
 
 class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
+    def _complete_startup_presentation(self, dialog, checkbox_type):
+        # These are constructor-owned controls/state used by the real launch path.
+        dialog.include_industrial_context_checkbox = checkbox_type(False)
+        dialog.dashboard_visual_settings = {}
+        dialog.request_summary_label = Mock()
+        dialog.path_readiness_label = Mock()
+        dialog.log_and_exit = lambda error: self.fail(f"Unexpected export startup error: {error}")
+
     def test_show_loading_screen_starts_thread_with_validated_export_request_keyword(self):
         from modules.export_dialog import ExportDialog
 
@@ -1102,6 +1110,7 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.on_export_error = lambda *_: None
         dialog.on_export_finished = lambda: None
         dialog.on_export_canceled = lambda: None
+        self._complete_startup_presentation(dialog, _FakeCheckbox)
 
         with patch('modules.export_dialog.create_worker_progress_dialog', return_value=(_FakeDialog(), _FakeLabel(), _FakeBar(), object())), \
              patch('modules.export_dialog.save_export_dialog_config'), \
@@ -1112,6 +1121,9 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
             dialog.show_loading_screen()
 
         self.assertIsNotNone(_FakeThread.init_kwargs)
+        self.assertTrue(dialog.export_thread.started)
+        self.assertEqual(dialog.loading_dialog.show_calls, 1)
+        self.assertIn('Launch request', dialog.request_summary_label.setText.call_args.args[0])
         self.assertEqual(set(_FakeThread.init_kwargs.keys()), {'export_request'})
         request = _FakeThread.init_kwargs['export_request']
         self.assertEqual(request.paths.db_file, 'input.db')
@@ -1286,19 +1298,22 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.on_export_error = lambda *_: None
         dialog.on_export_finished = lambda: None
         dialog.on_export_canceled = lambda: None
+        self._complete_startup_presentation(dialog, _FakeCheckbox)
 
         def _create_progress_dialog(*_args, **_kwargs):
             self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])
             return _FakeDialog(), _FakeLabel(), _FakeBar(), object()
 
-        with patch('modules.export_dialog.create_worker_progress_dialog', side_effect=_create_progress_dialog), \
+        with patch('modules.export_dialog.create_worker_progress_dialog', side_effect=_create_progress_dialog) as progress_mock, \
              patch('modules.export_dialog.save_export_dialog_config'), \
              patch(
                  'modules.export_dialog.create_export_data_thread',
                  side_effect=lambda export_request: _FakeThread(export_request=export_request),
-             ):
+             ) as thread_mock:
             dialog.show_loading_screen()
 
+        progress_mock.assert_called_once()
+        thread_mock.assert_called_once()
         self.assertEqual(dialog.metadata_enrichment_notice_label.visible_states, [True])
 
 

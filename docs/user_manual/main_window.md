@@ -40,7 +40,7 @@ for the current database. **Help** provides manuals, release notes and support a
 
 Commands apply to the active window. Disabled commands do nothing. Main-window
 commands pause while a modal dialog is open; F1 opens that dialog's own manual
-when it has a Help menu. Alt underlines identify the main action buttons and menus.
+when it has a Help menu. Existing Alt mnemonics remain optional alternatives for buttons and menus.
 
 | Shortcut | Action |
 |---|---|
@@ -49,18 +49,40 @@ when it has a Help menu. Alt underlines identify the main action buttons and men
 | Ctrl+3 | CSV Summary |
 | Ctrl+4 | Industrial Data |
 | Ctrl+5 | Realtime Monitor |
-| Ctrl+6 | Parser Profiles |
-| Ctrl+7 | Tools |
+| Ctrl+Shift+F | Parser Profiles |
+| Ctrl+Shift+T | Tools |
 | Ctrl+O | Open database… |
+| Ctrl+D | Select/create database in Reports; open database elsewhere |
+| Ctrl+Shift+D | Choose Reports source… |
+| Ctrl+Shift+S | Cancel report operation |
 | Ctrl+R | Review reports |
-| Ctrl+I | Import selected reports |
+| Ctrl+S | Import selected reports |
 | Ctrl+E | Export Workbook |
 | F1 | Manual of the active window |
 
 Review and Import use the current Reports selection and readiness, even from
 another page. Review starts the existing review/preflight action; Import requires
 an approved selection. Export opens the workbook workflow for the selected database.
-Standard editing and navigation keys keep their usual behavior.
+Ctrl+D uses the Reports database button while Reports is active (select/create, disabled
+until a source is selected). On Home and other pages it opens an existing database,
+including database-only Export workflows. Ctrl+O always opens an existing database.
+Ctrl+Shift+D invokes the same Reports source chooser, including its archive fallback.
+Ctrl+Shift+S cancels the active Reports operation from the main window; Alt+L is secondary.
+Ctrl+I remains a legacy alternative for Import.
+Ctrl+1…5 are the only numbered commands. The keys are displayed beside navigation
+and primary commands; Ctrl+A/C/X/V/Z and Polish AltGr typing keep their usual behavior.
+All shell commands belong to the main window and do not run inside another dialog.
+Reports search uses Ctrl+F only while Reports is visible; standard text editing remains available.
+
+Home offers all main modules. Click a navigation item, choose its View menu command,
+use its shortcut, or press the page's Open/Resume button to activate the same work.
+Arrow keys preview a launcher; Enter opens it. Repeating activation raises the existing
+session. Previous-page restoration selects the saved page without opening a child window.
+The Tools page is database maintenance; the broader Tools menu also opens work modules.
+
+Reports Tab order follows source, destination, metadata mode, Review, search/filters,
+selection/table, metadata actions, Import, outcome and downstream database actions.
+Shift+Tab reverses it; hidden and disabled controls are skipped.
 
 ## Report preparation and output
 
@@ -310,8 +332,11 @@ Use:
 
 Metroliza uses both modal and modeless dialogs.
 
-- **Modal dialogs** stay in front and block other app interaction until you close them. Examples include **About**, **Release notes**, **CSV Summary**, and **Characteristic Name Matching**.
-- **Reports** remains embedded in the main window. **Export** and other modeless workflows can stay open while you navigate.
+- **Modal dialogs** stay in front and block other app interaction until you close them. Examples include **About**, **Release notes**, and **Characteristic Name Matching**.
+- **Reports** remains embedded in the main window. **CSV Summary**, **Export** and other modeless workflows can stay open while you navigate.
+- CSV Summary keeps one session with its own CSV/XLSX input, settings and last result.
+  Changing the Reports database does not change that input. Close or Cancel keeps the
+  existing wait-for-worker guard; return to the CSV window to finish or cancel active work.
 
 In practice, this means some windows behave like a temporary popup, while others behave more like a separate workspace. **Modify Database** is opened as a focused editing dialog so you finish or cancel that cleanup before returning to other workflows.
 

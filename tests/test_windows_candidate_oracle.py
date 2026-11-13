@@ -76,6 +76,7 @@ def _payload(child: Path) -> dict:
         "literal_workbook": child / "literal.xlsx",
         "inference_database": child / "inference.sqlite",
         "group_inference": child / "inference.json",
+        "uiux_evidence": child / "uiux-observation.json",
     }
     for key, path in paths.items():
         path.write_bytes(key.encode("ascii"))

@@ -61,9 +61,12 @@ def _prepared(tmp_path):
         directory.mkdir()
         artifacts = {}
         for key in sorted(final.ARTIFACT_KEYS):
-            path = directory / (key + ".json")
+            path = directory / ("uiux-observation.json" if key == "uiux_evidence" else key + ".json")
             value = {}
-            if key == "closeout_evidence":
+            if key == "uiux_evidence":
+                from tests.test_windows_candidate_uiux import write_complete_uiux
+                value = write_complete_uiux(directory, source=HEAD, dpr=float(scale))
+            elif key == "closeout_evidence":
                 value = closeout_observation(scale=float(scale))
             elif key == "native_evidence":
                 value = native_observation(mode=mode)
@@ -265,3 +268,65 @@ def test_final_reopen_rejects_database_change_during_semantic_observation(tmp_pa
     with pytest.raises(core.CandidateFailure, match="fresh_reopen_database_identity_changed"):
         final.finalize(root, HEAD, TREE)
     assert not (root / "combined-candidate-receipt.json").exists()
+
+
+@pytest.mark.parametrize('defect', ['missing', 'failed_summary', 'source', 'tab_flag', 'png', 'sql', 'plotly', 'identity'])
+def test_combined_uiux_rechecks_closed_facts_and_actual_retained_assets(tmp_path, defect):
+    from scripts import verify_windows_candidate_uiux as verifier
+    root = _prepared(tmp_path)
+    directory = root / 'core-dpr-1.0'
+    receipt_path = directory / 'core-driver-receipt.json'
+    receipt = json.loads(receipt_path.read_bytes())
+    artifact = directory / receipt['artifacts']['uiux_evidence']['path']
+    value = json.loads(artifact.read_bytes())
+    if defect == 'missing':
+        del receipt['artifacts']['uiux_evidence']
+    elif defect == 'identity':
+        receipt['uiux_verifier_sha256'] = '0' * 64
+    elif defect == 'failed_summary':
+        value['evidence']['controls'] = dict(kind='failure_summary', phase='keys', code='unexpected_exception', error_codes=['unexpected_exception'])
+    elif defect == 'source':
+        value['evidence']['context']['source_sha'] = 'c' * 40
+    elif defect == 'tab_flag':
+        value['evidence']['controls']['evidence']['report_tab']['ready']['controls'][18]['enabled'] = True
+    elif defect == 'png':
+        (directory / 'uiux-csv-busy.png').write_bytes(b'changed')
+    else:
+        key = 'reports_B' if defect == 'sql' else 'csv_plotly'
+        record = value['evidence']['data'][key]
+        path = directory / record['path']
+        if defect == 'sql':
+            with closing(sqlite3.connect(path)) as writer:
+                writer.execute('UPDATE report_measurements SET meas=999 WHERE id=1')
+                writer.commit()
+        else:
+            path.write_bytes(b'changed')
+        record.update(sha256=verifier.sha(path), size=path.stat().st_size)
+    _write(artifact, value)
+    if 'uiux_evidence' in receipt['artifacts']:
+        receipt['artifacts']['uiux_evidence']['sha256'] = core._hash(artifact)
+    _write(receipt_path, receipt)
+    with pytest.raises((ValueError, OSError, RuntimeError)):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / 'combined-candidate-receipt.json').exists()
+
+
+def test_passed_component_retained_beneath_failed_host_never_finalizes(tmp_path):
+    from scripts import verify_windows_candidate_uiux as verifier
+    root = _prepared(tmp_path)
+    directory = root / 'core-dpr-1.0'
+    original = (directory / 'uiux-observation.json').read_bytes()
+    value = verifier.load_json(directory / 'uiux-observation.json')
+    evidence = value['evidence']
+    snapshot = verifier.snapshot_assets(directory, evidence['captures']['metadata'], evidence['data'], dpr=1.0)
+    snapshot['uiux-observation.json'] = original
+    payload = core._failed_diagnostic_payload(dict(owned_cleanup='complete', private_cleanup='complete', receipt_state='valid_success',
+        observed_exit_code=7), {'name': 'uiux_retention'}, core.CandidateFailure('post_success_nonzero_exit'), HEAD)
+    core._retain_failed_diagnostic(directory, payload)
+    core._restore_failed_uiux(directory, snapshot)
+    assert (directory / 'uiux-observation.json').read_bytes() == original
+    assert core._json(directory / core.FAILED_DIAGNOSTIC_FILE)['status'] == 'failed'
+    assert not (directory / 'core-driver-receipt.json').exists()
+    with pytest.raises((ValueError, OSError, RuntimeError)):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / 'combined-candidate-receipt.json').exists()

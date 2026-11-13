@@ -35,10 +35,10 @@ def _payload():
             "group_analysis_status": "insufficient_groups",
         },
         "artifacts": {
-            key: {"path": key + suffix, "sha256": "2" * 64}
+            key: {"path": ("uiux-observation.json" if key == "uiux_evidence" else key + suffix), "sha256": "2" * 64}
             for key, suffix in zip(
                 driver.ARTIFACTS,
-                (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json"),
+                (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json"),
                 strict=True,
             )
         },

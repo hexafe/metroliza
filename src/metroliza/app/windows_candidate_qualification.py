@@ -35,7 +35,7 @@ FAILURE_STAGES = frozenset({
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
-    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "complete",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -536,6 +536,110 @@ def _run_closeout_slices(child, fixtures, receipt, *, stage_recorder=None):
             raise ScenarioFailure("closeout_" + name + "_failed")
 
 
+UIUX_DATA = {'reports_A': 'reports-uiux/A.sqlite', 'reports_B': 'reports-uiux/B.sqlite',
+             'reports_C': 'reports-uiux/C.sqlite', 'reports_seed': 'reports-uiux/seed.sqlite',
+             'csv_html': 'tabular/analysis.html', 'csv_xlsx': 'tabular/analysis.xlsx',
+             'csv_plotly': 'tabular/analysis_assets/plotly-2.27.0.min.js'}
+UIUX_PHASES = {'reports': {'admission', 'A', 'B', 'C', 'cleanup'},
+               'tabular': {'admission', 'csv', 'filter', 'grouping', 'cleanup'},
+               'controls': {'admission', 'reports', 'routes', 'dialogs', 'keys', 'cleanup'}}
+
+
+def _uiux_failure_summary(name, record, allowed):
+    failure = record.get('evidence', {}).get('failure') or {}
+    phase = failure.get('phase')
+    codes = record.get('error_codes')
+    codes = codes if type(codes) is list and 0 < len(codes) <= 8 else ['unexpected_exception']
+    codes = [code if type(code) is str and code in allowed else 'unexpected_exception' for code in codes]
+    if type(phase) is not str or phase not in UIUX_PHASES[name]:
+        codes = ['unexpected_exception']
+    return dict(kind='failure_summary', phase=phase if type(phase) is str and phase in UIUX_PHASES[name]
+                else 'admission', code=codes[0], error_codes=codes)
+
+
+def _uiux_data(child):
+    import stat
+    data, total = {}, 0
+    for name, relative in UIUX_DATA.items():
+        path = child / relative
+        data[name] = None
+        if not path.exists():
+            continue
+        current = child
+        for component in Path(relative).parts:
+            current /= component
+            info = current.lstat()
+            if current.is_symlink() or getattr(info, 'st_file_attributes', 0) & 0x400:
+                raise ScenarioFailure('uiux_data_failed')
+        size = info.st_size
+        if not stat.S_ISREG(info.st_mode) or not 0 < size <= 8 * 1024 * 1024:
+            raise ScenarioFailure('uiux_data_failed')
+        total += size
+        if total > 32 * 1024 * 1024:
+            raise ScenarioFailure('uiux_data_failed')
+        data[name] = dict(path=relative, sha256=_sha256(path), size=size)
+    return data
+
+
+def _run_uiux_slice(child, fixtures, receipt):
+    from PyQt6.QtWidgets import QApplication
+    from metroliza.app.windows_candidate_uiux_reports import run_reports_checks, ERROR_CODES as report_errors
+    from metroliza.app.windows_candidate_uiux_tabular import run_tabular_checks, ERROR_CODES as tabular_errors
+    from metroliza.app.windows_candidate_uiux_controls import make_capture, run_controls_checks, ERROR_CODES as control_errors
+    scale = os.environ.get('METROLIZA_WINDOWS_CANDIDATE_DPR', '1.0')
+    if scale not in {'1.0', '1.25', '1.5'}:
+        raise ScenarioFailure('invalid_ui_scale')
+    dpr = float(scale)
+    record = dict(schema_version=1, status='failed', runtime_context='packaged' if receipt['packaged'] else 'source',
+        facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'failed'), error_codes=[],
+        evidence=dict(context=dict(source_sha=receipt['source_sha'], qpa=QApplication.platformName(), dpr=dpr),
+                      reports=None, tabular=None, controls=None, captures=None, data=dict.fromkeys(UIUX_DATA)))
+    session, started = None, time.monotonic()
+    try:
+        session = make_capture(child, expected_dpr=dpr)
+        for name, operation, inputs, errors in (
+            ('reports', run_reports_checks, fixtures / 'uiux/reports', report_errors),
+            ('tabular', run_tabular_checks, fixtures / 'uiux/tabular', tabular_errors),
+            ('controls', run_controls_checks, fixtures, control_errors),
+        ):
+            record['evidence'][name] = dict(kind='failure_summary', phase='admission',
+                code='unexpected_exception', error_codes=['unexpected_exception'])
+            result = operation(child, inputs, expected_dpr=dpr, capture=session)
+            if result.get('status') != 'passed':
+                record['evidence'][name] = _uiux_failure_summary(name, result, errors)
+                raise ScenarioFailure('uiux_' + name + '_failed')
+            record['evidence'][name] = result
+            record['facets'][name] = 'passed'
+            if time.monotonic() - started > 300:
+                raise ScenarioFailure('uiux_deadline')
+        record['evidence']['captures'] = session.snapshot(require_complete=True)
+        record['facets']['captures'] = 'passed'
+        record['evidence']['data'] = _uiux_data(child)
+        if any(value is None for value in record['evidence']['data'].values()):
+            raise ScenarioFailure('uiux_data_failed')
+        record['status'] = 'passed'
+    except Exception as error:
+        allowed = {'uiux_reports_failed', 'uiux_tabular_failed', 'uiux_controls_failed',
+                   'uiux_deadline', 'uiux_data_failed'}
+        code = str(error) if isinstance(error, ScenarioFailure) and str(error) in allowed else 'uiux_unexpected'
+        record['error_codes'] = [code]
+        record['evidence']['captures'] = session.snapshot(require_complete=False) if session else dict(
+            status='failed', metadata={}, observations={}, error_codes=[])
+        try:
+            record['evidence']['data'] = _uiux_data(child)
+        except Exception:
+            record['evidence']['data'] = dict.fromkeys(UIUX_DATA)
+            record['error_codes'].append('uiux_data_failed')
+    if len(json.dumps(record, allow_nan=False).encode()) > 128 * 1024:
+        raise ScenarioFailure('uiux_observation_size')
+    path = child / 'uiux-observation.json'
+    _atomic_json(path, record)
+    if record['status'] != 'passed':
+        raise ScenarioFailure('uiux_checks_failed')
+    receipt['artifacts']['uiux_evidence'] = dict(path=path.name, sha256=_sha256(path))
+    receipt['facets'].update(dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed'))
+
+
 def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.bootstrap import get_or_create_qapplication
     # Each stage closes its own windows. Keep their shared application alive
@@ -616,6 +720,9 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
         child, fixtures, receipt,
         stage_recorder=lambda stage: _record_core_stage(root, receipt, stage),
     )
+
+    _record_core_stage(root, receipt, "uiux")
+    _run_uiux_slice(child, fixtures, receipt)
 
 
 def _require_inference_result(receipt, inference):

@@ -434,7 +434,15 @@ def test_record_edits_reproduce_pre_model_view_behaviour(name, tmp_path):
 
     actual = run_scenario(scenario["flavor"], scenario["ops"], ScenarioDriver(), tmp_path)
 
-    assert actual == scenario["expected"]
+    # The new confirmation deliberately samples at most 12 pending cells/values.
+    # Keep the historical full summary, payload, selection and stored-value oracle intact.
+    confirmation = actual.pop("confirmation_text")
+    expected = dict(scenario["expected"])
+    expected.pop("confirmation_text")
+    assert "at most 12 changed cells/values" in confirmation
+    assert "Apply includes all pending changes" in confirmation
+    assert len(confirmation) < 4000
+    assert actual == expected
 
 
 def test_legacy_invalid_measurement_rejects_entire_scenario(tmp_path, qapplication_session, monkeypatch):

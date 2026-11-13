@@ -518,6 +518,8 @@ jobs:
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.sqlite
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.xlsx
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/*.html
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js
           if-no-files-found: warn
 
       - name: Retain accepted engineering package for orchestrator review
@@ -1671,6 +1673,7 @@ jobs:
             requirements-dev.txt
 
       - name: Install dependencies
+        id: windows-core-dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
@@ -1729,7 +1732,7 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_exit_evidence.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py
+          python -m pytest -v tests/test_windows_candidate_launch_ownership.py tests/test_windows_candidate_fresh_reopen.py tests/test_windows_candidate_native_check.py tests/test_windows_candidate_final_receipts.py tests/test_windows_candidate_privacy_checks.py tests/test_windows_candidate_closeout.py tests/test_windows_candidate_core_payload.py tests/test_windows_candidate_core_protocol.py tests/test_windows_candidate_exit_evidence.py tests/test_frozen_ocr_worker.py tests/test_windows_candidate_shell_checks.py tests/test_windows_candidate_lifecycle_checks.py tests/test_windows_candidate_uiux_reports.py tests/test_windows_candidate_uiux_tabular.py tests/test_windows_candidate_uiux_controls.py tests/test_windows_candidate_uiux.py
 
       - name: Run native Windows Qt lifecycle tests
         env:
@@ -1746,27 +1749,34 @@ jobs:
           METROLIZA_EXPECT_PLANNER_SCREEN: 1920x1080
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py
+          python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py tests/test_report_execution_results.py
 
       - name: Run native Windows report workspace tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
           METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080
+          METROLIZA_COMMAND_TEST_SCREEN: 1920x1080
+          METROLIZA_COMMAND_TEST_DPR: '1'
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py
+          python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py tests/test_command_matrix.py
 
       - name: Run native Windows specialist geometry tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
           METROLIZA_EXPECT_QT_PLATFORM: windows
           METROLIZA_EXPECT_INDUSTRIAL_SCREEN: 1920x1080
+          METROLIZA_FILTER_TEST_SCREEN: 1920x1080
+          METROLIZA_FILTER_SCOPE_SCREEN: 1920x1080
+          METROLIZA_FILTER_SCOPE_DPR: '1'
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv -s tests/test_industrial_native_geometry.py
+          python -m pytest -vv -s tests/test_industrial_native_geometry.py tests/test_output_request_presentation.py tests/test_filter_presentation.py tests/test_curation_presentation.py tests/test_parser_profile_onboarding.py tests/test_industrial_onboarding_presentation.py tests/test_industrial_onboarding_delta.py tests/test_pyqt_ui_geometry_audit.py::test_tabular_filter_dialog_geometry_handles_multi_column_filters tests/test_csv_progress_nonmodal.py
 
       - name: Run native Windows realtime dashboard scheduling tests
         env:
@@ -1777,11 +1787,13 @@ jobs:
         run: >-
           python -m pytest -vv -s --tb=short --show-capture=no
           tests/test_realtime_monitoring_dialog.py
+          tests/test_realtime_onboarding.py
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_private_cleanup_failure_keeps_parent_and_correct_retry_notice
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_realtime_deferred_private_cleanup_failure_notifies_parent_and_retries
           tests/test_main_window_metadata_ui.py::TestMainWindowMetadataUi::test_dirty_realtime_source_cancel_never_arms_automatic_root_close
 
       - name: Run native Windows grouping-preview lifecycle tests
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:
           PYTHONPATH: src;.
           QT_QPA_PLATFORM: windows
@@ -1789,6 +1801,7 @@ jobs:
         run: >-
           python -m pytest -vv -s --tb=short --show-capture=no
           tests/test_tabular_analytics_grouping_dialog.py
+          tests/test_tabular_grouping_member_controls.py
 
       - name: Run safe OCR diagnostics and native PowerShell contract tests
         env:

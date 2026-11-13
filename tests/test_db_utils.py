@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from modules.db import (
     QueryResult,
@@ -121,12 +122,61 @@ class TestDbUtils(unittest.TestCase):
             self.assertEqual(rows, [("alpha",), ("beta",)])
 
     def test_sqlite_readonly_connection_scope_reads_without_writes(self):
-        with sqlite_readonly_connection_scope(self.db_path) as connection:
-            rows = connection.execute("SELECT name FROM sample ORDER BY id").fetchall()
-            with self.assertRaises(sqlite3.OperationalError):
-                connection.execute("INSERT INTO sample (name) VALUES ('blocked')")
+        from metroliza.reports import db
+
+        before = Path(self.db_path).read_bytes()
+        with mock.patch.object(db.sqlite3, "connect", wraps=sqlite3.connect) as connect:
+            with sqlite_readonly_connection_scope(self.db_path) as connection:
+                self.assertEqual(connect.call_args.kwargs, {"uri": True, "timeout": 5.0})
+                self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone(), (5000,))
+                rows = connection.execute("SELECT name FROM sample ORDER BY id").fetchall()
+                with self.assertRaises(sqlite3.OperationalError):
+                    connection.execute("INSERT INTO sample (name) VALUES ('blocked')")
 
         self.assertEqual(rows, [("alpha",), ("beta",)])
+        self.assertEqual(Path(self.db_path).read_bytes(), before)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
+
+    def test_sqlite_readonly_scope_preserves_uri_timeout_and_persistence_options(self):
+        from metroliza.reports import db
+
+        before = Path(self.db_path).read_bytes()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "scope # próba %25.db"
+            source.write_bytes(before)
+            statements = []
+            real_connect = sqlite3.connect
+
+            def connect(*args, **kwargs):
+                connection = real_connect(*args, **kwargs)
+                connection.set_trace_callback(statements.append)
+                return connection
+
+            with mock.patch.object(db, "persist_sqlite_options", return_value={"cached_statements": 0}):
+                with mock.patch.object(db.sqlite3, "connect", side_effect=connect) as observed:
+                    with sqlite_readonly_connection_scope(str(source), timeout_s=0.1) as connection:
+                        uri = urlsplit(observed.call_args.args[0])
+                        self.assertEqual(Path(unquote(uri.path)), source.resolve())
+                        self.assertEqual(parse_qs(uri.query), {"mode": ["ro"]})
+                        self.assertEqual(observed.call_args.kwargs,
+                                         {"uri": True, "timeout": 0.1, "cached_statements": 0})
+                        self.assertEqual(statements, [])  # The helper adds no setup SQL or PRAGMAs.
+                        self.assertEqual(connection.execute("PRAGMA busy_timeout").fetchone(), (100,))
+                        with closing(connection.execute("SELECT name FROM sample ORDER BY id")) as cursor:
+                            self.assertEqual(cursor.fetchall(), [("alpha",), ("beta",)])
+                        with self.assertRaises(sqlite3.OperationalError):
+                            connection.execute("DELETE FROM sample")
+            self.assertEqual(source.read_bytes(), before)
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute("SELECT 1")
+
+    def test_sqlite_readonly_scope_closes_after_read_error(self):
+        with self.assertRaises(sqlite3.OperationalError):
+            with sqlite_readonly_connection_scope(self.db_path, timeout_s=0.1) as connection:
+                connection.execute("SELECT * FROM missing_table")
+        with self.assertRaises(sqlite3.ProgrammingError):
+            connection.execute("SELECT 1")
 
     def test_immutable_snapshot_scope_preserves_bytes_closes_and_creates_no_sidecars(self):
         before = Path(self.db_path).read_bytes()

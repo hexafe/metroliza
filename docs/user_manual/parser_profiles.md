@@ -1,7 +1,20 @@
 # Parser Profiles
 
-Use **Tools > Parser profiles...** when Metroliza needs to understand a new
-supplier report layout.
+Open **Parser Profiles (Ctrl+Shift+F)**, also available through **Tools > Parser
+profiles...**. Choose one task:
+
+- **Manage installed profiles**: inspect the observed enabled/approval/integrity state,
+  refresh the store, and explicitly enable or disable a selected profile through the
+  existing lifecycle service. Enable is unavailable for a profile needing integrity
+  or approval review; review/reinstall it through the normal validated route.
+- **Add a new format**: prepare local materials, check/validate, then explicitly
+  install/enable. The current stage, last observed results and next action stay below
+  the scrolling form. **Next (Ctrl+S)** invokes the named existing action; it never
+  approves a profile automatically.
+
+A last observed PASS describes that check, not the current contents after external
+edits. Install always rechecks the current profile, samples and expected-results
+rows. Creating a handoff folder is preparation, never profile approval.
 
 For normal users, a parser profile is a YAML setup file. It tells trusted
 Metroliza code how to recognize a report, read the report identity, and extract
@@ -30,7 +43,7 @@ From the main window, select:
 Tools > Parser profiles...
 ```
 
-Enter:
+Select **Add a new format**, then enter:
 
 - **Profile id**: a short lowercase id such as `supplier_alpha`.
 - **Display name**: a readable name such as `Supplier Alpha`.
@@ -97,26 +110,29 @@ the generated handoff files before continuing.
 
 Click **Validate** after `profile.yaml` and `expected_results.csv` are filled.
 
-Validation checks that:
+Validate checks the data-only YAML policy and structural parser contract. When
+`expected_results.csv` references sample reports, it also checks those samples:
+profile selection/probing, the parser contract, and parsed row counts and values
+against their checked expected results. Unreferenced files in `samples/` are not
+covered by that sample validation.
 
-- the YAML profile follows the Metroliza profile contract,
-- at least one sample report is covered,
-- `expected_results.csv` has checked data rows,
-- every parsed measurement row matches the expected results,
-- no extra parsed rows are left unchecked,
-- the profile stays data-only and within the safe parser rules.
+If there are no referenced samples, Validate performs structural contract checks
+only. A header-only expected-results CSV with no samples can therefore **PASS**.
+That result does not prove sample coverage or the presence of checked data rows.
 
-Do not install a profile that fails validation.
+Do not install a profile that fails validation. Before installing, supply the
+current samples and checked expected-result rows required by Install below.
 
 ## Diagnose
 
-Click **Diagnose** when validation passes but you want to confirm that this
-profile is the one Metroliza will choose for the sample report.
+**Diagnose** and **Repair Prompt** become available for an observed package,
+validation or installation problem. Diagnose inspects the current sample/profile;
+a missing sample is reported rather than treated as a passing selection.
 
 Diagnose explains whether the sample matches the profile markers and shows the
-probe/parse evidence saved under `artifacts/`. Use it when the wrong parser is
-selected, when the confidence looks suspicious, or before installing a profile
-for a supplier whose reports are close to another known layout.
+probe/parse evidence saved under `artifacts/`. Use it to investigate a reported
+selection/validation problem. Review that evidence and correct the local materials
+before validating again.
 
 ## Repair Prompt
 
@@ -135,9 +151,15 @@ were wrong, then run **Validate** again.
 Click **Install** only after **Check Package**, **Validate**, and any needed
 **Diagnose** review pass.
 
-Install copies the approved profile into the local approved profile store and
-writes approval evidence. Metroliza will only load approved profiles whose
-approval checksum matches the installed `profile.yaml`.
+Install requires an existing expected-results CSV and at least one existing
+sample report referenced by that table under `samples/`. It freshly validates the
+current profile and those samples. The expected-results checks require checked
+data rows and compare the parsed rows and their count with the sample's expected
+rows. An earlier structural PASS cannot bypass these requirements.
+
+Only successful installation copies the profile into the local approved profile
+store and writes approval evidence. Metroliza will only load approved profiles
+whose approval checksum matches the installed `profile.yaml`.
 
 ## Restart
 
@@ -223,3 +245,22 @@ normalization:
   date_formats: ["%Y-%m-%d"]
   missing_value_tokens: ["", "-", "NA", "N/A"]
 ```
+
+## Visible keyboard commands
+
+| Command | Shortcut | Context |
+|---|---|---|
+| Manage / Add task | Ctrl+Shift+D / Ctrl+Shift+A | Profiles window |
+| Next named action / Refresh | Ctrl+S | Add / Manage tab |
+| Prepare folder | Ctrl+D | Add |
+| Check package / Validate | Ctrl+R / Ctrl+Shift+R | Add |
+| Install / Enable selected | Ctrl+E | Add / Manage |
+| Disable selected | Ctrl+Shift+E | Manage |
+| Open folder / Copy path | Ctrl+Shift+F / Ctrl+Shift+C | Add |
+| Diagnose / Repair prompt | Ctrl+Shift+Q / Ctrl+Shift+S | Observed problem in Add |
+| Close | Ctrl+W or Esc | Existing close/validation ownership guards |
+
+Keys act only in the current window and relevant task; disabled actions remain
+inert. Standard text editing and Polish AltGr input are unchanged. A modal child
+does not invoke its parent's commands. Closing during validation preserves the
+existing worker cleanup; a result not adopted after close is labelled as such.

@@ -7,12 +7,12 @@ from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QDeadlineTimer, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QBrush, QColor, QIntValidator
+from PyQt6.QtCore import QDeadlineTimer, QEvent, QEventLoop, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QBrush, QColor, QIntValidator, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
-    QHBoxLayout,
+    QLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QVBoxLayout,
@@ -37,7 +38,7 @@ from metroliza.shared.grouping_filter_core import (
     parse_filter_expression,
 )
 from metroliza.ui.help_menu import attach_help_menu_to_layout
-from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
+from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut, install_button_commands
 from metroliza.shared.list_selection_utils import GroupingShortcutBindings, ListSelectionUtils
 from metroliza.exporting.export_grouping_utils import set_default_group_label
 from metroliza.tabular.tabular_column_selection import (
@@ -148,6 +149,16 @@ def _legacy_grouping_index(dataframe, columns):
     from metroliza.tabular.csv_summary_utils import CsvGroupingIndex
 
     return CsvGroupingIndex(dataframe, columns)
+
+
+def _copy_grouping_source(dataframe, sqlite_store):
+    if sqlite_store is not None:
+        return (
+            dataframe.copy()
+            if isinstance(dataframe, RowTable)
+            else RowTable(rows=(), columns=tuple(sqlite_store.columns))
+        )
+    return dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
 
 
 def _is_missing_scalar(value) -> bool:
@@ -290,6 +301,30 @@ def _run_csv_scope_query(parent, operation, stage):
         thread.deleteLater()
 
 
+class _GroupingInputLineEdit(QLineEdit):
+    """Keep a field's Return local even when its callback changes modal focus."""
+
+    def keyPressEvent(self, event) -> None:
+        local_return = event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+        # Preserve QLineEdit's real returnPressed signal and validator behavior.
+        super().keyPressEvent(event)
+        if local_return:
+            # A scope query can temporarily disable the dialog and drop focus.
+            # This same Return must not then propagate to its default save button.
+            event.accept()
+
+
+class _GroupingColumnsLayout(QGridLayout):
+    """Use real row minima before optional list preview height in the scroll body."""
+
+    def heightForWidth(self, width: int) -> int:
+        if width > 0 and self.count():
+            minimum = super().minimumHeightForWidth(width)
+            if minimum >= 0:
+                return max(minimum, self.minimumSize().height())
+        return super().heightForWidth(width)
+
+
 class TabularAnalyticsGroupingDialog(QDialog):
     """Create manual row groups from user-selected CSV/Excel selector columns."""
 
@@ -299,6 +334,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         *,
         dataframe: pd.DataFrame | None = None,
         column_mapping: dict[str, str] | None = None,
+        identity_column: str | None = None,
+        datetime_column: str | None = None,
         grouping_dataframe: pd.DataFrame | None = None,
         sqlite_store=None,
         filter_columns: tuple[str, ...] | list[str] | None = None,
@@ -310,16 +347,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.setWindowTitle("CSV / Excel groups")
         configure_window_size(self, minimum=(760, 560), initial=(980, 700))
         self.sqlite_store = sqlite_store
-        if sqlite_store is not None:
-            self.source_dataframe = (
-                dataframe.copy()
-                if isinstance(dataframe, RowTable)
-                else RowTable(rows=(), columns=tuple(sqlite_store.columns))
-            )
-        else:
-            self.source_dataframe = (
-                dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
-            )
+        self.source_dataframe = _copy_grouping_source(dataframe, sqlite_store)
         self._sqlite_assignment_store = (
             TabularGroupingAssignmentStore(sqlite_store) if sqlite_store is not None else None
         )
@@ -338,6 +366,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             for original, normalized in (column_mapping or {}).items()
             if isinstance(normalized, str) and isinstance(original, str)
         }
+        self.identity_column = identity_column
+        self.datetime_column = datetime_column
         self.selector_columns: list[str] = []
         self.selected_selector_keys: set[tuple[str, ...]] = set()
         self._selector_index: CsvGroupingIndex | None = None
@@ -371,6 +401,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._scoped_source_dataframe_cache: tuple[tuple[object, ...], pd.DataFrame] | None = None
         self._list_selection_utils = ListSelectionUtils()
         self._grouping_shortcuts = None
+        self._control_shortcuts: list[QShortcut] = []
         self.default_group = TABULAR_DEFAULT_GROUP
         self.default_group_color = self._resolve_default_group_color()
         self.group_color_column = "GROUP_COLOR"
@@ -384,10 +415,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.df = self._empty_grouping_dataframe()
         self._apply_group_assignments(self._initial_group_assignments)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(14, 14, 14, 14)
+        outer_layout.setSpacing(10)
+        attach_help_menu_to_layout(outer_layout, self, [("CSV Summary manual", "csv_summary")])
+        self.grouping_body_scroll = QScrollArea()
+        self.grouping_body_scroll.setWidgetResizable(True)
+        self.grouping_body_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        grouping_body = QWidget()
+        layout = QVBoxLayout(grouping_body)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
-        attach_help_menu_to_layout(layout, self, [("CSV Summary manual", "csv_summary")])
+        # Respect list/control minima and scroll the body on short screens instead of overlapping.
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.grouping_body_scroll.setWidget(grouping_body)
+        outer_layout.addWidget(self.grouping_body_scroll, 1)
 
         self.selector_status_label = status_chip("No grouping columns selected", "neutral")
         layout.addWidget(self.selector_status_label)
@@ -415,16 +457,16 @@ class TabularAnalyticsGroupingDialog(QDialog):
         layout.addWidget(self.context_status_label)
 
         column_area = QWidget()
-        columns_grid = QGridLayout(column_area)
+        columns_grid = _GroupingColumnsLayout(column_area)
         columns_grid.setContentsMargins(0, 0, 0, 0)
         columns_grid.setHorizontalSpacing(10)
         columns_grid.setVerticalSpacing(6)
         columns_grid.addWidget(QLabel("Available columns"), 0, 0)
         columns_grid.addWidget(QLabel("Selected columns"), 0, 1)
 
-        self.column_search = QLineEdit()
+        self.column_search = _GroupingInputLineEdit()
         self.column_search.setPlaceholderText("Search columns")
-        self.selected_column_search = QLineEdit()
+        self.selected_column_search = _GroupingInputLineEdit()
         self.selected_column_search.setPlaceholderText("Search selected columns")
         columns_grid.addWidget(self.column_search, 1, 0)
         columns_grid.addWidget(self.selected_column_search, 1, 1)
@@ -442,6 +484,23 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.selected_columns_list, name="Selected CSV grouping columns")
         columns_grid.addWidget(self.available_columns_list, 2, 0)
         columns_grid.addWidget(self.selected_columns_list, 2, 1)
+        self.add_column_button = QPushButton("Add column (Ctrl+E)")
+        self.remove_column_button = QPushButton("Remove column (Ctrl+Shift+E)")
+        for button, sequence in (
+            (self.add_column_button, "Ctrl+E"), (self.remove_column_button, "Ctrl+Shift+E"),
+        ):
+            self._bind_control_shortcut(button, sequence)
+            button.setAutoDefault(False)
+        configure_accessibility(self.add_column_button, name="Add current available grouping column")
+        configure_accessibility(self.remove_column_button, name="Remove current selected grouping column")
+        columns_grid.addWidget(self.add_column_button, 3, 0)
+        columns_grid.addWidget(self.remove_column_button, 3, 1)
+        for column, text in enumerate(("List focus: E adds the current column",
+                                       "List focus: R removes the current column")):
+            legend = QLabel(text)
+            legend.setWordWrap(True)
+            columns_grid.addWidget(legend, 4, column)
+        columns_grid.setRowStretch(2, 1)
         columns_grid.setColumnStretch(0, 1)
         columns_grid.setColumnStretch(1, 1)
         layout.addWidget(column_area, 1)
@@ -454,8 +513,10 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column = QVBoxLayout(selector_widget)
         selector_column.setContentsMargins(0, 0, 0, 0)
         selector_column.setSpacing(6)
-        selector_column.addWidget(QLabel("Matching rows: search or advanced expression"))
-        self.selector_search = QLineEdit()
+        selector_heading = QLabel("Matching rows: search or advanced expression")
+        selector_heading.setWordWrap(True)
+        selector_column.addWidget(selector_heading)
+        self.selector_search = _GroupingInputLineEdit()
         self.selector_search.setPlaceholderText(
             "Search values, or enter an advanced expression such as Supplier=SUPPLIER AND Value > 1"
         )
@@ -477,13 +538,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.selector_list, name="CSV grouping row selectors")
         selector_column.addWidget(self.selector_list, 1)
-        selector_paging = QHBoxLayout()
-        selector_paging.setSpacing(8)
+        selector_paging = QGridLayout()
+        selector_paging.setHorizontalSpacing(8)
+        selector_paging.setVerticalSpacing(6)
         self.first_page_button = QPushButton("First")
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
         self.last_page_button = QPushButton("Last")
-        self.page_jump_input = QLineEdit()
+        self.page_jump_input = _GroupingInputLineEdit()
         self.page_jump_input.setPlaceholderText("Page")
         self.page_jump_input.setFixedWidth(64)
         self.page_jump_input.setValidator(QIntValidator(1, 999_999, self))
@@ -496,15 +558,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.page_jump_input, name="Jump to matching rows page")
         configure_accessibility(self.jump_page_button, name="Jump to matching rows page button")
         configure_accessibility(self.selector_page_label, name="Matching rows page")
-        selector_paging.addStretch(1)
-        selector_paging.addWidget(self.first_page_button)
-        selector_paging.addWidget(self.previous_page_button)
-        selector_paging.addWidget(self.selector_page_label)
-        selector_paging.addWidget(self.next_page_button)
-        selector_paging.addWidget(self.last_page_button)
-        selector_paging.addWidget(self.page_jump_input)
-        selector_paging.addWidget(self.jump_page_button)
-        selector_paging.addStretch(1)
+        # Separate navigation from page entry so the pane can share a compact
+        # viewport with groups and members without horizontal body overflow.
+        for column, button in enumerate((self.first_page_button, self.previous_page_button,
+                                         self.next_page_button, self.last_page_button)):
+            selector_paging.addWidget(button, 0, column)
+        selector_paging.addWidget(self.selector_page_label, 1, 0, 1, 2)
+        selector_paging.addWidget(self.page_jump_input, 1, 2)
+        selector_paging.addWidget(self.jump_page_button, 1, 3)
+        selector_paging.setColumnStretch(1, 1)
         selector_column.addLayout(selector_paging)
         selector_column.setStretch(3, 1)
         selector_column.setStretch(4, 0)
@@ -530,10 +592,25 @@ class TabularAnalyticsGroupingDialog(QDialog):
         members_column.addWidget(QLabel("Rows in selected group"))
         self.group_members_list = QListWidget()
         self.group_members_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.group_members_list.setWordWrap(True)
+        self.group_members_list.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.group_members_list.setResizeMode(QListWidget.ResizeMode.Adjust)
         apply_list_selection_style(self.group_members_list)
         self.group_members_list.setMinimumHeight(120)
         self.group_members_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.group_members_list, name="Rows in selected CSV group")
+        self.remove_from_group_button = QPushButton("Remove from group (Ctrl+D)")
+        self._bind_control_shortcut(self.remove_from_group_button, "Ctrl+D")
+        self.remove_from_group_button.setAutoDefault(False)
+        configure_accessibility(
+            self.remove_from_group_button,
+            name="Remove selected members from group",
+            description="Return selected members to the default group; source rows are kept. Ctrl+D; R when the member list has focus.",
+        )
+        members_column.addWidget(self.remove_from_group_button)
+        self.group_member_command_legend = QLabel("List focus: R removes selected members")
+        self.group_member_command_legend.setWordWrap(True)
+        members_column.addWidget(self.group_member_command_legend)
         members_column.addWidget(self.group_members_list, 1)
         list_splitter.addWidget(members_widget)
         list_splitter.setStretchFactor(0, 2)
@@ -542,8 +619,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
         layout.addWidget(list_splitter, 3)
 
-        footer = QHBoxLayout()
-        footer.setSpacing(8)
+        footer = QGridLayout()
+        footer.setHorizontalSpacing(8)
+        footer.setVerticalSpacing(6)
         self.assign_filtered_rows_button = QPushButton("Assign all filtered rows...")
         self.create_group_button = QPushButton("Assign selected row values...")
         self.rename_group_button = QPushButton("Rename group")
@@ -580,20 +658,30 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.dont_use_grouping_button, name="Reset CSV grouping draft")
         configure_accessibility(self.cancel_button, name="Cancel CSV analytics grouping")
         configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
-        footer.addWidget(self.assign_filtered_rows_button)
-        footer.addWidget(self.create_group_button)
-        footer.addWidget(self.rename_group_button)
-        footer.addWidget(self.delete_group_button)
-        footer.addWidget(self.clear_selection_button)
-        footer.addStretch(1)
-        footer.addWidget(self.dont_use_grouping_button)
-        footer.addWidget(self.cancel_button)
-        footer.addWidget(self.use_grouping_button)
-        layout.addLayout(footer)
+        # Wide assignment actions get half a row; shorter actions and the
+        # final draft/Cancel/Apply row each have three readable columns.
+        footer.addWidget(self.assign_filtered_rows_button, 0, 0, 1, 3)
+        footer.addWidget(self.create_group_button, 0, 3, 1, 3)
+        footer.addWidget(self.rename_group_button, 1, 0, 1, 2)
+        footer.addWidget(self.delete_group_button, 1, 2, 1, 2)
+        footer.addWidget(self.clear_selection_button, 1, 4, 1, 2)
+        footer.addWidget(self.dont_use_grouping_button, 2, 0, 1, 2)
+        footer.addWidget(self.cancel_button, 2, 2, 1, 2)
+        footer.addWidget(self.use_grouping_button, 2, 4, 1, 2)
+        outer_layout.addLayout(footer)
+        footer_order = (self.assign_filtered_rows_button, self.create_group_button, self.rename_group_button,
+                        self.delete_group_button, self.clear_selection_button, self.dont_use_grouping_button,
+                        self.cancel_button, self.use_grouping_button)
+        for first, second in zip(footer_order, footer_order[1:]):
+            self.setTabOrder(first, second)
 
         self.column_search.returnPressed.connect(self._apply_column_search)
         self.selected_column_search.returnPressed.connect(self._apply_selected_column_search)
         self.available_columns_list.itemDoubleClicked.connect(lambda _item: self.add_selector_column())
+        self.add_column_button.clicked.connect(self.add_selector_column)
+        self.remove_column_button.clicked.connect(lambda: self.remove_selected_selector_column())
+        self.available_columns_list.currentItemChanged.connect(self._sync_column_actions)
+        self.selected_columns_list.currentItemChanged.connect(self._sync_column_actions)
         self.selected_columns_list.itemDoubleClicked.connect(self.remove_selected_selector_column)
         self.selected_columns_list.itemSelectionChanged.connect(
             lambda: self._sync_status(recompute_counts=False, recompute_scope=False)
@@ -611,6 +699,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.itemSelectionChanged.connect(self._store_current_selection)
         self.selector_list.itemDoubleClicked.connect(self._assign_matching_rows_from_item)
         self.groups_list.itemSelectionChanged.connect(self._populate_group_members)
+        self.group_members_list.itemSelectionChanged.connect(self._sync_member_action)
+        self.remove_from_group_button.clicked.connect(self.remove_selected_group_members)
         self.groups_list.itemDoubleClicked.connect(lambda _item: self.rename_group())
         self.create_group_button.clicked.connect(lambda: self.create_group())
         self.assign_filtered_rows_button.clicked.connect(self.assign_filtered_rows)
@@ -625,6 +715,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             primary=self.use_grouping_button,
             secondary=(self.cancel_button,),
             quiet=(
+                self.add_column_button,
+                self.remove_column_button,
                 self.dont_use_grouping_button,
                 self.assign_filtered_rows_button,
                 self.create_group_button,
@@ -636,7 +728,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 self.last_page_button,
                 self.jump_page_button,
             ),
-            danger=(self.delete_group_button,),
+            danger=(self.delete_group_button, self.remove_from_group_button),
         )
         apply_metroliza_theme(self)
         self._configure_stretch_panes()
@@ -660,15 +752,43 @@ class TabularAnalyticsGroupingDialog(QDialog):
             ),
             qt_namespace=Qt,
         )
+        for command_list in (
+            self.available_columns_list, self.selected_columns_list, self.group_members_list,
+        ):
+            command_list.installEventFilter(self)
         self._refresh_all()
         self._capture_committed_grouping_state()
         self._initializing_scope = False
         apply_dialog_mnemonics(self, "csv_grouping")
+        install_button_commands(self, "csv_grouping")
         bind_search_shortcut(self, (
             (self.column_search, self.available_columns_list),
             (self.selected_column_search, self.selected_columns_list),
             (self.selector_search, self.selector_list),
         ))
+
+    def _bind_control_shortcut(self, button, sequence: str) -> None:
+        shortcut = QShortcut(QKeySequence(sequence), self)
+        shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        shortcut.setAutoRepeat(False)
+        shortcut.activated.connect(button.click)
+        self._control_shortcuts.append(shortcut)
+
+    def eventFilter(self, watched, event) -> bool:
+        # These noneditable command lists replace E/R type-ahead only while directly focused.
+        if (event.type() == QEvent.Type.KeyPress and watched.hasFocus()
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier
+                and not event.isAutoRepeat()):
+            commands = {
+                (self.available_columns_list, Qt.Key.Key_E): self.add_column_button,
+                (self.selected_columns_list, Qt.Key.Key_R): self.remove_column_button,
+                (self.group_members_list, Qt.Key.Key_R): self.remove_from_group_button,
+            }
+            button = commands.get((watched, event.key()))
+            if button is not None:
+                button.click()
+                return True
+        return super().eventFilter(watched, event)
 
     def _is_sqlite_backed(self) -> bool:
         return vars(self).get("sqlite_store") is not None
@@ -1304,6 +1424,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._applied_column_search_text = str(self.column_search.text() or "").strip()
         self._refresh_available_columns()
         self._sync_search_scope_state()
+        self._sync_column_actions()
 
     def _build_grouping_dataframe(self) -> pd.DataFrame:
         if self._is_sqlite_backed():
@@ -1562,9 +1683,21 @@ class TabularAnalyticsGroupingDialog(QDialog):
             return RowTable(rows=(), columns=tuple(self.sqlite_store.columns))
         return self._current_selector_index().filter_rows(self.selected_selector_keys)
 
+    def _sync_column_actions(self, *_args) -> None:
+        available = self.available_columns_list.currentItem()
+        selected = self.selected_columns_list.currentItem()
+        self.add_column_button.setEnabled(bool(
+            available is not None and not available.isHidden()
+            and available.data(Qt.ItemDataRole.UserRole) not in self.selector_columns
+        ))
+        self.remove_column_button.setEnabled(bool(
+            selected is not None and not selected.isHidden()
+            and selected.data(Qt.ItemDataRole.UserRole) in self.selector_columns
+        ))
+
     def add_selector_column(self) -> None:
         item = self.available_columns_list.currentItem()
-        if item is None:
+        if item is None or item.isHidden():
             return
         column = item.data(Qt.ItemDataRole.UserRole)
         if not column or column in self.selector_columns:
@@ -1805,7 +1938,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
 
     def remove_selected_selector_column(self, item: QListWidgetItem | None = None) -> None:
         item = item or self.selected_columns_list.currentItem()
-        if item is None:
+        if item is None or item.isHidden():
             return
         column = item.data(Qt.ItemDataRole.UserRole)
         if column not in self.selector_columns:
@@ -2272,6 +2405,14 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._ensure_group_color_integrity()
         self._refresh_all(preferred_group=self.default_group)
 
+    def _sync_member_action(self) -> None:
+        selected_group = self._selected_group_name()
+        self.remove_from_group_button.setEnabled(bool(
+            selected_group and selected_group != self.default_group
+            and any(item.data(Qt.ItemDataRole.UserRole) is not None
+                    for item in self.group_members_list.selectedItems())
+        ))
+
     def remove_selected_group_members(self) -> None:
         selected_group = self._selected_group_name()
         if not selected_group or selected_group == self.default_group:
@@ -2334,6 +2475,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.rename_group_button.setEnabled(bool(selected_group))
         self.delete_group_button.setEnabled(bool(selected_group and selected_group != self.default_group))
         self.clear_selection_button.setEnabled(bool(self.selected_selector_keys))
+        self._sync_member_action()
+        self._sync_column_actions()
         self.use_grouping_button.setEnabled(filter_state.mode != "invalid")
 
     def _refresh_selectors(self) -> None:
@@ -2449,6 +2592,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         ).strip()
         self._refresh_selected_columns()
         self._sync_search_scope_state()
+        self._sync_column_actions()
 
     def _refresh_groups(self, preferred_group: str | None = None) -> None:
         self.groups_list.blockSignals(True)
@@ -2544,6 +2688,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
                 if group_name == selected_group
             ]
             total_rows = len(row_ids)
+        row_ids = row_ids[:_GROUP_MEMBER_PREVIEW_LIMIT]
+        member_labels = self._group_member_labels(row_ids)
         rows = self._group_member_rows(row_ids, selected_group)
         preview = (
             rows.iloc[:_GROUP_MEMBER_PREVIEW_LIMIT]
@@ -2564,14 +2710,8 @@ class TabularAnalyticsGroupingDialog(QDialog):
             else preview.itertuples(index=False, name=None)
         )
         for values in preview_values:
-            label = str(
-                _row_value(values, "REFERENCE")
-                or _row_value(values, "PART_NAME")
-                or _row_value(values, "SAMPLE_NUMBER")
-                or ""
-            )
-            if not label:
-                label = f"Row {_row_value(values, 'REPORT_ID')}"
+            row_id = _row_value(values, "REPORT_ID")
+            label = member_labels.get(int(row_id), f"Missing identifier [Row {row_id}]")
             item = QListWidgetItem(label)
             item.setData(Qt.ItemDataRole.UserRole, _row_value(values, "REPORT_ID"))
             color = _row_value(values, self.group_color_column)
@@ -2588,26 +2728,64 @@ class TabularAnalyticsGroupingDialog(QDialog):
             item = QListWidgetItem(
                 f"Showing first {_GROUP_MEMBER_PREVIEW_LIMIT} of {total_rows} row(s)."
             )
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             self.group_members_list.addItem(item)
         self._sync_status(
             recompute_counts=recompute_status_counts,
             recompute_scope=recompute_status_counts,
         )
 
-    def _group_member_rows(self, row_ids: list[int], group_name: str) -> pd.DataFrame:
-        if not row_ids:
-            return self._empty_grouping_dataframe()
-        color = self._group_color_for_group(group_name)
+    def _group_member_source_records(self, row_ids, display_columns):
         if self._is_sqlite_backed():
-            return self._sqlite_assignment_dataframe(row_ids, group_name, color)
-        frame = self._base_grouping_dataframe()
-        if frame.empty or "REPORT_ID" not in frame.columns:
-            return self._empty_grouping_dataframe()
-        report_ids = pd.to_numeric(frame["REPORT_ID"], errors="coerce")
-        rows = frame.loc[report_ids.isin(row_ids)].copy()
-        rows["GROUP"] = group_name
-        rows[self.group_color_column] = color
-        return rows
+            rows = self.sqlite_store.read_row_table(
+                filter_columns=("source_row_number",),
+                selected_filter_keys=tuple((str(row_id),) for row_id in row_ids),
+                columns=("source_row_number", *display_columns),
+                limit=_GROUP_MEMBER_PREVIEW_LIMIT,
+            )
+            return rows.iter_rows(as_dict=True)
+        source = self.source_dataframe
+        # Match build_tabular_grouping_dataframe's fallback, including non-default indexes.
+        ids = pd.Series(range(1, len(source.index) + 1), index=source.index)
+        if "source_row_number" in source.columns:
+            ids = pd.to_numeric(source["source_row_number"], errors="coerce").fillna(ids).astype(int)
+        mask = ids.isin(row_ids)
+        selected = source.loc[mask, list(display_columns)].head(_GROUP_MEMBER_PREVIEW_LIMIT)
+        values = selected.itertuples(index=False, name=None) if display_columns else (() for _ in selected.index)
+        return (
+            dict(zip(display_columns, row_values, strict=True), source_row_number=int(row_id))
+            for row_id, row_values in zip(ids.loc[mask], values, strict=False)
+        )
+
+    def _group_member_labels(self, row_ids: list[int]) -> dict[int, str]:
+        """Read only bounded preview IDs; selectors never replace source identity."""
+        if not row_ids:
+            return {}
+        columns = tuple(self.source_dataframe.columns)
+        identity = self.identity_column
+        timestamp = self.datetime_column
+        display_columns = tuple(dict.fromkeys(
+            column for column in (identity, timestamp) if column in columns
+        ))
+        return {
+            int(row["source_row_number"]): self._group_member_label(row, identity, timestamp)
+            for row in self._group_member_source_records(row_ids, display_columns)
+        }
+
+    def _group_member_label(self, row, identity, timestamp) -> str:
+        value = row.get(identity)
+        label = "Missing identifier" if _is_missing_scalar(value) or not str(value).strip() else str(value)
+        if identity:
+            label = f"{self._column_label(identity)}: {label}"
+        if timestamp:
+            value = row.get(timestamp)
+            date_text = "Missing date" if _is_missing_scalar(value) or not str(value).strip() else str(value)
+            label += f" | {self._column_label(timestamp)}: {date_text}"
+        return f"{label} [Row {row['source_row_number']}]"
+
+    def _group_member_rows(self, row_ids: list[int], group_name: str) -> pd.DataFrame:
+        # Preview decoration needs only the bounded IDs and group color, never a full source frame.
+        return self._sqlite_assignment_dataframe(row_ids, group_name, self._group_color_for_group(group_name))
 
     def _refresh_all(self, preferred_group: str | None = None) -> None:
         self._refresh_available_columns()

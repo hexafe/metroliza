@@ -42,6 +42,7 @@ from metroliza.industrial.industrial_tabular_bridge import (
     IndustrialCacheLoadCanceled,
     load_industrial_cache_tabular_result,
 )
+from metroliza.ui.curation_presentation import bind_button
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.industrial_analytics_dialog import IndustrialAnalyticsDialog
 from metroliza.ui.industrial_export_dialog import IndustrialExportDialog
@@ -281,6 +282,7 @@ class IndustrialDataDialog(QDialog):
         self.workflow_steps_label = section_label(
             "1  Source   ·   2  Test access   ·   3  Fetch cache   ·   4  Analyze"
         )
+        self.next_action_label = status_chip("Checking local source and cache state…", "neutral")
         self.oznak_label = status_chip(OZNAK_CHECKING_TEXT, "neutral")
         self.workflow_label = status_chip(
             "Source -> Access -> Cache -> CSV Summary: checking...",
@@ -302,15 +304,18 @@ class IndustrialDataDialog(QDialog):
         self.use_temp_button = QPushButton("Temp")
         self.select_database_button = QPushButton("Open...")
         self.create_database_button = QPushButton("Save cache as...")
-        self.sources_button = QPushButton("Production sources...")
-        self.sync_button = QPushButton("Fetch to cache...")
+        self.sources_button = QPushButton("Configure sources")
+        self.sync_button = QPushButton("Fetch to cache")
         self.links_button = QPushButton("Production links...")
-        self.export_button = QPushButton("Export workbook...")
-        self.analyze_button = QPushButton("CSV Summary...")
+        self.export_button = QPushButton("Export workbook")
+        self.analyze_button = QPushButton("Analyze cache")
         self.initialize_button = QPushButton("Initialize cache")
         self.diagnostics_button = QPushButton("Diagnostics...")
         self.diagnostics_menu = QMenu(self)
         self.initialize_cache_action = self.diagnostics_menu.addAction("Initialize cache")
+        self.connector_details_action = self.diagnostics_menu.addAction("Show connector details")
+        self.connector_details_action.setCheckable(True)
+        self.connector_details_action.toggled.connect(self._show_connector_details)
         self.diagnostics_button.setMenu(self.diagnostics_menu)
         self.refresh_links_button = QPushButton("Refresh links")
         self.close_button = QPushButton("Close")
@@ -342,6 +347,11 @@ class IndustrialDataDialog(QDialog):
 
         self._build_layout()
         self._configure_accessibility()
+        self.command_actions = [bind_button(self, button, sequence) for button, sequence in (
+            (self.sources_button, "Ctrl+D"), (self.sync_button, "Ctrl+R"),
+            (self.analyze_button, "Ctrl+S"), (self.export_button, "Ctrl+E"),
+            (self.close_button, "Ctrl+W"),
+        )]
         self.refresh_status()
         apply_metroliza_theme(self)
         self._preserve_status_label_heights()
@@ -352,6 +362,7 @@ class IndustrialDataDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Industrial Data manual", "industrial_data")])
         layout.addWidget(section_label("Industrial data"))
+        layout.addWidget(self.next_action_label)
 
         # The lifecycle/status rows remain persistent operator context.  Keep
         # their full label heights in a scrollable content surface so the
@@ -386,8 +397,13 @@ class IndustrialDataDialog(QDialog):
         grid.addWidget(self.workflow_steps_label, row, 0, 1, 3)
 
         row += 1
-        grid.addWidget(section_label("Oznak connector"), row, 0)
-        grid.addWidget(self.oznak_label, row, 1, 1, 2)
+        self.connector_details = QWidget()
+        connector_layout = QVBoxLayout(self.connector_details)
+        connector_layout.setContentsMargins(0, 0, 0, 0)
+        connector_layout.addWidget(section_label("Connector diagnostics"))
+        connector_layout.addWidget(self.oznak_label)
+        grid.addWidget(self.connector_details, row, 0, 1, 3)
+        self.connector_details.hide()
 
         row += 1
         grid.addWidget(section_label("Workflow"), row, 0)
@@ -404,17 +420,14 @@ class IndustrialDataDialog(QDialog):
         row += 1
         grid.addWidget(section_label("Production sources"), row, 0)
         grid.addWidget(self.sources_label, row, 1)
-        grid.addWidget(self.sources_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Fetch scope"), row, 0)
         grid.addWidget(self.sync_filter_label, row, 1)
-        grid.addWidget(self.sync_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Workbook filter"), row, 0)
         grid.addWidget(self.export_filter_label, row, 1)
-        grid.addWidget(self.export_button, row, 2)
 
         row += 1
         analytics_row = QHBoxLayout()
@@ -424,7 +437,6 @@ class IndustrialDataDialog(QDialog):
         analytics_row.addWidget(self.analysis_source_combo)
         grid.addWidget(section_label("CSV Summary cache"), row, 0)
         grid.addLayout(analytics_row, row, 1)
-        grid.addWidget(self.analyze_button, row, 2)
 
         row += 1
         grid.addWidget(section_label("Workbook groups"), row, 0)
@@ -454,6 +466,12 @@ class IndustrialDataDialog(QDialog):
         self.content_scroll.setWidget(content)
         layout.addWidget(self.content_scroll, 1)
 
+        workflow_actions = QGridLayout()
+        for index, button in enumerate((self.sources_button, self.sync_button,
+                                        self.analyze_button, self.export_button)):
+            workflow_actions.addWidget(button, index // 2, index % 2)
+        layout.addLayout(workflow_actions)
+
         actions = QHBoxLayout()
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(6)
@@ -466,6 +484,16 @@ class IndustrialDataDialog(QDialog):
         actions.addStretch(1)
         actions.addWidget(self.close_button)
         layout.addLayout(actions)
+
+    def _show_connector_details(self, visible):
+        self.connector_details.setVisible(visible)
+        self._preserve_status_label_heights()
+        if visible:
+            self.content_scroll.ensureWidgetVisible(self.connector_details)
+
+    def _present_next_action(self, message, *, variant="neutral"):
+        self.next_action_label.setText(message)
+        set_status_variant(self.next_action_label, variant)
 
     def _preserve_status_label_heights(self) -> None:
         """Let the scroll surface preserve themed status-label text heights."""
@@ -757,6 +785,7 @@ class IndustrialDataDialog(QDialog):
         self.status_label.setText("Configure production sources, then fetch rows into a local cache.")
         set_status_variant(self.status_label, "warning")
         self._configure_action_roles(self.sources_button)
+        self._present_next_action("Source setup needed. Next: Configure sources [Ctrl+D].", variant="warning")
 
     def _load_cache_status(self):
         config_error = ""
@@ -788,7 +817,8 @@ class IndustrialDataDialog(QDialog):
             set_status_variant(self.sync_summary_label, "warning")
             self.status_label.setText("Initialize the active local industrial cache.")
             set_status_variant(self.status_label, "warning")
-            self._configure_action_roles(self.sources_button)
+            self._configure_action_roles(self.select_database_button)
+            self._present_next_action("Local cache unavailable. Next: Open a readable cache or use Temp.", variant="warning")
             return None
         return repository, counts, profiles, latest_sync, config_error
 
@@ -804,7 +834,8 @@ class IndustrialDataDialog(QDialog):
             f"{self.cache_target.status_prefix}: "
             f"{counts.records} records, {counts.sync_runs} sync runs, {counts.link_candidates} links"
         )
-        self.sources_label.setText(f"{len(profiles)} production source(s) configured")
+        enabled_profiles = tuple(profile for profile in profiles if profile.is_enabled)
+        self.sources_label.setText(f"{len(profiles)} production source(s) configured; {len(enabled_profiles)} enabled")
         self.workflow_label.setText(self._format_workflow_summary(len(profiles), counts.records, latest_sync))
         set_status_variant(
             self.workflow_label,
@@ -831,22 +862,30 @@ class IndustrialDataDialog(QDialog):
                 "Industrial cache ready. Open CSV Summary to analyze cached production rows."
             )
             set_status_variant(self.status_label, "success")
-        elif profiles:
+        elif enabled_profiles:
             self.status_label.setText(
                 "Industrial cache empty. Fetch selected production rows into the local cache before opening CSV Summary."
             )
             set_status_variant(self.status_label, "warning")
         else:
             self.status_label.setText(
-                "Industrial cache empty. Create or import a production source before fetching rows."
+                "Industrial cache empty. Configure and enable a production source before fetching rows."
             )
             set_status_variant(self.status_label, "warning")
         if counts.records > 0:
             self._configure_action_roles(self.analyze_button)
-        elif profiles:
+            remote = " Last fetch failed; cached rows are still usable." if latest_sync and latest_sync.status == "failed" else ""
+            self._present_next_action(f"Cache ready: {counts.records:,} rows.{remote} Next: Analyze cache [Ctrl+S], or Export [Ctrl+E].",
+                                      variant="warning" if remote else "success")
+        elif enabled_profiles:
             self._configure_action_roles(self.sync_button)
+            if latest_sync and latest_sync.status == "failed":
+                self._present_next_action("Last fetch failed. Next: open Fetch [Ctrl+R], check credentials/source settings and Check access.", variant="warning")
+            else:
+                self._present_next_action("Local cache empty. Next: Fetch to cache [Ctrl+R]; Check access there before fetching.", variant="warning")
         else:
             self._configure_action_roles(self.sources_button)
+            self._present_next_action("No enabled production source. Next: Configure sources [Ctrl+D].", variant="warning")
 
     def refresh_status(self) -> None:
         update_path_field(
@@ -876,15 +915,10 @@ class IndustrialDataDialog(QDialog):
         configure_dialog_button_roles(
             primary=primary,
             secondary=tuple(button for button in workflow_actions if button is not primary),
-            quiet=(
-                self.use_temp_button,
-                self.select_database_button,
-                self.create_database_button,
-                self.diagnostics_button,
-                self.refresh_links_button,
-                self.links_button,
-                self.close_button,
-            ),
+            quiet=tuple(button for button in (
+                self.use_temp_button, self.select_database_button, self.create_database_button,
+                self.diagnostics_button, self.refresh_links_button, self.links_button, self.close_button,
+            ) if button is not primary),
         )
 
     @staticmethod
@@ -945,11 +979,8 @@ class IndustrialDataDialog(QDialog):
         cache_text = self._format_cache_step(records)
         csv_text = "ready" if records > 0 else "waiting"
         return self._format_workflow_strip(
-            source_text=source_text,
-            access_text=access_text,
-            cache_text=cache_text,
-            csv_text=csv_text,
-        )
+            source_text=source_text, access_text=access_text, cache_text=cache_text, csv_text=csv_text,
+        ) + "\nAccess history describes the last fetch, not a live connection check."
 
     @staticmethod
     def _format_access_step(latest_sync: IndustrialSyncRunSummary | None) -> str:
@@ -1050,6 +1081,10 @@ class IndustrialDataDialog(QDialog):
         self.config_path = self.source_window.config_path
         self.refresh_status()
 
+    def on_industrial_source_config_changed(self, config_path) -> None:
+        """Adopt the modal editor's chosen file before any in-modal refresh or handoff."""
+        self.config_path = config_path
+
     def open_sync_dialog(self) -> None:
         self.sync_window = IndustrialSyncDialog(
             self,
@@ -1060,6 +1095,7 @@ class IndustrialDataDialog(QDialog):
             filter_state=self.sync_filter_state,
         )
         self.sync_window.exec()
+        self.config_path = getattr(self.sync_window, "config_path", self.config_path)
         self.refresh_status()
 
     def open_export_dialog(self) -> None:

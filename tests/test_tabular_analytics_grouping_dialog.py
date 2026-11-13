@@ -536,7 +536,7 @@ def test_grouping_dialog_column_panes_are_tall_enough_for_multiple_columns() -> 
         dialog.close()
 
 
-def test_grouping_dialog_uses_double_click_column_selection_without_action_buttons() -> None:
+def test_grouping_dialog_exposes_column_actions_and_preserves_double_click_selection() -> None:
     _app()
     dialog = TabularAnalyticsGroupingDialog(
         dataframe=pd.DataFrame(
@@ -549,13 +549,15 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
     )
     try:
         button_texts = {plain_text(button.text()) for button in dialog.findChildren(QPushButton)}
-        assert not hasattr(dialog, "add_column_button")
-        assert not hasattr(dialog, "remove_column_button")
+        assert "Add column (Ctrl+E)" in button_texts
+        assert "Remove column (Ctrl+Shift+E)" in button_texts
+        assert dialog.add_column_button.isEnabled()
+        assert not dialog.remove_column_button.isEnabled()
         assert not hasattr(dialog, "clear_columns_button")
-        assert {"Add column", "Remove selected column", "Clear columns"}.isdisjoint(button_texts)
+        assert "Clear columns" not in button_texts
         assert "Create or add" not in button_texts
-        assert "Assign all filtered rows..." in button_texts
-        assert "Assign selected row values..." in button_texts
+        assert "Assign all filtered rows... [Ctrl+R]" in button_texts
+        assert "Assign selected row values... [Ctrl+G]" in button_texts
         assert "Add filter row" not in button_texts
         assert "Clear scope filters" not in button_texts
         assert not hasattr(dialog, "add_scope_filter_button")
@@ -600,7 +602,7 @@ def test_grouping_dialog_uses_double_click_column_selection_without_action_butto
             False,
             True,
         ]
-        assert plain_text(dialog.dont_use_grouping_button.text()) == "Reset changes"
+        assert plain_text(dialog.dont_use_grouping_button.text()) == "Reset changes [Ctrl+Shift+R]"
         assert dialog.previous_page_button.accessibleName() == "Previous matching rows page"
         assert dialog.selector_page_label.accessibleName() == "Matching rows page"
 
@@ -1658,7 +1660,9 @@ def test_delete_and_backspace_remove_focused_selected_grouping_column() -> None:
 
 
 def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_row() -> None:
-    _app()
+    from tests.qt_key_input import activate_for_key
+
+    app = _app()
     frame = pd.DataFrame(
         {
             "source_row_number": list(range(1, 1003)),
@@ -1678,8 +1682,8 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert "Grouping-scope filters" not in label_texts
         assert "Match" not in label_texts
         assert button_texts.isdisjoint({"Assign filtered rows...", "Assign to group..."})
-        assert "Assign all filtered rows..." in button_texts
-        assert "Assign selected row values..." in button_texts
+        assert "Assign all filtered rows... [Ctrl+R]" in button_texts
+        assert "Assign selected row values... [Ctrl+G]" in button_texts
 
         footer_layout = dialog.layout().itemAt(dialog.layout().count() - 1).layout()
         assign_all_index = footer_layout.indexOf(dialog.assign_filtered_rows_button)
@@ -1687,17 +1691,24 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         assert -1 not in (assign_all_index, assign_selected_index)
         assert assign_all_index < assign_selected_index
 
-        selector_layout = dialog.selector_list.parentWidget().layout()
-        paging_layout = selector_layout.itemAt(selector_layout.count() - 1).layout()
-        previous_index = paging_layout.indexOf(dialog.previous_page_button)
-        label_index = paging_layout.indexOf(dialog.selector_page_label)
-        next_index = paging_layout.indexOf(dialog.next_page_button)
-        assert -1 not in (previous_index, label_index, next_index)
-        assert previous_index < label_index < next_index
-
         dialog.selector_columns = ["tracecode"]
         dialog._selector_index = None
         dialog._refresh_all()
+        dialog.show()
+        app.processEvents()
+        app.processEvents()
+
+        navigation = (dialog.first_page_button, dialog.previous_page_button,
+                      dialog.next_page_button, dialog.last_page_button)
+        page_entry = (dialog.selector_page_label, dialog.page_jump_input, dialog.jump_page_button)
+        assert all(widget.isVisible() for widget in (*navigation, *page_entry))
+        for row in (navigation, page_entry):
+            rects = [widget.geometry() for widget in row]
+            assert all(rect.width() > 0 and rect.height() > 0 for rect in rects)
+            assert all(first.right() < second.left() for first, second in zip(rects, rects[1:]))
+            assert max(rect.top() for rect in rects) <= min(rect.bottom() for rect in rects)
+        assert dialog.selector_list.geometry().bottom() < min(widget.y() for widget in navigation)
+        assert max(widget.geometry().bottom() for widget in navigation) < min(widget.y() for widget in page_entry)
 
         assert dialog.selector_page_label.text() == "Page 1 of 2"
         assert dialog.selector_preview_label.text() == (
@@ -1705,6 +1716,26 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
         )
         assert dialog.previous_page_button.isEnabled() is False
         assert dialog.next_page_button.isEnabled() is True
+
+        # Tab follows visible enabled navigation, then page entry; the status label is skipped.
+        for start, following in ((dialog.next_page_button, (dialog.last_page_button,
+                                   dialog.page_jump_input, dialog.jump_page_button)),
+                                 (dialog.first_page_button, (dialog.previous_page_button,
+                                   dialog.page_jump_input, dialog.jump_page_button))):
+            if start is dialog.first_page_button:
+                dialog.next_page_button.click()
+                assert dialog.selector_page_label.text() == "Page 2 of 2"
+                assert dialog.previous_page_button.isEnabled() is True
+                assert dialog.next_page_button.isEnabled() is False
+            activate_for_key(app, start)
+            app.processEvents()
+            assert app.focusWidget() is start
+            for expected in following:
+                QTest.keyClick(app.focusWidget(), Qt.Key.Key_Tab)
+                app.processEvents()
+                assert app.focusWidget() is expected
+        dialog.previous_page_button.click()
+        assert dialog.selector_page_label.text() == "Page 1 of 2"
     finally:
         dialog.close()
 

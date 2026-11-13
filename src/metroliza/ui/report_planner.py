@@ -263,6 +263,12 @@ class ReportPlanner(QWidget):
     # -- review lifecycle ---------------------------------------------------
 
     def set_review(self, result, *, carry=None):
+        self._replace_table_contents(lambda: self._set_review_contents(result, carry=carry))
+
+    def show_execution_rows(self, rows):
+        self._replace_table_contents(lambda: self._set_execution_contents(rows))
+
+    def _replace_table_contents(self, replace_contents):
         self._remember_column_widths()
         # Reset and clear the previous filters before sorting the replacement once.
         # Sorting during endResetModel otherwise rebuilds the proxy repeatedly as
@@ -272,7 +278,7 @@ class ReportPlanner(QWidget):
         self.proxy.setDynamicSortFilter(False)
         self.proxy.sort(-1)
         try:
-            self._set_review_contents(result, carry=carry)
+            replace_contents()
         finally:
             self.proxy.setDynamicSortFilter(dynamic)
             self.proxy.sort(column, order)
@@ -288,6 +294,18 @@ class ReportPlanner(QWidget):
         for column, width in enumerate(self._column_widths):
             self.table.setColumnWidth(column, width)
         self._configure_columns()
+        self._reset_filters()
+
+    def _set_execution_contents(self, rows):
+        self.model.set_execution_rows(rows)
+        self._configure_columns()
+        self._reset_filters()
+
+    def _reset_filters(self):
+        self.status_filter.clear()
+        self.status_filter.addItem("All statuses", "")
+        for status, label in self.model.status_labels.items():
+            self.status_filter.addItem(label, status.value)
         self.parser_filter.clear()
         self.parser_filter.addItem("All parsers", "")
         for parser in self.model.parser_ids:
@@ -306,8 +324,9 @@ class ReportPlanner(QWidget):
 
     def set_busy(self, busy):
         self._busy = bool(busy)
-        for control in (self.table, self.select_ready, self.clear):
-            control.setEnabled(not busy)
+        self.table.setEnabled(not busy)
+        for control in (self.select_ready, self.clear):
+            control.setEnabled(not busy and self.model.valid)
         self._update_metadata_actions()
 
     def show_outcome(self, text):
@@ -541,6 +560,12 @@ class ReportPlanner(QWidget):
             f"{counts['total']} reviewed · {counts['ready']} ready · "
             f"{counts['excluded']} excluded · {counts['attention']} need attention"
         )
+        if self.model.execution_rows:
+            results = self.model.execution_counts
+            text = (f"Last import: {self.proxy.rowCount()} visible / {counts['total']} report results · "
+                    f"{results.get('saved', 0)} saved · {results.get('already_present', 0)} already present · "
+                    f"{results.get('skipped', 0)} skipped · {results.get('failed', 0)} failed · "
+                    f"{results.get('unknown', 0)} unknown · {counts['attention']} need attention · Review again to import")
         missing_reference = self.model.missing_reference_count
         if missing_reference:
             text += f" · {missing_reference} missing reference"
@@ -601,6 +626,18 @@ class ReportPlanner(QWidget):
     def _configure_columns(self):
         compact = self.width() < COMPACT_WIDTH
         model = ReportPlannerModel
+        historical = bool(self.model.execution_rows)
+        self.table.setColumnHidden(model.CHECKBOX_COLUMN, historical)
+        for field in REVIEW_FIELDS:
+            self.table.setColumnHidden(model.column_for_field(field), historical or field not in self._visible_fields)
+        self.table.horizontalHeader().setSectionResizeMode(
+            model.LOCATION_COLUMN, QHeaderView.ResizeMode.Stretch if historical else QHeaderView.ResizeMode.Interactive,
+        )
+        if historical:
+            self.table.setColumnHidden(model.PARSER_COLUMN, compact)
+            self.table.setColumnHidden(model.CONFIDENCE_COLUMN, True)
+            self.table.setColumnHidden(model.DETAIL_COLUMN, compact)
+            return
         if compact and self._compact_columns is False:
             self._remember_column_widths()
         for column in (model.PARSER_COLUMN, model.CONFIDENCE_COLUMN, model.DETAIL_COLUMN):

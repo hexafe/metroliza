@@ -17,6 +17,8 @@ import weakref
 from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, QCoreApplication, QModelIndex, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QFont
+from metroliza.ui.curation_presentation import field_label, short_value
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QTableView, QWidget
 
 from metroliza.reports.db import iter_sql_query_batches
@@ -141,6 +143,8 @@ class RecordTableModel(QAbstractTableModel):
         self._needle = ""
         self._visible: list[int] | None = None
 
+    pendingChanged = pyqtSignal()
+
     # -- Qt model interface ---------------------------------------------------------
     @property
     def specs(self) -> list[dict[str, Any]]:
@@ -161,8 +165,18 @@ class RecordTableModel(QAbstractTableModel):
             return self.text_at(self.source_row(index.row()), index.column())
         if role == Qt.ItemDataRole.UserRole:
             return self.original_value(self.source_row(index.row()), index.column())
+        source, column = self.source_row(index.row()), index.column()
+        dirty = column in self._edits.get(source, {})
+        if role == Qt.ItemDataRole.FontRole and dirty:
+            font = QFont()
+            font.setBold(True)
+            return font
         if role == Qt.ItemDataRole.ToolTipRole:
-            return self.validation_error(self.source_row(index.row()), index.column())
+            error = self.validation_error(source, column)
+            if dirty:
+                return (f"Pending: {short_value(self.original_value(source, column))} → "
+                        f"{short_value(self.text_at(source, column))}" + (f"\n{error}" if error else ""))
+            return error
         return None
 
     def validation_error(self, row, column):
@@ -181,10 +195,13 @@ class RecordTableModel(QAbstractTableModel):
         return flags
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role != Qt.ItemDataRole.DisplayRole:
+        if orientation == Qt.Orientation.Horizontal and 0 <= section < len(self._specs):
+            if role == Qt.ItemDataRole.ToolTipRole:
+                return self._specs[section]["label"]
+            if role == Qt.ItemDataRole.DisplayRole:
+                return field_label(self._specs[section])
+        if orientation == Qt.Orientation.Horizontal or role != Qt.ItemDataRole.DisplayRole:
             return None
-        if orientation == Qt.Orientation.Horizontal:
-            return self._specs[section]["label"] if 0 <= section < len(self._specs) else None
         # Row numbers follow the unfiltered table, as hidden rows kept their numbers before.
         source = self.source_row(section) if 0 <= section < self.rowCount() else section
         return str(source + 1)
@@ -207,7 +224,9 @@ class RecordTableModel(QAbstractTableModel):
             self._edits.setdefault(source, {})[column] = text
         if self._haystack is not None:
             self._haystack[source] = self._current_haystack(source)
-        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole])
+        self.dataChanged.emit(index, index, [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole,
+                                            Qt.ItemDataRole.FontRole, Qt.ItemDataRole.ToolTipRole])
+        self.pendingChanged.emit()
         return True
 
     def _matches_original(self, source, column, text):
@@ -248,6 +267,27 @@ class RecordTableModel(QAbstractTableModel):
     @property
     def has_edits(self) -> bool:
         return bool(self._edits)
+
+    @property
+    def pending_cell_count(self):
+        return sum(len(edits) for edits in self._edits.values())
+
+    def pending_preview(self, limit=12):
+        key_column = next((i for i, spec in enumerate(self._specs)
+                           if spec.get("key") or spec["field"] in ("report_id", "measurement_id")), None)
+        lines = []
+        for source, edits in self._edits.items():
+            key = self.original_text(source, key_column) if key_column is not None else str(source + 1)
+            for column, text in edits.items():
+                spec = self._specs[column]
+                # The same validation/coercion as Apply; preview never invents a saved result.
+                value = (None if text == "" else validate_manual_number(text)
+                         if spec.get("value_type") == "float" else text)
+                lines.append(f"{field_label(spec)} (ID {key}): "
+                             f"{short_value(self.original_value(source, column))} → {short_value(value)}")
+                if len(lines) >= limit:
+                    return lines
+        return lines
 
     def edited_rows(self) -> Iterator[tuple[int, dict[int, str]]]:
         """Yield ``(source_row, {column: new_text})`` for edited rows in row order."""

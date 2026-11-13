@@ -32,6 +32,8 @@ def _artifact_paths(directory, records):
                 or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}\.(json|sqlite|xlsx|html)", record["path"]) is None
                 or record["path"] in seen):
             raise core.CandidateFailure("combined_artifact_path_invalid")
+        if key == "uiux_evidence" and record["path"] != "uiux-observation.json":
+            raise core.CandidateFailure("invalid_uiux_artifact_name")
         seen.add(record["path"])
         path = directory / record["path"]
         if core._hash(path) != record["sha256"]:
@@ -54,7 +56,7 @@ def _expected_host_identity():
         "inference_verifier_sha256": "verify_group_inference.py",
     }
     return {**{key: core._hash(folder / name) for key, name in files.items()},
-            "ocr_fixture_sha256": core._ocr_oracle().FIXTURE_SHA256}
+            "ocr_fixture_sha256": core._ocr_oracle().FIXTURE_SHA256, **core._uiux_host_identity()}
 
 
 def _validate_run_identity(value, package, head, tree, scale, mode):
@@ -87,6 +89,11 @@ def _validate_run(directory, package, head, tree, scale, mode):
     core._validate_native_observation(core._json(artifacts["native_evidence"]), packaged=True, expected_mode=mode)
     core._validate_ocr_observation(core._json(artifacts["ocr_evidence"]), packaged=True)
     core._validate_closeout_observation(core._json(artifacts["closeout_evidence"]), packaged=True, expected_dpr=float(scale))
+    verifier = core._uiux_verifier()
+    inputs = Path(__file__).resolve().parents[1] / "tests/fixtures/windows_uiux"
+    oracle, _ = verifier.load_inputs(inputs)
+    verifier.verify(directory, verifier.load_json(artifacts["uiux_evidence"]), oracle,
+                    source=head, packaged=True, dpr=float(scale), qpa="windows")
     before_hash = value["artifacts"]["before_reopen_database"]["sha256"]
     after_hash = value["artifacts"]["database"]["sha256"]
     fresh = core._json(artifacts["fresh_reopen_evidence"])

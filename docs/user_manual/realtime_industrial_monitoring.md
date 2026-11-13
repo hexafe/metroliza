@@ -77,6 +77,45 @@ Open the monitor from **Tools > Real-time Industrial Monitoring...**. If no
 Metroliza database is selected, the app creates a temporary local SQLite store
 for the session; for normal monitoring, select a persistent database first.
 
+Use **Configure source (Ctrl+D)** to open the existing **Setup** tab. With no
+source, open **Production Sources... (Ctrl+Shift+D)** there. Check an enabled
+source, complete its monitor setup, and use **Save Current Source (Ctrl+S)**.
+After saving valid current setup, the single highlighted footer action advances
+to **Monitor (Ctrl+R)**. Editing that setup changes the footer back to Save;
+**Ctrl+S** on Setup still saves the form; Enter follows the highlighted Monitor
+step after saving. An active Stop is an Enter default on Monitor only, so Enter
+in an Event Review text field does not stop polling. On Monitor, choose **Start Checked
+(Ctrl+S)**. Saved setup does not
+prove source access; the actual poll checks access. Disabled sources and checked
+sources with no saved setup cannot start through the next-action button. For a
+previously configured checked source, Start validates and saves its current form
+(including edits not saved separately) before polling. Invalid checked-source
+edits are reported without polling; edits to an unchecked source are not applied.
+
+The footer keeps the current next action visible. During scheduled monitoring
+or an owned poll it shows **Stop (Ctrl+Shift+S)**, including on Event Review.
+Stop requests cancellation; the dialog stays in its stopping state until the
+owned poll finishes. **Poll Once (Ctrl+Shift+R)** and **Open Dashboard
+(Ctrl+Shift+F)** are available on Monitor. **Close (Ctrl+W or plain Esc)** uses
+the existing worker and temporary-storage safeguards. A modified or repeated Esc
+does not request closure. Esc inside a child modal dialog belongs to that child.
+A refused source-editor close or private-storage cleanup keeps the monitor open;
+an owned poll/dashboard worker must finish before the monitor can be destroyed.
+
+**Setup**, **Poll**, and **Dashboard** report separate states. **Data freshness**
+shows the maximum available lag and first reported data-through timestamp from
+the last completed poll snapshot. It is not a ticking age or proof that data is
+live. After Stop the snapshot remains visible as stopped; a later poll error
+appears separately without making the previous snapshot current. Dashboard
+generation can still be finishing after polling stops.
+
+Open **Event Review (Ctrl+E)** to load up to 100 persisted open events. **Ctrl+S**
+refreshes that list. Select an event and enter both operator and review comment
+before **Acknowledge (Ctrl+Shift+A)**, **Resolve (Ctrl+Shift+E)**, or **Mark false
+positive (Ctrl+Shift+Q)**. These retain the existing recorded decisions and
+conflict checks. Shortcuts act inside this dialog; normal text editing and
+Ctrl+Alt/AltGr combinations remain available to editors.
+
 The monitor uses the same production source YAML config and source editor as the manual
 Industrial Data fetch workflow. In **Sources**, confirm the **Production source config
 file**, use **Reload Config** after the file changes, or open **Production Sources...** to

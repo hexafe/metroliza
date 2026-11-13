@@ -13,7 +13,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertRegex(metadata.release_version, r"^\d{4}\.\d{2}(?:rc\d+)?$")
         self.assertRegex(metadata.build, r"^\d{6}$")
         self.assertEqual(metadata.version_label, f"{metadata.release_version}({metadata.build})")
-        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261112)")
+        self.assertEqual(metadata.public_version_label, "2026.09 RC1 (build 261115)")
         self.assertTrue(metadata.highlight)
 
     def test_in_app_current_release_notes_show_current_version_only(self):
@@ -50,41 +50,24 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                '- Help opens the manuals that match this version<br>',
-                '- The Windows download is one ZIP: extract it and start the EXE; build identity and third-party notices sit next to the EXE<br>',
-                '- Exporting to an existing workbook asks whether to save a copy (the default) or replace it; a workbook open in Excel is not overwritten<br>',
-                '- Metadata enrichment reports canceled, failed and skipped reports instead of a green 100%<br>',
-                '- Opening an existing .sqlite, .sqlite3 or .DB database uses exactly the file you chose<br>',
-                '- Copy to checked shows hidden and overwritten values and can be undone<br>',
-                '- Filter searches keep selected headers, All and specific values cannot be mixed, and a From date after To is blocked<br>',
-                '- Modify Database accepts an unambiguous decimal comma, blocks invalid numbers and saves all changes or none<br>',
-                '- Mapping CSV import previews added and replaced names and imports only new ones by default<br>',
-                '- CSV Summary applies a search with Enter before assigning rows, keeps groups when nothing changed, and keeps manual limits of metrics you switch off and on again<br>',
-                '- Much faster start on Windows: the app unpacks once per version, and later starts open the main window in about a second<br>',
-                '- A smaller download: unused OCR acceleration and video components are no longer bundled<br>',
-                '- Fast report import is about 2.5 times faster<br>',
-                '- After review, report metadata (reference, part name, sample number, date) is read automatically into the import table, where you can correct it or run OCR for selected reports; your corrections are kept<br>',
-                '- The dark theme is applied correctly when the app starts<br>',
-                '- The splash screen closes as soon as the main window is visible<br>',
-                '- A missing or damaged program file is repaired automatically, or the message names the affected file<br>',
-                '- Modify Database opens instantly and searches quickly, even with hundreds of thousands of measurements<br>',
-                '- Excel exports are about twice as fast and use much less memory; Extended plots export uses several processor cores and CSV Summary export is faster too<br>',
-                '- Importing reports on Windows saves them to the database much faster<br>',
-                '- Multi-page reports in very large imports (more than 2048 reports at once) are read the same way as other imports, without extra measurement groups at page breaks<br>',
-                '- The filter window opens instantly, loads its choices in the background and reuses them while the database is unchanged<br>',
-                '- Canceling an export right after it starts stops at once, without loading all measurements first<br>',
-                '- Creating an analysis in CSV Summary works after applying groups to Industrial Data, and a renamed default group is kept in the dashboard and workbook<br>',
-                '- Industrial Data temporary storage shows how many rows were fetched, and opening CSV Summary for different sources no longer makes the temporary file grow each time<br>',
-                '- A refreshed Windows workspace keeps report review, import, analysis, and export in one place<br>',
-                '- Choose PDF reports before import and reopen saved measurements without repeating completed work<br>',
-                '- Filters and grouping keep numeric results consistent between the table and analysis views<br>',
-                '- Excel exports preserve chart titles and series names as literal text<br>',
-                '- Reports follow the selected app theme, including after a theme change<br>',
-                '- Reports without a reference remain exportable, while group comparisons identify missing references<br>',
-                '- The Help menu opens private incident reports for preview and export when a supervised run fails<br>',
-                '- Canceling active work protects completed database and workbook output<br>',
+                '- Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>',
+                '- Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys<br>',
+                '- After import, keep per-report saved, skipped and failed results in view, then review again before importing more<br>',
+                '- Filter dialogs show hidden selection counts; groups have explicit column and member controls<br>',
+                '- Choose HTML dashboards and optional workbooks with visible paths and the scope that will be generated<br>',
+                '- Parser Profiles separates installed profiles from adding a format, with preparation, check, validation and installation stages<br>',
+                '- Industrial Data shows source setup, access checks, cache readiness and the next available action<br>',
+                '- Realtime separates polling, last-snapshot freshness and dashboard state, with visible Stop and event review<br>',
+                '- Offline dashboards use a compact overview, retain sampling warnings, and show local Enter/E/Esc/Q hints<br>',
+                '- Help opens manuals pinned to this build, including the shared keyboard reference<br>',
             ],
         )
+        self.assertIn("Version 2026.09rc1 (build 261114)", VersionDate.release_notes)
+        self.assertNotIn("261114", current_section)
+        self.assertIn("Version 2026.09rc1 (build 261113)", VersionDate.release_notes)
+        self.assertNotIn("261113", current_section)
+        self.assertIn("Version 2026.09rc1 (build 261112)", VersionDate.release_notes)
+        self.assertNotIn("261112", current_section)
         self.assertIn("Version 2026.06rc2 (build 260711)", VersionDate.release_notes)
 
         changelog_bullets = [

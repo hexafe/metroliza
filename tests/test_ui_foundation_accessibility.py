@@ -311,7 +311,7 @@ def test_source_profile_dialog_has_one_stable_primary_enter_action(tmp_path):
     app.processEvents()
 
     buttons = dialog.findChildren(QPushButton)
-    assert [button.text() for button in buttons if button.isDefault()] == ["Save source"]
+    assert [button.text() for button in buttons if button.isDefault()] == ["Save source [Ctrl+S]"]
     assert dialog.save_source_button.property("buttonRole") == "primary"
     assert dialog.save_source_button.autoDefault()
     for button in (
@@ -336,7 +336,7 @@ def test_source_profile_dialog_has_one_stable_primary_enter_action(tmp_path):
     QTest.keyClick(dialog.source_name_edit, Qt.Key.Key_Return)
     app.processEvents()
 
-    assert triggered == ["Save source"]
+    assert triggered == ["Save source [Ctrl+S]"]
     assert dialog.save_source_button.isDefault()
     dialog.close()
 

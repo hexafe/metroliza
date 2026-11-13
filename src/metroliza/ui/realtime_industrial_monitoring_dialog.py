@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from time import monotonic
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -15,6 +16,8 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QGridLayout,
+    QLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -65,6 +68,8 @@ from metroliza.industrial.industrial_workers import (
     RealtimeMonitorPollThread,
 )
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
+from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
+from metroliza.ui.realtime_monitor_presentation import observed_freshness
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_dialog_button_roles,
@@ -162,21 +167,38 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.config_readiness_label = status_chip("Setup: not checked", "neutral")
         self.poll_status_label = status_chip("Poll: not run", "neutral")
         self.dashboard_status_label = status_chip("Dashboard: not generated", "neutral")
+        for label in (self.config_readiness_label, self.poll_status_label, self.dashboard_status_label):
+            label.setWordWrap(True)
         subsystem_row.addWidget(self.config_readiness_label, 1)
         subsystem_row.addWidget(self.poll_status_label, 1)
         subsystem_row.addWidget(self.dashboard_status_label, 1)
         layout.addLayout(subsystem_row)
+        self.freshness_label = status_chip("Data freshness: not observed", "neutral")
+        self.freshness_label.setWordWrap(True)
+        self.freshness_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.freshness_label)
 
         self.workflow_tabs = QTabWidget()
         self.workflow_tabs.setObjectName("realtimeWorkflowTabs")
         self.workflow_tabs.addTab(self._build_monitor_page(), "Monitor")
         self.workflow_tabs.addTab(self._build_setup_page(), "Setup")
         self.workflow_tabs.addTab(self._build_event_review_page(), "Event Review")
-        self.workflow_tabs.currentChanged.connect(self._sync_default_action_for_tab)
+        self.workflow_tabs.currentChanged.connect(self._sync_workflow_presentation)
         layout.addWidget(self.workflow_tabs, 1)
 
-        close_row = QHBoxLayout()
-        close_row.addStretch(1)
+        self.next_action_label = status_chip("Configure a source to begin.", "info")
+        self.next_action_label.setWordWrap(True)
+        layout.addWidget(self.next_action_label)
+        close_row = QGridLayout()
+        self.configure_source_button = QPushButton("Configure source")
+        self.monitor_view_button = QPushButton("Monitor")
+        self.event_review_button = QPushButton("Event Review")
+        self.next_button = QPushButton("Configure source")
+        self._next_control = self.configure_source_button
+        self.configure_source_button.clicked.connect(self._show_setup)
+        self.monitor_view_button.clicked.connect(lambda: self.workflow_tabs.setCurrentIndex(0))
+        self.event_review_button.clicked.connect(self._show_event_review)
+        self.next_button.clicked.connect(lambda: self._next_control.click())
         self.close_button = QPushButton("Close")
         self.close_button.clicked.connect(self.close)
         configure_dialog_button_roles(
@@ -194,8 +216,13 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             quiet=(self.close_button,),
             danger=(self.stop_button,),
         )
-        close_row.addWidget(self.close_button)
+        close_row.addWidget(self.configure_source_button, 0, 0)
+        close_row.addWidget(self.monitor_view_button, 0, 1)
+        close_row.addWidget(self.event_review_button, 0, 2)
+        close_row.addWidget(self.next_button, 1, 0, 1, 2)
+        close_row.addWidget(self.close_button, 1, 2)
         layout.addLayout(close_row)
+        self._configure_commands()
         self._sync_running_state(False)
         self._sync_default_action_for_tab(0)
 
@@ -214,14 +241,136 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             set_status_variant(self.storage_lifecycle_label, "success")
 
     def _sync_default_action_for_tab(self, index: int) -> None:
-        candidates = (
-            self.start_button,
-            self.save_button,
-            self.refresh_events_button,
+        for button in (self.start_button, self.save_button, self.refresh_events_button,
+                       self.stop_button, self.configure_source_button, self.edit_sources_button,
+                       self.monitor_view_button, self.event_review_button):
+            set_button_role(button, "danger" if button is self.stop_button else "secondary")
+        selected = getattr(self, "_next_control", None)
+        # Mirror the original visible control's Enter eligibility. A hidden Stop
+        # must not become the default while typing in Setup or Event Review.
+        set_button_role(self.next_button, "primary",
+                        default=selected is not None and selected.isVisibleTo(self))
+
+    def _show_setup(self) -> None:
+        self.workflow_tabs.setCurrentIndex(1)
+        (self.edit_sources_button if not self.profiles else self.cursor_column_edit).setFocus()
+
+    def _show_event_review(self) -> None:
+        self.workflow_tabs.setCurrentIndex(2)
+        self.refresh_event_review()
+
+    def _configure_commands(self) -> None:
+        commands = (
+            ("Ctrl+D", self.configure_source_button, None), ("Ctrl+R", self.monitor_view_button, None),
+            ("Ctrl+E", self.event_review_button, None), ("Ctrl+Shift+S", self.stop_button, None),
+            ("Ctrl+Shift+R", self.poll_once_button, 0), ("Ctrl+Shift+F", self.open_dashboard_button, 0),
+            ("Ctrl+Shift+D", self.edit_sources_button, 1), ("Ctrl+Shift+A", self.acknowledge_event_button, 2),
+            ("Ctrl+Shift+E", self.resolve_event_button, 2), ("Ctrl+Shift+Q", self.false_positive_event_button, 2),
         )
-        selected = candidates[index] if 0 <= index < len(candidates) else None
-        for button in candidates:
-            set_button_role(button, "primary", default=button is selected)
+        for sequence, button, tab in commands:
+            action = QAction(self)
+            bind_shortcut(action, sequence)
+            action.setAutoRepeat(False)
+            action.triggered.connect(lambda _checked=False, control=button, page=tab:
+                                     control.click() if page is None or self.workflow_tabs.currentIndex() == page else None)
+            self.addAction(action)
+            visible_shortcut(button, sequence)
+        primary = QAction(self)
+        bind_shortcut(primary, "Ctrl+S")
+        primary.setAutoRepeat(False)
+        primary.triggered.connect(lambda: (self.start_button, self.save_button, self.refresh_events_button)[
+            self.workflow_tabs.currentIndex()].click())
+        self.addAction(primary)
+        for button in (self.start_button, self.save_button, self.refresh_events_button):
+            visible_shortcut(button, "Ctrl+S")
+        close = QAction(self)
+        bind_shortcut(close, "Ctrl+W")
+        close.setAutoRepeat(False)
+        close.triggered.connect(self.close)
+        self.addAction(close)
+        visible_shortcut(self.close_button, "Ctrl+W / Esc")
+        for first, second in ((self.source_list, self.cursor_column_edit),
+                              (self.event_operator_edit, self.event_comment_edit),
+                              (self.event_comment_edit, self.acknowledge_event_button)):
+            self.setTabOrder(first, second)
+        for edit in (self.stream_key_edit, self.cursor_column_edit, self.event_time_column_edit,
+                     self.record_key_column_edit, self.signal_columns_edit,
+                     self.aggregation_methods_edit, self.aggregation_groups_edit,
+                     self.context_fields_edit, self.segment_fields_edit, self.detectors_edit,
+                     self.dashboard_path_field):
+            edit.textChanged.connect(self._sync_workflow_presentation)
+        for spin in (self.interval_spin, self.timeout_spin, self.chunk_spin, self.max_catchup_spin):
+            spin.valueChanged.connect(self._sync_workflow_presentation)
+        for combo in (self.display_mode_combo, self.aggregation_bucket_combo):
+            combo.currentTextChanged.connect(self._sync_workflow_presentation)
+
+    def _current_setup_matches_saved(self) -> bool:
+        profile = self.current_profile()
+        saved = self.configs_by_profile_id.get(profile.id) if profile and profile.is_enabled else None
+        if saved is None:
+            return False
+        try:
+            current = self._config_from_form(profile)
+        except ValueError:
+            return False  # Invalid current text remains an unsaved form, not readiness.
+        # Compare normalized editable values, ignoring persistence metadata and
+        # the two runtime fields not represented by this existing form.
+        return replace(current, id=saved.id, created_at=saved.created_at, updated_at=saved.updated_at,
+                       allowed_lateness_seconds=saved.allowed_lateness_seconds,
+                       source_timezone=saved.source_timezone) == saved
+
+    def _sync_workflow_presentation(self, _index=None) -> None:
+        if not hasattr(self, "next_button"):
+            return
+        running = self.poll_timer.isActive() or self.poll_thread is not None or self._stop_requested
+        tab = self.workflow_tabs.currentIndex()
+        if running:
+            control = self.stop_button
+            message = "Waiting for owned poll cleanup." if self._stop_requested else "Polling is active. Stop before changing setup."
+        elif tab == 2:
+            control, message = self.refresh_events_button, "Review persisted events; actions require operator and comment."
+        elif tab == 1:
+            if self._current_setup_matches_saved():
+                control = self.monitor_view_button
+                message = ("Current setup saved. Open Monitor, then Start checks source access."
+                           if self.start_button.isEnabled() else
+                           "Current setup saved. Monitoring requires checked enabled sources with saved setup.")
+            else:
+                control = self.save_button if self.save_button.isEnabled() else self.edit_sources_button
+                message = "Save valid current edits, then choose Monitor and Start." if self.save_button.isEnabled() else "Configure or enable a source using Production Sources, then save monitor setup."
+        elif self.start_button.isEnabled():
+            control, message = self.start_button, self._start_action_message()
+        else:
+            control = self.configure_source_button
+            message = self._unready_guidance()
+        self._next_control = control
+        self.next_button.setText(control.text())
+        self.next_button.setEnabled(control.isEnabled())
+        self.next_action_label.setText(message)
+        self.freshness_label.setText(observed_freshness(
+            self.last_poll_results, scheduled=self.poll_timer.isActive(),
+            poll_owned=self.poll_thread is not None, stopping=self._stop_requested,
+        ))
+        self._sync_default_action_for_tab(tab)
+
+    def _start_action_message(self) -> str:
+        current = self.current_profile()
+        if current is None or all(profile.id != current.id for profile in self.selected_profiles()):
+            return "Start uses checked sources. Current unchecked source edits are not applied."
+        try:
+            self._config_from_form(current)
+        except ValueError:
+            return "Current checked source edits are invalid. Configure source to correct them; Start will report the error without polling."
+        return "Start validates and saves the current checked source setup, then polls checked sources. Polling checks source access."
+
+    def _unready_guidance(self) -> str:
+        if not self.profiles:
+            return "No sources configured. Configure source opens the existing Setup workflow."
+        if not any(profile.is_enabled for profile in self.profiles):
+            return "Sources are disabled. Configure source to review them in Production Sources."
+        if not self.selected_profiles():
+            return "Configure source to check an enabled source for monitoring."
+        return "Checked source setup is incomplete or unsaved. Configure source, save setup, then return to Monitor."
 
     def _build_monitor_page(self) -> QWidget:
         page = QWidget()
@@ -229,8 +378,16 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         layout.addLayout(self._build_monitor_action_row())
-        layout.addWidget(self._build_status_panel(), 2)
-        layout.addWidget(self._build_diagnostics_panel(), 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        body_layout.addWidget(self._build_status_panel(), 2)
+        body_layout.addWidget(self._build_diagnostics_panel(), 1)
+        scroll.setWidget(body)
+        layout.addWidget(scroll, 1)
         return page
 
     def _build_setup_page(self) -> QWidget:
@@ -375,8 +532,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         row.addStretch(1)
         return row
 
-    def _build_monitor_action_row(self) -> QHBoxLayout:
-        row = QHBoxLayout()
+    def _build_monitor_action_row(self) -> QGridLayout:
+        row = QGridLayout()
         self.start_button = QPushButton("Start Checked")
         self.poll_once_button = QPushButton("Poll Once")
         self.stop_button = QPushButton("Stop")
@@ -387,14 +544,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.stop_button.clicked.connect(self.stop_monitoring)
         self.open_dashboard_button.clicked.connect(self.open_dashboard)
 
-        for button in (
-            self.start_button,
-            self.poll_once_button,
-            self.stop_button,
-            self.open_dashboard_button,
-        ):
-            row.addWidget(button)
-        row.addStretch(1)
+        for index, button in enumerate((self.start_button, self.poll_once_button,
+                                        self.stop_button, self.open_dashboard_button)):
+            row.addWidget(button, index // 2, index % 2)
         return row
 
     def _build_status_panel(self) -> QWidget:
@@ -439,7 +591,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             "and a comment; Metroliza never automates hold, release, or scrap decisions."
         )
         intro.setWordWrap(True)
-        layout.addWidget(intro)
+        event_body = QWidget()
+        event_body_layout = QVBoxLayout(event_body)
+        event_body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        event_body_layout.addWidget(intro)
 
         self.event_review_table = QTableWidget(0, 8)
         self.event_review_table.setHorizontalHeaderLabels(
@@ -463,7 +618,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.event_review_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.event_review_table.itemSelectionChanged.connect(self._sync_event_action_buttons)
         configure_table(self.event_review_table, stretch_column=6, min_height=220)
-        layout.addWidget(self.event_review_table, 1)
+        event_body_layout.addWidget(self.event_review_table, 1)
+        event_scroll = QScrollArea()
+        event_scroll.setWidgetResizable(True)
+        event_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        event_scroll.setWidget(event_body)
+        layout.addWidget(event_scroll, 1)
 
         operator_row = QHBoxLayout()
         self.event_operator_edit = QLineEdit()
@@ -476,7 +636,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         operator_row.addWidget(self.event_comment_edit, 2)
         layout.addLayout(operator_row)
 
-        action_row = QHBoxLayout()
+        action_row = QGridLayout()
         self.refresh_events_button = QPushButton("Refresh events")
         self.acknowledge_event_button = QPushButton("Acknowledge")
         self.resolve_event_button = QPushButton("Resolve")
@@ -491,11 +651,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.false_positive_event_button.clicked.connect(
             lambda: self._apply_selected_event_action("false_positive")
         )
-        action_row.addWidget(self.refresh_events_button)
-        action_row.addStretch(1)
-        action_row.addWidget(self.acknowledge_event_button)
-        action_row.addWidget(self.resolve_event_button)
-        action_row.addWidget(self.false_positive_event_button)
+        for index, button in enumerate((self.refresh_events_button, self.acknowledge_event_button,
+                                        self.resolve_event_button, self.false_positive_event_button)):
+            action_row.addWidget(button, index // 2, index % 2)
         layout.addLayout(action_row)
         self.event_review_status_label = status_chip("Open events: not loaded", "neutral")
         layout.addWidget(self.event_review_status_label)
@@ -635,9 +793,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._populate_sources()
         if profiles:
             source_text = (
-                f"Ready; imported {len(imported)} source(s) from YAML"
+                f"Source profiles loaded; imported {len(imported)} source(s) from YAML"
                 if imported
-                else "Ready"
+                else "Source profiles loaded; monitor setup and source access are separate checks"
             )
         else:
             source_text = "No industrial sources configured"
@@ -1095,6 +1253,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         poll_thread.finished.connect(lambda: self._clear_poll_thread(poll_thread))
         self._set_poll_status("Polling realtime industrial sources...", "info")
         poll_thread.start()
+        self._sync_buttons()
 
     def _due_active_configs(self) -> tuple[RealtimeMonitorConfig, ...]:
         now = monotonic()
@@ -1131,11 +1290,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 "success",
             )
 
+        self._sync_workflow_presentation()
+
     def _on_poll_error(self, message: str) -> None:
         if self._closing:
             return
         self._set_poll_status(f"Polling failed: {message}", "danger")
         self._append_diagnostic(message)
+        self._sync_workflow_presentation()
 
     def _clear_poll_thread(self, finished_thread=None) -> None:
         if finished_thread is not None and finished_thread is not self.poll_thread:
@@ -1350,6 +1512,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.clear_sources_button.setEnabled(has_sources and not running)
         has_dashboard_context = bool(self.last_poll_results or self.configs_by_profile_id or has_sources)
         self.open_dashboard_button.setEnabled(has_dashboard_context)
+        self._sync_workflow_presentation()
 
     def _set_status(self, text: str, variant: str) -> None:
         self.status_label.setText(text)
@@ -1469,6 +1632,17 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             event.ignore()
             return
         super().closeEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            # QDialog's inherited Escape->reject/done path bypasses closeEvent.
+            # Keep all Escape variants out of that path; only a deliberate plain
+            # press invokes the same guarded close as the visible Close command.
+            event.accept()
+            if not event.isAutoRepeat() and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+                self.close()
+            return
+        super().keyPressEvent(event)
 
 
 def _profile_label(profile: IndustrialSourceProfile) -> str:

@@ -2,12 +2,19 @@
 
 MAIN_SHORTCUTS = {
     "open_database": ("Ctrl+O", "Open database…"),
+    "report_database": ("Ctrl+D", "Select/create database in Reports; open database elsewhere"),
+    "choose_source": ("Ctrl+Shift+D", "Choose Reports source…"),
+    "cancel_reports": ("Ctrl+Shift+S", "Cancel report operation"),
     "review_reports": ("Ctrl+R", "Review reports"),
-    "import_reports": ("Ctrl+I", "Import selected reports"),
+    "import_reports": ("Ctrl+S", "Import selected reports"),
     "export_workbook": ("Ctrl+E", "Export Workbook"),
     "manual": ("F1", "Manual of the active window"),
 }
-PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 10))
+PAGE_SHORTCUTS = tuple(f"Ctrl+{index}" for index in range(1, 6))
+WORKSPACE_SHORTCUTS = dict(zip(
+    ("home", "reports", "csv_summary", "industrial_data", "realtime_monitor"), PAGE_SHORTCUTS,
+)) | {"parser_profiles": "Ctrl+Shift+F", "tools": "Ctrl+Shift+T"}
+LEGACY_MAIN_SHORTCUTS = {"import_reports": "Ctrl+I"}
 DIALOG_SHORTCUTS = {"focus_search": ("Ctrl+F", "Focus and select the current search field")}
 DIALOG_MNEMONICS = {
     "csv_filter": {
@@ -69,10 +76,7 @@ def set_mnemonic(button, letter):
 
 
 def shortcut_tooltip(button, command):
-    sequence = MAIN_SHORTCUTS[command][0]
-    suffix = f" ({sequence})"
-    if not button.toolTip().endswith(suffix):
-        button.setToolTip(button.toolTip() + suffix)
+    _append_shortcut_tooltip(button, MAIN_SHORTCUTS[command][0])
 
 
 def bind_shortcut(action, sequence):
@@ -96,17 +100,25 @@ def _append_shortcut_tooltip(widget, sequence):
     """Show the key in the tooltip; the base text is kept so dynamic captions stay current."""
     if not sequence:
         return
-    base = widget.property("metrolizaShortcutTooltipBase")
-    if base is None:
-        base = widget.toolTip()
-        widget.setProperty("metrolizaShortcutTooltipBase", base)
+    current = widget.toolTip()
+    previous = widget.property("metrolizaShortcutTooltipRendered")
+    automatic = bool(widget.property("metrolizaShortcutTooltipAutomatic")) if current == previous else not current
+    base = widget.property("metrolizaShortcutTooltipBase") if current == previous else current
+    if automatic:
+        base = ""
     if not base:
-        # Never use a line edit's typed text; buttons use their current caption.
         if hasattr(widget, "placeholderText"):
             base = widget.placeholderText() or widget.accessibleName()
         else:
             base = plain_text(widget.text())
-    widget.setToolTip(f"{base} ({sequence})" if base else sequence)
+            hint = widget.property("metrolizaVisibleShortcut")
+            if hint and base.endswith(f" [{hint}]"):
+                base = base[:-(len(hint) + 3)]
+    rendered = f"{base} ({sequence})" if base else sequence
+    widget.setProperty("metrolizaShortcutTooltipAutomatic", automatic)
+    widget.setProperty("metrolizaShortcutTooltipBase", base)
+    widget.setProperty("metrolizaShortcutTooltipRendered", rendered)
+    widget.setToolTip(rendered)
 
 
 def bind_search_shortcut(window, pairs):
@@ -140,3 +152,140 @@ def bind_search_shortcut(window, pairs):
     for edit, _view in pairs:
         _append_shortcut_tooltip(edit, sequence)
     return action
+
+
+def visible_shortcut(button, sequence):
+    """Append a persistent key hint while keeping dynamic captions and names clean."""
+    previous = button.property("metrolizaVisibleShortcut")
+    text = button.text()
+    if previous and text.endswith(f" [{previous}]"):
+        text = text[:-(len(previous) + 3)]
+    button.setText(f"{text} [{sequence}]")
+    button.setProperty("metrolizaVisibleShortcut", sequence)
+    _append_shortcut_tooltip(button, sequence)
+
+
+# Supplemental commands only: accepted primary bindings stay at their existing owners.
+# Each entry targets the actual guarded button, not a parallel command/readiness state.
+PRIMARY_BUTTON_COMMANDS = {
+    "modify": (("select_db_button", "Ctrl+D"),),
+    "csv_summary": (
+        ("browse_input_button", "Ctrl+D"), ("load_metrics_button", "Ctrl+R"),
+        ("dashboard_button", "Ctrl+Shift+D"), ("workbook_button", "Ctrl+Shift+E"),
+        ("filters_button", "Ctrl+Shift+F"), ("edit_groups_button", "Ctrl+G"),
+        ("edit_limits_button", "Ctrl+Shift+G"), ("clear_filter_button", "Ctrl+Shift+R"),
+        ("clear_groups_button", "Ctrl+Shift+Q"),
+    ),
+    "export": (
+        ("select_db_button", "Ctrl+D"), ("select_excel_button", "Ctrl+Shift+E"),
+        ("group_button", "Ctrl+G"), ("clear_filter_button", "Ctrl+Shift+R"),
+        ("clear_group_button", "Ctrl+Shift+Q"),
+    ),
+    "csv_grouping": (
+        ("assign_filtered_rows_button", "Ctrl+R"), ("clear_selection_button", "Ctrl+Q"),
+        ("create_group_button", "Ctrl+G"), ("rename_group_button", "Ctrl+Shift+G"),
+        ("delete_group_button", "Ctrl+Shift+D"), ("use_grouping_button", "Ctrl+S"),
+        ("dont_use_grouping_button", "Ctrl+Shift+R"), ("cancel_button", "Ctrl+W"),
+    ),
+    "grouping": (
+        ("create_group_button", "Ctrl+G"), ("rename_group_button", "Ctrl+Shift+G"),
+        ("delete_group_button", "Ctrl+Shift+D"), ("remove_from_group_button", "Ctrl+D"),
+        ("use_grouping_button", "Ctrl+S"), ("dont_use_grouping_button", "Ctrl+Shift+R"),
+        ("cancel_button", "Ctrl+W"),
+    ),
+    "mapping": (
+        ("select_db_button", "Ctrl+D"), ("add_from_selected_button", "Ctrl+R"),
+        ("delete_button", "Ctrl+Shift+D"), ("import_button", "Ctrl+Shift+R"),
+        ("export_button", "Ctrl+S"),
+    ),
+    "metrics": (("apply_button", "Ctrl+S"), ("cancel_button", "Ctrl+W")),
+    "limits": (("apply_button", "Ctrl+S"), ("cancel_button", "Ctrl+W")),
+    "industrial_sources": (
+        ("new_source_button", "Ctrl+D"), ("browse_config_button", "Ctrl+Shift+D"),
+        ("reload_config_button", "Ctrl+R"), ("save_source_button", "Ctrl+S"),
+        ("close_button", "Ctrl+W"),
+    ),
+    "industrial_sql": (
+        ("open_button", "Ctrl+D"), ("save_button", "Ctrl+S"),
+        ("preview_button", "Ctrl+R"), ("close_button", "Ctrl+W"),
+    ),
+    "industrial_filter": (
+        ("add_filter_button", "Ctrl+E"), ("apply_button", "Ctrl+S"),
+        ("clear_button", "Ctrl+Shift+R"), ("cancel_button", "Ctrl+W"),
+    ),
+    "industrial_grouping": (
+        ("apply_button", "Ctrl+S"), ("clear_button", "Ctrl+Shift+R"),
+        ("cancel_button", "Ctrl+W"),
+    ),
+    "industrial_export": (
+        ("output_button", "Ctrl+Shift+E"), ("edit_filter_button", "Ctrl+F"),
+        ("edit_grouping_button", "Ctrl+G"), ("clear_filter_button", "Ctrl+Shift+R"),
+        ("clear_grouping_button", "Ctrl+Shift+Q"), ("start_button", "Ctrl+S"),
+        ("close_button", "Ctrl+W"),
+    ),
+}
+
+
+def _active_command_window(window):
+    from PyQt6.QtWidgets import QApplication
+
+    return (window.isVisible() and window.isActiveWindow()
+            and QApplication.activeModalWidget() in (None, window))
+
+
+def _invoke_command_button(window, button):
+    if (_active_command_window(window) and button.isVisibleTo(window) and button.isEnabled()):
+        button.setFocus()  # Commit an active table delegate just as a mouse click does.
+        button.click()
+
+
+def refresh_button_command_hints(window, context):
+    """Keep accepted dynamic captions/tooltips while restoring their primary hint."""
+    installed = getattr(window, "_catalog_button_actions", {})
+    for attribute, sequence in PRIMARY_BUTTON_COMMANDS[context]:
+        if (context, attribute) not in installed:
+            continue
+        button = getattr(window, attribute)
+        visible_shortcut(button, sequence)
+        legacy = button.shortcut().toString()
+        if legacy:
+            _append_shortcut_tooltip(button, f"{sequence}; {legacy} (secondary)")
+
+
+def install_button_commands(window, context):
+    """Install once per window; controllers retain all availability/admission decisions."""
+    from PyQt6.QtGui import QAction
+
+    installed = getattr(window, "_catalog_button_actions", None)
+    if installed is None:
+        installed = window._catalog_button_actions = {}
+    for attribute, sequence in PRIMARY_BUTTON_COMMANDS[context]:
+        key = (context, attribute)
+        if key in installed:
+            continue
+        button = getattr(window, attribute)
+        action = QAction(plain_text(button.text()), window)
+        bind_shortcut(action, sequence)
+        action.setAutoRepeat(False)
+        action.triggered.connect(lambda checked=False, target=button: _invoke_command_button(window, target))
+        window.addAction(action)
+        installed[key] = action
+    refresh_button_command_hints(window, context)
+    return tuple(installed[(context, attribute)] for attribute, _sequence in PRIMARY_BUTTON_COMMANDS[context])
+
+
+def install_callback_command(window, sequence, callback):
+    """Window-local route to an existing guarded handler (for an active operation)."""
+    from PyQt6.QtGui import QAction
+
+    installed = getattr(window, "_catalog_callback_actions", None)
+    if installed is None:
+        installed = window._catalog_callback_actions = {}
+    if sequence not in installed:
+        action = QAction(window)
+        bind_shortcut(action, sequence)
+        action.setAutoRepeat(False)
+        action.triggered.connect(lambda: callback() if _active_command_window(window) else None)
+        window.addAction(action)
+        installed[sequence] = action
+    return installed[sequence]
