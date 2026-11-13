@@ -458,6 +458,19 @@ class _Journey:
         rows = frame.iter_rows(as_dict=True) if hasattr(frame, 'iter_rows') else frame.to_dict('records')
         return sorted([[int(row['REPORT_ID']), str(row['GROUP'])] for row in rows])
 
+    @staticmethod
+    def _grouping_read_observer(original_read, owned_stores, reads, read_errors):
+        def observe(instance, **kwargs):
+            result = original_read(instance, **kwargs)
+            if any(instance is known for known in owned_stores):
+                try:
+                    reads.append({'columns': list(kwargs.get('columns') or ()), 'limit': kwargs.get('limit'),
+                                  'filter_columns': list(kwargs.get('filter_columns') or ()), 'keys': len(kwargs.get('selected_filter_keys') or ()), 'rows': len(result)})
+                except BaseException as error:
+                    read_errors.append(type(error).__name__)
+            return result
+        return observe
+
     def grouping(self):
         import pandas as pd
         from PyQt6.QtWidgets import QInputDialog, QLineEdit, QDialogButtonBox
@@ -482,15 +495,7 @@ class _Journey:
         kind, store = type(loaded.sqlite_store), loaded.sqlite_store
         owned_stores = [store]
         original_read = kind.read_row_table
-        def observe(instance, **kwargs):
-            result = original_read(instance, **kwargs)
-            if any(instance is known for known in owned_stores):
-                try:
-                    reads.append({'columns': list(kwargs.get('columns') or ()), 'limit': kwargs.get('limit'),
-                                  'filter_columns': list(kwargs.get('filter_columns') or ()), 'keys': len(kwargs.get('selected_filter_keys') or ()), 'rows': len(result)})
-                except BaseException as error:
-                    read_errors.append(type(error).__name__)
-            return result
+        observe = self._grouping_read_observer(original_read, owned_stores, reads, read_errors)
         kind.read_row_table = observe
         def edit(action):
             self.modal(self.csv.edit_groups_button.click, TabularAnalyticsGroupingDialog, action)

@@ -151,6 +151,16 @@ def _legacy_grouping_index(dataframe, columns):
     return CsvGroupingIndex(dataframe, columns)
 
 
+def _copy_grouping_source(dataframe, sqlite_store):
+    if sqlite_store is not None:
+        return (
+            dataframe.copy()
+            if isinstance(dataframe, RowTable)
+            else RowTable(rows=(), columns=tuple(sqlite_store.columns))
+        )
+    return dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
+
+
 def _is_missing_scalar(value) -> bool:
     if value is None:
         return True
@@ -326,16 +336,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.setWindowTitle("CSV / Excel groups")
         configure_window_size(self, minimum=(760, 560), initial=(980, 700))
         self.sqlite_store = sqlite_store
-        if sqlite_store is not None:
-            self.source_dataframe = (
-                dataframe.copy()
-                if isinstance(dataframe, RowTable)
-                else RowTable(rows=(), columns=tuple(sqlite_store.columns))
-            )
-        else:
-            self.source_dataframe = (
-                dataframe.copy() if isinstance(dataframe, pd.DataFrame) else pd.DataFrame()
-            )
+        self.source_dataframe = _copy_grouping_source(dataframe, sqlite_store)
         self._sqlite_assignment_store = (
             TabularGroupingAssignmentStore(sqlite_store) if sqlite_store is not None else None
         )

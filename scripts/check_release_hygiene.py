@@ -84,6 +84,9 @@ PINNED_SYNTHETIC_FIXTURES = {
     "tests/fixtures/windows_candidate/reports/report-3.pdf": "cb801c452d9608c227606a4c10325d19d7d8a095fe80976fa60338fd6bfd0849",
     "tests/fixtures/windows_candidate/reports/report-4.pdf": "b9f83ee23a191eccfa3515594e6ba85ede670a2163444cd0daf7b9bb5edd83d9",
     "tests/fixtures/windows_candidate_protocol/literal-measurement-labels.xlsx": "ec39dfd2b969b283d7f6086aad612661d8bdc9e1bdeb328f8dd3e2d0d8ba6ca4",
+    "tests/fixtures/windows_uiux/tabular/analysis.csv": "764c2776b85b24c373b094b5095c7e043dee3fa2f3af48fb063781f5f4bbaef0",
+    "tests/fixtures/windows_uiux/tabular/grouping.csv": "b04ea4ba08ee70e6a12e5fd709467ebf3049f21cd252ceea77a738bb9b07fb4e",
+    "tests/fixtures/windows_uiux/tabular/saved-groups.csv": "02770298bcb61b07fbc9bee9f0c38b4a86e2a0d8be8815e09ebdf9b31be7e54d",
 }
 
 def _git_lines(*args: str) -> list[str]:
