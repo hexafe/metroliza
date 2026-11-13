@@ -270,6 +270,10 @@ def test_sqlite_search_return_stays_open_without_committing_parent(
             assert child.selector_list.item(0).data(Qt.ItemDataRole.UserRole) == ("DUP-1212",)
             assert parent.df_for_grouping is saved
             pd.testing.assert_frame_equal(parent.df_for_grouping, baseline)
+            # Readability includes the user's body scroll; evaluate search/no-commit first.
+            activate_for_key(qapplication_session, child.grouping_body_scroll)
+            QTest.keyClick(child.grouping_body_scroll, Qt.Key.Key_PageDown)
+            qapplication_session.processEvents()
             _assert_full_member_labels_visible(child, os.environ.get("METROLIZA_GROUPING_MEMBER_ARTIFACT_DIR"), key)
         except BaseException:
             # Assertions/diagnostics must never escape a Qt timer callback.
