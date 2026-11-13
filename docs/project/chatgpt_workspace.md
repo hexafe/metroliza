@@ -60,7 +60,8 @@ Use this second block as the Metroliza project instruction:
 ```text
 Treat GitHub repository hexafe/metroliza and its accepted active Issue/packet as durable truth.
 Read root AGENTS.md and relevant project, architecture, development workflow and release contracts.
-Normal work starts from and targets develop; never rely on the default branch. Canonical code is
+Normal work starts from and targets dev; main is the production/history default and rc the active
+candidate. Select the PR base explicitly. Canonical code is
 src/metroliza; modules is compatibility-only. Preserve local-first, SQLite atomicity, bounded
 processing, offline dashboards, deterministic Python fallback, Python/native parity and packaging,
 representative benchmarks, Windows journeys and confidential measurement-data hygiene. Apply

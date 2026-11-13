@@ -12,7 +12,7 @@ pliku nie zmienia ustawień ChatGPT/Codexa/Claude.
 Użytkownik jest Product Ownerem. Zewnętrzny orkiestrator odpowiada za packet i niezależną decyzję
 merge; koordynować wykonanie może Codex albo Claude. Autor nie scala własnego PR. GitHub
 `hexafe/metroliza` jest trwałym źródłem prawdy. Sprawdź aktualny Issue, własny worktree, base/head/tree,
-kod i istotne CI. Normalna baza/target to `develop`; kanoniczny pakiet `src/metroliza`, `modules`
+kod i istotne CI. Normalna baza/target to `dev`; kanoniczny pakiet `src/metroliza`, `modules`
 tylko kompatybilność. Zachowuj local-first, poufność pomiarów, atomowość SQLite, offline dashboards,
 deterministyczny Python fallback i rzeczywiste działanie pakietu Windows.
 

@@ -2,13 +2,20 @@
 
 - Status: Active release status hub
 - Owner: Release maintainer
-- Last reviewed: 2026-11-12
+- Last reviewed: 2026-11-13
 
-The Product Owner selected `release/2026.09-rc1` as the current RC source line under
-[#1153](https://github.com/hexafe/metroliza/issues/1153). Cut it from accepted `develop` after
+Historical source-line selection: the Product Owner selected `release/2026.09-rc1` under
+[#1153](https://github.com/hexafe/metroliza/issues/1153). It was cut from accepted `develop` after
 the ordered #1109, #1142, STEP2+STEP3 and #1063 integrations. The live execution ledger records
 the actual merge commits, final branch cut and cleanup receipts. This source-line decision does
 not distribute or publish a packaged candidate.
+
+The 2026-11-13 naming decision maps the current roles to `main` (production/history default),
+`dev` (daily integration) and `rc` (active candidate). The migration renames `rc2` to `rc` for
+hosted-blob redirect compatibility and advances it from the former `release/2026.09-rc1` through
+a reviewed history-preserving PR. This is a ref/configuration change, not new artifact qualification.
+Original branch names, source SHA/tree, build identities and receipts below retain their historical
+bindings; do not interpret a current ref tip as the frozen build's source.
 
 ## UI workflow source candidate — build 261115
 
@@ -41,7 +48,7 @@ package hashes, review receipts or acceptance state of that build.
 | Item | State | Evidence / next gate |
 |---|---|---|
 | Integration order | #1109, #1142, one STEP2+STEP3 aggregate, #1063; merge commits | #1153, current-base checks and independent reviews per merge |
-| Current RC source line | `release/2026.09-rc1` | Cut from accepted final develop; exact SHA/tree in #1153 |
+| Current RC source line | `rc` (formerly `release/2026.09-rc1`) | Original cut from accepted final develop; exact frozen SHA/tree in #1153 and the rows below |
 | STEP3 delivery | Complete with disclosed limits | [Immutable report](https://github.com/hexafe/metroliza/blob/f69ca5da31be5ef7efd5547457f14744dcb93baa/docs/engineering/performance-boost-step3.md) |
 | Final build identity | `261031`: Combined, launcher smoke and ZIP gates **PASS** in CI (scope in the rows below); `261029` stays bound to the historical bytes below | Synchronized source metadata under #1158 (#1189); changed binaries never reuse 261029 |
 | Current candidate source (261031) | `6dc0554667a842e107bd547fc86aeefedc52aec4`, tree `710332799cb9d7b6f58e59603b8e4630fb2f34d0` | Head of `release/2026.09-rc1` after sync #1190 (#1185, #1186, #1188, #1189); RC tree equals `develop` `d558a430` |
@@ -61,8 +68,8 @@ package hashes, review receipts or acceptance state of that build.
 | 261029 manual EXE acceptance | **NOT_RUN** (historical packet) | Native dialogs and mouse focus, desktop Excel lock, clean machine with antivirus, representative real reports, Help/manual, notices/legal, #1143 disposition and Google smoke, all on the exact tester EXE (#1158) |
 | 261029 durable archive | Original Actions archives, EXE, receipts, job logs | Tag `archive/2026.09-rc1/build-261029`, unpublished draft release; see [archive record](../archive/2026/build-261029-provenance/README.md). Actions retention ends 2027-01-28 |
 | Core-flow Qt retain at exit | Open follow-up, not a gate for the Combined PASS | [#1184](https://github.com/hexafe/metroliza/issues/1184) |
-| Promotion to master / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
-| Historical RC lines | 2026.06 RC2 closed without a release (#901); `release/2026.06-rc2` retired, recovery tag `archive/2026.06-rc2/final` | `rc2` kept until #1187 links are gone (#924) |
+| Promotion to main / published release | **Not authorized by #1153** | Full RC checklist and release-owner Go required |
+| Historical RC lines | 2026.06 RC2 closed without a release (#901); `release/2026.06-rc2` retired, recovery tag `archive/2026.06-rc2/final` | Historical `rc2` hosted links preserved by rename redirects to `rc` (#1187/#924); verify during migration |
 | Dependency upgrades #972/#973 | Deferred until after RC | Refresh separately, preserve STEP3 exact dependency pins |
 | Security exception review #906 | Open | Selected STEP3 baseline earliest expiry 2026-11-23; verify the actual baseline before every gate and renew before expiry. The issue's original 2026-10-31 deadline is historical, not a new waiver |
 
@@ -72,8 +79,9 @@ carries the same onedir that passed Combined (content hash above); it is not a s
 Build `261029` (which replaced the inherited 261020 label) remains the historical accepted
 candidate: its Combined PASS accepts the 261029 CI onedir bytes only, and its tester launcher
 EXE was a separate build of the same source. Every release-owner criterion remains open in
-#1158. The copy of this file on `release/2026.09-rc1` is intentionally not synchronized, so
-the RC head stays at the 261031 source `6dc05546`. Historical test
+#1158. At the frozen qualification checkpoint, the copy of this file on
+`release/2026.09-rc1` was intentionally not synchronized and its head was the 261031 source
+`6dc05546`. The naming migration does not rewrite that source/receipt binding. Historical test
 build 261021 is separately archived under
 `archive/repo-cleanup-2026-10-27/build/step2-rc1-261021`; do not merge that old build-number
 commit into the final RC. The unpublished archive container preserves original binaries,

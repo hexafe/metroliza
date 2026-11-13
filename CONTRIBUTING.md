@@ -5,14 +5,14 @@
 - Read [`docs/project/README.md`](docs/project/README.md) for the current source-of-truth hierarchy and repository/branch state.
 - Start from a GitHub Issue and follow [`docs/project/development_workflow.md`](docs/project/development_workflow.md).
 - Use [`docs/project/roadmap.md`](docs/project/roadmap.md) for current priorities; old roadmap checklists do not schedule work by themselves.
-- Branch normal development from `develop` and target pull requests at `develop`.
-- Branch only approved current release fixes/evidence from `release/2026.09-rc1` and target that release branch; reconcile accepted release changes into `develop`.
-- Do not start new routine work from `rc2` or the current production `master`; neither is the
+- Branch normal development from `dev` and target pull requests at `dev`.
+- Branch only approved current release fixes/evidence from `rc` and target `rc`; reconcile accepted release changes into `dev`.
+- Do not start new routine work from `rc` or the current production `main`; neither is the
   development base.
-- GitHub currently presents `master` as the default branch, so select the pull-request base explicitly.
-- Apply the accepted develop PR template explicitly using the [publication procedure](docs/project/development_workflow.md#pr-template-publication); do not assume the template auto-filled from `master` is current. Record the template source commit and verify the actual PR body.
+- GitHub currently presents `main` as the default branch, so select the pull-request base explicitly.
+- Apply the accepted dev PR template explicitly using the [publication procedure](docs/project/development_workflow.md#pr-template-publication); do not assume the template auto-filled from `main` is current. Record the template source commit and verify the actual PR body.
 - Keep one primary Issue per pull request and separate behavior changes from structural refactors.
-- Keep remote branches short-lived: normally only `master`, `develop`, the active `release/*` line, and current PR heads should exist. A branch is work-in-progress, not evidence storage.
+- Keep remote branches short-lived: normally only `main`, `dev`, `rc`, and genuinely active unmerged PR heads should exist. A branch is work-in-progress, not evidence storage.
 - After merge, mark the source branch for retirement unless a named live consumer per the [cleanup gate](docs/release_checks/branching_strategy.md#cleanup-gate) requires that exact ref; record the consumer and retirement trigger. Physical deletion follows that gate: complete live-consumer checks and clean-repository recovery fetch of the exact commit/tree for every branch, including merged and squashed branches, then a Product-Owner-approved finite exact-ref/full-SHA manifest and expected-old-value guards. Do not create branches for reviewers, agents, test attempts, checkpoints, or backlog ideas.
 
 The current RC source roles and qualification state are recorded in
@@ -130,7 +130,7 @@ Key release entry points remain:
 - Treat archived implementation plans as historical context only.
 - For release-candidate documentation, use `docs/release_checks/release_candidate_checklist.md` as the RC gate source of truth and update all linked evidence files in the same closeout slice.
 - For Google export docs, explicitly describe required local secret files and the guaranteed local `.xlsx` fallback.
-- For branch/release guidance, follow `docs/release_checks/branching_strategy.md` and keep release scope frozen after `release/<version>-rcN` is cut.
+- For branch/release guidance, follow `docs/release_checks/branching_strategy.md` and keep the approved release scope frozen on `rc`.
 - For a beginner-friendly release walkthrough, see `docs/release_checks/release_playbook_beginner.md`.
 
 ## Google export contributor checklist
@@ -153,6 +153,6 @@ Use `.github/pull_request_template.md` completely. In particular:
 - state scope and non-goals;
 - identify contracts, risk, failure, cancellation, and rollback behavior;
 - select a validation tier and record exact commands/results;
-- for release-line changes, document reconciliation into `develop`;
+- for release-line changes, document reconciliation into `dev`;
 - update project, user, or release documentation when applicable;
 - ensure evidence refers to the exact PR head/content tree.

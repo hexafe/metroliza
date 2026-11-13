@@ -992,7 +992,7 @@ def test_release_status_and_runbook_keep_gate_semantics_aligned() -> None:
     assert 'green CI run does not satisfy this gate' in google_log
 
 
-def test_active_release_docs_use_master_as_current_production_branch() -> None:
+def test_active_release_docs_use_main_dev_rc_without_retired_branch_commands() -> None:
     docs = {
         BRANCHING_STRATEGY_PATH: BRANCHING_STRATEGY_PATH.read_text(encoding='utf-8'),
         RELEASE_BRANCHING_PLAYBOOK_PATH: RELEASE_BRANCHING_PLAYBOOK_PATH.read_text(encoding='utf-8'),
@@ -1001,15 +1001,36 @@ def test_active_release_docs_use_master_as_current_production_branch() -> None:
     }
 
     for path, text in docs.items():
-        assert 'git checkout main' not in text, f'{path} still uses main checkout commands'
-        assert 'origin main' not in text, f'{path} still pulls or pushes origin main'
-        assert 'merge into `main`' not in text, f'{path} still documents main as merge target'
+        for role in ('main', 'dev', 'rc'):
+            assert f'`{role}`' in text or f'git checkout {role}' in text, f'{path} omits {role}'
+        # Historical prose and immutable refs keep original names; current commands must not.
+        assert not re.search(
+            r'git (?:checkout|switch) (?:-b )?(?:master|develop|rc2|release/)[^\n]*', text
+        ), f'{path} still selects or creates a retired branch'
+        assert not re.search(r'origin (?:master|develop|rc2|release/)[^\n]*', text), path
+        assert 'merge into `master`' not in text, f'{path} still documents master as merge target'
         assert 'release/2026.03-rc1' not in text, f'{path} still uses stale 2026.03 RC examples'
 
-    assert '`master`: current production-ready branch' in docs[BRANCHING_STRATEGY_PATH]
-    assert 'git checkout master' in docs[RC_CHECKLIST_PATH]
-    assert 'git checkout master' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
-    assert 'git checkout master' in docs[BEGINNER_RELEASE_PLAYBOOK_PATH]
+    assert '`main`: current production-ready branch' in docs[BRANCHING_STRATEGY_PATH]
+    for path in (RC_CHECKLIST_PATH, RELEASE_BRANCHING_PLAYBOOK_PATH,
+                 BEGINNER_RELEASE_PLAYBOOK_PATH):
+        assert 'git checkout main' in docs[path]
+    for path in (BRANCHING_STRATEGY_PATH, RELEASE_BRANCHING_PLAYBOOK_PATH,
+                 BEGINNER_RELEASE_PLAYBOOK_PATH):
+        assert 'git checkout rc' in docs[path]
+        assert 'git checkout -b rc' not in docs[path]
+    # Renaming cannot rewrite the historical June decision or release tag identity.
+    assert 'archive/2026.06-rc2/final' in docs[BRANCHING_STRATEGY_PATH]
+    assert '`master` promotion/stable tag: **No-Go pending #901**' in docs[BRANCHING_STRATEGY_PATH]
+    assert 'v2026.05-rc2' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
+
+
+def test_dependabot_version_updates_target_daily_dev_branch() -> None:
+    import yaml
+
+    config = yaml.safe_load(Path('.github/dependabot.yml').read_text(encoding='utf-8'))
+    assert {update['package-ecosystem'] for update in config['updates']} == {'pip', 'github-actions'}
+    assert all(update['target-branch'] == 'dev' for update in config['updates'])
 
 
 def test_release_status_keeps_current_release_line_metadata() -> None:
@@ -1255,9 +1276,10 @@ def test_topic_push_deduplication_preserves_integration_and_dispatch_qualificati
     assert not triggers['pull_request']  # No path/base filter can strand a required check.
     assert set(triggers['push']) == {'branches'}
     branches = triggers['push']['branches']
-    assert branches == ['master', 'main', 'develop', 'rc2', 'integrate/**', 'release/**', 'hotfix/**',
-                        'build/**']
-    for branch in ('master', 'develop', 'rc2', 'integrate/2026.09-rc1-into-develop',
+    assert branches == ['master', 'main', 'dev', 'rc', 'develop', 'rc2', 'integrate/**',
+                        'release/**', 'hotfix/**', 'build/**']
+    for branch in ('main', 'dev', 'rc', 'master', 'develop', 'rc2',
+                   'integrate/2026.09-rc1-into-develop',
                    'integrate/nested/branch', 'release/2026.09-rc1', 'hotfix/urgent',
                    'build/onefile-20260927'):
         assert any(fnmatchcase(branch, pattern) for pattern in branches)

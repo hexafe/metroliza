@@ -2,7 +2,7 @@
 
 Status: Active  
 Owner: Product/architecture maintainer  
-Last reviewed: 2026-10-18 (routing/adoption; dated branch/release decisions retain their own evidence)
+Last reviewed: 2026-11-13 (current branch names; dated decisions retain their own evidence)
 Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
@@ -30,7 +30,7 @@ rules and ordered roadmap. Release evidence remains under `docs/release_checks/`
 8. [ChatGPT workspace](./chatgpt_workspace.md) — project sources/chats aligned to GitHub so chat
    history never becomes the only record of a decision.
 9. [RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
-   — authoritative branch roles, exact automatic evidence and the pending release blockers.
+   — historical branch roles, exact automatic evidence and the pending release blockers.
 
 ## AI orchestration ownership
 
@@ -151,24 +151,23 @@ a durable project decision. Record it in an Issue, pull request, ADR or active d
 
 ## Repository and branch state
 
-Current decision: 2026-10-27 under [#1153](https://github.com/hexafe/metroliza/issues/1153).
-`release/2026.09-rc1` is the current RC source line, cut from accepted develop after the ordered
-integrations. Final build identity and packaged Windows acceptance remain pending. The two June
-RC2 refs are retained historical evidence with separate #901/#924 cycle closure. No master
-promotion or published release is authorized.
+Current naming decision: 2026-11-13 under [#960](https://github.com/hexafe/metroliza/issues/960).
+The long-lived roles are `main`, `dev`, `rc`; only genuinely active unmerged PR heads supplement them.
+This changes names and governance/configuration, without promoting development product code.
 
-Historical branch-transition decision date: 2026-08-22. The authoritative rationale and release evidence are in the
-[RC2 branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
-and the active [release status](../release_checks/release_status.md).
+- `dev` (formerly `develop`) is the normal Issue-driven development and integration base/PR target.
+- `rc` is the current frozen candidate source/evidence branch, advanced from the former
+  `release/2026.09-rc1` through a history-preserving reviewed migration PR. Distribution still needs
+  final artifact qualification and release-owner approval.
+- `main` (renamed from `master`) remains the GitHub default and production/history anchor.
+- Historical `rc2` hosted-blob links redirect to `rc`; do not recreate the retired name.
+- `release/2026.06-rc2` was retired on 2026-11-04 (cycle closed without a release, #901);
+  recovery tag `archive/2026.06-rc2/final` preserves its source.
+- Accepted release fixes reconcile into `dev`; promotion to `main` remains separately gated.
 
-- `develop` is the canonical branch for normal Issue-driven development and integration.
-- `release/2026.09-rc1` is the current RC source/evidence branch; distribution needs final artifact qualification.
-- `release/2026.06-rc2` was retired on 2026-11-04 (cycle closed without a release, #901); recovery tag `archive/2026.06-rc2/final`.
-- `rc2` is a temporary historical transition/reference alias, not a routine development base.
-- `master` remains the current production/history anchor and is unchanged pending the separate
-  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
-- Normal work branches from and targets `develop`; approved release fixes target the frozen line
-  and must be reconciled into `develop`.
+The [branching strategy](../release_checks/branching_strategy.md) defines current roles and cleanup
+controls. The [2026-08-22 transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+and [release status](../release_checks/release_status.md) preserve original historical evidence.
 
 ## Delivery model
 
@@ -185,7 +184,7 @@ product requirement / evidence
 ### Working rules
 
 - Start meaningful implementation from an Issue with testable acceptance criteria.
-- Branch normal work from and target `develop`; use `release/2026.09-rc1` only for approved
+- Branch normal work from and target `dev`; use `rc` only for approved
   release fixes and evidence.
 - Use one primary Issue/outcome per pull request; split broad work before coding.
 - Keep behavior changes separate from structural refactors.
