@@ -68,6 +68,8 @@ def test_database_comparator_rejects_and_preserves_active_wal(tmp_path):
 
 
 def _payload(child: Path) -> dict:
+    from tests.test_windows_candidate_main_html import SHA, write_main_html_archive
+
     paths = {
         "database": child / "reports.sqlite",
         "workbook": child / "report.xlsx",
@@ -77,10 +79,18 @@ def _payload(child: Path) -> dict:
         "inference_database": child / "inference.sqlite",
         "group_inference": child / "inference.json",
         "uiux_evidence": child / "uiux-observation.json",
+        "main_html": child / "main-html.zip",
     }
     for key, path in paths.items():
-        path.write_bytes(key.encode("ascii"))
+        if key == "main_html":
+            # Keep the real HTML verifier active before the drift/sidecar guards.
+            write_main_html_archive(path, source=SHA, packaged=True)
+        else:
+            path.write_bytes(key.encode("ascii"))
+    assert set(paths) == set(driver.ARTIFACTS)
     return {
+        "source_sha": SHA,
+        "packaged": True,
         "relative_artifact_dir": child.name,
         "artifacts": {key: {"path": path.name, "sha256": _digest(path)} for key, path in paths.items()},
     }
