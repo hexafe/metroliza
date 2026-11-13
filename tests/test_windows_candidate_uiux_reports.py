@@ -155,7 +155,8 @@ def capture_journey(tmp_path, qapplication_session):
     window, table = QWidget(), QTableWidget(12, 1)
     layout = QVBoxLayout(window)
     layout.addWidget(table)
-    window.resize(400, 300)
+    # Half-pixel dimensions at125% exercise Qt QSize scaling, not Python round.
+    window.resize(626, 402)
     window.show()
     qapplication_session.processEvents()
     journey = object.__new__(checks._Journey)

@@ -337,8 +337,7 @@ class _Journey:
         image = QImage(str(path))
         _require(not image.isNull() and image.width() == metadata['width'] and image.height() == metadata['height']
                  and metadata['dpr'] == self.dpr and metadata['sha256'] == _sha(path, 8 * 1024 * 1024)
-                 and image.width() == round(self.window.width() * self.dpr)
-                 and image.height() == round(self.window.height() * self.dpr), 'reports_capture_failed')
+                 and image.size() == self.window.size() * self.dpr, 'reports_capture_failed')
         self.evidence['captures'][name] = metadata
 
     def trigger(self, database, *, remove=False):
