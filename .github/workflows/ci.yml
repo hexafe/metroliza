@@ -84,6 +84,14 @@ jobs:
         with:
           toolchain: 1.95.0
 
+      - name: Install the pinned PE resource writer for the owned stub
+        shell: pwsh
+        run: |
+          $pins = @(Get-Content requirements-build.txt | Where-Object { $_ -match '^pyinstaller==[0-9.]+$' })
+          if ($pins.Count -ne 1) { throw 'Expected one literal PyInstaller build pin' }
+          python -m pip install --disable-pip-version-check $pins[0]
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned PE resource writer installation failed' }
+
       - name: Launcher unit and integration tests (Windows file-system semantics)
         working-directory: packaging/launcher
         run: cargo test --locked
@@ -113,11 +121,11 @@ jobs:
             --test-entry "$bin/launcher-test-entry.exe" --filler-mb 8
           if ($LASTEXITCODE -ne 0) { throw 'Synthetic onedir creation failed' }
           .\build_windows_launcher_exe.ps1 -OnedirPath qualification/onedir `
-            -Entry launcher-test-entry.exe -ReleaseLabel '2026.00test(260101)' `
-            -Output qualification/metroliza_2026.00test_260101_launcher.exe
+            -Entry launcher-test-entry.exe -ReleaseLabel '0.0.0-dev.1' `
+            -Output qualification/Metroliza-0.0.0-dev.1-windows-x64.exe
           $env:METROLIZA_RUNTIME_ROOT = (Join-Path $PWD 'qualification/packaging-root')
           $env:METROLIZA_LAUNCHER_NO_UI = '1'
-          $process = Start-Process -FilePath qualification/metroliza_2026.00test_260101_launcher.exe `
+          $process = Start-Process -FilePath qualification/Metroliza-0.0.0-dev.1-windows-x64.exe `
             -ArgumentList '--exit-code', '3' -Wait -PassThru
           if ($process.ExitCode -ne 3) { throw "Unexpected launcher exit code $($process.ExitCode)" }
 
@@ -128,7 +136,7 @@ jobs:
           name: windows-launcher-qualification
           path: |
             qualification/launcher-qualification.json
-            qualification/metroliza_2026.00test_260101_launcher.exe
+            qualification/Metroliza-0.0.0-dev.1-windows-x64.exe
           if-no-files-found: warn
 
   classify-changes:
@@ -205,8 +213,10 @@ jobs:
       - name: Qualify first launch, reopen, core outputs, incident and extraction cleanup
         shell: pwsh
         run: |
-          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*.exe' |
-            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}\.exe$' })
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.portable })
           if ($portable.Count -ne 1) { throw 'Expected exactly one versioned portable EXE' }
           & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $portable[0].FullName
           if ($LASTEXITCODE -ne 0) { throw 'Portable supervised smoke failed' }
@@ -220,8 +230,10 @@ jobs:
       - name: Qualify the launcher EXE (cold first launch, warm reopen, incident, cache layout)
         shell: pwsh
         run: |
-          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
-            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.launcher })
           if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
           & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $launcher[0].FullName --kind launcher
           if ($LASTEXITCODE -ne 0) { throw 'Launcher supervised smoke failed' }
@@ -283,7 +295,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-supervised-portable-onefile
-          path: dist/metroliza_[0-9]*_[0-9][0-9][0-9][0-9][0-9][0-9].exe
+          path: dist/Metroliza-*-windows-x64-portable.exe
           if-no-files-found: error
 
       - name: Retain the native launcher EXE for testers
@@ -292,9 +304,9 @@ jobs:
         with:
           name: windows-supervised-launcher-exe
           path: |
-            dist/metroliza_[0-9]*_launcher.exe
-            dist/metroliza_[0-9]*_launcher.exe.provenance.json
-            dist/metroliza_[0-9]*_launcher.exe.licenses/**
+            dist/Metroliza-*-windows-x64.exe
+            dist/Metroliza-*-windows-x64.exe.provenance.json
+            dist/Metroliza-*-windows-x64.exe.licenses/**
           if-no-files-found: error
 
   windows-candidate-acceptance:
@@ -456,8 +468,10 @@ jobs:
         id: launcher-smoke
         shell: pwsh
         run: |
-          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
-            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.launcher })
           if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
           & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $launcher[0].FullName --kind launcher
           if ($LASTEXITCODE -ne 0) { throw 'Launcher EXE smoke failed' }
@@ -473,8 +487,9 @@ jobs:
         run: |
           $release = Join-Path $env:RUNNER_TEMP 'metroliza-release'
           if (Test-Path -LiteralPath $release) { throw 'Release output root must be new' }
-          $stem = [IO.Path]::GetFileNameWithoutExtension($env:CANDIDATE_LAUNCHER) -replace '_launcher$', ''
-          $zip = Join-Path $release "${stem}_windows.zip"
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $zip = Join-Path $release $artifactNames.zip
           & .\.venv-build\Scripts\python.exe scripts/release_zip.py assemble --exe $env:CANDIDATE_LAUNCHER --output $zip
           if ($LASTEXITCODE -ne 0) { throw 'Release ZIP assembly failed' }
           & .\.venv-build\Scripts\python.exe scripts/release_zip.py verify $zip `
@@ -536,7 +551,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-release-zip
-          path: ${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip
+          path: ${{ runner.temp }}/metroliza-release/Metroliza-*-windows-x64.zip
           if-no-files-found: error
 
   windows-release-zip-download-check:
@@ -567,7 +582,7 @@ jobs:
           CONTENT_SHA256: ${{ needs.windows-candidate-acceptance.outputs.content_sha256 }}
           LAUNCHER_SHA256: ${{ needs.windows-candidate-acceptance.outputs.launcher_sha256 }}
         run: |
-          mapfile -t zips < <(find "$RUNNER_TEMP/downloaded-release" -type f -name 'metroliza_*_windows.zip')
+          mapfile -t zips < <(find "$RUNNER_TEMP/downloaded-release" -type f -name 'Metroliza-*-windows-x64.zip')
           test "${#zips[@]}" -eq 1
           [[ "$CONTENT_SHA256" =~ ^[0-9a-f]{64}$ && "$LAUNCHER_SHA256" =~ ^[0-9a-f]{64}$ ]]
           python scripts/release_zip.py verify "${zips[0]}" --expected-content-sha256 "$CONTENT_SHA256" \
@@ -1948,10 +1963,14 @@ jobs:
       - name: Measure real-application startup (envelope, launcher cold, launcher warm)
         shell: pwsh
         run: |
-          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*.exe' |
-            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}\.exe$' })
-          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe' |
-            Where-Object { $_.Name -match '^metroliza_[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}_launcher\.exe$' })
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.portable })
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
+            Where-Object { $_.Name -eq $artifactNames.launcher })
           if ($portable.Count -ne 1) { throw 'Expected exactly one versioned portable envelope EXE' }
           if ($launcher.Count -ne 1) { throw 'Expected exactly one versioned launcher EXE' }
           & .\.venv-build\Scripts\python.exe scripts/measure_windows_startup_routes.py `
@@ -2011,11 +2030,11 @@ jobs:
       - name: Pack the same onedir with the baseline launcher and a next-version PoC EXE
         shell: pwsh
         run: |
-          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'metroliza_*_launcher.exe')
+          $launcher = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe')
           if ($launcher.Count -ne 1) { throw 'Expected exactly one PoC launcher EXE' }
           $onedir = @(Get-ChildItem -LiteralPath dist -Directory -Filter 'metroliza_P_*_onedir')
           if ($onedir.Count -ne 1) { throw 'Expected exactly one onedir' }
-          $version = $launcher[0].Name -replace '^metroliza_(.+)_launcher\.exe$', '$1'
+          $version = ([IO.Path]::GetFileNameWithoutExtension($launcher[0].Name)) -replace '^Metroliza-(.+)-windows-x64$', '$1'
           $sha = (git rev-parse HEAD).Trim()
           git fetch --no-tags --depth=1 origin $env:BASELINE_LAUNCHER_SHA
           if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the baseline commit' }
@@ -2043,8 +2062,11 @@ jobs:
       - name: Record the first-run timeline (baseline vs splash PoC)
         shell: pwsh
         run: |
-          $base = @(Get-ChildItem timeline-exe -Filter 'baseline_2*_launcher.exe')[0].FullName
-          $poc = @(Get-ChildItem timeline-exe -Filter 'poc_2*_launcher.exe')[0].FullName
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
+          $version = [string]$artifactNames.version
+          $base = (Resolve-Path "timeline-exe/baseline_${version}_launcher.exe").Path
+          $poc = (Resolve-Path "timeline-exe/poc_${version}_launcher.exe").Path
           & .\.venv-build\Scripts\python.exe scripts/measure_windows_first_run_timeline.py `
             --variant "baseline=$base,$(Resolve-Path timeline-exe/baseline_next_launcher.exe)" `
             --variant "poc=$poc,$(Resolve-Path timeline-exe/poc_next_launcher.exe)" `

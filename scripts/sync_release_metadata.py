@@ -10,6 +10,9 @@ import re
 import sys
 from dataclasses import dataclass
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+from metroliza.app.release_identity import ReleaseIdentity  # noqa: E402
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION_MODULE = REPO_ROOT / "src" / "metroliza" / "app" / "version.py"
 README_PATH = REPO_ROOT / "README.md"
@@ -41,24 +44,19 @@ def load_metadata() -> ReleaseMetadata:
 
     missing = [
         name
-        for name in ("RELEASE_VERSION", "VERSION_DATE", "CURRENT_RELEASE_HIGHLIGHT")
+        for name in ("RELEASE_VERSION", "CURRENT_RELEASE_HIGHLIGHT")
         if not hasattr(module, name)
     ]
     if missing:
         names = ", ".join(missing)
         raise RuntimeError(f"Package release metadata missing required fields: {names}")
 
-    release_version = str(module.RELEASE_VERSION)
-    release_match = re.fullmatch(r"(\d{4}\.\d{2})(?:rc(\d+))?", release_version)
-    if release_match and release_match.group(2):
-        public_release_version = f"{release_match.group(1)} RC{release_match.group(2)}"
-    else:
-        public_release_version = release_version
+    release_version = ReleaseIdentity.parse(module.RELEASE_VERSION).label
     return ReleaseMetadata(
         release_version=release_version,
-        build=str(module.VERSION_DATE),
-        version_label=f"{module.RELEASE_VERSION}({module.VERSION_DATE})",
-        public_version_label=f"{public_release_version} (build {module.VERSION_DATE})",
+        build="",  # Deprecated API field; actual build date belongs to provenance.
+        version_label=release_version,
+        public_version_label=release_version,
         highlight=str(module.CURRENT_RELEASE_HIGHLIGHT).strip(),
     )
 

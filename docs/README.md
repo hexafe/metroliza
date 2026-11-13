@@ -13,6 +13,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `project/architecture.md` — canonical package ownership, data flows, compatibility/native policies, and active architecture risks.
 - `project/roadmap.md` — single current planning overview backed by GitHub Issues.
 - `project/development_workflow.md` — issue-first workflow, active development/release branch rules, validation tiers, and definitions of ready/done.
+- [`project/versioning_policy.md`](project/versioning_policy.md) — accepted semantic development/RC/stable versions, actual build dates, immutable packages and the two additional 1.0 product targets (#1228/#920).
 - `project/chatgpt_workspace.md` — recommended ChatGPT project sources, control chats, Issue-specific chat workflow, and privacy rules.
 - [`engineering/codex-model-routing.md`](engineering/codex-model-routing.md) — universal coordinator/worker routing, exact-head evidence, review feedback, merge authority, and Metroliza adaptation.
 - [`engineering/chatgpt-project-instructions.md`](engineering/chatgpt-project-instructions.md) — concise project-instruction mirror for ChatGPT/Codex orchestration and current branch lifecycle guidance.

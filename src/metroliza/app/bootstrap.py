@@ -144,14 +144,10 @@ def _smoke_return(exit_code: int) -> int:
     return exit_code
 
 
-def _source_release_fields() -> tuple[int, int, int | None]:
-    version = VersionDate.RELEASE_VERSION
-    if type(version) is not str or len(version) > 32:
-        raise ValueError("invalid source release")
-    match = re.fullmatch(r"([0-9]{4})\.([0-9]{2})(?:rc([0-9]{1,3}))?", version)
-    if match is None:
-        raise ValueError("invalid source release")
-    return int(match[1]), int(match[2]), None if match[3] is None else int(match[3])
+def _source_release_fields() -> str:
+    from metroliza.app.release_identity import ReleaseIdentity
+
+    return ReleaseIdentity.parse(VersionDate.RELEASE_VERSION).label
 
 
 def _project_build_identity():
@@ -256,11 +252,11 @@ def log_runtime_provenance(logger: logging.Logger) -> None:
             return
         context.sequence += 1
         mode, packager, sha, dirty = _project_build_identity()
-        year, month, candidate = _source_release_fields()
+        release = _source_release_fields()
         event = RuntimeProvenanceEvent(
             context.invocation_id, context.startup_id, context.sequence,
             mode, packager, sha, dirty,
-            release_year=year, release_month=month, release_candidate=candidate,
+            release_version=release,
         )
         logger.info(event)
     except Exception:

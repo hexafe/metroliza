@@ -10,6 +10,12 @@ The default output is a **declarative YAML parser profile**: a reviewed
 Python parser plugin is still supported, but only as an advanced operator-only
 fallback when the YAML profile route cannot model the template.
 
+The [versioning policy](../project/versioning_policy.md#complete-external-llm-parser-authoring-package)
+defines the additional `1.0.0` authoring-package target: self-contained external-LLM instructions,
+contracts/schema/formats/examples, deterministic validation and actual normal import/DB persistence
+evidence. The precise routes below remain authoritative; this does not require an in-app LLM provider
+or change trust/privacy/DB-write ownership. Profile/schema example versions below are not app versions.
+
 ## Route Summary
 
 Use the YAML profile route first.

@@ -8,9 +8,11 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 
 ## Repository and release status
 
-The current RC source line is `rc` (formerly `release/2026.09-rc1`), cut from accepted development under
-[#1153](https://github.com/hexafe/metroliza/issues/1153). Final packaged Windows acceptance and
-the final build identity remain pending. See [release status](docs/release_checks/release_status.md).
+The accepted [versioning policy](docs/project/versioning_policy.md) uses development packages
+`0.8.0-dev.N`, frozen candidates `0.8.0-rc.N` and the accepted current-scope release `0.8.0`.
+Actual build dates and qualification receipts are separate. The next public identity is `0.8.0-dev.1`;
+version assignment does not claim a new package passed or was delivered. See
+[release status](docs/release_checks/release_status.md) for exact evidence and the separate `1.0.0` targets.
 Normal work targets `dev`; `main` remains the production/history default. Historical June RC2
 evidence is preserved through immutable recovery refs; promotion to `main` is separately gated.
 
@@ -136,8 +138,11 @@ version into `%LOCALAPPDATA%\Metroliza\runtime` and reuses it on every later sta
 .\build_windows_launcher_exe.ps1 -Supervised  # the same onedir -> native launcher EXE
 ```
 
-The result is `dist\metroliza_<version>_<yymmdd>_launcher.exe` (the portable envelope is
-`dist\metroliza_<version>_<yymmdd>.exe`). See `packaging/launcher/README.md` for the format, cache
+The public Windows delivery uses `Metroliza-<version>-windows-x64.exe` and
+`Metroliza-<version>-windows-x64.zip`; the optional supervised envelope is distinct as
+`Metroliza-<version>-windows-x64-portable.exe`. The actual build date stays in provenance rather
+than being encoded as a release counter. Older calendar-named artifacts retain their names. See
+`packaging/launcher/README.md` for the format, cache
 layout, self-repair contract, benchmark and fallbacks; `scripts/qualify_windows_launcher.py`
 qualifies the launcher with a synthetic payload and `scripts/qualify_windows_portable_onefile.py
 --kind launcher` the real packaged application.
@@ -324,7 +329,7 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`2026.09 RC1 (build 261119)`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
+Current release highlight (`0.8.0-dev.1`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
 
 Build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
@@ -337,7 +342,7 @@ version label does not change those historical receipts. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.09 RC1 (build 261119)`)
+### Changelog highlights (release `0.8.0-dev.1`)
 
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
 - Main HTML dashboards retain full measurement labels with compact image and asset-directory names.

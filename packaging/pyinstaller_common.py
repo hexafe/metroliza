@@ -138,9 +138,18 @@ def collect_setuptools_hook_metadata() -> list:
 
 def read_version_label(root_dir: Path) -> str:
     """Return the release label used by packaged artifact names."""
-    version_ns: dict[str, str] = {}
-    exec((root_dir / "VersionDate.py").read_text(encoding="utf-8"), version_ns)
-    return f"{version_ns['RELEASE_VERSION']}({version_ns['VERSION_DATE']})"
+    from metroliza.app.release_identity import current_identity
+
+    return current_identity(root_dir).label
+
+
+def version_resource_file(root_dir: Path) -> str | None:
+    if sys.platform != "win32":
+        return None
+    from metroliza.app.release_identity import current_identity
+    from scripts.release_identity import write_resource
+
+    return str(write_resource(root_dir / "build/provenance/version-info.txt", current_identity(root_dir)))
 
 
 def prepare_build_provenance_manifest(root_dir: Path) -> Path:

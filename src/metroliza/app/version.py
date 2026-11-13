@@ -1,8 +1,9 @@
-RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261119"
-VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
+RELEASE_VERSION = "0.8.0-dev.1"
+# Deprecated import compatibility only; actual build time is provenance.built_at_utc.
+VERSION_DATE = ""
+VERSION_LABEL = RELEASE_VERSION
 CURRENT_RELEASE_HIGHLIGHT = 'Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.'
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261119)"
+PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>

@@ -1441,7 +1441,8 @@
       "id": "application-build-identity",
       "include": [
         "src/metroliza/app/build_provenance.py",
-        "src/metroliza/app/version.py"
+        "src/metroliza/app/version.py",
+        "src/metroliza/app/release_identity.py"
       ],
       "exclude": [],
       "class": "canonical runtime",
@@ -1505,7 +1506,8 @@
         "src/metroliza/app/version.py",
         "src/metroliza/app/backend_diagnostics.py",
         "src/metroliza/app/license_bootstrap.py",
-        "src/metroliza/app/license_key_manager.py"
+        "src/metroliza/app/license_key_manager.py",
+        "src/metroliza/app/release_identity.py"
       ],
       "class": "canonical runtime",
       "primary_owner": 977,
@@ -2465,7 +2467,8 @@
         "scripts/windows_candidate_xlsx.py",
         "scripts/windows_owned_process_probe.py",
         "scripts/windows_candidate_exit_evidence.py",
-        "scripts/windows_fault_events.py"
+        "scripts/windows_fault_events.py",
+        "scripts/release_identity.py"
       ],
       "exclude": [],
       "class": "script/tooling",

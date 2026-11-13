@@ -2,7 +2,7 @@
 
 The ZIP holds one folder with exactly:
 
-* the native launcher ``metroliza_<version>_<build>_launcher.exe``;
+* the native launcher ``Metroliza-<version>-windows-x64.exe`` (historical archives remain readable);
 * its original ``.provenance.json`` sidecar;
 * its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md`` and
   the dependency inventory, nothing else;
@@ -41,8 +41,9 @@ except ImportError:  # pragma: no cover - direct ``python scripts/release_zip.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.stage_release_notices import DEFAULT_INVENTORY, DEFAULT_NOTICE, REPO_ROOT
 
+sys.path.insert(0, str(REPO_ROOT / "src"))
+from metroliza.app.release_identity import LAUNCHER_NAME, launcher_identity  # noqa: E402
 
-LAUNCHER_NAME = re.compile(r"metroliza_(?P<version>[0-9]{4}\.[0-9]{2}[a-z0-9]+)_(?P<build>[0-9]{6})_launcher\.exe")
 TRAILER_MAGIC = b"MTRLZPL1"
 TRAILER_LEN = 64
 CONTENT_PREFIX = b"metroliza-onedir-content-v1\n"
@@ -207,12 +208,15 @@ def assemble(exe: Path, output: Path) -> Path:
     match = LAUNCHER_NAME.fullmatch(exe.name)
     if not match:
         raise ReleaseZipError(f"not a versioned launcher EXE name: {exe.name}")
+    try:
+        _, folder = launcher_identity(exe.name)
+    except ValueError:
+        raise ReleaseZipError("invalid launcher identity") from None
     provenance_path = exe.with_name(f"{exe.name}.provenance.json")
     licenses = exe.with_name(f"{exe.name}.licenses")
     for required, kind in ((exe, "file"), (provenance_path, "file"), (licenses / NOTICE_MANIFEST, "file")):
         if not required.is_file():
             raise ReleaseZipError(f"required {kind} is missing: {required}")
-    folder = f"metroliza_{match['version']}_{match['build']}"
     if output.exists():
         raise ReleaseZipError(f"output already exists: {output}")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -264,6 +268,12 @@ def verify(
         if len(exes) != 1:
             raise ReleaseZipError(f"expected exactly one launcher EXE, found {exes}")
         exe_name = exes[0]
+        try:
+            _, expected_folder = launcher_identity(exe_name)
+        except ValueError:
+            raise ReleaseZipError("invalid launcher identity") from None
+        if folder != expected_folder:
+            raise ReleaseZipError("ZIP folder differs from canonical artifact identity")
         licenses = f"{exe_name}.licenses"
         if f"{licenses}/{NOTICE_MANIFEST}" not in names:
             raise ReleaseZipError(f"notice directory {licenses}/ with {NOTICE_MANIFEST} is missing")
@@ -337,8 +347,11 @@ def _verify_provenance(exe: Path, provenance: dict[str, Any], expected_source_sh
         raise ReleaseZipError("provenance does not bind a clean full source commit")
     if expected_source_sha is not None and git_sha != expected_source_sha:
         raise ReleaseZipError(f"provenance source {git_sha} is not the expected {expected_source_sha}")
-    match = LAUNCHER_NAME.fullmatch(exe.name)
-    if provenance.get("release_label") != f"{match['version']}({match['build']})":
+    try:
+        label, _ = launcher_identity(exe.name)
+    except ValueError:
+        raise ReleaseZipError("invalid launcher identity") from None
+    if provenance.get("release_label") != label:
         raise ReleaseZipError("EXE name differs from the provenance release label")
     return git_sha
 
@@ -349,8 +362,11 @@ def _verify_payload(exe: Path, git_sha: str, expected_content_sha256: str | None
     payload_sha256 = payload_content_sha256(manifest)
     if manifest.get("git_sha") != git_sha:
         raise ReleaseZipError("embedded payload commit differs from provenance")
-    if not str(manifest.get("version", "")).endswith(payload_sha256[:12]):
-        raise ReleaseZipError("embedded payload version does not carry its content key")
+    label, folder = launcher_identity(exe.name)
+    # Historical cache labels used an underscore build suffix; new labels are the full SemVer.
+    cache_label = label if exe.name.startswith("Metroliza-") else folder.removeprefix("metroliza_")
+    if manifest.get("version") != f"{cache_label}-{payload_sha256[:12]}":
+        raise ReleaseZipError("embedded payload version differs from release identity or content key")
     if expected_content_sha256 is not None and payload_sha256 != expected_content_sha256:
         raise ReleaseZipError("embedded payload differs from the qualified onedir")
     return {

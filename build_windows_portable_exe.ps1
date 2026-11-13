@@ -20,11 +20,11 @@ try {
     if ($LASTEXITCODE -ne 0 -or $provenance.git_sha -ne $head -or $provenance.dirty) {
         throw 'Portable build requires a clean, exact-head supervised payload'
     }
-    $release = [string]$provenance.release_label
-    if ($release -notmatch '^([0-9]{4}\.[0-9]{2}[a-z0-9]+)\(([0-9]{6})\)$') {
-        throw 'Invalid versioned release label'
+    $names = & $python scripts/release_identity.py names | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or [string]$provenance.release_label -ne [string]$names.version) {
+        throw 'Invalid canonical release identity or stale provenance'
     }
-    $outerName = "metroliza_$($Matches[1])_$($Matches[2]).exe"
+    $outerName = [string]$names.portable
     $outer = Join-Path $root "dist/$outerName"
     if (Test-Path -LiteralPath $outer) { Remove-Item -LiteralPath $outer -Force }
 
@@ -32,6 +32,8 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $outer -PathType Leaf)) {
         throw 'Portable onefile build failed'
     }
+    & $python scripts/release_identity.py verify-pe --input $outer
+    if ($LASTEXITCODE -ne 0) { throw 'Portable PE version mismatch' }
     & $python scripts/build_provenance.py stage --manifest $provenancePath --artifact $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable provenance staging failed' }
     & $python scripts/stage_release_notices.py --dist-dir dist --artifact $outer

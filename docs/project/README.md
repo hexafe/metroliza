@@ -7,7 +7,9 @@ Review cadence: every release cycle or monthly, whichever is sooner
 
 This directory is the canonical entry point for planning and developing Metroliza. GitHub Issues
 track executable work. These documents explain the product, feature catalog, architecture, delivery
-rules and ordered roadmap. Release evidence remains under `docs/release_checks/`.
+rules and ordered roadmap. The [versioning policy](versioning_policy.md) records the accepted
+`0.8.0-dev.1` transition and the separate `1.0.0` product targets. Release evidence remains under
+`docs/release_checks/`.
 
 ## Start here
 

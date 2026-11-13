@@ -326,8 +326,15 @@ mod tests {
 
         // Same files, other commit and other label: same content hash.
         opts.git_sha = "11111111".into();
-        opts.version = "2.0".into();
-        assert_eq!(pack(&opts).unwrap().content_sha256, first.content_sha256);
+        opts.version = "0.8.0-dev.1".into();
+        let semver = pack(&opts).unwrap();
+        assert_eq!(semver.content_sha256, first.content_sha256);
+        assert_eq!(semver.version, format!("0.8.0-dev.1-{key}"));
+        assert_eq!(semver.dir_name, format!("0.8.0-dev.1-{key}_11111111"));
+        assert_eq!(
+            Payload::open(&opts.output).unwrap().manifest.version,
+            semver.version
+        );
 
         // One changed byte: another key, therefore another cache directory.
         write(&input, "lib/data.bin", b"payload two");

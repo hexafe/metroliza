@@ -1,4 +1,4 @@
-# Release status — 2026.09 RC1 source candidate
+# Metroliza release status
 
 - Status: Active release status hub
 - Owner: Release maintainer
@@ -19,14 +19,22 @@ bindings; do not interpret a current ref tip as the frozen build's source.
 
 ## Current development build and exact delivery evidence
 
+The PO adopted `0.8.0-dev.1` and the semantic channel/stable contract under
+[#1228](https://github.com/hexafe/metroliza/issues/1228), parent #920; see the
+[versioning policy](../project/versioning_policy.md). This is the next identity, not a claim that
+a new package has passed CI, been built, delivered or accepted. Its exact source/run/artifact ledger
+belongs to #1228; the #1220 / PR #1224 records below retain their completed historical bindings.
+The accepted `0.8.0` scope and additional `1.0.0` targets do not relabel older RC artifacts.
+
 The canonical release/build identity is defined in
-[`src/metroliza/app/version.py`](../../src/metroliza/app/version.py). The current main HTML and
+[`src/metroliza/app/version.py`](../../src/metroliza/app/version.py). The delivered main HTML and
 related save-path repair is tracked in [#1220](https://github.com/hexafe/metroliza/issues/1220),
 [#1221](https://github.com/hexafe/metroliza/issues/1221) and
 [PR #1224](https://github.com/hexafe/metroliza/pull/1224).
 
-Use the coordinator's exact-source delivery and integration ledger in #1220 / PR #1224 for the
-latest candidate source commit/tree, build identity, required source/manual-workflow CI outcomes,
+Use each version's coordinator-owned exact-source delivery/integration ledger (#1228 for the new
+line; #1220 / PR #1224 for the historical export repair) for its source commit/tree, version,
+required source/manual-workflow CI outcomes,
 canonical Windows run/jobs, retained qualification artifacts, EXE/ZIP hashes and byte sizes,
 local download/finalizer/delivery receipts, independent/GitHub review disposition and actual merge.
 Read the recorded terminal verdict for each boundary; a version assignment, branch tip, one successful
@@ -179,8 +187,10 @@ sidecar provenance, the actual embedded `build_provenance.json` and exact hashes
 Google conversion smoke is intentionally local-only and remains release-blocking for promotion.
 
 Release line metadata is canonical in `src/metroliza/app/version.py`:
-`RELEASE_VERSION` defines the release line, `VERSION_DATE` its six-digit build identity,
-and `CURRENT_RELEASE_HIGHLIGHT` the synchronized release summary. Run
+`RELEASE_VERSION` defines the public version and `CURRENT_RELEASE_HIGHLIGHT` the synchronized
+release summary. Follow the [versioning policy](../project/versioning_policy.md) for actual
+`YYYY-MM-DD` build dates from `built_at_utc`; `VERSION_DATE` is legacy compatibility metadata,
+not the new public version or an inferred actual build date. Run
 `python scripts/sync_release_metadata.py --check` before recording candidate evidence.
 
 Follow the [timeless checklist](release_candidate_checklist.md) and

@@ -10,12 +10,14 @@ Use this together with:
 - [`release_branching_playbook.md`](./release_branching_playbook.md)
 - [`open_testing_runbook.md`](./open_testing_runbook.md)
 - [`branching_strategy.md`](./branching_strategy.md)
+- [Version identities and dates](../project/versioning_policy.md)
 
 ---
 
 ## 1) End-to-end example: feature freeze → final merge
 
-Example target release: `v2026.05`.
+Example target release: `v0.8.0`, prepared as `0.8.0-dev.N` and `0.8.0-rc.N` under the
+[versioning policy](../project/versioning_policy.md).
 
 1. **Feature freeze declared**
    - Product/Release Manager announces freeze date/time.
@@ -38,7 +40,7 @@ Example target release: `v2026.05`.
      [automatic GitHub CI gate](./release_candidate_checklist.md#3-automatic-github-ci-gate)
      before distributing the candidate broadly.
 
-4. **Stabilize and test RC1**
+4. **Stabilize and test `0.8.0-rc.1`**
    - QA executes open testing and the checklist's
      [packaging](./release_candidate_checklist.md#4-packaging-and-clean-machine-gate),
      [Google conversion](./release_candidate_checklist.md#5-google-conversion-gate),
@@ -48,7 +50,7 @@ Example target release: `v2026.05`.
    - Every accepted RC fix is reconciled into `dev` through review.
    - Product/Release Manager tracks blocker status and go/no-go criteria.
 
-5. **If issues are found, continue on RC1 or qualify RC2**
+5. **If issues are found, qualify the next `rc.N` identity**
    - Minor/isolated fixes: keep patching `rc`.
    - Significant churn or reset of test confidence: advance the same `rc` with reviewed fixes, assign a new candidate tag/evidence and retest.
 
@@ -67,7 +69,7 @@ Example target release: `v2026.05`.
    - Verify release notes/changelog updates are present.
 
 8. **Tag the reviewed production commit and reconcile it**
-   - Create annotated tag `v2026.05` at the exact reviewed `main` merge commit.
+   - Create annotated tag `v0.8.0` at the exact reviewed `main` merge commit.
    - Reconcile the production result into `dev` through a reviewed PR.
 
 9. **Post-release communication**
@@ -78,7 +80,8 @@ Example target release: `v2026.05`.
 
 ## 2) Exact Git command snippets
 
-> Replace `2026.05` and tags with your target release month; keep the `main`/`dev`/`rc` branch roles.
+> Select the approved target version and exact immutable tags; keep the `main`/`dev`/`rc` roles.
+> Package/candidate counters are not dates; record the actual build date separately.
 
 ### A. Prepare the candidate line
 
@@ -106,7 +109,7 @@ fix into `dev` through a separate reviewed PR.
 ### C. Record a successor candidate (when needed)
 
 Keep the same `rc` branch. After reviewed fixes, assign the next candidate identity and new
-immutable `vYYYY.MM-rcN` tag through the approved release decision, then repeat qualification.
+immutable `v0.8.0-rc.N` tag through the approved release decision, then repeat qualification.
 Do not create another candidate branch or reuse the previous candidate evidence.
 
 ### D. Merge the approved release branch into `main`
@@ -114,7 +117,7 @@ Do not create another candidate branch or reuse the previous candidate evidence.
 ```bash
 git checkout main
 git pull --ff-only origin main
-git merge --no-ff rc -m "merge: finalize v2026.05 from rc"
+git merge --no-ff rc -m "merge: finalize v0.8.0 from rc"
 git push origin main
 ```
 
@@ -122,8 +125,8 @@ git push origin main
 
 ```bash
 git checkout main
-git tag -a v2026.05 -m "Release v2026.05"
-git push origin v2026.05
+git tag -a v0.8.0 -m "Release v0.8.0"
+git push origin v0.8.0
 ```
 
 Then reconcile the tagged production result into `dev` through a reviewed PR.

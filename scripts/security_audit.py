@@ -156,6 +156,7 @@ IMPORT_TO_PACKAGE = {
     "setuptools": "setuptools",
     "PIL": "Pillow",
     "PyQt6": "PyQt6",
+    "PyInstaller": "pyinstaller",
     "cryptography": "cryptography",
     "cv2": "opencv-python",
     "defusedxml": "defusedxml",

@@ -30,7 +30,8 @@ def _write_onedir(root: Path) -> Path:
     return onedir
 
 
-def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA, gap: int = 0) -> None:
+def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA, gap: int = 0,
+                   version: str = "2026.09rc1_261031") -> None:
     """Write a stub + payload + trailer laid out like packaging/launcher/src/pack.rs (raw blobs)."""
     records, offset = [], 0
     for name, data in sorted(files.items()):
@@ -39,7 +40,7 @@ def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SH
         offset += len(data) + gap
     content = release_zip.content_sha256("metroliza.exe", [(r["path"], r["size"], r["sha256"]) for r in records])
     manifest = json.dumps(
-        {"format": 1, "version": f"2026.09rc1_261031-{content[:12]}", "git_sha": git_sha,
+        {"format": 1, "version": f"{version}-{content[:12]}", "git_sha": git_sha,
          "entry": "metroliza.exe", "chunk_size": 4194304, "files": records}
     ).encode()
     stub = b"MZ" + b"\0" * 62
@@ -52,16 +53,17 @@ def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SH
     path.write_bytes(stub + blobs + manifest + trailer)
 
 
-def _stage_release(tmp_path: Path, *, notices: bool = True) -> Path:
+def _stage_release(tmp_path: Path, *, notices: bool = True, name: str = EXE_NAME,
+                   label: str = "2026.09rc1(261031)", version: str = "2026.09rc1_261031") -> Path:
     dist = tmp_path / "dist"
     dist.mkdir()
-    exe = dist / EXE_NAME
-    _fake_launcher(exe, ONEDIR_FILES)
+    exe = dist / name
+    _fake_launcher(exe, ONEDIR_FILES, version=version)
     provenance = {
         "artifact": {"name": exe.name, "sha256": hashlib.sha256(exe.read_bytes()).hexdigest(), "size_bytes": exe.stat().st_size},
         "dirty": False,
         "git_sha": GIT_SHA,
-        "release_label": "2026.09rc1(261031)",
+        "release_label": label,
         "schema_version": 1,
     }
     exe.with_name(f"{exe.name}.provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
@@ -106,6 +108,31 @@ def test_content_hash_matches_the_packer_definition(tmp_path: Path) -> None:
     assert release_zip.content_sha256("a.exe", []) == hashlib.sha256(
         b"metroliza-onedir-content-v1\nentry\0a.exe\n"
     ).hexdigest()
+
+
+def test_semver_zip_preserves_exact_label_names_hash_and_cache_identity(tmp_path: Path):
+    name = "Metroliza-0.8.0-dev.1-windows-x64.exe"
+    exe = _stage_release(tmp_path, name=name, label="0.8.0-dev.1", version="0.8.0-dev.1")
+    archive = release_zip.assemble(exe, tmp_path / "Metroliza-0.8.0-dev.1-windows-x64.zip")
+    receipt = release_zip.verify(archive, expected_source_sha=GIT_SHA,
+                                 expected_exe_sha256=hashlib.sha256(exe.read_bytes()).hexdigest())
+    assert receipt["source"]["release_label"] == "0.8.0-dev.1"
+    assert receipt["exe"]["name"] == name
+    assert receipt["payload"]["runtime_dir"].startswith("0.8.0-dev.1-")
+    with zipfile.ZipFile(archive) as zipped:
+        assert all(n.startswith("Metroliza-0.8.0-dev.1-windows-x64/") for n in zipped.namelist())
+
+
+@pytest.mark.parametrize("label,version", [
+    ("0.8.0-rc.1", "0.8.0-dev.1"),
+    ("0.8.0-dev.1", "0.8.0-rc.1"),
+])
+def test_semver_zip_rejects_conflicting_provenance_or_payload_identity(tmp_path: Path, label, version):
+    exe = _stage_release(tmp_path, name="Metroliza-0.8.0-dev.1-windows-x64.exe",
+                         label=label, version=version)
+    with pytest.raises(release_zip.ReleaseZipError, match="release label|release identity"):
+        archive = release_zip.assemble(exe, tmp_path / "out.zip")
+        release_zip.verify(archive)
 
 
 def test_assembled_zip_is_complete_and_verifies(release: tuple[Path, str], tmp_path: Path) -> None:
