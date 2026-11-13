@@ -496,25 +496,80 @@ def test_shortcuts_preserve_text_altgr_and_modal_boundary(dashboard_dialog, qapp
 
 @pytest.mark.parametrize("tab", [0, 1, 2])
 def test_small_window_keeps_state_and_next_action_visible(dashboard_dialog, qapp, tab, monkeypatch):
+    import json
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QScrollArea
     from metroliza.ui import ui_foundation
 
     dialog = dashboard_dialog
+    turns = []
+
+    def diagnostic(stage, *, failed_geometry=False):
+        config = dialog._metroliza_window_size_config
+        screen = qapp.primaryScreen().availableGeometry()
+        value = dict(stage=stage, tab=tab, size=[dialog.width(), dialog.height()],
+                     available=[screen.width(), screen.height()],
+                     minimum=[dialog.minimumWidth(), dialog.minimumHeight()],
+                     config=[int(config['finalized']), int(config['scheduled'])],
+                     active=[int(dialog.isActiveWindow()), int(qapp.activeWindow() is dialog)],
+                     style={'fusion': 0, 'windows': 1, 'windowsvista': 2}.get(qapp.style().objectName().lower(), -1),
+                     dpr=dialog.devicePixelRatioF(), delivered_turns=len(turns))
+        if failed_geometry:
+            # These potentially cache-affecting queries run only after the original failure.
+            page = dialog.workflow_tabs.currentWidget()
+            widgets = [dialog, dialog.workflow_tabs, page]
+            scrolls = page.findChildren(QScrollArea)
+            if scrolls:
+                widgets.extend((scrolls[0], scrolls[0].widget()))
+            value['post_failure_hfw_intervention'] = []
+            for widget in widgets:
+                hint, minimum_hint, layout = widget.sizeHint(), widget.minimumSizeHint(), widget.layout()
+                row = dict(size=[widget.width(), widget.height()], hint=[hint.width(), hint.height()],
+                           minimum_hint=[minimum_hint.width(), minimum_hint.height()],
+                           hfw=widget.heightForWidth(widget.width()))
+                if layout is not None:
+                    row['layout'] = [layout.minimumSize().height(), layout.heightForWidth(widget.width()),
+                                     layout.minimumHeightForWidth(widget.width())]
+                value['post_failure_hfw_intervention'].append(row)
+        print('REALTIME_COMPACT_DIAGNOSTIC ' + json.dumps(value, sort_keys=True))
+
     monkeypatch.setattr(ui_foundation, "_available_window_size", lambda *_args: (760, 620))
     ui_foundation.configure_window_size(dialog, minimum=(900, 620), initial=(1120, 760))
     dialog.workflow_tabs.setCurrentIndex(tab)
     _show(dialog, qapp)
-    print(f"Realtime geometry screen={qapp.primaryScreen().availableGeometry()} "
-          f"dpr={dialog.devicePixelRatioF()} dialog={dialog.size()}")
+    diagnostic('before_readiness')
+
+    def delivered_turn():
+        turns.append(True)
+        if len(turns) < 2:
+            QTimer.singleShot(0, delivered_turn)
+
+    QTimer.singleShot(0, delivered_turn)
+    try:
+        # Readiness is independent of desired size and the geometry assertions below.
+        _wait_for(lambda: len(turns) == 2 and dialog.isActiveWindow() and qapp.activeWindow() is dialog
+                  and dialog._metroliza_window_size_config['finalized']
+                  and not dialog._metroliza_window_size_config['scheduled'],
+                  'active Realtime dialog after two Qt turns and sizing finalization')
+    finally:
+        diagnostic('after_readiness')
     controls = [dialog.freshness_label, dialog.next_action_label, dialog.next_button,
                 dialog.configure_source_button, dialog.event_review_button, dialog.close_button]
     if tab == 2:
         controls += [dialog.event_operator_edit, dialog.event_comment_edit,
                      dialog.acknowledge_event_button, dialog.resolve_event_button,
                      dialog.false_positive_event_button]
-    rectangles = []
-    for control in controls:
-        rect = control.rect().translated(control.mapTo(dialog, QPoint()))
-        assert control.isVisibleTo(dialog) and dialog.rect().contains(rect)
-        rectangles.append(rect)
-    assert all(not a.intersects(b) for i, a in enumerate(rectangles) for b in rectangles[i + 1:])
-    assert dialog.width() <= 760 and dialog.height() <= 620
+    try:
+        rectangles = []
+        for control in controls:
+            rect = control.rect().translated(control.mapTo(dialog, QPoint()))
+            assert control.isVisibleTo(dialog) and dialog.rect().contains(rect)
+            rectangles.append(rect)
+        assert all(not a.intersects(b) for i, a in enumerate(rectangles) for b in rectangles[i + 1:])
+        assert dialog.width() <= 760 and dialog.height() <= 620
+    except AssertionError:
+        try:
+            diagnostic('failed_original_geometry', failed_geometry=True)
+        except BaseException:
+            print('REALTIME_COMPACT_DIAGNOSTIC post_failure_snapshot_unavailable')
+        raise
