@@ -22,10 +22,30 @@ import zipfile
 from defusedxml import ElementTree as ET
 from scripts.verify_windows_candidate_uiux import PLOTLY_SHA, keys, literal, png, regular, require
 
-CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html")
+CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html",
+         "target_html", "target_xlsx_html")
 FACETS = ("main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity")
 MAX_TOTAL = 32 * 1024 * 1024
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+
+
+def _case_names(case):
+    """Closed fixture names, independently derived without product helpers."""
+    workbook = case.endswith("xlsx_html")
+    if not case.startswith("target_"):
+        stem = 'report_dashboard' if workbook else 'dashboard'
+        return stem + '.html', 'report.xlsx' if workbook else None, stem + '_assets'
+    selected_stem = 't' * 245
+    if workbook:
+        digest = hashlib.sha256((selected_stem + '_dashboard').encode()).hexdigest()[:24]
+        stem = 't' * 150 + '-' + digest
+    else:
+        stem = selected_stem
+    # The generated base reserves 44 bytes for .generation- plus UUID32.
+    asset_input = stem + '_assets'
+    asset_digest = hashlib.sha256(asset_input.encode()).hexdigest()[:24]
+    asset_base = asset_input[:111] + '-' + asset_digest
+    return stem + '.html', selected_stem + '.xlsx' if workbook else None, asset_base
 
 
 def _unique(pairs):
@@ -101,7 +121,8 @@ def _png(data):
 
 def _html(files, case, names):
     workbook = case.endswith("xlsx_html")
-    dashboard = case + ('/report_dashboard.html' if workbook else '/dashboard.html')
+    dashboard_name, workbook_name, asset_base = _case_names(case)
+    dashboard = case + '/' + dashboard_name
     require(dashboard in names, "main_html_missing_dashboard")
     parsed = _Html()
     parsed.feed(files[dashboard].decode('utf-8'))
@@ -125,8 +146,8 @@ def _html(files, case, names):
             "main_html_resource_set")
     for name in pngs | scripts:
         parts = name.split('/')
-        prefix = 'report_dashboard' if workbook else 'dashboard'
-        require(len(parts) == 3 and re.fullmatch(prefix + r'_assets\.generation-[0-9a-f]{32}', parts[1])
+        require(len(parts) == 3 and re.fullmatch(re.escape(asset_base) + r'\.generation-[0-9a-f]{32}', parts[1])
+                and len(parts[1].encode()) <= 180
                 and re.fullmatch(r'[A-Za-z0-9_.-]+', parts[2])
                 and len(parts[2].encode()) <= 180, "main_html_asset_component")
     for name in pngs:
@@ -139,8 +160,9 @@ def _html(files, case, names):
             "main_html_plot_data")
     expected = {dashboard, *resources}
     if workbook:
-        expected.add(case + '/report.xlsx')
+        expected.add(case + '/' + workbook_name)
     require(names == expected, "main_html_case_file_set")
+    return [(trace.get('x'), trace.get('y')) for spec in parsed.specs for trace in spec.get('data', [])]
 
 
 def _workbook(data, label):
@@ -166,11 +188,12 @@ def verify(path, *, source, packaged):
     require('receipt.json' in files and len(files['receipt.json']) <= 64 * 1024, "main_html_receipt")
     receipt = json.loads(files['receipt.json'], object_pairs_hook=_unique)
     keys(receipt, ('schema_version', 'source_sha', 'runtime_context', 'cases'))
-    literal(receipt['schema_version'], 1)
+    literal(receipt['schema_version'], 2)
     literal(receipt['source_sha'], source)
     literal(receipt['runtime_context'], 'packaged' if packaged else 'source')
     keys(receipt['cases'], CASES)
     seen = {'receipt.json'}
+    plot_data = []
     for case in CASES:
         record = keys(receipt['cases'][case], ('status', 'files'))
         literal(record['status'], 'complete')
@@ -181,10 +204,12 @@ def verify(path, *, source, packaged):
         for name, digest in record['files'].items():
             require(type(digest) is str and re.fullmatch('[0-9a-f]{64}', digest)
                     and hashlib.sha256(files[name]).hexdigest() == digest, "main_html_asset_hash")
-        _html(files, case, names)
+        plot_data.append(_html(files, case, names))
         seen.update(names)
     require(set(files) == seen and len({name.casefold() for name in files}) == len(files), "main_html_archive_file_set")
-    normal = _workbook(files['normal_xlsx_html/report.xlsx'], 'SMOKE FEATURE')
-    long = _workbook(files['long_xlsx_html/report.xlsx'], 'L' * 240)
-    require(normal == long and normal, "main_html_numeric_parity")
+    require(all(data == plot_data[0] for data in plot_data), "main_html_plot_numeric_parity")
+    workbooks = [_workbook(files[case + '/' + _case_names(case)[1]],
+                           'L' * 240 if case == 'long_xlsx_html' else 'SMOKE FEATURE')
+                 for case in CASES if case.endswith('xlsx_html')]
+    require(workbooks[0] and all(data == workbooks[0] for data in workbooks), "main_html_numeric_parity")
     return dict.fromkeys(FACETS, 'passed')

@@ -1,4 +1,4 @@
-"""Four closed main Reports HTML cases for the existing package core gate.
+"""Six closed main Reports HTML cases for the existing package core gate.
 
 Only the already imported two-report public synthetic fixture is accepted. No
 external scenario/options selector is added; the core driver's Job owns timeout
@@ -14,9 +14,11 @@ import zipfile
 
 from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 
-CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html")
+CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html",
+         "target_html", "target_xlsx_html")
 FACETS = ("main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity")
 LONG_HEADER = "L" * 240
+LONG_TARGET_STEM = "t" * 245
 
 
 def _sha(path):
@@ -39,7 +41,10 @@ def _run_case(database, directory, case):
 
     workbook = case.endswith("xlsx_html")
     directory.mkdir()
-    target = directory / ("report.xlsx" if workbook else "dashboard.html")
+    target_name = "report.xlsx" if workbook else "dashboard.html"
+    if case.startswith("target_"):
+        target_name = LONG_TARGET_STEM + (".xlsx" if workbook else ".html")
+    target = directory / target_name
     request = build_validated_export_request(
         db_file=str(database), excel_file=str(target),
         selected_preset="full_report" if workbook else "html_dashboard_only",
@@ -59,6 +64,10 @@ def _run_case(database, directory, case):
     metadata = export.completion_metadata
     dashboard = Path(metadata["html_dashboard_path"])
     assets = Path(metadata["html_dashboard_assets_path"])
+    if (dashboard.parent != directory or assets.parent != directory
+            or (not workbook and dashboard != target)
+            or (workbook and Path(metadata["local_xlsx_path"]) != target)):
+        raise ValueError("main_html_output_identity")
     paths = [dashboard, *sorted(assets.iterdir())]
     if workbook:
         paths.append(target)
@@ -68,7 +77,7 @@ def _run_case(database, directory, case):
 
 
 def run_main_html_checks(child: Path, database: Path, *, source_sha, packaged: bool) -> dict:
-    """Export both ordinary presets, then both with a 240-character header."""
+    """Export both presets normally, with a long header, and to 250-byte names."""
     _synthetic_database(database)
     before = _sha(database)
     scratch = child / "main-html"
@@ -82,7 +91,7 @@ def run_main_html_checks(child: Path, database: Path, *, source_sha, packaged: b
         changed = connection.execute("UPDATE report_measurements SET header=? WHERE header=?", (LONG_HEADER, "SMOKE FEATURE")).rowcount
         if changed != 2:
             raise ValueError("main_html_fixture_mismatch")
-    receipt = dict(schema_version=1, source_sha=source_sha,
+    receipt = dict(schema_version=2, source_sha=source_sha,
                    runtime_context="packaged" if packaged else "source", cases={})
     files = []
     for case in CASES:
