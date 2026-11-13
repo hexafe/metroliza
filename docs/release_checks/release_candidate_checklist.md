@@ -5,6 +5,10 @@ not carry checked boxes from older builds. Exact commands, counts, commit SHAs,
 workflow runs, artifacts, waivers, and sign-offs belong in a dated file under
 `docs/release_checks/` and must identify the build being promoted.
 
+The [versioning policy](../project/versioning_policy.md) distinguishes development `-dev.N`
+packages, frozen `-rc.N` candidates and accepted stable scope, with actual dates recorded separately.
+Its two additional `1.0.0` product targets do not replace these applicable release gates.
+
 Canonical release identity comes from `src/metroliza/app/version.py`. Run
 `python scripts/sync_release_metadata.py --check` before recording evidence; do
 not copy an older build identifier into this checklist.

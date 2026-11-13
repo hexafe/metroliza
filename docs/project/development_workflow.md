@@ -18,6 +18,8 @@ slices, use several pull requests and keep the Issue open until all acceptance c
 ## 2. Active branch policy
 
 Current branch roles are defined in the [branching strategy](../release_checks/branching_strategy.md).
+The [versioning policy](versioning_policy.md) owns `dev.N` / `rc.N` / accepted stable identities,
+actual build dates and the additional `1.0.0` product targets; branch roles remain unchanged.
 The [2026-08-22 decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md) preserves
 historical validation evidence.
 
@@ -401,13 +403,13 @@ Historical June RC2 flow (cycle closed without a release on 2026-11-04, #901; ke
 7. the production result is synchronized back to `develop`;
 8. `rc2` can then be retired through an explicit cleanup decision.
 
-Current September RC1 and future normal flow:
+Current versioned release flow (older September RC1 receipts remain historical):
 
 1. develop features/refactors on Issue branches from `dev`;
 2. prepare `rc` from the approved `dev` scope when it freezes, through a reviewed release decision;
 3. allow only fixes, evidence, version metadata, and release documentation on the release branch;
 4. validate exact head automatically and manually;
-5. merge approved release into `main` and tag `vYYYY.MM`;
+5. merge the approved release into `main` and tag its exact stable public version, such as `v0.8.0`;
 6. sync the production result back to `dev`;
 7. archive completed release plans/evidence appropriately.
 

@@ -10,6 +10,8 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
+from metroliza.shared.release_identity import ReleaseIdentity
+
 
 _MAX_EXCEPTION_NODES = 32
 _MAX_EXCEPTION_DEPTH = 8
@@ -566,9 +568,10 @@ class RuntimeProvenanceEvent:
     packager: BuildPackager
     git_sha: str = "unknown"
     dirty: bool | None = None
-    release_year: int = field(kw_only=True)
-    release_month: int = field(kw_only=True)
-    release_candidate: int | None = field(kw_only=True)
+    release_year: int | None = field(kw_only=True, default=None)
+    release_month: int | None = field(kw_only=True, default=None)
+    release_candidate: int | None = field(kw_only=True, default=None)
+    release_version: str | None = field(kw_only=True, default=None)
 
     def __post_init__(self) -> None:
         _provenance_payload(self)
@@ -932,9 +935,16 @@ def _validated_build_facts(event: RuntimeProvenanceEvent) -> None:
 
 
 def _release_version(event: RuntimeProvenanceEvent) -> str:
-    if not _bounded_integer(event.release_year, 9999) or event.release_year < 2000:
+    if event.release_version is not None:
+        if any(v is not None for v in (event.release_year, event.release_month, event.release_candidate)):
+            raise DiagnosticEventValidationError("mixed release identity")
+        try:
+            return ReleaseIdentity.parse(event.release_version).label
+        except ValueError:
+            raise DiagnosticEventValidationError("invalid release identity") from None
+    if event.release_year is None or not _bounded_integer(event.release_year, 9999) or event.release_year < 2000:
         raise DiagnosticEventValidationError("invalid release year")
-    if not _bounded_integer(event.release_month, 12) or event.release_month == 0:
+    if event.release_month is None or not _bounded_integer(event.release_month, 12) or event.release_month == 0:
         raise DiagnosticEventValidationError("invalid release month")
     candidate = event.release_candidate
     if candidate is not None and (not _bounded_integer(candidate, 999) or candidate == 0):

@@ -18,11 +18,11 @@ param(
     # manifest, so it can later name the supervisor instead of metroliza.exe.
     [string]$Entry = 'metroliza.exe',
 
-    # Release label such as 2026.06rc2(260711). Default: read from VersionDate.py.
+    # Canonical release label such as 0.8.0-dev.1. Default: canonical source metadata.
     [string]$ReleaseLabel,
 
-    # Output EXE. Default: dist/metroliza_<version>_<yymmdd>_launcher.exe. The suffix keeps it
-    # apart from the PyInstaller portable envelope dist/metroliza_<version>_<yymmdd>.exe.
+    # Output EXE. Default: dist/Metroliza-<version>-windows-x64.exe. The suffix keeps it
+    # apart from the PyInstaller portable envelope dist/Metroliza-<version>-windows-x64-portable.exe.
     [string]$Output
 )
 
@@ -120,16 +120,12 @@ try {
     }
 
     $label = Get-ReleaseLabel
-    if ($label -notmatch '^([0-9]{4}\.[0-9]{2}[a-z0-9]+)\(([0-9]{6})\)$') {
-        throw "Release label does not look like 2026.06rc2(260711): $label"
-    }
-    $version = "$($Matches[1])_$($Matches[2])"
-    if (-not $OnedirPath) {
-        $OnedirPath = Join-Path $distDir "metroliza_P_${label}_onedir"
-    }
-    if (-not $Output) {
-        $Output = Join-Path $distDir "metroliza_${version}_launcher.exe"
-    }
+    $identityPython = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { 'python' }
+    $names = & $identityPython scripts/release_identity.py names --version $label | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Invalid canonical release identity' }
+    $version = [string]$names.version
+    if (-not $OnedirPath) { $OnedirPath = Join-Path $distDir $names.onedir }
+    if (-not $Output) { $Output = Join-Path $distDir $names.launcher }
     $gitSha = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-f]{40}$') {
         throw 'Could not determine the git commit'
@@ -207,6 +203,13 @@ try {
     $releaseDir = Join-Path $crateDir 'target/release'
     $stub = Join-Path $releaseDir 'metroliza-launcher.exe'
     $packer = Join-Path $releaseDir 'metroliza-packer.exe'
+    # Resource writes are confined to a copied owned stub BEFORE payload packing/signing.
+    $versionedStub = Join-Path $repoRoot 'build/provenance/versioned-launcher-stub.exe'
+    Invoke-Checked -Executable $identityPython -Arguments @(
+        'scripts/release_identity.py', 'stamp-stub', '--version', $label,
+        '--input', $stub, '--output', $versionedStub
+    )
+    $stub = $versionedStub
 
     Invoke-Step 'Packing the onedir into one EXE' {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Output) | Out-Null
@@ -238,6 +241,11 @@ try {
     Invoke-Step 'Signing (optional)' {
         [void](Invoke-OptionalSigning -ExePath $Output)
     }
+
+    # Inspect the ACTUAL packed/signed EXE, not a synthetic fixture or filename.
+    Invoke-Checked -Executable $identityPython -Arguments @(
+        'scripts/release_identity.py', 'verify-pe', '--version', $label, '--input', $Output
+    )
 
     if ((Test-Path -LiteralPath $venvPython) -and (Test-Path -LiteralPath $provenanceManifestPath)) {
         # Sidecars describe the final bytes, so they are staged after signing.

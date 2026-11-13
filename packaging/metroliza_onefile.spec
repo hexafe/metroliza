@@ -11,7 +11,10 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 
 from pyinstaller_common import build_pyinstaller_collection, filter_payload_toc, read_version_label
 
+from pyinstaller_common import version_resource_file
+
 VERSION_LABEL = read_version_label(ROOT_DIR)
+VERSION_RESOURCE = version_resource_file(ROOT_DIR)
 OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"
 ICON_PATH = SPEC_DIR / "metroliza_icon2.ico"
 SPLASH_IMAGE_PATH = SPEC_DIR / "metroliza_bootloader_splash.png"
@@ -60,6 +63,7 @@ exe = EXE(
     a.datas,
     splash_binaries,
     [],
+    version=VERSION_RESOURCE,
     name=OUTPUT_NAME,
     debug=False,
     bootloader_ignore_signals=False,

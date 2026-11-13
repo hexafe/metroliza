@@ -34,6 +34,15 @@ def test_runtime_layout_accepts_one_complete_content_keyed_directory(tmp_path: P
     assert qualify._runtime_layout(tmp_path) == RUNTIME
 
 
+def test_semver_runtime_keeps_full_label_and_content_key(tmp_path: Path) -> None:
+    name = "0.8.0-dev.1-0123456789ab_89abcdef"
+    _runtime(tmp_path, name=name)
+    assert qualify._runtime_layout(tmp_path) == name
+    (tmp_path / name).rename(tmp_path / (name + "private"))
+    with pytest.raises(RuntimeError, match="expected_one_runtime_directory"):
+        qualify._runtime_layout(tmp_path)
+
+
 @pytest.mark.parametrize(
     "build,fragment",
     [

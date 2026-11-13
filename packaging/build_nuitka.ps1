@@ -446,16 +446,11 @@ function Install-PreferredCompiler {
 }
 
 function Get-DefaultOutputName {
-    $versionInfo = python -c "import sys,pathlib;root=pathlib.Path.cwd();vp=root/'VersionDate.py';ns={};exec(vp.read_text(encoding='utf-8'), ns);release=ns.get('RELEASE_VERSION');build=ns.get('VERSION_DATE');sys.stdout.write(f'{release}|{build}' if release and build else '')" 2>$null
-    if ($LASTEXITCODE -eq 0 -and $versionInfo) {
-        $parts = $versionInfo.Split("|")
-        if ($parts.Count -eq 2 -and $parts[0] -and $parts[1]) {
-            return "metroliza_N_$($parts[0])($($parts[1])).exe"
-        }
+    $names = python (Join-Path $repoRoot 'scripts/release_identity.py') names | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or -not $names.nuitka) {
+        throw 'Could not read canonical release identity'
     }
-
-    Write-Warning 'Could not read release/build metadata from VersionDate.py. Falling back to date-based output name.'
-    return "metroliza_N_$(Get-Date -Format yyMMdd).exe"
+    return [string]$names.nuitka
 }
 
 if (-not $OutputName) {

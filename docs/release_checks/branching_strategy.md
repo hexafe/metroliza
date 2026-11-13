@@ -2,6 +2,9 @@
 
 This document defines the lightweight branching model used for Metroliza development and release
 work. Current RC roles and qualification are recorded in [release status](release_status.md).
+The [versioning policy](../project/versioning_policy.md) under #1228/#920 owns semantic
+`-dev.N` / `-rc.N` / stable identities and separate actual build dates. Older calendar receipts
+below retain their historical meanings.
 The historical branch transition and automatic evidence are recorded in
 [`rc2_branch_transition_decision_2026-08-22.md`](./rc2_branch_transition_decision_2026-08-22.md).
 
@@ -300,10 +303,11 @@ Not allowed:
 
 ## 7) Tagging rules
 
-- Tag each approved release candidate on `rc` using an annotated tag:
-  `vYYYY.MM-rcN`.
-- After production promotion, tag the approved merge commit on `main` as `vYYYY.MM`.
-- Do not move or recreate a published tag. Create a new `-rcN` or patch version.
+- Follow the [versioning policy](../project/versioning_policy.md) for immutable exact public-version
+  tags: development `v0.8.0-dev.N`, approved candidate `v0.8.0-rc.N` on `rc`, and accepted stable
+  `v0.8.0` on the approved production merge in `main`. Tag publication retains its existing authority.
+- Do not move/recreate a published tag or replace distributed package bytes. Advance the applicable
+  sequence or select the next patch/minor target; an identity change does not reuse qualification.
 - Hotfix versions must progress monotonically according to the selected release scheme.
 - The 2026.06 RC2 line is never tagged as stable: its cycle closed without a release (#901); its
   head is preserved only as the recovery tag `archive/2026.06-rc2/final`.

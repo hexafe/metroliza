@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 2026.09 RC1 (build 261119) — current version
+## 0.8.0-dev.1 — current version
+- Adopt development package versions `dev.N`, frozen candidates `rc.N` and accepted stable scope `0.8.0`; the actual build date is recorded separately.
+- Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history; this naming transition does not rename or requalify their bytes.
+- Reserve `1.0.0` for both a complete external-LLM parser authoring package and fully unified, complete reports, with the existing issue contracts and release gates retained.
+- This versioning change does not by itself claim new functionality, a qualified new Windows package or private/manual acceptance. See [versioning policy](docs/project/versioning_policy.md).
+
+## 2026.09 RC1 (build 261119) — previous delivered build
 - Main Reports HTML dashboards retain complete long measurement labels while bounding generated asset names.
 - Export failures report a safe stage, original operating-system error codes and next action without exposing paths or measurement details.
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.

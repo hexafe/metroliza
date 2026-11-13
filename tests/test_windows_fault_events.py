@@ -86,7 +86,7 @@ def test_allowlist_tracks_spec_names_and_version_metadata():
         assert f'"{stem}"' in onedir
         assert stem + ".exe" in faults.allowed_apps()
     assert 'OUTPUT_NAME = f"metroliza_P_{VERSION_LABEL}"' in (root / "packaging/metroliza_onefile.spec").read_text()
-    assert 'OUTPUT_NAME = f"metroliza_{match[1]}_{match[2]}"' in (root / "packaging/metroliza_portable_onefile.spec").read_text()
+    assert 'OUTPUT_NAME = ReleaseIdentity.parse(VERSION_LABEL).portable_name.removesuffix(".exe")' in (root / "packaging/metroliza_portable_onefile.spec").read_text()
 
 
 @pytest.mark.parametrize("app", ["foreign.exe", PRIVATE, "../metroliza.exe", "metroliza_evil.exe", "metroliza.exe\n", "metroliza_compute_worKer.exe"])
@@ -243,3 +243,14 @@ def test_fault_event_workflow_step_is_advisory_always_and_before_upload():
     upload = next(i for i, value in enumerate(steps) if value["name"] == "Retain bounded synthetic candidate receipts")
     assert max(core) < index < upload
     assert any(path.endswith("/**/*.json") for path in steps[upload]["with"]["path"].splitlines())
+
+
+def test_historical_calendar_fault_class_remains_readable():
+    app = "metroliza_2026.09rc1_261119_launcher.exe"
+    receipt = reduce(event(fields={"AppName": app}))
+    assert receipt["events"][0]["app"] == app
+    assert faults.validate_receipt(receipt)
+
+
+def test_foreign_semver_application_is_not_current_package():
+    assert reduce(event(fields={"AppName": "Metroliza-9.9.9-dev.1-windows-x64.exe"}))["events"] == []

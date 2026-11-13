@@ -3,8 +3,8 @@
 Two delivery routes carry the same supervised onedir and are qualified with the same scenarios
 (first launch, reopen, hard exit, incident export, extraction cleanup):
 
-* ``--kind envelope`` (default): the PyInstaller envelope, ``metroliza_<label>.exe``.
-* ``--kind launcher``: the native launcher, ``metroliza_<label>_launcher.exe``. The runtime cache
+* ``--kind envelope`` (default): ``Metroliza-<version>-windows-x64-portable.exe``.
+* ``--kind launcher``: ``Metroliza-<version>-windows-x64.exe``. The runtime cache
   is the production default (``%LOCALAPPDATA%\\Metroliza\\runtime`` below the private state
   directory), so the first launch must be ``cache=cold``, the reopen ``cache=verified`` and
   later ones ``cache=warm``. Exactly one complete runtime directory must exist at the end.
@@ -24,6 +24,10 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from metroliza.app.release_identity import VERSION_PATTERN, current_identity  # noqa: E402
+
 FIXTURE = Path(__file__).resolve().parents[1] / "tests/fixtures/pdf/cmm_smoke_fixture.pdf"
 FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b"
 
@@ -40,7 +44,7 @@ def _receipt(root: Path, scenario: str) -> None:
 
 
 RUNTIME_DIR_PATTERN = re.compile(
-    r"^[0-9]{4}\.[0-9]{2}[a-z0-9]+_[0-9]{6}-[0-9a-f]{12}_[0-9a-f]{8}$"
+    rf"^(?:{VERSION_PATTERN}|[0-9]{{4}}\.[0-9]{{2}}[a-z0-9]+_[0-9]{{6}})-[0-9a-f]{{12}}_[0-9a-f]{{8}}$"
 )
 
 
@@ -62,7 +66,7 @@ def _runtime_layout(runtime_root: Path) -> str:
     if not runtime_root.is_dir():
         raise RuntimeError("launcher_runtime_root_missing")
     names = sorted(path.name for path in runtime_root.iterdir())
-    versions = [name for name in names if RUNTIME_DIR_PATTERN.match(name)]
+    versions = [name for name in names if RUNTIME_DIR_PATTERN.fullmatch(name)]
     if len(versions) != 1:
         raise RuntimeError(f"launcher_expected_one_runtime_directory_found_{versions}")
     leftovers = [name for name in names if ".staging-" in name]
@@ -160,9 +164,14 @@ def main(argv: list[str] | None = None) -> int:
     if sys.platform != "win32" or not args.artifact.is_file():
         raise RuntimeError("native_portable_artifact_required")
     is_launcher = args.kind == "launcher"
-    if is_launcher != args.artifact.name.endswith("_launcher.exe"):
+    identity = current_identity(Path(__file__).resolve().parents[1])
+    expected_name = identity.launcher_name if is_launcher else identity.portable_name
+    if args.artifact.name != expected_name:
         # The two deliveries must never be mistaken for each other.
         raise RuntimeError("artifact_name_does_not_match_kind")
+    from scripts.release_identity import verify_pe
+
+    print(json.dumps({"actual_PE_version": verify_pe(args.artifact, identity)}, sort_keys=True))
     if hashlib.sha256(FIXTURE.read_bytes()).hexdigest() != FIXTURE_SHA256:
         raise RuntimeError("public_fixture_mismatch")
     with tempfile.TemporaryDirectory(prefix="metroliza-portable-qualification-") as private:

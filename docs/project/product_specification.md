@@ -798,6 +798,13 @@ Detailed current/target boundaries live in [architecture.md](./architecture.md) 
 
 ## 13. Compatibility and versioning
 
+The accepted [versioning policy](versioning_policy.md) under
+[#1228](https://github.com/hexafe/metroliza/issues/1228) / #920 defines development packages
+`0.8.0-dev.N`, candidates `0.8.0-rc.N` and the accepted current-scope release `0.8.0`.
+Actual build dates are separate from versions. The two additional `1.0.0` product targets are a
+complete external-LLM parser authoring package and fully unified, complete reports; adopting a
+version does not establish either implementation or release acceptance.
+
 Versioned artifacts/contracts include as applicable:
 
 - workspace;
@@ -854,9 +861,15 @@ are immutable; permanent ad-hoc RC branches are not the long-term release archiv
 
 No feature is claimed in a supported release only because a branch or local test exists.
 
-## 15. Stable post-RC / 1.0 acceptance
+## 15. Stable release and 1.0 acceptance
 
-The first stable post-RC line requires:
+The declared stable release scope retains its applicable acceptance obligations below.
+`1.0.0` additionally requires **both** product targets in the
+[versioning policy](versioning_policy.md#additional-100-product-milestone); the external-LLM
+authoring package does not require an in-app provider/API integration. Existing issue contracts
+remain authoritative, without making all roadmap phases or unrelated epic clauses new prerequisites.
+
+Stable release acceptance requires:
 
 1. The current [branching strategy](../release_checks/branching_strategy.md) under
    [#960](https://github.com/hexafe/metroliza/issues/960) is followed: normal work integrates through

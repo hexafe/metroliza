@@ -7,6 +7,8 @@ import re
 import uuid
 from collections.abc import Callable
 
+from metroliza.shared.release_identity import ReleaseIdentity
+
 from metroliza.shared.diagnostic_events import (
     BuildPackager,
     DiagnosticEvent,
@@ -163,8 +165,14 @@ def _runtime(payload: object) -> RuntimeProvenanceEvent:
         ),
     )
     release = values["release_version"]
-    if type(release) is not str or (match := _RELEASE.fullmatch(release)) is None:
+    if type(release) is not str:
         raise WireValidationError(_WIRE_ERROR)
+    match = _RELEASE.fullmatch(release)
+    if match is None:
+        try:
+            ReleaseIdentity.parse(release)
+        except ValueError:
+            raise WireValidationError(_WIRE_ERROR) from None
     return RuntimeProvenanceEvent(
         invocation_id=_uuid(values["invocation_id"]),
         startup_id=_uuid(values["startup_id"]),
@@ -173,9 +181,10 @@ def _runtime(payload: object) -> RuntimeProvenanceEvent:
         packager=_enum(BuildPackager, values["packager"]),
         git_sha=values["git_sha"],
         dirty=values["dirty"],
-        release_year=int(match.group("year")),
-        release_month=int(match.group("month")),
-        release_candidate=int(candidate) if (candidate := match.group("rc")) else None,
+        release_year=int(match["year"]) if match else None,
+        release_month=int(match["month"]) if match else None,
+        release_candidate=int(match["rc"]) if match and match["rc"] else None,
+        release_version=release if match is None else None,
     )
 
 

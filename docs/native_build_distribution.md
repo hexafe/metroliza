@@ -10,6 +10,10 @@ This project ships optional native extension modules:
 
 Each extension is optional at runtime. The app must keep deterministic Python-path behavior when native binaries are unavailable.
 
+The [versioning policy](project/versioning_policy.md) owns the exact public version and separate
+actual build date. The artifact names below use the full supported semantic label, such as
+`0.8.0-dev.1`; they do not append a date counter. Historical calendar-named artifacts are unchanged.
+
 ## Supported platforms and architectures
 
 Native wheels are built for CPython 3.11 on:
@@ -165,8 +169,9 @@ Distribution audit status:
 - `pyinstaller packaging/metroliza_onefile.spec` produces the single-file
   convenience artifact.
 - `pyinstaller packaging/metroliza_onedir.spec` produces the faster-starting
-  folder artifact under `dist/metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>)_onedir/`.
-- default PyInstaller output filename follows release metadata: `metroliza_P_<RELEASE_VERSION>(<VERSION_DATE>).exe`
+  folder artifact under `dist/metroliza_P_<version>_onedir/`.
+- direct PyInstaller onefile output is `metroliza_P_<version>.exe`; this is distinct from the
+  public native-launcher and optional supervised portable envelope names below.
 - Windows onefile builds include a PyInstaller bootloader splash image at
   `packaging/metroliza_bootloader_splash.png`. This splash is shown while the
   onefile bootloader extracts the bundle, before Python and the Qt splash can
@@ -240,12 +245,12 @@ from different Qt major/minor lines.
 
 Native launcher (single EXE with a persistent runtime cache):
 
-`packaging/launcher` is a Rust launcher that replaces per-launch onefile extraction. For the RC1
-line it carries the supervised onedir: `build_windows_portable_exe.ps1` builds the onedir and the
-PyInstaller portable envelope, and `build_windows_launcher_exe.ps1 -Supervised` packs **the same
-onedir** (entry `metroliza.exe`, after the exact-head provenance and package identity checks) into
-`dist/metroliza_<version>_<yymmdd>_launcher.exe` with `cargo build --release --locked` and an LZ4
-payload. The `_launcher` suffix keeps it apart from the envelope. On first start the payload is
+`packaging/launcher` is a Rust launcher that replaces per-launch onefile extraction. For supervised
+builds, `build_windows_portable_exe.ps1` builds the onedir and the distinct
+`Metroliza-<version>-windows-x64-portable.exe` envelope. `build_windows_launcher_exe.ps1 -Supervised`
+packs **the same onedir** (entry `metroliza.exe`, after the exact-head provenance and package
+identity checks) into `dist/Metroliza-<version>-windows-x64.exe` with
+`cargo build --release --locked` and an LZ4 payload. The public ZIP uses the same stem with `.zip`. On first start the payload is
 unpacked once to `%LOCALAPPDATA%\Metroliza\runtime\<version>-<contenthash12>_<sha8>\`; the
 cache key therefore contains the release label, the onedir content hash and the commit. Later
 starts only check the cache and run the entry EXE recorded in the payload manifest.
@@ -317,8 +322,8 @@ bootloader, extraction, launcher and supervisor included:
 .\build_windows_portable_exe.ps1
 .\build_windows_launcher_exe.ps1 -Supervised
 .\.venv-build\Scripts\python.exe scripts\measure_windows_startup_routes.py `
-  --portable .\dist\metroliza_<version>_<yymmdd>.exe `
-  --launcher .\dist\metroliza_<version>_<yymmdd>_launcher.exe --runs 3
+  --portable .\dist\Metroliza-<version>-windows-x64-portable.exe `
+  --launcher .\dist\Metroliza-<version>-windows-x64.exe --runs 3
 ```
 
 It runs the same `METROLIZA_STARTUP_UI_SMOKE=1` smoke through the portable envelope, the launcher
@@ -339,7 +344,7 @@ disabled for offscreen UI smoke unless forced.
 
 `packaging/build_nuitka.ps1` now conditionally includes the native parser module when available in the build environment, auto-generates output naming from release metadata, and selects a healthy compiler strategy before invoking Nuitka:
 
-- default output filename is `metroliza_N_<RELEASE_VERSION>(<VERSION_DATE>).exe` from package release metadata
+- default output filename is `Metroliza-<version>-windows-x64-nuitka.exe` from canonical release metadata; no date-derived fallback
 - still supports explicit override with `-OutputName`
 - supports `-Mode onefile|standalone`; legacy `-FastDev` maps to
   `-Mode standalone`

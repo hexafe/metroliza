@@ -20,6 +20,21 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
+def test_native_launcher_fixture_uses_supported_identity_and_actual_pinned_pe_writer():
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    steps = workflow["jobs"]["windows-launcher-qualification"]["steps"]
+    writer = next(step for step in steps if "literal PyInstaller build pin" in step.get("run", ""))
+    package = next(step for step in steps if "build_windows_launcher_exe.ps1" in step.get("run", ""))
+    assert steps.index(writer) < steps.index(package)
+    assert "Get-Content requirements-build.txt" in writer["run"]
+    assert "python -m pip install --disable-pip-version-check $pins[0]" in writer["run"]
+    assert "if ($LASTEXITCODE -ne 0) { throw" in writer["run"]
+    assert "-ReleaseLabel '0.0.0-dev.1'" in package["run"]
+    assert "qualification/Metroliza-0.0.0-dev.1-windows-x64.exe" in package["run"]
+
+
 def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(tmp_path):
     import yaml
 
@@ -126,7 +141,7 @@ def test_combined_candidate_packs_the_qualified_onedir_into_one_verified_user_zi
     uploads = {step["with"]["name"]: step for step in steps if "actions/upload-artifact@" in step.get("uses", "")}
     release = uploads["windows-release-zip"]
     assert release["if"] == "success()" and release["with"]["if-no-files-found"] == "error"
-    assert release["with"]["path"] == "${{ runner.temp }}/metroliza-release/metroliza_*_windows.zip"
+    assert release["with"]["path"] == "${{ runner.temp }}/metroliza-release/Metroliza-*-windows-x64.zip"
     # Release receipts land below the receipt root, which is uploaded with if: always().
     assert "Join-Path $env:CANDIDATE_RECEIPTS 'release/release-zip.json'" in steps[zip_gate]["run"]
 
@@ -152,7 +167,7 @@ def test_portable_tester_launcher_upload_keeps_its_notices():
     workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
     steps = workflow["jobs"]["windows-portable-onefile"]["steps"]
     upload = next(step for step in steps if step.get("with", {}).get("name") == "windows-supervised-launcher-exe")
-    assert "dist/metroliza_[0-9]*_launcher.exe.licenses/**" in upload["with"]["path"].splitlines()
+    assert "dist/Metroliza-*-windows-x64.exe.licenses/**" in upload["with"]["path"].splitlines()
 
 
 def test_candidate_required_native_contracts_include_actual_closeout_owners():
@@ -583,7 +598,7 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     # The same qualification script, once per delivery, each against its own EXE name.
     assert commands.count('qualify_windows_portable_onefile.py') == 2
     assert '--kind launcher' in commands
-    assert "_launcher\\.exe$" in commands
+    assert "Where-Object { $_.Name -eq $artifactNames.launcher }" in commands
     uploads = {
         step['with']['name']: step['with']['path']
         for step in steps if step.get('uses', '').startswith('actions/upload-artifact@')
@@ -591,8 +606,9 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     envelope = uploads['windows-supervised-portable-onefile']
     launcher = uploads['windows-supervised-launcher-exe']
     # The envelope upload must never pick up the launcher EXE (and vice versa).
-    assert envelope.endswith('_[0-9][0-9][0-9][0-9][0-9][0-9].exe')
-    assert '_launcher.exe' in launcher
+    assert envelope.endswith('-windows-x64-portable.exe')
+    assert 'dist/Metroliza-*-windows-x64.exe' in launcher.splitlines()
+    assert 'Where-Object { $_.Name -eq $artifactNames.portable }' in commands
     # User-facing EXEs are retained only from a fully qualified run; diagnostic receipts
     # (e.g. the #1111 package identity receipt) are uploaded with if: always().
     exe_uploads = ('windows-supervised-portable-onefile', 'windows-supervised-launcher-exe')
@@ -603,6 +619,32 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     assert steps[-1]['if'] == 'success()'
     verify = next(i for i, step in enumerate(steps) if 'remains at the exact clean head' in step['name'])
     assert verify > max(i for i, step in enumerate(steps) if 'qualify' in step['name'].lower())
+
+
+def test_first_run_timeline_selects_only_the_launcher_when_both_routes_exist() -> None:
+    from fnmatch import fnmatchcase
+    import json
+    import re
+    import subprocess
+    import sys
+
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    step = next(step for step in workflow['jobs']['windows-first-run-timeline']['steps']
+                if step['name'] == 'Pack the same onedir with the baseline launcher and a next-version PoC EXE')
+    command = step['run']
+    names = json.loads(subprocess.check_output(
+        [sys.executable, 'scripts/release_identity.py', 'names'], cwd=CI_WORKFLOW_PATH.parents[2], text=True,
+    ))
+    # Exercise the workflow's declared selection with the envelope and unrelated EXEs present.
+    pattern = re.search(r"\$launcher = .*?-Filter '([^']+)'", command).group(1)
+    files = [names['portable'], names['launcher'], names['nuitka'], 'Metroliza-unrelated.exe']
+    selected = [name for name in files if fnmatchcase(name, pattern)]
+    predicate = re.search(r'Where-Object \{ \$_\.Name -eq \$artifactNames\.(\w+) \}', command)
+    if predicate:
+        selected = [name for name in selected if name == names[predicate.group(1)]]
+    assert selected == [names['launcher']]
 
 
 def test_startup_benchmark_measures_the_shipped_route_not_the_legacy_onefile_spec() -> None:
@@ -1072,7 +1114,8 @@ def test_active_release_docs_use_main_dev_rc_without_retired_branch_commands() -
     # Renaming cannot rewrite the historical June decision or release tag identity.
     assert 'archive/2026.06-rc2/final' in docs[BRANCHING_STRATEGY_PATH]
     assert '`master` promotion/stable tag: **No-Go pending #901**' in docs[BRANCHING_STRATEGY_PATH]
-    assert 'v2026.05-rc2' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
+    assert 'v0.8.0-rc.N' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
+    assert '../project/versioning_policy.md' in docs[RELEASE_BRANCHING_PLAYBOOK_PATH]
 
 
 def test_dependabot_version_updates_target_daily_dev_branch() -> None:

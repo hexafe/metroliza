@@ -53,6 +53,20 @@ separate qualification/release gates. References to [#901](https://github.com/he
 below identify the historical June RC2 cycle, closed without a release; its closure does not satisfy
 current candidate promotion gates.
 
+## 2.1. Version targets and the 1.0 boundary
+
+The [accepted versioning policy](versioning_policy.md) under #1228/#920 starts with
+`0.8.0-dev.1`: development packages advance `dev.N`, frozen candidates advance `rc.N`, and
+`0.8.0` represents the accepted declared current scope. Bug fixes/features use patch/minor targets;
+actual dates and artifact evidence remain separate. Historical calendar build receipts are unchanged.
+
+`1.0.0` requires both a complete external-LLM parser authoring package and fully unified, complete
+reports. Relevant parser handoff/interface/lifecycle/import/DB clauses remain with #950/#951/#928/
+#927/#930; report/result/workbook/dashboard/preset clauses remain with #917/#936/#937/#935, consuming
+#954/#945 where applicable. This records the PO target without requiring optional in-app provider/API
+work or completion of all eight phases/entire epics. The detailed evidence contract stays in the
+policy; capability maturity and existing prerequisites are not changed by a version assignment.
+
 ## 3. Roadmap overview
 
 | Phase | Outcome | Principal Issues |

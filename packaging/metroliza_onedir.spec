@@ -23,7 +23,10 @@ from pyinstaller_common import (
     validate_setuptools_runtime_hook,
 )
 
+from pyinstaller_common import version_resource_file
+
 VERSION_LABEL = read_version_label(ROOT_DIR)
+VERSION_RESOURCE = version_resource_file(ROOT_DIR)
 OUTPUT_DIR_NAME = f"metroliza_P_{VERSION_LABEL}_onedir"
 EXE_NAME = "metroliza"
 SUPERVISED_WINDOWS = sys.platform == "win32"
@@ -73,6 +76,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
+    version=VERSION_RESOURCE,
     name=EXE_NAME,
     debug=False,
     bootloader_ignore_signals=False,
@@ -121,6 +125,7 @@ if SUPERVISED_WINDOWS:
     ocr_pyz = PYZ(ocr_analysis.pure, ocr_analysis.zipped_data, cipher=block_cipher)
     ocr_exe = EXE(
         ocr_pyz, ocr_analysis.scripts, [], exclude_binaries=True,
+        version=VERSION_RESOURCE,
         name="metroliza_ocr_worker", debug=False, bootloader_ignore_signals=False,
         strip=False, upx=True, console=False, disable_windowed_traceback=True,
         icon=[str(ICON_PATH)],
@@ -150,6 +155,7 @@ if SUPERVISED_WINDOWS:
     compute_pyz = PYZ(compute_analysis.pure, compute_analysis.zipped_data, cipher=block_cipher)
     compute_exe = EXE(
         compute_pyz, compute_analysis.scripts, [], exclude_binaries=True,
+        version=VERSION_RESOURCE,
         name="metroliza_compute_worker", debug=False, bootloader_ignore_signals=False,
         strip=False, upx=True, console=False, disable_windowed_traceback=True,
         icon=[str(ICON_PATH)],
@@ -189,7 +195,7 @@ if SUPERVISED_WINDOWS:
     launcher_pyz = PYZ(launcher_analysis.pure)
     launcher_exe = EXE(
         launcher_pyz, launcher_analysis.scripts, launcher_analysis.binaries,
-        launcher_analysis.datas, [], name="metroliza", debug=False,
+        launcher_analysis.datas, [], version=VERSION_RESOURCE, name="metroliza", debug=False,
         bootloader_ignore_signals=False, strip=False, upx=True, console=False,
         disable_windowed_traceback=True, icon=[str(ICON_PATH)],
     )

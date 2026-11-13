@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
-import ast
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import xml.etree.ElementTree as ET  # nosec B405: bounded input, DTD/entities rejected below
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from metroliza.app.release_identity import current_identity, legacy_fault_app  # noqa: E402
 
 
 NS = "{http://schemas.microsoft.com/win/2004/08/events/event}"
@@ -33,21 +36,11 @@ def allowed_apps() -> frozenset[str]:
     Source: packaging/metroliza_{onedir,onefile,portable_onefile}.spec.
     Read only literal release metadata, without importing/executing product code.
     """
-    path = Path(__file__).resolve().parents[1] / "src/metroliza/app/version.py"
-    values = {}
-    for node in ast.parse(path.read_text(encoding="utf-8")).body:
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    values[target.id] = node.value.value
-    release, build = values.get("RELEASE_VERSION"), values.get("VERSION_DATE")
-    if (not isinstance(release, str) or not re.fullmatch(r"[0-9]{4}\.[0-9]{2}[a-z0-9]+", release)
-            or not isinstance(build, str) or not re.fullmatch(r"[0-9]{6}", build)):
-        raise ValueError("invalid_release_metadata")
+    identity = current_identity(Path(__file__).resolve().parents[1])
     return frozenset({
         "metroliza_application.exe", "metroliza.exe",
         "metroliza_ocr_worker.exe", "metroliza_compute_worker.exe",
-        f"metroliza_p_{release}({build}).exe", f"metroliza_{release}_{build}.exe",
+        f"metroliza_p_{identity.label}.exe", identity.portable_name.lower(), identity.launcher_name.lower(),
     })
 
 
@@ -89,7 +82,7 @@ def _event_fields(event: ET.Element, since: datetime, apps: frozenset[str]):
         data[name] = item.text or ""
     raw_app = data.get("AppName", "")
     app = raw_app.lower() if raw_app.isascii() else ""
-    if app not in apps:
+    if app not in apps and not legacy_fault_app(app):
         return None
     module, version = data.get("ModuleName", ""), data.get("ModuleVersion", "")
     return timestamp, {
@@ -163,7 +156,7 @@ def _valid_event(event: object, apps: frozenset[str]) -> bool:
     if not all(isinstance(event[key], str) for key in event if key != "seconds_after_since"):
         return False
     return (
-        event["app"] in apps
+        (event["app"] in apps or legacy_fault_app(event["app"]))
         and (event["module"] == "other" or MODULE.fullmatch(event["module"]) is not None)
         and (event["module_version"] == "unavailable" or VERSION.fullmatch(event["module_version"]) is not None)
         and all(event[key] == "unavailable" or HEX_OUTPUT.fullmatch(event[key]) is not None

@@ -6,6 +6,7 @@ For canonical policy (branch naming, merge rules, and tagging rules), always fol
 
 - `docs/release_checks/branching_strategy.md`
 - `docs/release_checks/release_candidate_checklist.md`
+- [Version identities and dates](../project/versioning_policy.md)
 
 ## TL;DR flow
 
@@ -106,7 +107,7 @@ Open a reviewed PR targeting `rc`. After it is accepted, reconcile the fix into
 ```bash
 git checkout main
 git merge --no-ff rc
-git tag -a v2026.05 -m "Release v2026.05"
+git tag -a v0.8.0 -m "Release v0.8.0"
 ```
 
 Then reconcile the production result into `dev` through a reviewed PR. Keep `rc` as the candidate
@@ -128,10 +129,12 @@ This protects stability by treating any late feature as a new release-scope deci
 ## Suggested naming convention
 
 - RC branch: `rc` (reused across candidate iterations)
-- RC tag: `vYYYY.MM-rcN` (example: `v2026.05-rc2`)
-- Final tag: `vYYYY.MM` (example: `v2026.05`)
+- Development package: `0.8.0-dev.N` (first adopted identity: `0.8.0-dev.1`)
+- Candidate tag: `v0.8.0-rc.N`
+- Accepted stable tag: `v0.8.0`
 
-Use the monthly release format for metadata and tags; the candidate branch remains `rc`.
+The [versioning policy](../project/versioning_policy.md) owns patch/feature progression and
+separate actual build dates. The candidate branch remains `rc`; old calendar tags are immutable history.
 
 ---
 
