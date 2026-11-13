@@ -2324,3 +2324,21 @@ def test_groupstats_html_renders_overall_and_ordered_pairwise_rows(tmp_path) -> 
     assert html_text.index("<td>POPULATION</td><td>B</td>") < html_text.index(
         "<td>A</td><td>B</td>"
     )
+
+
+def test_direct_analytics_writer_bounds_only_generated_assets_and_retains_identity(tmp_path):
+    from tests.test_industrial_dashboard_performance_equivalence import _manifest
+
+    assets = []
+    for stem in ('a' * 249 + 'A', 'a' * 249 + 'B', '測' * 83 + 'x'):
+        target = tmp_path / (stem + '.html')
+        result = write_production_dashboard(_manifest(), target)
+        assert Path(result['html_dashboard_path']) == target
+        generated = Path(result['html_dashboard_assets_path'])
+        assert generated == dashboard_module.resolve_production_dashboard_assets_dir(target)
+        assert len(generated.name.encode()) <= 180
+        assert re.fullmatch(r'[A-Za-z0-9_.-]+', generated.name)
+        assert (generated / 'plotly-2.27.0.min.js').is_file()
+        assert generated.name + '/plotly-2.27.0.min.js' in target.read_text(encoding='utf-8')
+        assets.append(generated)
+    assert len({path.name.casefold() for path in assets}) == len(assets)

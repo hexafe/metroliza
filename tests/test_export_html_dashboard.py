@@ -2117,3 +2117,18 @@ class TestExportHtmlDashboard(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_generated_sidecar_and_copy_keep_full_identity_after_bounding(tmp_path):
+    from metroliza.exporting.output_publication import free_copy_path
+
+    stems = ['x' * 244 + 'A', 'x' * 244 + 'B', '測' * 81 + 'ø', '測' * 81 + 'ß']
+    sidecars, copies = [], []
+    for stem in stems:
+        target = tmp_path / (stem + '.xlsx')
+        target.write_bytes(b'old workbook')
+        sidecars.append(resolve_html_dashboard_path(target))
+        copies.append(free_copy_path(target, dashboard=True))
+    assert len({path.name.casefold() for path in sidecars}) == len(stems)
+    assert len({path.name.casefold() for path in copies}) == len(stems)
+    assert all(len(path.name.encode()) <= 180 for path in sidecars + copies)

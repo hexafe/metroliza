@@ -260,7 +260,7 @@ def write_realtime_dashboard_html(
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            prefix=f".{path.name}.",
+            prefix=".metroliza-realtime-",
             suffix=".tmp",
             dir=path.parent,
             delete=False,

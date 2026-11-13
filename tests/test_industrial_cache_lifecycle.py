@@ -60,6 +60,7 @@ def _write_marker_database(path: Path) -> bytes:
 
 
 def _assert_no_staging_artifacts(destination: Path) -> None:
+    assert list(destination.parent.glob(".metroliza-cache-*.saving")) == []
     assert list(destination.parent.glob(f".{destination.name}.*.saving")) == []
 
 

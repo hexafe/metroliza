@@ -229,7 +229,7 @@ def resolve_html_dashboard_path(excel_file: str | Path) -> Path:
 
     excel_path = Path(str(excel_file))
     stem = excel_path.stem or "metroliza_export"
-    return excel_path.with_name(f"{stem}_dashboard.html")
+    return excel_path.with_name(_bounded_dashboard_output_component(f"{stem}_dashboard", suffix=".html"))
 
 
 def resolve_html_dashboard_assets_dir(html_path: str | Path) -> Path:
@@ -796,6 +796,15 @@ def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
     destination_path = asset_directory / _PLOTLY_JS_FILENAME
     destination_path.write_bytes(source_path.read_bytes())
     return f"{asset_directory.name}/{destination_path.name}"
+
+
+def _bounded_dashboard_output_component(stem: str, *, suffix: str) -> str:
+    """Retain short valid suggested names; bound only generated long/unsafe ones."""
+    name = stem + suffix
+    if (len(name.encode("utf-8", "surrogatepass")) <= _GENERATED_COMPONENT_MAX_BYTES
+            and re.search(r'[<>:"/\\|?*\x00-\x1f]', name) is None):
+        return name
+    return _bounded_dashboard_component(stem, suffix=suffix)
 
 
 def _bounded_dashboard_component(

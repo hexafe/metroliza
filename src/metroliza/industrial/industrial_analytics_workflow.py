@@ -23,6 +23,7 @@ from metroliza.industrial.industrial_analytics_dashboard import (
     DashboardCancelled,
     DASHBOARD_RAW_POINT_LIMIT,
     build_production_dashboard_manifest,
+    resolve_production_dashboard_assets_dir,
     write_production_dashboard,
 )
 from metroliza.industrial.industrial_analytics_service import (
@@ -1136,11 +1137,11 @@ def _workbook_output_path(output_file: str | Path) -> Path:
 
 
 def _temporary_output_path(target_path: Path) -> Path:
-    return target_path.with_name(f".{target_path.stem}.{uuid4().hex}.tmp{target_path.suffix}")
+    return target_path.with_name(f".metroliza-analytics-{uuid4().hex}.tmp{target_path.suffix}")
 
 
 def _dashboard_assets_dir(target_path: Path) -> Path:
-    return target_path.with_name(f"{target_path.stem}_assets")
+    return resolve_production_dashboard_assets_dir(target_path)
 
 
 def _run_result(

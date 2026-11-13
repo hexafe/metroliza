@@ -42,10 +42,10 @@ class OutputConsent:
 def output_paths(primary, *, html_only=False, dashboard=False):
     """Return the complete set of final file names used by this export."""
     primary = Path(primary)
-    if html_only:
+    if html_only or not dashboard:
         return (primary,)
-    html = primary.with_name(f"{primary.stem}_dashboard.html")
-    return (primary, html) if dashboard else (primary,)
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_path
+    return (primary, resolve_html_dashboard_path(primary))
 
 
 def conflicting_outputs(paths):
@@ -67,11 +67,15 @@ def conflicting_outputs(paths):
 
 
 def free_copy_path(primary, *, html_only=False, dashboard=False):
+    from metroliza.charts.export_html_dashboard import _bounded_dashboard_output_component
+
     primary = Path(primary)
     number = 2
     candidate = primary
     while conflicting_outputs(output_paths(candidate, html_only=html_only, dashboard=dashboard)):
-        candidate = primary.with_name(f"{primary.stem} ({number}){primary.suffix}")
+        candidate = primary.with_name(_bounded_dashboard_output_component(
+            primary.stem, suffix=f" ({number}){primary.suffix}",
+        ))
         number += 1
     return candidate
 

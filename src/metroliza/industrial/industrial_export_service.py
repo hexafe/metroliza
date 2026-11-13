@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from uuid import uuid4
 from typing import Any, Callable, Mapping, Sequence
 
 from metroliza.industrial.industrial_data_repository import redact_sensitive_text
@@ -293,9 +294,7 @@ def _export_cached_industrial_workbook_streaming(
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_output_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
-    if temp_output_path.exists():
-        temp_output_path.unlink()
+    temp_output_path = output_path.with_name(f".metroliza-industrial-{uuid4().hex}.tmp{output_path.suffix}")
 
     summary_counts: dict[str, int] = {}
     row_count = 0
@@ -836,9 +835,7 @@ def export_industrial_dataframe_workbook(
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_output_path = output_path.with_name(f".{output_path.stem}.tmp{output_path.suffix}")
-    if temp_output_path.exists():
-        temp_output_path.unlink()
+    temp_output_path = output_path.with_name(f".metroliza-industrial-{uuid4().hex}.tmp{output_path.suffix}")
 
     _raise_if_cancelled(cancel_check)
     export_frame = _industrial_export_dataframe(dataframe, include_raw_data=include_raw_data)

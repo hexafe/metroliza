@@ -346,7 +346,7 @@ def persist_temporary_industrial_cache(
 
     staging_directory = Path(
         tempfile.mkdtemp(
-            prefix=f".{destination_path.name}.",
+            prefix=".metroliza-cache-",
             suffix=".saving",
             dir=destination_path.parent,
         )
