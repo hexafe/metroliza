@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "archive_sha256": "99f2a0af7269e52e82ac60a784e29aa82153a37b72357dc3844019d487c22041",
+  "members": [
+    {
+      "name": "REF001_0001.pdf",
+      "size": 6969,
+      "sha256": "d31dd75b46eb3897f178c26b36af96745f71c1acdbc78df03c884fdee68c79b2"
+    },
+    {
+      "name": "REF002_0002.pdf",
+      "size": 6981,
+      "sha256": "c33bd1b923eb9df1365871fda2fe464f218f50ad3d3f9182db96056e87d9fbe7"
+    },
+    {
+      "name": "REF003_0003.pdf",
+      "size": 6988,
+      "sha256": "81858fd3ffeaa9b1afeaf76515bb27ef84de9629b7b195858f172f06ad15f3d7"
+    },
+    {
+      "name": "REF004_0004.pdf",
+      "size": 6989,
+      "sha256": "893ea32ee9c1d0a798785cdcb3ef2c7ab566cc12535140b208b9658d3c0c2eaa"
+    },
+    {
+      "name": "REF005_0005.pdf",
+      "size": 7016,
+      "sha256": "59fb66cd63dbf5a02efc74c0842577e54ce7d476e2105f17a4f465a980ebdd19"
+    },
+    {
+      "name": "REF006_0006.pdf",
+      "size": 6951,
+      "sha256": "6ed81cae46fe0111ee251f9dc2a7bfe817735e650e3d213cc84f0f1a03ddbd87"
+    },
+    {
+      "name": "REF007_0007.pdf",
+      "size": 6954,
+      "sha256": "d89f259276f6d3cc1d45b40d0670c1b811a2ffe9aa14c7a68981ff200a019128"
+    },
+    {
+      "name": "REF008_0008.pdf",
+      "size": 6972,
+      "sha256": "1c744b4625dc3c8158b65d914c2bbc7b7d81a347242a0968a9855ae4c7f416bd"
+    },
+    {
+      "name": "REF009_0009.pdf",
+      "size": 6995,
+      "sha256": "6386f4137f42e8812374883fd8f7397f464cd867812e455e8f44d34f3e09600c"
+    },
+    {
+      "name": "REF010_0010.pdf",
+      "size": 6978,
+      "sha256": "5b987c51fe0aa7d4cecf69392680352ea4341a8ecab16b9a1d236a727695ca28"
+    },
+    {
+      "name": "REF011_0011.pdf",
+      "size": 6971,
+      "sha256": "15ce24d2e531581df9f4c5126cd0997dc4ceacadf75845ae31e1958f6df2b4b2"
+    },
+    {
+      "name": "REF012_0012.pdf",
+      "size": 6973,
+      "sha256": "24c2cbba84571cd184c5be321b8d7ea7b05b9bac5851fd09ec346fa2e2be6f62"
+    }
+  ],
+  "measurement_fields": [
+    "row_order",
+    "header",
+    "section_name",
+    "feature_label",
+    "characteristic_name",
+    "characteristic_family",
+    "description",
+    "ax",
+    "nominal",
+    "tol_plus",
+    "tol_minus",
+    "bonus",
+    "meas",
+    "dev",
+    "outtol",
+    "is_nok",
+    "status_code"
+  ],
+  "expected": {
+    "counts": {
+      "parsed_reports": 12,
+      "report_measurements": 1728,
+      "report_metadata": 12
+    },
+    "reports": {
+      "15ce24d2e531581df9f4c5126cd0997dc4ceacadf75845ae31e1958f6df2b4b2": {
+        "name": "REF011_0011.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF011",
+          "2024-02-01",
+          "0011",
+          "filename_tail"
+        ],
+        "measurements_sha256": "1aa113e767f8c5640a7d4a23b9a0f8a3f28ee60926c5a326d4b4ddaa5980353f"
+      },
+      "1c744b4625dc3c8158b65d914c2bbc7b7d81a347242a0968a9855ae4c7f416bd": {
+        "name": "REF008_0008.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF008",
+          "2024-02-01",
+          "0008",
+          "filename_tail"
+        ],
+        "measurements_sha256": "e5404e2edd621ca86d7262ff415579b0c517796ba9cf8e37a97fac15aee8597b"
+      },
+      "24c2cbba84571cd184c5be321b8d7ea7b05b9bac5851fd09ec346fa2e2be6f62": {
+        "name": "REF012_0012.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF012",
+          "2024-02-01",
+          "0012",
+          "filename_tail"
+        ],
+        "measurements_sha256": "7aa8a31125cbab8eaca3314d46226e396354f76c8886d6f709db7f63bbe3622c"
+      },
+      "59fb66cd63dbf5a02efc74c0842577e54ce7d476e2105f17a4f465a980ebdd19": {
+        "name": "REF005_0005.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF005",
+          "2024-02-01",
+          "0005",
+          "filename_tail"
+        ],
+        "measurements_sha256": "b1febe871db08791adcf7a482126e45c0eb061f52b0397a61edc4a586af93bbd"
+      },
+      "5b987c51fe0aa7d4cecf69392680352ea4341a8ecab16b9a1d236a727695ca28": {
+        "name": "REF010_0010.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF010",
+          "2024-02-01",
+          "0010",
+          "filename_tail"
+        ],
+        "measurements_sha256": "4e09e4ac11da4d5f176ee1e7359c2baefcb2dfa1e7ab747633de99d084ba55ab"
+      },
+      "6386f4137f42e8812374883fd8f7397f464cd867812e455e8f44d34f3e09600c": {
+        "name": "REF009_0009.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF009",
+          "2024-02-01",
+          "0009",
+          "filename_tail"
+        ],
+        "measurements_sha256": "5e3878c36e541097f981ed83baf235719f0954eea6f926b74d9a37516645c47f"
+      },
+      "6ed81cae46fe0111ee251f9dc2a7bfe817735e650e3d213cc84f0f1a03ddbd87": {
+        "name": "REF006_0006.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF006",
+          "2024-02-01",
+          "0006",
+          "filename_tail"
+        ],
+        "measurements_sha256": "1864cdcddca0628d7424e861e3a7d253b0499ae6ee9208f01d01790fdbb1cb37"
+      },
+      "81858fd3ffeaa9b1afeaf76515bb27ef84de9629b7b195858f172f06ad15f3d7": {
+        "name": "REF003_0003.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF003",
+          "2024-02-01",
+          "0003",
+          "filename_tail"
+        ],
+        "measurements_sha256": "36a97fb660dd6482cd581eaf332496e5184d4b13243458511fbaac96f2331b39"
+      },
+      "893ea32ee9c1d0a798785cdcb3ef2c7ab566cc12535140b208b9658d3c0c2eaa": {
+        "name": "REF004_0004.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF004",
+          "2024-02-01",
+          "0004",
+          "filename_tail"
+        ],
+        "measurements_sha256": "81b9dd42d746d2738c6d4b74f7b9c03f5b03946e458c968fd25cbee5d293995c"
+      },
+      "c33bd1b923eb9df1365871fda2fe464f218f50ad3d3f9182db96056e87d9fbe7": {
+        "name": "REF002_0002.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF002",
+          "2024-02-01",
+          "0002",
+          "filename_tail"
+        ],
+        "measurements_sha256": "522f6c8d3aeb2f1779afca864e613b197f26943eae826d4dab47aefb94594aa9"
+      },
+      "d31dd75b46eb3897f178c26b36af96745f71c1acdbc78df03c884fdee68c79b2": {
+        "name": "REF001_0001.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF001",
+          "2024-02-01",
+          "0001",
+          "filename_tail"
+        ],
+        "measurements_sha256": "486de6f8c220cef245f005c0253d194bb139d812146a41a290376ef1a8ed0352"
+      },
+      "d89f259276f6d3cc1d45b40d0670c1b811a2ffe9aa14c7a68981ff200a019128": {
+        "name": "REF007_0007.pdf",
+        "declared": 144,
+        "actual": 144,
+        "has_nok": 0,
+        "metadata": [
+          "REF007",
+          "2024-02-01",
+          "0007",
+          "filename_tail"
+        ],
+        "measurements_sha256": "c9e373435b2e1423f65a87ce0595c0c698511a969e85734bc4c644ef410fad61"
+      }
+    }
+  },
+  "scenarios": {
+    "A": {
+      "saved": 12,
+      "failed": 0,
+      "unknown": 0,
+      "cancelled": 0
+    },
+    "B": {
+      "saved": 11,
+      "failed": 1,
+      "unknown": 0,
+      "cancelled": 0,
+      "failed_name": "REF006_0006.pdf"
+    },
+    "C": {
+      "saved": 1,
+      "failed": 0,
+      "unknown": 11,
+      "cancelled": 11,
+      "saved_name": "REF001_0001.pdf"
+    }
+  }
+}
