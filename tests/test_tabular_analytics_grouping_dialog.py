@@ -1660,6 +1660,8 @@ def test_delete_and_backspace_remove_focused_selected_grouping_column() -> None:
 
 
 def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_row() -> None:
+    from tests.qt_key_input import activate_for_key
+
     app = _app()
     frame = pd.DataFrame(
         {
@@ -1725,7 +1727,7 @@ def test_matching_rows_pane_removes_bulk_buttons_and_keeps_compact_pagination_ro
                 assert dialog.selector_page_label.text() == "Page 2 of 2"
                 assert dialog.previous_page_button.isEnabled() is True
                 assert dialog.next_page_button.isEnabled() is False
-            start.setFocus()
+            activate_for_key(app, start)
             app.processEvents()
             assert app.focusWidget() is start
             for expected in following:
