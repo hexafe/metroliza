@@ -2637,6 +2637,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 action_started_at=action_started_at,
             )
         )
+        if self.source_kind == SOURCE_TABULAR_FILE and not self.is_industrial_cache_presentation:
+            self.loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
         self.loading_bar.setRange(0, 0)
         self.tabular_load_thread = TabularAnalyticsLoadThread(
             input_file=self.input_file,
@@ -2827,6 +2829,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 action_started_at=action_started_at,
             )
         )
+        if self.source_kind == SOURCE_TABULAR_FILE and not self.is_industrial_cache_presentation:
+            self.loading_dialog.setWindowModality(Qt.WindowModality.NonModal)
         self.loading_bar.setRange(0, 0)
         self._pending_grouping_snapshot = request._grouping_snapshot
         self._pending_analytics_request = request
