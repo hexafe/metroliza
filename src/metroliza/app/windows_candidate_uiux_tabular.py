@@ -285,7 +285,7 @@ class _Journey:
         self.window.show()
         databases = [self.child / name for name in ('db-a.sqlite', 'db-b.sqlite')]
         for path in databases:
-            IndustrialDataRepository(str(path))
+            IndustrialDataRepository(str(path)).ensure_schema()
         database_hashes = [_logical_sha256(path) for path in databases]
         _require(self.window.set_db_file(str(databases[0])))
         self.window._activate_workspace('reports')
