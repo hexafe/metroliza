@@ -9,13 +9,13 @@ For canonical policy (branch naming, merge rules, and tagging rules), always fol
 
 ## TL;DR flow
 
-1. Integrate each planned change into `develop` through its reviewed `feature/*` or `fix/*` PR.
-2. At the approved feature-freeze point, create `release/YYYY.MM-rc1` from `develop`.
+1. Integrate each planned change into `dev` through its reviewed `feature/*` or `fix/*` PR.
+2. At the approved feature-freeze point, prepare the approved `dev` scope on existing `rc` through a reviewed release PR.
 3. After freeze, use short-lived release-fix branches that target the active release branch and
-   reconcile each accepted fix into `develop`.
+   reconcile each accepted fix into `dev`.
 4. Build the EXE from the release branch and deploy it internally.
-5. Repeat release-fix and validation cycles on the same candidate branch or a successor candidate.
-6. After validation and sign-off are complete, merge the approved release into `master` and tag
+5. Repeat release-fix and validation cycles on the same candidate branch or a successor candidate identity on the same `rc`.
+6. After validation and sign-off are complete, merge the approved release into `main` and tag
    the final release.
 
 ---
@@ -23,9 +23,9 @@ For canonical policy (branch naming, merge rules, and tagging rules), always fol
 ## Branch roles
 
 - `feature/<name>`: one isolated feature/fix.
-- `develop`: canonical integration line and source for a new release branch at feature freeze.
-- `master`: stable line; updated only by completed releases/hotfixes.
-- `release/YYYY.MM-rcN`: active release integration + stabilization branch used for packaging and internal testing.
+- `dev`: canonical integration line and source for the approved `rc` scope at feature freeze.
+- `main`: stable line; updated only by completed releases/hotfixes.
+- `rc`: active release integration + stabilization branch used for packaging and internal testing.
 - `hotfix/<name>`: urgent production patch after a release.
 
 ## Important rule
@@ -34,13 +34,13 @@ Do **not** rename a feature branch into a release branch.
 
 Instead:
 - Keep feature branches short-lived.
-- Merge approved feature branches into `develop` through reviewed PRs before feature freeze.
-- Cut the release branch from `develop` at the approved feature-freeze point.
+- Merge approved feature branches into `dev` through reviewed PRs before feature freeze.
+- Prepare the approved scope on existing `rc` from `dev` at the approved feature-freeze point.
 - After freeze, target only approved release-fix branches at the release branch and reconcile each
-  accepted fix into `develop`.
-- Keep `master` untouched until release sign-off.
+  accepted fix into `dev`.
+- Keep `main` untouched until release sign-off.
 
-This keeps `master` maximally stable during the full RC cycle.
+This keeps `main` maximally stable during the full RC cycle.
 
 ---
 
@@ -51,29 +51,30 @@ Assume you finished:
 - `feature/google-export-warning-copy`
 - `feature/export-speed-tuning`
 
-### 1) Integrate the approved feature set into `develop`
+### 1) Integrate the approved feature set into `dev`
 
-Review and merge each approved feature PR into `develop`. Do not merge the feature branches
+Review and merge each approved feature PR into `dev`. Do not merge the feature branches
 directly into the frozen release line. When the approved scope is integrated:
 
 ```bash
-git checkout develop
-git pull --ff-only origin develop
+git checkout dev
+git pull --ff-only origin dev
 ```
 
-### 2) Cut the release branch at feature freeze
+### 2) Prepare the candidate line at feature freeze
 
 ```bash
-git checkout -b release/2026.05-rc1
-git push -u origin release/2026.05-rc1
+# Prepare the approved dev scope on existing rc through a reviewed release PR.
+git checkout rc
+git pull --ff-only origin rc
 ```
 
-This branch is now the frozen release target; `master` stays stable and `develop` continues as the
+This branch is now the frozen release target; `main` stays stable and `dev` continues as the
 normal integration line.
 
 ### 3) Freeze scope
 
-On `release/2026.05-rc1`, allow only:
+On `rc`, allow only:
 - bug fixes,
 - release metadata/docs/checklist updates,
 - packaging fixes.
@@ -89,27 +90,27 @@ Use the packaging/checklist flow in `release_candidate_checklist.md`.
 Create a short-lived fix branch from the current RC:
 
 ```bash
-git checkout release/2026.05-rc1
-git pull --ff-only origin release/2026.05-rc1
+git checkout rc
+git pull --ff-only origin rc
 git checkout -b fix/<issue>-release-blocker
 # apply fix
 git commit -m "Fix: <issue>"
 git push -u origin fix/<issue>-release-blocker
 ```
 
-Open a reviewed PR targeting `release/2026.05-rc1`. After it is accepted, reconcile the fix into
-`develop` through a separate reviewed PR, then deploy and repeat validation until stable.
+Open a reviewed PR targeting `rc`. After it is accepted, reconcile the fix into
+`dev` through a separate reviewed PR, then deploy and repeat validation until stable.
 
 ### 6) Finalize release
 
 ```bash
-git checkout master
-git merge --no-ff release/2026.05-rc1
+git checkout main
+git merge --no-ff rc
 git tag -a v2026.05 -m "Release v2026.05"
 ```
 
-Then reconcile the production result into `develop` through a reviewed PR. Close or delete the RC
-branch only under the repository's separately approved cleanup policy.
+Then reconcile the production result into `dev` through a reviewed PR. Keep `rc` as the candidate
+line; preserve completed candidate evidence with immutable tags and exact source/artifact hashes.
 
 ---
 
@@ -126,11 +127,11 @@ This protects stability by treating any late feature as a new release-scope deci
 
 ## Suggested naming convention
 
-- RC branch: `release/YYYY.MM-rcN` (example: `release/2026.05-rc1`)
+- RC branch: `rc` (reused across candidate iterations)
 - RC tag: `vYYYY.MM-rcN` (example: `v2026.05-rc2`)
 - Final tag: `vYYYY.MM` (example: `v2026.05`)
 
-Use the monthly release format consistently for RC branches and tags.
+Use the monthly release format for metadata and tags; the candidate branch remains `rc`.
 
 ---
 

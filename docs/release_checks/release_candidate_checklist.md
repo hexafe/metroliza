@@ -9,6 +9,10 @@ Canonical release identity comes from `src/metroliza/app/version.py`. Run
 `python scripts/sync_release_metadata.py --check` before recording evidence; do
 not copy an older build identifier into this checklist.
 
+Use `rc` for the frozen candidate, `dev` for daily integration/reconciliation, and `main`
+for separately approved production promotion. Candidate iterations keep the same `rc` name;
+record their distinct immutable source, tag and artifact evidence.
+
 ## 1. Scope, ownership, and freeze
 
 - [ ] Release owner, QA owner, release engineer, and backups are named.
@@ -119,12 +123,12 @@ on hosted runners.
 - [ ] The RC is merged only after evidence review:
 
 ```bash
-RELEASE_BRANCH="release/YYYY.MM-rcN" # Exact approved branch from the dated release evidence.
-git checkout master
-git pull --ff-only origin master
+RELEASE_BRANCH="rc" # Exact approved branch from the dated release evidence.
+git checkout main
+git pull --ff-only origin main
 git merge --no-ff "$RELEASE_BRANCH"
 ```
 
 - [ ] The release tag is created from the reviewed merge commit and pushed.
-- [ ] The production result is reconciled into `develop` through a reviewed PR.
+- [ ] The production result is reconciled into `dev` through a reviewed PR.
 - [ ] Final artifact hashes, publication location, announcement, and post-release monitoring owner are recorded.
