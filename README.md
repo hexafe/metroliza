@@ -324,24 +324,23 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`2026.09 RC1 (build 261118)`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
+Current release highlight (`2026.09 RC1 (build 261119)`): Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.
 
-Build `261118` is the main Reports HTML export and safe diagnostics source candidate
-on the unchanged RC1 line. Build `261117` passed native package execution, but its retained evidence omitted the main-HTML output archives; it was not delivered. Build `261118` corrects that evidence retention. The `261116` qualification attempt was cancelled and did not qualify an artifact.
-Earlier `261115`, `261114` and `261113` observations retain
-their original source/package bindings and do not qualify this new source.
-Source review/CI and a new Windows package qualification are pending. See [release status](docs/release_checks/release_status.md)
-for the separate source, package and manual acceptance gates. The current
+Build `261119` contains the main Reports HTML export and safe diagnostics correction
+on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
+recorded in the [release status hub](docs/release_checks/release_status.md) and its linked
+issue ledger. Earlier builds retain their original source/package outcomes; a current
+version label does not change those historical receipts. The current
 [workflow manuals](docs/user_manual/README.md) include the
 [keyboard reference](docs/user_manual/keyboard_shortcuts.md).
 
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `2026.09 RC1 (build 261118)`)
+### Changelog highlights (release `2026.09 RC1 (build 261119)`)
 
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
-- Main HTML dashboards retain full measurement labels with compact image and asset-directory names. Windows package verification of these source changes is pending.
+- Main HTML dashboards retain full measurement labels with compact image and asset-directory names.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
 Sync docs from release metadata:

@@ -922,13 +922,17 @@ def test_saved_final_incident_is_authoritative_before_marker_resolution(
     )
     resolve_entered, release_resolve = threading.Event(), threading.Event()
     original_resolve = store.resolve_session
+    resolution_calls = []
 
-    def stalled_resolve(*args, **kwargs):
+    def stalled_resolve(session_id, report_id):
+        assert type(session_id) is str and uuid.UUID(hex=session_id).hex == observed.session_id
+        assert type(report_id) is uuid.UUID and report_id.version == 4
+        resolution_calls.append((session_id, report_id))
         resolve_entered.set()
         if resolution == "raised":
             raise OSError("synthetic marker resolution failure")
-        release_resolve.wait(2)
-        return original_resolve(*args, **kwargs)
+        release_resolve.wait()
+        return StoreResult(StoreStatus.MARKER_RESOLVED, report_id)
 
     def unnecessary_marker_call(*_args, **_kwargs):
         raise AssertionError("final incident must not create marker controls")
@@ -953,9 +957,18 @@ def test_saved_final_incident_is_authoritative_before_marker_resolution(
         assert marker.is_file()
     finally:
         release_resolve.set()
-        publisher.worker.join(1)
+        try:
+            # Completion watchdog, like _completion_scheduler; no disk-latency SLA.
+            assert publisher.done.wait(10), "publisher completion watchdog"
+        finally:
+            publisher.worker.join(1)
     assert not publisher.worker.is_alive()
+    assert resolution_calls == [(observed.session_id, reports[0].report_id)]
     if resolution == "stalled":
+        # Exercise real marker IO after asynchronous teardown, outside close's budget.
+        resolved = original_resolve(*resolution_calls[0])
+        assert resolved.status is StoreStatus.MARKER_RESOLVED
+        assert resolved.report_id == reports[0].report_id
         assert not marker.exists()
         assert store.list_unclean_sessions().sessions == ()
     else:

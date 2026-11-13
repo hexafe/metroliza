@@ -1,8 +1,8 @@
 RELEASE_VERSION = "2026.09rc1"
-VERSION_DATE = "261118"
+VERSION_DATE = "261119"
 VERSION_LABEL = f"{RELEASE_VERSION}({VERSION_DATE})"
 CURRENT_RELEASE_HIGHLIGHT = 'Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.'
-PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261118)"
+PUBLIC_VERSION_LABEL = "2026.09 RC1 (build 261119)"
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
