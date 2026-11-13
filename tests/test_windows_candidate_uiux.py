@@ -21,6 +21,42 @@ from scripts import verify_windows_candidate_uiux as uiux
 FIXTURES = Path(__file__).parent / 'fixtures/windows_uiux'
 
 
+def _assert_retained_snapshot(root, snapshot):
+    paths = {path.relative_to(root).as_posix(): path for path in root.rglob('*') if path.is_file()}
+    missing, unexpected = set(snapshot) - paths.keys(), paths.keys() - set(snapshot)
+    if missing or unexpected:
+        pytest.fail(f'Retained asset set mismatch: missing={sorted(missing)!r}, unexpected_count={len(unexpected)}')
+    for name, expected in snapshot.items():
+        actual = paths[name].read_bytes()
+        if actual != expected:
+            pytest.fail(f'Retained asset bytes differ: {name}; '
+                        f'expected_length={len(expected)}, expected_sha256={hashlib.sha256(expected).hexdigest()}; '
+                        f'actual_length={len(actual)}, actual_sha256={hashlib.sha256(actual).hexdigest()}')
+
+
+@pytest.mark.parametrize('defect', [None, 'missing', 'extra', 'bytes'])
+def test_retained_snapshot_preserves_nested_names_exact_bytes_and_bounded_diagnostics(tmp_path, defect):
+    snapshot = {'reports-uiux/A.sqlite': b'private-synthetic-payload', 'uiux-observation.json': b'{}'}
+    for name, payload in snapshot.items():
+        path = tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(payload)
+    if defect is None:
+        _assert_retained_snapshot(tmp_path, snapshot)
+        return
+    if defect == 'missing':
+        (tmp_path / 'reports-uiux/A.sqlite').unlink()
+    elif defect == 'extra':
+        (tmp_path / 'extra.sqlite').write_bytes(b'private-extra-payload')
+    else:
+        (tmp_path / 'reports-uiux/A.sqlite').write_bytes(b'Private-synthetic-payload')
+    with pytest.raises(pytest.fail.Exception, match='Retained asset') as failure:
+        _assert_retained_snapshot(tmp_path, snapshot)
+    assert len(str(failure.value)) < 400
+    assert 'synthetic-payload' not in str(failure.value)
+    assert 'private-extra-payload' not in str(failure.value)
+
+
 def png_bytes(width=64, height=64):
     def chunk(kind, body):
         return struct.pack('>I', len(body)) + kind + body + struct.pack('>I', binascii.crc32(kind + body) & 0xffffffff)
@@ -947,8 +983,7 @@ def test_actual_three_slices_and_independent_retained_assets(qapplication_sessio
     retained = tmp_path / 'independent-retained'
     retained.mkdir(mode=0o700)
     host._write_uiux_snapshot(retained, snapshot)
-    assert {str(path.relative_to(retained)): path.read_bytes()
-            for path in retained.rglob('*') if path.is_file()} == snapshot
+    _assert_retained_snapshot(retained, snapshot)
     reread = uiux.load_json(retained / 'uiux-observation.json')
     assert reread == value
     uiux.verify(retained, reread, oracle, **options)
