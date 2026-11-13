@@ -242,8 +242,9 @@ class _Journey:
             self.idle(dialog)
             self.select(dialog.matching_list, 'East')
             dialog.matching_search.setText('West')
+            self.key(dialog.matching_search, 'Return')
             self.idle(dialog)
-            _require('1 hidden selected' in dialog.value_scope_label.text()
+            _require(dialog.isVisible() and '1 hidden selected' in dialog.value_scope_label.text()
                      and dialog.get_column_filters()[0].selected_values == ('East',))
             if capture:
                 self.take('filter-scope', dialog)
