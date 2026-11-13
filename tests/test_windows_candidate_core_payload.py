@@ -35,10 +35,10 @@ def _payload():
             "group_analysis_status": "insufficient_groups",
         },
         "artifacts": {
-            key: {"path": ("uiux-observation.json" if key == "uiux_evidence" else key + suffix), "sha256": "2" * 64}
+            key: {"path": ("main-html.zip" if key == "main_html" else "uiux-observation.json" if key == "uiux_evidence" else key + suffix), "sha256": "2" * 64}
             for key, suffix in zip(
                 driver.ARTIFACTS,
-                (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json"),
+                (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json", ".zip"),
                 strict=True,
             )
         },
@@ -103,3 +103,10 @@ def test_ocr_fixture_staging_preserves_pinned_bytes_and_rejects_mutation(tmp_pat
     (folder / FIXTURE_NAME).write_bytes(b"changed synthetic input")
     with pytest.raises(driver.CandidateFailure, match="prepared_ocr_fixture_hash_mismatch"):
         driver._stage_ocr_fixture(shadow, private)
+
+
+def test_old_core_receipt_cannot_omit_main_html_cases():
+    payload = _payload()
+    del payload["artifacts"]["main_html"]
+    with pytest.raises(driver.CandidateFailure, match="missing_scenario_artifact"):
+        driver._validate_core_result(payload)

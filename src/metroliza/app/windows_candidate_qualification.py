@@ -31,7 +31,7 @@ FAILURE_STAGES = frozenset({
     "ocr_asset_validation", "ocr_fixture_inspection", "ocr_parser_construction",
     "ocr_parser_execution", "ocr_onnxruntime_import", "ocr_rapidocr_import",
     "ocr_engine_construction", "ocr_engine_inference", "ocr_result_normalization",
-    "ocr_result_validation", "reopen", "tabular", "xlsx",
+    "ocr_result_validation", "reopen", "tabular", "xlsx", "main_html",
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
@@ -640,6 +640,20 @@ def _run_uiux_slice(child, fixtures, receipt):
     receipt['facets'].update(dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed'))
 
 
+def _run_main_html_slice(child, receipt):
+    from metroliza.app.windows_candidate_main_html import FACETS, run_main_html_checks
+
+    try:
+        artifact = run_main_html_checks(
+            child, child / "reports.sqlite", source_sha=receipt["source_sha"],
+            packaged=receipt["packaged"],
+        )
+    except Exception:
+        raise ScenarioFailure("main_html_checks_failed") from None
+    receipt["artifacts"]["main_html"] = artifact
+    receipt["facets"].update(dict.fromkeys(FACETS, "passed"))
+
+
 def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.bootstrap import get_or_create_qapplication
     # Each stage closes its own windows. Keep their shared application alive
@@ -671,6 +685,8 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     receipt["artifacts"]["database"]["sha256"] = reopened_hash
     receipt["reopen_database"] = reopened["database"]
     receipt["facets"].update(reopened["facets"])
+    _record_core_stage(root, receipt, "main_html")
+    _run_main_html_slice(child, receipt)
     tabular_file = root / receipt["relative_artifact_dir"] / "tabular.json"
     _record_core_stage(root, receipt, "tabular")
     capture_tabular_w05(fixtures, tabular_file)

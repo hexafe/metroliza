@@ -235,6 +235,7 @@ def test_core_execution_preserves_inference_substage_before_group_computation(tm
     # and the actual failed-receipt projection on both old and new sources.
     monkeypatch.setattr(producer, "_run_core", lambda *args: None)
     monkeypatch.setattr(producer, "_run_ocr_slice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(producer, "_run_main_html_slice", lambda *args: None)
     monkeypatch.setattr(producer, "capture_tabular_w05", lambda *args: None)
     monkeypatch.setattr(producer, "_sha256", lambda *args: digest)
     monkeypatch.setattr(producer.shutil, "copyfile", lambda *args: None)
@@ -766,8 +767,8 @@ def payload():
         "native_observation": native_observation(),
         "facets": {**{key: "passed" for key in driver.REQUIRED_CHECKS}, "group_analysis_status": "insufficient_groups"},
         "artifacts": {
-            key: {"path": ("uiux-observation.json" if key == "uiux_evidence" else key + extension), "sha256": "2" * 64}
-            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json"), strict=True)
+            key: {"path": ("main-html.zip" if key == "main_html" else "uiux-observation.json" if key == "uiux_evidence" else key + extension), "sha256": "2" * 64}
+            for key, extension in zip(driver.ARTIFACTS, (".sqlite", ".xlsx", ".json", ".json", ".xlsx", ".sqlite", ".json", ".json", ".zip"), strict=True)
         },
     }
 
@@ -1044,6 +1045,8 @@ def _complete_synthetic_artifacts(tmp_path):
     shutil.copyfile(retained, child / "literal_workbook.xlsx")
     create_inference_case(child / "inference_database.sqlite", child / "group_inference.json")
     (child / "uiux-observation.json").write_text("{}")
+    from tests.test_windows_candidate_main_html import write_main_html_archive
+    write_main_html_archive(child / "main-html.zip", source=SHA, packaged=True)
     for record in sample["artifacts"].values():
         record["sha256"] = driver._hash(child / record["path"])
     import hashlib
@@ -1079,7 +1082,7 @@ def test_verified_preserved_copy_remains_readable_and_matches_oracle(tmp_path):
             "path": "dashboard.html", "sha256": sample["ui_observation"]["evidence"]["dashboard_sha256"],
         },
     }
-    assert len(list(output.iterdir())) == 10
+    assert len(list(output.iterdir())) == 11
 
 
 @pytest.mark.parametrize("suffix", ["-wal", "-shm", "-journal"])

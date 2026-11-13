@@ -29,7 +29,8 @@ def _artifact_paths(directory, records):
     for key, record in records.items():
         if (type(record) is not dict or set(record) != {"path", "sha256"}
                 or type(record["path"]) is not str
-                or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}\.(json|sqlite|xlsx|html)", record["path"]) is None
+                or (record["path"] != "main-html.zip" if key == "main_html" else
+                    re.fullmatch(r"[a-z][a-z0-9_-]{0,63}\.(json|sqlite|xlsx|html)", record["path"]) is None)
                 or record["path"] in seen):
             raise core.CandidateFailure("combined_artifact_path_invalid")
         if key == "uiux_evidence" and record["path"] != "uiux-observation.json":
@@ -50,6 +51,7 @@ def _expected_host_identity():
         "driver_sha256": "qualify_windows_candidate_core.py",
         "ocr_verifier_sha256": "verify_windows_candidate_ocr.py",
         "browser_verifier_sha256": "verify_windows_candidate_dashboard.py",
+        "main_html_verifier_sha256": "verify_windows_candidate_main_html.py",
         "closeout_verifier_sha256": "verify_windows_candidate_closeout.py",
         "literal_xlsx_verifier_sha256": "windows_candidate_xlsx.py",
         "inference_oracle_sha256": "synthetic-inference-oracle.json",
@@ -86,6 +88,7 @@ def _validate_run(directory, package, head, tree, scale, mode):
     value = core._json(path)
     _validate_run_identity(value, package, head, tree, scale, mode)
     artifacts = _artifact_paths(directory, value.get("artifacts"))
+    core._verify_main_html(artifacts["main_html"], source=head, packaged=True)
     core._validate_native_observation(core._json(artifacts["native_evidence"]), packaged=True, expected_mode=mode)
     core._validate_ocr_observation(core._json(artifacts["ocr_evidence"]), packaged=True)
     core._validate_closeout_observation(core._json(artifacts["closeout_evidence"]), packaged=True, expected_dpr=float(scale))

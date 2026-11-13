@@ -61,7 +61,7 @@ def _prepared(tmp_path):
         directory.mkdir()
         artifacts = {}
         for key in sorted(final.ARTIFACT_KEYS):
-            path = directory / ("uiux-observation.json" if key == "uiux_evidence" else key + ".json")
+            path = directory / ("main-html.zip" if key == "main_html" else "uiux-observation.json" if key == "uiux_evidence" else key + ".json")
             value = {}
             if key == "uiux_evidence":
                 from tests.test_windows_candidate_uiux import write_complete_uiux
@@ -74,7 +74,10 @@ def _prepared(tmp_path):
                 value = ocr_observation()
             elif key == "process_evidence":
                 value = _verified_ocr_topology()
-            if key in {"database", "before_reopen_database"}:
+            if key == "main_html":
+                from tests.test_windows_candidate_main_html import write_main_html_archive
+                write_main_html_archive(path, source=HEAD, packaged=True)
+            elif key in {"database", "before_reopen_database"}:
                 with closing(sqlite3.connect(path)) as connection, connection:
                     connection.execute("CREATE TABLE synthetic_protocol (value INTEGER)")
                     connection.execute("INSERT INTO synthetic_protocol VALUES (1)")
@@ -330,3 +333,23 @@ def test_passed_component_retained_beneath_failed_host_never_finalizes(tmp_path)
     with pytest.raises((ValueError, OSError, RuntimeError)):
         final.finalize(root, HEAD, TREE)
     assert not (root / 'combined-candidate-receipt.json').exists()
+
+
+def test_combined_finalizer_rejects_missing_main_html_case_even_with_rehashed_zip(tmp_path):
+    from scripts import verify_windows_candidate_main_html as html_verifier
+    from tests.test_windows_candidate_main_html import _zip
+
+    root = _prepared(tmp_path)
+    directory = root / 'core-dpr-1.0'
+    archive = directory / 'main-html.zip'
+    files = html_verifier._members(archive.read_bytes())
+    record = json.loads(files['receipt.json'])
+    del record['cases']['long_html']
+    files['receipt.json'] = json.dumps(record).encode()
+    archive.write_bytes(_zip(files))
+    path = directory / 'core-driver-receipt.json'
+    receipt = core._json(path)
+    receipt['artifacts']['main_html']['sha256'] = core._hash(archive)
+    _write(path, receipt)
+    with pytest.raises(core.CandidateFailure, match='main_html_retained_verification_failed'):
+        final.finalize(root, HEAD, TREE)
