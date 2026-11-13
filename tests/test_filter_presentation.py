@@ -492,6 +492,7 @@ def test_reports_compact_window_keeps_complete_footer_targets_and_wrapped_scope(
 
 
 def test_reports_compact_real_export_owner_selected_scope_fits_footer_ancestors(scoped_header_dialog, app):
+    from PyQt6 import sip
     from PyQt6.QtCore import QPoint, QRect, QSize
     from metroliza.ui.export_dialog import ExportDialog
     from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
@@ -539,7 +540,9 @@ def test_reports_compact_real_export_owner_selected_scope_fits_footer_ancestors(
         assert owner.filter_state is applied and source_ids(editor) == {2}
         editor.cancel_button.click()
     finally:
-        if editor is not None:
-            editor.close()
+        if editor is not None and not sip.isdeleted(editor):
+            # Failure teardown must not enter a new dirty-draft confirmation.
+            editor._stop_value_load()
+            QDialog.reject(editor)
         owner.close()
         wait_until(app, lambda: not _RUNNING_LOADERS)
