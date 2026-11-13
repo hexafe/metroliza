@@ -618,3 +618,69 @@ def test_grouping_small_screen_keeps_lists_separate_and_footer_reachable(
         window._reset_grouping_draft(refresh=False)
         window.close()
         qapplication_session.setFont(previous_font)
+
+
+@pytest.mark.parametrize('family', ['DejaVu Sans', 'Liberation Sans'])
+def test_sqlite_member_labels_and_pager_fit_actual_application_fonts(
+        qapplication_session, tmp_path, monkeypatch, family):
+    import json
+    import os
+    from pathlib import Path
+    from PyQt6.QtCore import QPoint, QRect
+    from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo
+
+    if family not in QFontDatabase.families():
+        pytest.skip(f'Installed font family unavailable for this NEW characterization: {family}')
+    previous = qapplication_session.font()
+    original = _assert_full_member_labels_visible
+    observed = []
+
+    def inspect(window, artifact_dir, key, *, expected_width):
+        # Delegate every original literal/geometry/text guard before inspecting
+        # the additional real pager surface. The caller safely catches failures.
+        original(window, artifact_dir, key, expected_width=expected_width)
+        actual = [QFontInfo(font).family() for font in (
+            qapplication_session.font(), window.font(), window.group_members_list.font())]
+        assert actual == [family] * 3
+        assert all(QFontInfo(font).pointSizeF() == 9 for font in (
+            qapplication_session.font(), window.font(), window.group_members_list.font()))
+        scroll = window.grouping_body_scroll
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert scroll.widget().width() <= scroll.viewport().width()
+        scroll.ensureWidgetVisible(window.page_jump_input)
+        qapplication_session.processEvents()
+        buttons = (window.first_page_button, window.previous_page_button, window.next_page_button,
+                   window.last_page_button, window.jump_page_button)
+        controls = (*buttons, window.page_jump_input, window.selector_page_label)
+        bounds = [QRect(control.mapTo(scroll.viewport(), QPoint()), control.size()) for control in controls]
+        assert all(control.isVisibleTo(window) for control in controls)
+        assert all(scroll.viewport().rect().contains(rect) for rect in bounds)
+        assert all(not first.intersects(second) for index, first in enumerate(bounds) for second in bounds[index + 1:])
+        assert all(button.height() >= 36 and button.width() >= button.minimumSizeHint().width() for button in buttons)
+        assert window.page_jump_input.width() == 64
+        screen = window.screen().availableGeometry()
+        facts = {'font': actual, 'points': 9, 'screen': [screen.width(), screen.height()],
+                 'platform': qapplication_session.platformName(), 'dpr': window.devicePixelRatioF(),
+                 'window': [window.width(), window.height()],
+                 'body_width': scroll.widget().width(), 'viewport_width': scroll.viewport().width(),
+                 'horizontal_maximum': scroll.horizontalScrollBar().maximum(),
+                 'pager_bounds': [[r.x(), r.y(), r.width(), r.height()] for r in bounds]}
+        observed.append(facts)
+        print('GROUPING_FONT_FIT ' + json.dumps(facts))
+        target = os.environ.get('METROLIZA_GROUPING_FONT_ARTIFACT_DIR')
+        if target:
+            directory = Path(target)
+            directory.mkdir(parents=True, exist_ok=True)
+            stem = 'grouping-' + family.lower().replace(' ', '-')
+            assert window.grab().save(str(directory / (stem + '.png')))
+            (directory / (stem + '.json')).write_text(json.dumps(facts, indent=2) + '\n')
+
+    monkeypatch.setitem(globals(), '_assert_full_member_labels_visible', inspect)
+    try:
+        qapplication_session.setFont(QFont(family, 9))
+        assert QFontInfo(qapplication_session.font()).family() == family
+        test_sqlite_search_return_stays_open_without_committing_parent(
+            qapplication_session, tmp_path, 'Return')
+        assert len(observed) == 1
+    finally:
+        qapplication_session.setFont(previous)

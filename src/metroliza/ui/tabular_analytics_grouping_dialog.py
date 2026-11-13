@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QGridLayout,
     QLayout,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -484,8 +483,11 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.remove_column_button, name="Remove current selected grouping column")
         columns_grid.addWidget(self.add_column_button, 3, 0)
         columns_grid.addWidget(self.remove_column_button, 3, 1)
-        columns_grid.addWidget(QLabel("List focus: E adds the current column"), 4, 0)
-        columns_grid.addWidget(QLabel("List focus: R removes the current column"), 4, 1)
+        for column, text in enumerate(("List focus: E adds the current column",
+                                       "List focus: R removes the current column")):
+            legend = QLabel(text)
+            legend.setWordWrap(True)
+            columns_grid.addWidget(legend, 4, column)
         columns_grid.setRowStretch(2, 1)
         columns_grid.setColumnStretch(0, 1)
         columns_grid.setColumnStretch(1, 1)
@@ -499,7 +501,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         selector_column = QVBoxLayout(selector_widget)
         selector_column.setContentsMargins(0, 0, 0, 0)
         selector_column.setSpacing(6)
-        selector_column.addWidget(QLabel("Matching rows: search or advanced expression"))
+        selector_heading = QLabel("Matching rows: search or advanced expression")
+        selector_heading.setWordWrap(True)
+        selector_column.addWidget(selector_heading)
         self.selector_search = _GroupingInputLineEdit()
         self.selector_search.setPlaceholderText(
             "Search values, or enter an advanced expression such as Supplier=SUPPLIER AND Value > 1"
@@ -522,8 +526,9 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self.selector_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         configure_accessibility(self.selector_list, name="CSV grouping row selectors")
         selector_column.addWidget(self.selector_list, 1)
-        selector_paging = QHBoxLayout()
-        selector_paging.setSpacing(8)
+        selector_paging = QGridLayout()
+        selector_paging.setHorizontalSpacing(8)
+        selector_paging.setVerticalSpacing(6)
         self.first_page_button = QPushButton("First")
         self.previous_page_button = QPushButton("Previous")
         self.next_page_button = QPushButton("Next")
@@ -541,15 +546,15 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.page_jump_input, name="Jump to matching rows page")
         configure_accessibility(self.jump_page_button, name="Jump to matching rows page button")
         configure_accessibility(self.selector_page_label, name="Matching rows page")
-        selector_paging.addStretch(1)
-        selector_paging.addWidget(self.first_page_button)
-        selector_paging.addWidget(self.previous_page_button)
-        selector_paging.addWidget(self.selector_page_label)
-        selector_paging.addWidget(self.next_page_button)
-        selector_paging.addWidget(self.last_page_button)
-        selector_paging.addWidget(self.page_jump_input)
-        selector_paging.addWidget(self.jump_page_button)
-        selector_paging.addStretch(1)
+        # Separate navigation from page entry so the pane can share a compact
+        # viewport with groups and members without horizontal body overflow.
+        for column, button in enumerate((self.first_page_button, self.previous_page_button,
+                                         self.next_page_button, self.last_page_button)):
+            selector_paging.addWidget(button, 0, column)
+        selector_paging.addWidget(self.selector_page_label, 1, 0, 1, 2)
+        selector_paging.addWidget(self.page_jump_input, 1, 2)
+        selector_paging.addWidget(self.jump_page_button, 1, 3)
+        selector_paging.setColumnStretch(1, 1)
         selector_column.addLayout(selector_paging)
         selector_column.setStretch(3, 1)
         selector_column.setStretch(4, 0)
@@ -592,6 +597,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         )
         members_column.addWidget(self.remove_from_group_button)
         self.group_member_command_legend = QLabel("List focus: R removes selected members")
+        self.group_member_command_legend.setWordWrap(True)
         members_column.addWidget(self.group_member_command_legend)
         members_column.addWidget(self.group_members_list, 1)
         list_splitter.addWidget(members_widget)
