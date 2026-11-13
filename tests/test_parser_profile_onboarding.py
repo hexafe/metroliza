@@ -190,3 +190,44 @@ def test_profiles_small_window_keeps_status_next_and_close_accessible(window, qa
         assert window.rect().contains(control.rect().translated(control.mapTo(window, QPoint())))
         if tab == 1:
             assert not window.add_scroll_area.isAncestorOf(control)
+
+
+@pytest.mark.parametrize('tab', [0, 1])
+def test_profiles_compact_window_keeps_wrapped_status_pinned_while_form_scrolls(
+        window, qapplication_session, tab):
+    from PyQt6.QtCore import QRect
+
+    window.create_handoff_workspace()
+    window.check_handoff_package()
+    # A genuinely tall form must consume scroll range, including when its tab
+    # is inactive; it must not raise the surrounding window's minimum height.
+    window.add_scroll_area.widget().setMinimumHeight(1200)
+    window.task_tabs.setCurrentIndex(tab)
+    window.show()
+    qapplication_session.processEvents()
+    window.resize(620, 560)
+    qapplication_session.processEvents()
+    try:
+        assert (window.width(), window.height()) == (620, 560)
+        controls = (window.manage_status_label, window.refresh_button) if tab == 0 else (
+            window.stage_label, window.validation_status_label, window.next_action_label,
+            window.result_label, window.next_button,
+        )
+        for control in (*controls, window.close_button):
+            assert control.isVisibleTo(window)
+            assert window.rect().contains(QRect(control.mapTo(window, QPoint()), control.size()))
+        if tab == 1:
+            for label in (window.stage_label, window.validation_status_label,
+                          window.next_action_label, window.result_label):
+                assert label.height() >= label.heightForWidth(label.width())
+            scroll = window.add_scroll_area
+            assert scroll.verticalScrollBar().maximum() > 0
+            scroll.ensureWidgetVisible(window.repair_button)
+            qapplication_session.processEvents()
+            assert scroll.viewport().rect().contains(QRect(
+                window.repair_button.mapTo(scroll.viewport(), QPoint()), window.repair_button.size()))
+            assert window.repair_button.height() >= 36
+            assert window.next_button.height() >= 36
+        assert window.close_button.height() >= 36
+    finally:
+        window.close()

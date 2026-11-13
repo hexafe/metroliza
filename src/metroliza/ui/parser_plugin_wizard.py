@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QStyle,
+    QStyleOptionTabWidgetFrame,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -75,6 +77,33 @@ def _native_validation_widget(widget, cls, methods):
     if any(type(key) is not str for key in tuple(state)):
         return False
     return not any(name in state for name in methods)
+
+
+class _ProfileTaskTabs(QTabWidget):
+    """Let the existing form scroll instead of requiring its preferred height."""
+
+    def heightForWidth(self, width):
+        if width <= 0 or not self.count():
+            return super().heightForWidth(width)
+        option = QStyleOptionTabWidgetFrame()
+        self.initStyleOption(option)
+        # Style geometry must have a valid body even before the first show.
+        frame = self.style().pixelMetric(QStyle.PixelMetric.PM_DefaultFrameWidth, option, self)
+        option.rect.setWidth(width)
+        option.rect.setHeight(max(self.height(), self.tabBar().sizeHint().height() + 2 * frame + 1))
+        contents = self.style().subElementRect(QStyle.SubElement.SE_TabWidgetTabContents, option, self)
+        chrome = option.rect.height() - contents.height()
+        if contents.width() <= 0 or contents.height() <= 0 or chrome < 0:
+            return super().heightForWidth(width)
+        minimum = 0
+        for index in range(self.count()):
+            page = self.widget(index)
+            required = max(page.minimumHeight(), page.minimumSizeHint().height())
+            layout = page.layout()
+            if layout is not None and layout.hasHeightForWidth():
+                required = max(required, layout.minimumHeightForWidth(contents.width()))
+            minimum = max(minimum, required)
+        return chrome + minimum
 
 
 class _ProfileValidationThread(QThread):
@@ -157,7 +186,7 @@ class ParserPluginWizardDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Parser profiles manual", "parser_profiles")])
-        self.task_tabs = QTabWidget()
+        self.task_tabs = _ProfileTaskTabs()
         manage = QWidget()
         manage_layout = QVBoxLayout(manage)
         manage_layout.addWidget(section_label("Manage installed profiles"))

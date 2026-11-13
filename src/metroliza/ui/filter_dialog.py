@@ -416,8 +416,9 @@ class FilterDialog(QDialog):
         try:
             self.layout = QtWidgets.QVBoxLayout(self)
             attach_help_menu_to_layout(self.layout, self, [("Filtering manual", 'export_filtering')])
-            self.layout.setContentsMargins(10, 10, 10, 10)
-            self.layout.setSpacing(8)
+            # Keep the fixed actions and wrapped scope visible on a 480px-high screen.
+            self.layout.setContentsMargins(8, 8, 8, 8)
+            self.layout.setSpacing(4)
             ui_foundation.apply_metroliza_theme(self)
 
             self.layout.addWidget(self.draft_status_label)

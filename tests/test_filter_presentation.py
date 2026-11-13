@@ -460,3 +460,26 @@ def test_column_search_never_auto_selects_or_scans_date_source(app, tmp_path, mo
         editor.close()
         if loaded is not None:
             cleanup_tabular_load_result(loaded)
+
+
+def test_reports_compact_window_keeps_complete_footer_targets_and_wrapped_scope(app, monkeypatch):
+    from PyQt6.QtCore import QPoint, QRect, QSize
+
+    monkeypatch.setattr(FilterDialog, 'populate_list_widgets', lambda self: None)
+    editor = FilterDialog()
+    editor.show()
+    wait_until(app, lambda: editor._metroliza_window_size_config['finalized'])
+    editor.resize(720, 480)
+    app.processEvents()
+    try:
+        assert editor.size() == QSize(720, 480)
+        for button in (editor.apply_button, editor.cancel_button, editor.reset_button,
+                       editor.select_today_button, editor.select_beginning_button, editor.has_nok_button):
+            assert button.isVisibleTo(editor) and button.height() >= 36
+            assert editor.rect().contains(QRect(button.mapTo(editor, QPoint()), button.size()))
+        for label in (editor.draft_status_label, editor.filter_summary_label):
+            assert label.isVisibleTo(editor)
+            assert label.height() >= label.heightForWidth(label.width())
+            assert editor.rect().contains(QRect(label.mapTo(editor, QPoint()), label.size()))
+    finally:
+        editor.close()
