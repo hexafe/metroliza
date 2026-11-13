@@ -2454,6 +2454,7 @@
         "scripts/qualify_windows_candidate_core.py",
         "scripts/finalize_windows_candidate_receipts.py",
         "scripts/verify_windows_candidate_closeout.py",
+        "scripts/verify_windows_candidate_uiux.py",
         "scripts/synthetic-report-oracle.json",
         "scripts/verify_synthetic_oracle.py",
         "scripts/synthetic-inference-oracle.json",
