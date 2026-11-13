@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, SystemTime};
 
 use metroliza_launcher::archive::Payload;
@@ -15,12 +16,21 @@ use metroliza_launcher::pack::{pack, PackOptions};
 const LAUNCHER: &str = env!("CARGO_BIN_EXE_metroliza-launcher");
 const TEST_ENTRY: &str = env!("CARGO_BIN_EXE_launcher-test-entry");
 
+// A foreign test-thread fork can inherit live cache locks until its child execs.
+// Keep process creation out of the library lifecycle's cache/cleanup critical section.
+static TEST_FORK_GATE: Mutex<()> = Mutex::new(());
+
+fn test_fork_guard() -> MutexGuard<'static, ()> {
+    TEST_FORK_GATE.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Run `command`, retrying while the freshly packed executable is still "busy".
 ///
 /// On Linux, a parallel test thread that forks between this test writing the EXE and executing
 /// it briefly holds the write descriptor (until its child execs), so `execve` fails with
 /// ETXTBSY ("Text file busy"). That is a test-harness race, not launcher behaviour.
 fn status_retrying_busy(command: &mut Command) -> std::process::ExitStatus {
+    let _fork = test_fork_guard();
     for _ in 0..100 {
         match command.status() {
             Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
@@ -95,6 +105,7 @@ fn set_completed(root: &Path, dir_name: &str, age_secs: u64) {
 
 #[test]
 fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
+    let _fork = test_fork_guard();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     fs::create_dir(&root).unwrap();
@@ -155,7 +166,11 @@ fn library_lifecycle_cold_warm_corrupt_repair_upgrade() {
         let current = r.dir_name.clone();
         drop(r);
         set_completed(&root, &current, age);
-        cleanup_old_versions(&root, &current);
+        let report = cleanup_old_versions(&root, &current);
+        assert!(
+            !report.busy && report.skipped_in_use.is_empty() && report.failed.is_empty(),
+            "lifecycle cleanup for {current}: {report:?}"
+        );
     }
     assert!(
         !root.join("1.0_11111111").exists(),
@@ -544,14 +559,17 @@ fn a_second_instance_shows_no_splash_and_touches_no_cache() {
     let first_log = tmp.path().join("first.log");
     let record_arg = record.to_str().unwrap();
     let stop_arg = stop.to_str().unwrap();
-    let mut first = Command::new(&exe)
-        .args(["--record", record_arg, "--stop-file", stop_arg, "--sleep-ms", "60000"])
-        .current_dir(exe.parent().unwrap())
-        .env("METROLIZA_RUNTIME_ROOT", &root)
-        .env("METROLIZA_LAUNCHER_LOG", &first_log)
-        .env("METROLIZA_LAUNCHER_NO_UI", "1")
-        .spawn()
-        .unwrap();
+    let mut first = {
+        let _fork = test_fork_guard();
+        Command::new(&exe)
+            .args(["--record", record_arg, "--stop-file", stop_arg, "--sleep-ms", "60000"])
+            .current_dir(exe.parent().unwrap())
+            .env("METROLIZA_RUNTIME_ROOT", &root)
+            .env("METROLIZA_LAUNCHER_LOG", &first_log)
+            .env("METROLIZA_LAUNCHER_NO_UI", "1")
+            .spawn()
+            .unwrap()
+    };
     let _stop = StopOrphan(stop.clone());
     wait_for_record(&record, "started");
     let second = run_launcher(&exe, &root, &log, &["--record", record_arg, "--sleep-ms", "0"]);
