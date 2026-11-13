@@ -8,10 +8,11 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 
 ## Repository and release status
 
-The current RC source line is `release/2026.09-rc1`, cut from accepted develop under
+The current RC source line is `rc` (formerly `release/2026.09-rc1`), cut from accepted development under
 [#1153](https://github.com/hexafe/metroliza/issues/1153). Final packaged Windows acceptance and
 the final build identity remain pending. See [release status](docs/release_checks/release_status.md).
-The June RC2 refs are retained historical evidence; master promotion is separately gated.
+Normal work targets `dev`; `main` remains the production/history default. Historical June RC2
+evidence is preserved through immutable recovery refs; promotion to `main` is separately gated.
 
 ## Quickstart
 

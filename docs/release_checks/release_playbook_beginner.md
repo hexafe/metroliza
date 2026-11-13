@@ -19,12 +19,12 @@ Example target release: `v2026.05`.
 
 1. **Feature freeze declared**
    - Product/Release Manager announces freeze date/time.
-   - Engineering freezes the approved release scope on `develop`; later routine development stays
+   - Engineering freezes the approved release scope on `dev`; later routine development stays
      out of the release branch.
    - Engineering Lead confirms the release scope (what is in, what is out).
 
-2. **Cut RC branch from `develop`**
-   - Branch name: `release/2026.05-rc1`.
+2. **Prepare `rc` from approved `dev` scope**
+   - Branch name: `rc`; prepare the approved scope through a reviewed release PR.
    - This branch now holds only stabilization work (bug fixes, release blockers, docs/tests updates tied to release readiness).
 
 3. **Open testing readiness (before broad RC testing)**
@@ -45,12 +45,12 @@ Example target release: `v2026.05`.
      [product/data-integrity](./release_candidate_checklist.md#6-product-and-data-integrity-smoke),
      and [security](./release_candidate_checklist.md#7-security-and-privacy-gate) gates.
    - Bugs found during RC testing are fixed on short-lived branches that target the RC branch.
-   - Every accepted RC fix is reconciled into `develop` through review.
+   - Every accepted RC fix is reconciled into `dev` through review.
    - Product/Release Manager tracks blocker status and go/no-go criteria.
 
-5. **If issues are found, continue on RC1 or cut RC2**
-   - Minor/isolated fixes: keep patching `release/2026.05-rc1`.
-   - Significant churn or reset of test confidence: cut `release/2026.05-rc2` from the current stabilized RC tip and retest.
+5. **If issues are found, continue on RC1 or qualify RC2**
+   - Minor/isolated fixes: keep patching `rc`.
+   - Significant churn or reset of test confidence: advance the same `rc` with reviewed fixes, assign a new candidate tag/evidence and retest.
 
 6. **Promotion decision and rollback readiness**
    - Complete the checklist's
@@ -62,13 +62,13 @@ Example target release: `v2026.05`.
    - Engineering confirms no open release blockers.
    - Product/Release Manager gives final release approval.
 
-7. **Merge the approved release branch into `master`**
+7. **Merge the approved release branch into `main`**
    - Merge the final RC branch only after the promotion decision and evidence review.
    - Verify release notes/changelog updates are present.
 
 8. **Tag the reviewed production commit and reconcile it**
-   - Create annotated tag `v2026.05` at the exact reviewed `master` merge commit.
-   - Reconcile the production result into `develop` through a reviewed PR.
+   - Create annotated tag `v2026.05` at the exact reviewed `main` merge commit.
+   - Reconcile the production result into `dev` through a reviewed PR.
 
 9. **Post-release communication**
    - Product/Release Manager announces release completion.
@@ -78,22 +78,21 @@ Example target release: `v2026.05`.
 
 ## 2) Exact Git command snippets
 
-> Replace `2026.05` and branch/tag names with your target release month.
+> Replace `2026.05` and tags with your target release month; keep the `main`/`dev`/`rc` branch roles.
 
-### A. Create RC branch
+### A. Prepare the candidate line
 
 ```bash
-git checkout develop
-git pull --ff-only origin develop
-git checkout -b release/2026.05-rc1
-git push -u origin release/2026.05-rc1
+# Prepare the approved dev scope on existing rc through a reviewed release PR.
+git checkout rc
+git pull --ff-only origin rc
 ```
 
 ### B. Fix RC issues on RC branch
 
 ```bash
-git checkout release/2026.05-rc1
-git pull --ff-only origin release/2026.05-rc1
+git checkout rc
+git pull --ff-only origin rc
 git checkout -b fix/<issue>-release-blocker
 # ... edit files ...
 git add -A
@@ -101,36 +100,33 @@ git commit -m "fix(rc): resolve blocker in export flow"
 git push -u origin fix/<issue>-release-blocker
 ```
 
-Open a reviewed PR from the fix branch to `release/2026.05-rc1`. After acceptance, reconcile the
-fix into `develop` through a separate reviewed PR.
+Open a reviewed PR from the fix branch to `rc`. After acceptance, reconcile the
+fix into `dev` through a separate reviewed PR.
 
-### C. Cut `rc2` (when needed)
+### C. Record a successor candidate (when needed)
 
-```bash
-git checkout release/2026.05-rc1
-git pull --ff-only origin release/2026.05-rc1
-git checkout -b release/2026.05-rc2
-git push -u origin release/2026.05-rc2
-```
+Keep the same `rc` branch. After reviewed fixes, assign the next candidate identity and new
+immutable `vYYYY.MM-rcN` tag through the approved release decision, then repeat qualification.
+Do not create another candidate branch or reuse the previous candidate evidence.
 
-### D. Merge the approved release branch into `master`
+### D. Merge the approved release branch into `main`
 
 ```bash
-git checkout master
-git pull --ff-only origin master
-git merge --no-ff release/2026.05-rc2 -m "merge: finalize v2026.05 from rc2"
-git push origin master
+git checkout main
+git pull --ff-only origin main
+git merge --no-ff rc -m "merge: finalize v2026.05 from rc"
+git push origin main
 ```
 
 ### E. Tag the reviewed production commit
 
 ```bash
-git checkout master
+git checkout main
 git tag -a v2026.05 -m "Release v2026.05"
 git push origin v2026.05
 ```
 
-Then reconcile the tagged production result into `develop` through a reviewed PR.
+Then reconcile the tagged production result into `dev` through a reviewed PR.
 
 ---
 

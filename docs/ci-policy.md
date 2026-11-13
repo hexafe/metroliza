@@ -7,10 +7,14 @@ This policy defines the **required CI checks** and Tier-0 selection implemented 
 
 - CI is triggered on:
   - every `pull_request`, without path or target-branch filtering;
-  - direct `push` to `master`, `main`, `develop`, `rc2`, `integrate/**`, `release/**`,
-    `hotfix/**` and `build/**` (RC artifacts are cut from build branches), including
-    nested names;
+  - direct `push` to `main`, `dev`, `rc`, plus compatibility literals `master`, `develop`, `rc2`,
+    and patterns `integrate/**`, `release/**`, `hotfix/**` and `build/**` (RC artifacts are cut
+    from build branches), including nested names;
   - `workflow_dispatch`, with the existing opt-in qualification inputs.
+- The final long-lived roles are `main` (production/history), `dev` (daily integration), and
+  `rc` (active candidate). Legacy literals and integration/release patterns keep transitional
+  pushes covered; they do not authorize creating retired branches or require a later config-only
+  cleanup. The remote inventory is `main`, `dev`, `rc` plus genuinely active unmerged PR heads.
 - Topic branches use PR CI only. A topic push without an open PR has no automatic CI;
   open a PR or dispatch CI to qualify it. This removes duplicate topic push + PR workloads
   without querying PR state, changing concurrency keys, or losing integration-push CI.
