@@ -647,7 +647,9 @@ def test_sqlite_member_labels_and_pager_fit_actual_application_fonts(
         scroll = window.grouping_body_scroll
         assert scroll.horizontalScrollBar().maximum() == 0
         assert scroll.widget().width() <= scroll.viewport().width()
-        scroll.ensureWidgetVisible(window.page_jump_input)
+        from tests.qt_key_input import activate_for_key
+        activate_for_key(qapplication_session, scroll)
+        QTest.keyClick(scroll, Qt.Key.Key_End)
         qapplication_session.processEvents()
         buttons = (window.first_page_button, window.previous_page_button, window.next_page_button,
                    window.last_page_button, window.jump_page_button)
