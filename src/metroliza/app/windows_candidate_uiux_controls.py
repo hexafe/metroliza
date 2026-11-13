@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 import hashlib
+from importlib import import_module
 import json
 import math
 import os
@@ -228,7 +229,7 @@ class _Journey:
 
     def start(self):
         from metroliza.app.ui_entrypoint import load_main_window_factory
-        from metroliza.ui.ui_preferences import UiPreferences
+        UiPreferences = import_module('metroliza.ui.ui_preferences').UiPreferences
         self.window = load_main_window_factory()('UIUX controls', None, ui_preferences=UiPreferences(self.settings))
         self.window.show()
         self.workspace = self.window.launch_parsing_dialog()
@@ -438,8 +439,8 @@ class _Journey:
         from PyQt6.QtGui import QKeyEvent, QInputMethodEvent
         from PyQt6.QtTest import QTest, QSignalSpy
         from metroliza.tabular.tabular_analytics_service import load_tabular_analytics_file
-        from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
-        from metroliza.ui.industrial_analytics_dialog import MetricSelectionDialog
+        TabularAnalyticsGroupingDialog = import_module('metroliza.ui.tabular_analytics_grouping_dialog').TabularAnalyticsGroupingDialog
+        MetricSelectionDialog = import_module('metroliza.ui.industrial_analytics_dialog').MetricSelectionDialog
         self.phase = 'keys'
         loaded = load_tabular_analytics_file(self.analysis, force_sqlite=True, reference_column='operator_lot_code', timestamp_column='captured_at')
         self.loaded = loaded

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import hashlib
+from importlib import import_module
 import json
 import math
 import os
@@ -261,7 +262,7 @@ class _Journey:
             timer.deleteLater()
 
     def filters(self):
-        from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+        TabularAnalyticsFilterDialog = import_module('metroliza.ui.tabular_analytics_filter_dialog').TabularAnalyticsFilterDialog
         self.phase = 'filter'
         counts = [self.csv._tabular_filtered_row_count()]
         def east(dialog, capture=False):
@@ -304,7 +305,7 @@ class _Journey:
         from PyQt6.QtCore import QSettings
         from PyQt6.QtTest import QSignalSpy
         from metroliza.app.ui_entrypoint import load_main_window_factory
-        from metroliza.ui.ui_preferences import UiPreferences
+        UiPreferences = import_module('metroliza.ui.ui_preferences').UiPreferences
         from metroliza.industrial import industrial_workers as workers
         from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
         from metroliza.app.windows_candidate_lifecycle_checks import _logical_sha256
@@ -475,7 +476,7 @@ class _Journey:
         import pandas as pd
         from PyQt6.QtWidgets import QInputDialog, QLineEdit, QDialogButtonBox
         from metroliza.tabular.tabular_analytics_service import load_tabular_analytics_file
-        from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog
+        TabularAnalyticsGroupingDialog = import_module('metroliza.ui.tabular_analytics_grouping_dialog').TabularAnalyticsGroupingDialog
         self.phase = 'grouping'
         self.csv.clear_filter_button.click()
         source = self.child / 'grouping.csv'
