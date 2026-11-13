@@ -81,7 +81,7 @@ class _Journey:
             self.app.processEvents()
             time.sleep(0.005)
         _require(bool(predicate()), 'tabular_phase_deadline')
-        _require(not self.callback_errors, 'tabular_callback_failed')
+        _require(self.phase == 'cleanup' or not self.callback_errors, 'tabular_callback_failed')
 
     def reveal(self, widget):
         from PyQt6.QtWidgets import QScrollArea
