@@ -3,7 +3,7 @@
 Status: Active product specification
 Owner: Product/architecture maintainer  
 Last reviewed: 2026-08-23
-Applies to: product scope integrated through `develop`; release claims remain evidence-controlled
+Applies to: product scope integrated through `dev`; release claims remain evidence-controlled
 Product backlog epic: [#925](https://github.com/hexafe/metroliza/issues/925)
 Feature catalog: [feature_catalog.md](./feature_catalog.md)
 
@@ -16,20 +16,26 @@ GitHub Issues carry implementation work. The linked feature Issue is authoritati
 scope and acceptance criteria of an in-flight capability. This specification remains the stable
 product-level contract across individual implementation Issues and pull requests.
 
-The accepted branch policy separates development from release evidence:
+The accepted [branching strategy](../release_checks/branching_strategy.md) under
+[#960](https://github.com/hexafe/metroliza/issues/960) separates current branch roles from release evidence:
 
-- `develop` is the canonical branch for normal Issue-driven development and integration;
-- `release/2026.09-rc1` is the current RC source/evidence line under #1153; final packaged qualification is pending;
-- the 2026.06 RC2 cycle closed without a release (#901); `release/2026.06-rc2` was retired (recovery tag `archive/2026.06-rc2/final`);
-- `rc2` is a temporary historical transition/reference alias, not a routine development base;
-- `master` remains the current production/history anchor and is unchanged pending the separate
-  [#901 release-promotion decision](https://github.com/hexafe/metroliza/issues/901).
+- `dev` is the canonical branch for normal Issue-driven development and integration;
+- `rc` is the current frozen candidate source/evidence line, continuing the original
+  `release/2026.09-rc1` source cut under #1153; exact packaged/manual qualification remains separate;
+- `main` is the GitHub default and production/history anchor; renaming it from `master` does not
+  promote development or candidate product code;
+- historical source/build receipts keep their original names and SHAs. The June RC2 recovery tag
+  `archive/2026.06-rc2/final` preserves historical source, not an accepted release. The historical
+  `rc2` name was renamed to `rc` to preserve hosted-blob links; follow #960's redirect and recovery controls.
 
-The authoritative branch rationale and release evidence remain in
-[`docs/release_checks/`](../release_checks/), especially the
-[branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md) and
-[release status](../release_checks/release_status.md). Product maturity statements here describe
-scope and implementation maturity; they do not declare promotion or release.
+The [historical branch transition decision](../release_checks/rc2_branch_transition_decision_2026-08-22.md)
+and [release status](../release_checks/release_status.md) retain their dated evidence. Product maturity
+statements here describe scope and implementation maturity; they do not declare packaged/manual
+acceptance, promotion or release. Promotion to `main` still requires the applicable gates in the
+[current release status](../release_checks/release_status.md) and
+[release candidate checklist](../release_checks/release_candidate_checklist.md), plus the release-owner
+decision. References to [#901](https://github.com/hexafe/metroliza/issues/901) identify the historical
+June RC2 cycle, closed without a release; that closure is not current candidate approval.
 
 ## 2. Product definition
 
@@ -852,9 +858,12 @@ No feature is claimed in a supported release only because a branch or local test
 
 The first stable post-RC line requires:
 
-1. The accepted #900 branch decision remains followed: normal work integrates through `develop`
-   while release evidence stays authoritative on the frozen candidate line.
-2. #901 either closes every manual promotion gate or explicitly blocks release.
+1. The current [branching strategy](../release_checks/branching_strategy.md) under
+   [#960](https://github.com/hexafe/metroliza/issues/960) is followed: normal work integrates through
+   `dev`, frozen candidate evidence belongs to `rc`, and promotion to `main` remains separately gated.
+2. The [current release status](../release_checks/release_status.md) and
+   [release candidate checklist](../release_checks/release_candidate_checklist.md) must close every
+   applicable promotion gate or explicitly block release; the historical #901 closure is not approval.
 3. #912 provides one reproducible end-to-end reference workflow.
 4. #915/#916/#917 establish the canonical core contracts and at least one headless vertical slice.
 5. Major release-candidate features claimed for the release meet their tracking-Issue acceptance
