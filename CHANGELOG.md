@@ -1,6 +1,8 @@
 # Changelog (for end users)
 
 ## 2026.09 RC1 (build 261115) — current version
+- Return or Enter searches CSV filter values without applying the draft; use Apply or Ctrl+S to commit it.
+- Compact CSV grouping wraps long hints, keeps paging controls together and makes footer actions reachable with Tab.
 - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace.
 - Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys.
 - After import, keep per-report saved, skipped and failed results in view, then review again before importing more.
