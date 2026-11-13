@@ -314,6 +314,17 @@ class _GroupingInputLineEdit(QLineEdit):
             event.accept()
 
 
+class _GroupingColumnsLayout(QGridLayout):
+    """Use real row minima before optional list preview height in the scroll body."""
+
+    def heightForWidth(self, width: int) -> int:
+        if width > 0 and self.count():
+            minimum = super().minimumHeightForWidth(width)
+            if minimum >= 0:
+                return max(minimum, self.minimumSize().height())
+        return super().heightForWidth(width)
+
+
 class TabularAnalyticsGroupingDialog(QDialog):
     """Create manual row groups from user-selected CSV/Excel selector columns."""
 
@@ -446,7 +457,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         layout.addWidget(self.context_status_label)
 
         column_area = QWidget()
-        columns_grid = QGridLayout(column_area)
+        columns_grid = _GroupingColumnsLayout(column_area)
         columns_grid.setContentsMargins(0, 0, 0, 0)
         columns_grid.setHorizontalSpacing(10)
         columns_grid.setVerticalSpacing(6)
@@ -900,14 +911,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         for widget, minimum_height in pane_specs:
             widget.setMinimumHeight(minimum_height)
             widget.setMinimumSize(widget.minimumWidth(), minimum_height)
-            # Column lists keep their 120px minimum without promoting their
-            # preferred height above the member commands in the scroll body.
-            vertical_policy = (
-                QSizePolicy.Policy.Ignored
-                if widget in (self.available_columns_list, self.selected_columns_list)
-                else QSizePolicy.Policy.Expanding
-            )
-            widget.setSizePolicy(QSizePolicy.Policy.Expanding, vertical_policy)
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             widget.updateGeometry()
         layout = self.layout()
         if layout is not None:
