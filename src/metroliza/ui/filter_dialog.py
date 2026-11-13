@@ -493,7 +493,9 @@ class FilterDialog(QDialog):
         footer_layout = QGridLayout(footer_widget)
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setHorizontalSpacing(8)
-        footer_layout.setVerticalSpacing(6)
+        # Preserve full-height controls and the menu on the compact 480px surface.
+        # Six compact gaps leave the footer's own minimum inside its allocation.
+        footer_layout.setVerticalSpacing(2)
 
         footer_layout.addWidget(self.expression_label, 0, 0)
         footer_layout.addWidget(self.expression_input, 0, 1, 1, 3)

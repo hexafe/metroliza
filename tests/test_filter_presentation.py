@@ -477,9 +477,69 @@ def test_reports_compact_window_keeps_complete_footer_targets_and_wrapped_scope(
                        editor.select_today_button, editor.select_beginning_button, editor.has_nok_button):
             assert button.isVisibleTo(editor) and button.height() >= 36
             assert editor.rect().contains(QRect(button.mapTo(editor, QPoint()), button.size()))
+            ancestor = button.parentWidget()
+            while ancestor is not None:
+                assert ancestor.rect().contains(QRect(button.mapTo(ancestor, QPoint()), button.size()))
+                if ancestor is editor:
+                    break
+                ancestor = ancestor.parentWidget()
         for label in (editor.draft_status_label, editor.filter_summary_label):
             assert label.isVisibleTo(editor)
             assert label.height() >= label.heightForWidth(label.width())
             assert editor.rect().contains(QRect(label.mapTo(editor, QPoint()), label.size()))
     finally:
         editor.close()
+
+
+def test_reports_compact_real_export_owner_selected_scope_fits_footer_ancestors(scoped_header_dialog, app):
+    from PyQt6.QtCore import QPoint, QRect, QSize
+    from metroliza.ui.export_dialog import ExportDialog
+    from metroliza.ui.filter_values_loader import _RUNNING_LOADERS
+
+    database = scoped_header_dialog.db_file
+    scoped_header_dialog.close()
+    wait_until(app, lambda: not _RUNNING_LOADERS)
+    owner = ExportDialog(db_file=database)
+    owner.show()
+    editor = None
+    try:
+        owner.filter_button.click()  # Actual Export -> Filter constructor and real SQLite loader.
+        editor = owner.filter_window
+        assert isinstance(editor, FilterDialog) and editor.parentWidget() is owner
+        wait_for_choices(editor)
+        editor.reference_list.findItems('REF-NOK', Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        wait_for_choices(editor)
+        editor.header_list.findItems('Diameter-NOK', Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        wait_for_choices(editor)
+        editor.apply_button.click()
+        assert not editor.isVisible() and source_ids(editor) == {2}
+        applied = owner.filter_state
+        assert applied.reference_values == ('REF-NOK',) and applied.header_values == ('Diameter-NOK',)
+        owner.filter_button.click()
+        assert owner.filter_window is editor
+        wait_for_choices(editor)
+        wait_until(app, lambda: editor._metroliza_window_size_config['finalized'])
+        editor.resize(720, 480)
+        app.processEvents()
+        assert editor.size() == QSize(720, 480)
+        for button in (editor.apply_button, editor.cancel_button, editor.reset_button,
+                       editor.select_today_button, editor.select_beginning_button, editor.has_nok_button):
+            assert button.isVisibleTo(editor) and button.height() >= 36
+            assert editor.rect().contains(QRect(button.mapTo(editor, QPoint()), button.size()))
+            ancestor = button.parentWidget()
+            while ancestor is not None:
+                assert ancestor.rect().contains(QRect(button.mapTo(ancestor, QPoint()), button.size()))
+                if ancestor is editor:
+                    break
+                ancestor = ancestor.parentWidget()
+        for label in (editor.draft_status_label, editor.filter_summary_label):
+            assert label.isVisibleTo(editor)
+            assert label.height() >= label.heightForWidth(label.width())
+            assert editor.rect().contains(QRect(label.mapTo(editor, QPoint()), label.size()))
+        assert owner.filter_state is applied and source_ids(editor) == {2}
+        editor.cancel_button.click()
+    finally:
+        if editor is not None:
+            editor.close()
+        owner.close()
+        wait_until(app, lambda: not _RUNNING_LOADERS)
