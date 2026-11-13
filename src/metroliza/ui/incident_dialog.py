@@ -390,6 +390,13 @@ class IncidentDialog(QDialog):
             ),
         ]
 
+    def _export_failure_text(self, failure) -> str:
+        from metroliza.exporting.export_outcomes import export_failure_message
+        try:
+            return export_failure_message(failure)
+        except Exception:
+            return self.tr("Export failure details could not be validated.")
+
     def _latest_event_lines(self, events: list[object]) -> list[str]:
         workflow = next(
             (event for event in reversed(events) if type(event) is WorkflowDiagnosticEvent),
@@ -410,6 +417,8 @@ class IncidentDialog(QDialog):
                 self.tr("Workflow issue: {error}").format(error=error),
                 self.tr("Domain validation: {status}").format(status=validation),
             ]
+            if workflow.export_failure is not None:
+                lines.append(self._export_failure_text(workflow.export_failure))
             if workflow.selected_report_count is not None:
                 lines.append(
                     self.tr("Selected reports: {count}").format(

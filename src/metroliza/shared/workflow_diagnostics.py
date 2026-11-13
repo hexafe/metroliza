@@ -31,7 +31,7 @@ class WorkflowTrace:
         self._emit(stage, outcome, selected_report_count=selected_report_count)
 
     def _emit(self, stage, outcome, *, error=WorkflowError.NONE, selected_report_count=None,
-              imported_report_count=None):
+              imported_report_count=None, export_failure=None):
         try:
             if self.finished:
                 return
@@ -48,6 +48,7 @@ class WorkflowTrace:
                 stage, outcome, error=error, selected_report_count=count,
                 imported_report_count=imported,
                 duration_ms=elapsed if stage is WorkflowStage.FINISHED else None,
+                export_failure=export_failure,
             )
             logging.getLogger(__name__).log(
                 logging.ERROR if outcome is WorkflowOutcome.FAILED else logging.INFO, event,
@@ -79,7 +80,7 @@ class WorkflowTrace:
             return
 
     def finish_export(self, *, completed: bool, cancelled: bool, fallback: bool = False,
-                      omissions: bool = False) -> None:
+                      omissions: bool = False, export_failure=None) -> None:
         if cancelled:
             outcome, error = WorkflowOutcome.CANCELLED, WorkflowError.NONE
         elif completed:
@@ -89,7 +90,7 @@ class WorkflowTrace:
             error = WorkflowError.NONE
         else:
             outcome, error = WorkflowOutcome.FAILED, WorkflowError.OUTPUT_FAILED
-        self._emit(WorkflowStage.FINISHED, outcome, error=error)
+        self._emit(WorkflowStage.FINISHED, outcome, error=error, export_failure=export_failure)
 
 
 class _UnavailableTrace:

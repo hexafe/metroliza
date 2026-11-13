@@ -59,6 +59,7 @@ from metroliza.charts.chart_numeric_helpers import (
     finite_series_list as _finite_series_list,
 )
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
+from metroliza.shared.diagnostic_events import ExportFailureStage, observe_export_stage
 from metroliza.charts.hexafe_plotstats_adapter import (
     build_plotstats_dashboard_spec,
     normalize_distribution_stat_legend,
@@ -464,6 +465,7 @@ def write_export_html_dashboard(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Publish one serialized dashboard generation without mixing writer assets."""
 
@@ -497,13 +499,23 @@ def write_export_html_dashboard(
                 plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
                 plotly_visual_settings=plotly_visual_settings,
                 dashboard_visual_settings=dashboard_visual_settings,
+                diagnostic_stage=diagnostic_stage,
             )
+            observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_PUBLICATION)
             os.replace(temporary_dashboard_path, dashboard_path)
-        except BaseException:
-            temporary_dashboard_path.unlink(missing_ok=True)
-            shutil.rmtree(generation_directory, ignore_errors=True)
+        except BaseException as exc:
+            observe_export_stage(diagnostic_stage, exception=exc)
+            try:
+                temporary_dashboard_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(generation_directory, ignore_errors=True)
+            except Exception:
+                pass
             raise
 
+        observe_export_stage(diagnostic_stage, ExportFailureStage.CLEANUP)
         _remove_obsolete_dashboard_generations(asset_base, keep=generation_directory)
         result["html_dashboard_path"] = str(dashboard_path)
         result["html_dashboard_assets_path"] = str(generation_directory)
@@ -527,6 +539,7 @@ def _write_export_html_dashboard_generation(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Build one isolated HTML dashboard generation."""
 
@@ -543,6 +556,7 @@ def _write_export_html_dashboard_generation(
     for section_index, raw_section in enumerate(sections, start=1):
         charts: list[dict[str, Any]] = []
         for chart_index, raw_chart in enumerate(raw_section.get("charts") or [], start=1):
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PNG_WRITE)
             image_bytes = _coerce_image_bytes(raw_chart.get("image_buffer"))
             image_name = _bounded_dashboard_component(
                 f"section_{section_index:03d}_{_slugify(raw_section.get('header') or 'header')}_"
@@ -564,6 +578,7 @@ def _write_export_html_dashboard_generation(
             payload_details = extract_dashboard_chart_details(raw_chart.get("payload"))
             timings_s["payload_metadata"] += perf_counter() - metadata_start
             spec_start = perf_counter()
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_SPEC)
             plotly_spec = _build_plotly_chart_spec_bundle(
                 raw_chart.get("payload"),
                 title=str(raw_chart.get("title") or raw_chart.get("chart_type") or "Chart"),
@@ -611,6 +626,7 @@ def _write_export_html_dashboard_generation(
         group_analysis_payload,
         group_analysis_plot_assets,
         asset_directory=asset_directory,
+        diagnostic_stage=diagnostic_stage,
         timings_s=timings_s,
         plotly_visual_settings=plotly_visual_settings,
     )
@@ -618,6 +634,7 @@ def _write_export_html_dashboard_generation(
     chart_count += int(normalized_group_analysis.get("plot_count") or 0) if normalized_group_analysis else 0
     interactive_chart_count = _count_plotly_specs(section_entries, normalized_group_analysis)
     plotly_spec_count = interactive_chart_count
+    observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_JSON)
     json_measurement_start = perf_counter()
     plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
@@ -650,6 +667,7 @@ def _write_export_html_dashboard_generation(
             reasons.append(f"serialized_json_bytes>{json_bytes_budget}")
         plotly_budget_reason = ",".join(reasons)
     plotly_runtime_status = "not_needed"
+    observe_export_stage(diagnostic_stage, ExportFailureStage.ASSET_PUBLICATION)
     runtime_asset_start = perf_counter()
     plotly_js_path = (
         _copy_plotly_runtime_asset(asset_directory)
@@ -666,6 +684,7 @@ def _write_export_html_dashboard_generation(
     elif plotly_js_path:
         plotly_runtime_status = "local"
 
+    observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_JSON)
     embedded_json_measurement_start = perf_counter()
     embedded_plotly_serialized_json_bytes = _measure_plotly_specs_json_bytes(
         section_entries,
@@ -705,6 +724,7 @@ def _write_export_html_dashboard_generation(
         "chart_observability_summary": chart_observability_summary or {},
         "backend_diagnostics_lines": [str(line) for line in (backend_diagnostics_lines or []) if str(line).strip()],
     }
+    observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_RENDER)
     render_start = perf_counter()
     html_text = _render_dashboard_html(
         manifest,
@@ -713,6 +733,7 @@ def _write_export_html_dashboard_generation(
     timings_s["html_rendering"] += perf_counter() - render_start
     html_bytes = len(html_text.encode("utf-8"))
     write_start = perf_counter()
+    observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_WRITE)
     dashboard_path.write_text(html_text, encoding="utf-8")
     timings_s["html_write"] += perf_counter() - write_start
     timings_s["total"] = perf_counter() - total_start
@@ -2577,6 +2598,7 @@ def _normalize_group_analysis_manifest(
     plot_assets: dict[str, Any] | None,
     *,
     asset_directory: Path,
+    diagnostic_stage=None,
     timings_s: dict[str, float] | None = None,
     plotly_visual_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
@@ -2610,6 +2632,7 @@ def _normalize_group_analysis_manifest(
             plot_asset = per_metric_assets.get(plot_key) if isinstance(per_metric_assets, dict) else {}
             image_buffer = plot_asset.get("image_data") if isinstance(plot_asset, dict) else None
             spec_start = perf_counter()
+            observe_export_stage(diagnostic_stage, ExportFailureStage.PLOTLY_SPEC)
             plotly_spec = _build_group_analysis_plotly_spec_bundle(
                 metric_name,
                 plot_key,
@@ -2630,6 +2653,7 @@ def _normalize_group_analysis_manifest(
                 continue
             image_relative_path = ""
             if image_buffer is not None:
+                observe_export_stage(diagnostic_stage, ExportFailureStage.PNG_WRITE)
                 image_name = _bounded_dashboard_component(
                     f"group_metric_{metric_index:03d}_{_slugify(metric_name)}_{plot_key}",
                     suffix=".png",

@@ -8,7 +8,6 @@ grouping (`metroliza.exporting.export_grouping_utils`), chart and summary planni
 """
 
 import logging
-import inspect
 import re
 import sqlite3
 import textwrap
@@ -49,6 +48,10 @@ from metroliza.exporting.export_summary_render_pool import (
 )
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
+from metroliza.shared.diagnostic_events import (
+    ExportFailureBackend, ExportFailureCode, ExportFailureStage,
+    build_export_failure_diagnostic,
+)
 from metroliza.shared.env_utils import env_bool
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
@@ -56,6 +59,7 @@ from metroliza.exporting.execution import ExportStageOutcome, normalize_export_o
 from metroliza.exporting.export_outcomes import (
     ExportRunStatus,
     derive_export_run_result,
+    export_failure_message,
 )
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
@@ -3685,6 +3689,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self.export_canceled = False
         self._cancel_signal_emitted = False
         self.export_run_result = None
+        self._export_failure = None
+        self._export_failure_stage = ExportFailureStage.PREPARATION
+        self._export_diagnostic_trace = None
         self._prepared_grouping_df = None
         self.completion_metadata = {
             "local_xlsx_path": self.excel_file,
@@ -3780,6 +3787,57 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self.completion_metadata["backend_diagnostics"] = dict(self._backend_diagnostic_summary)
         self.completion_metadata["backend_diagnostics_lines"] = format_backend_diagnostic_lines(self._backend_diagnostic_summary)
 
+    def _observe_export_failure_stage(self, stage=None, exception=None):
+        """Best effort; never inspect exception payload or replace the first failure."""
+        try:
+            if self._export_failure is not None:
+                return
+            if type(stage) is ExportFailureStage:
+                self._export_failure_stage = stage
+            if exception is None or issubclass(type(exception), OutputPublicationCanceled):
+                return
+            trace = self._export_diagnostic_trace
+            # Direct/test callers without an active workflow still get an opaque ID.
+            import uuid
+            invocation_id = getattr(trace, "invocation_id", None) or uuid.uuid4()
+            operation_id = getattr(trace, "operation_id", None) or uuid.uuid4()
+            backend = ExportFailureBackend(self.export_target)
+            from metroliza.shared.diagnostic_transport import current_recorder
+            recorder = current_recorder()
+            connected = recorder is not None and recorder.connected is True
+            self._export_failure = build_export_failure_diagnostic(
+                exception, invocation_id=invocation_id, operation_id=operation_id,
+                stage=self._export_failure_stage, backend=backend, recorder_connected=connected,
+                code=(ExportFailureCode.OUTPUT_MISSING
+                      if self._export_failure_stage is ExportFailureStage.HTML_VALIDATION
+                      else ExportFailureCode.UNEXPECTED),
+            )
+            self.completion_metadata["export_failure"] = self._export_failure
+        except Exception:
+            return
+
+    def _restore_failure_after_successful_retry(self, previous_failure):
+        # A successful Save a copy retry has handled its intermediate collision.
+        if self._export_failure is previous_failure:
+            return
+        self._export_failure = previous_failure
+        if previous_failure is None:
+            self.completion_metadata.pop("export_failure", None)
+        else:
+            self.completion_metadata["export_failure"] = previous_failure
+
+    def _cleanup_export_resources(self):
+        failure = None
+        for cleanup in (self._cleanup_export_snapshot, self._shutdown_chart_executor,
+                        self._shutdown_summary_prep_executor, self._cleanup_chart_images,
+                        self._cleanup_dashboard_payloads):
+            try:
+                cleanup()
+            except Exception as exc:
+                if failure is None:
+                    failure = exc
+        return failure
+
     def _set_export_run_result(self, *, cancelled=False, terminal_failure=""):
         result = derive_export_run_result(
             excel_file=self._primary_output_file,
@@ -3865,9 +3923,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
         )
         self._emit_stage_progress('finalize', 0.45)
+        previous_failure = self._export_failure
+        self._observe_export_failure_stage(ExportFailureStage.HTML_GENERATION)
         try:
             dashboard_result = write_dashboard_safely(
                 _write_export_html_dashboard,
+                diagnostic_stage=self._observe_export_failure_stage,
                 consents=getattr(self, "replace_outputs", ()),
                 should_cancel=lambda: self.export_canceled,
                 copy_from=(self.copy_output_from if html_only_export else self.html_dashboard_file)
@@ -3892,19 +3953,18 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except OutputPublicationCanceled:
             raise
         except Exception as exc:
+            self._observe_export_failure_stage(exception=exc)
             elapsed = time.perf_counter() - dashboard_start
             self._record_stage_timing('dashboard_finalization', elapsed)
             self._record_stage_timing('html_dashboard_total', elapsed)
             if html_only_export:
                 logger.exception("HTML dashboard export failed")
-                raise RuntimeError(f"HTML dashboard export failed: {exc}") from exc
+                raise RuntimeError("HTML dashboard export failed") from exc
             warning_message = "HTML dashboard could not be generated; workbook export continued."
-            logger.warning("HTML dashboard export skipped: %s", exc, exc_info=True)
+            logger.warning("HTML dashboard export skipped after generation failure")
             self.completion_metadata.setdefault('html_dashboard_warnings', []).append(warning_message)
             self.completion_metadata.setdefault('html_dashboard_warning_details', []).append(
                 {
-                    "exception_class": type(exc).__name__,
-                    "exception_message": str(exc),
                     "stage": "dashboard_generation",
                 }
             )
@@ -3916,8 +3976,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             return
 
+        self._restore_failure_after_successful_retry(previous_failure)
+        self._observe_export_failure_stage(ExportFailureStage.HTML_VALIDATION)
         dashboard_output_error = self._html_dashboard_output_error(dashboard_result)
         if dashboard_output_error:
+            self._observe_export_failure_stage(exception=RuntimeError("Dashboard output missing"))
             if html_only_export:
                 raise RuntimeError(dashboard_output_error)
             warning_message = "HTML dashboard output was not created; workbook export continued."
@@ -5006,6 +5069,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         diagnostic_cancelled = False
         diagnostic = start_workflow_trace(WorkflowOperation.LOCAL_EXPORT)
+        self._export_diagnostic_trace = diagnostic
         try:
             if self._check_canceled():
                 return
@@ -5029,6 +5093,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 backend = self.get_export_backend()
                 self._active_backend = backend
                 diagnostic.stage(WorkflowStage.OUTPUT_STAGING)
+                self._observe_export_failure_stage(ExportFailureStage.LOCAL_OUTPUT)
                 local_outcome = normalize_export_outcome(backend.run(self))
                 diagnostic_cancelled = not bool(local_outcome)
                 self.completion_metadata["local_export_outcome"] = local_outcome.kind.value
@@ -5082,6 +5147,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         self._emit_google_stage("uploading", detail=stage_message)
                         self._log_export_stage("Google conversion upload retry", stage="uploading_retry", level="warning")
 
+                self._observe_export_failure_stage(ExportFailureStage.CLOUD_CONVERSION)
                 conversion = upload_and_convert_workbook(
                     self.excel_file,
                     expected_sheet_names=self._build_expected_sheet_names(),
@@ -5130,6 +5196,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._check_canceled()
             return
         except GoogleDriveExportError as e:
+            self._observe_export_failure_stage(exception=e)
             if self.export_target == "google_sheets_drive_convert":
                 self.completion_metadata.update(build_google_fallback_metadata(excel_file=self.excel_file, error=e))
                 self._emit_google_stage("fallback", detail=self.completion_metadata["fallback_message"])
@@ -5157,6 +5224,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            self._observe_export_failure_stage(exception=e)
             if self.export_target == "html_dashboard":
                 failure_title = "HTML dashboard export failed."
                 failure_detail = "Dashboard generation aborted before completion."
@@ -5177,11 +5245,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             )
             self.log_and_exit(e)
         finally:
-            self._cleanup_export_snapshot()
-            self._shutdown_chart_executor()
-            self._shutdown_summary_prep_executor()
-            self._cleanup_chart_images()
-            self._cleanup_dashboard_payloads()
+            cleanup_failure = self._cleanup_export_resources()
+            if cleanup_failure is not None and self.export_run_result is None and not self.export_canceled:
+                self._observe_export_failure_stage(ExportFailureStage.CLEANUP, cleanup_failure)
+                self.log_and_exit(cleanup_failure)
+                emit_completed_after_cleanup = False
             self._db_connection = None
             if emit_completed_after_cleanup and not self.export_canceled:
                 result = self._set_export_run_result()
@@ -5220,6 +5288,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 fallback=bool(self.completion_metadata.get("fallback_message")),
                 omissions=(self.export_run_result is not None
                            and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
+                export_failure=self._export_failure,
             )
 
     def add_measurements_horizontal_sheet(self, excel_writer):
@@ -7425,27 +7494,20 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             May update UI state, database rows, or in-memory export context.
         """
 
-        caller = inspect.stack()[1].function
-        context = f"export operation ({caller})"
-        self._set_export_run_result(terminal_failure=f"{context}: {exception}")
-        self._log_export_stage(
-            "Export operation failed",
-            stage="error",
-            level="error",
-            exception_class=type(exception).__name__,
-            operation_context=context,
-        )
-        if hasattr(custom_logger, "handle_exception") and hasattr(custom_logger, "LOG_ONLY"):
+        self._observe_export_failure_stage(exception=exception)
+        self._set_export_run_result(terminal_failure="Export failed")
+        try:
+            if self._export_failure is not None:
+                message = export_failure_message(self._export_failure)
+            else:
+                message = "Export failed. Detailed failure capture is unavailable."
+        except Exception:
+            message = "Export failed. Detailed failure capture is unavailable."
+        try:
             custom_logger.handle_exception(
-                exception,
-                behavior=custom_logger.LOG_ONLY,
-                logger_name=logger.logger.name,
-                context=context,
-                reraise=False,
+                exception, behavior=custom_logger.LOG_ONLY,
+                logger_name=logger.logger.name, context="export operation", reraise=False,
             )
-        else:
-            try:
-                custom_logger.CustomLogger(exception, reraise=False)
-            except Exception:
-                logger.exception("Failed to invoke fallback custom logger for %s", context)
-        self.error_occurred.emit(f"{context}: {exception}")
+        except Exception:
+            pass
+        self.error_occurred.emit(message)
