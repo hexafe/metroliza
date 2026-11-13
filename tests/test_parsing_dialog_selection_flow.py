@@ -325,34 +325,57 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
             directory='/tmp/reports',
             db_file='/tmp/reports.db',
         )
-        dialog.on_preflight_completed(result)
+        try:
+            dialog.on_preflight_completed(result)
 
-        self.assertTrue(dialog.parse_button.isEnabled())
-        self.assertTrue(dialog.review_scan_button.isEnabled())
-        self.assertIn('1 ready', dialog.readiness_label.text())
+            self.assertTrue(dialog.parse_button.isEnabled())
+            self.assertTrue(dialog.review_scan_button.isEnabled())
+            self.assertIn('1 ready', dialog.readiness_label.text())
 
-        captured = {}
+            captured = {}
 
-        class _FakeParseThread:
-            def __init__(self, request):
-                captured['thread'] = self
-                self.preflight_result = request.preflight_result
-                self.update_label = _Signal()
-                self.update_progress = _Signal()
-                self.error_occurred = _Signal()
-                self.finished = _Signal()
+            class _FakeParseThread:
+                def __init__(self, request):
+                    captured['thread'] = self
+                    self.preflight_result = request.preflight_result
+                    self.update_label = _Signal()
+                    self.update_progress = _Signal()
+                    self.error_occurred = _Signal()
+                    self.finished = _Signal()
 
-            def start(self):
-                captured['started'] = True
+                def start(self):
+                    captured['started'] = True
 
-        with patch(
-            'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
-            return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
-        ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
-            dialog.show_loading_screen()
+            # Review starts a real fast metadata read. Its finished delivery must
+            # precede this short fake-worker scope: startup may correctly defer
+            # while metadata still runs, outliving these patches otherwise.
+            for metadata_worker in tuple(dialog._metadata_threads):
+                self.assertTrue(metadata_worker.wait(5000))
+            self.app.processEvents()
+            self.assertIsNone(dialog.metadata_thread)
+            self.assertEqual(dialog._metadata_threads, [])
+            self.assertEqual(dialog._after_metadata_idle, [])
 
-        self.assertTrue(captured['started'])
-        self.assertIs(captured['thread'].preflight_result, result)
+            with patch(
+                'metroliza.ui.parsing_dialog.create_worker_progress_dialog',
+                return_value=(_ProgressDialog(), _ProgressLabel(), _ProgressBar(), None),
+            ), patch('metroliza.ui.parsing_dialog.ParseReportsThread', _FakeParseThread):
+                dialog.show_loading_screen()
+
+            self.assertTrue(captured['started'])
+            self.assertIs(captured['thread'].preflight_result, result)
+        finally:
+            # Also cancel queued startup on an assertion failure before allowing
+            # finished callbacks to run outside their originating fixture.
+            dialog._request_active_worker_cancellation()
+            metadata_workers = tuple(dialog._metadata_threads)
+            joined = [worker.wait(5000) for worker in metadata_workers]
+            self.app.processEvents()
+            self.assertTrue(dialog.close())
+            self.assertTrue(all(joined), "Real metadata worker did not stop")
+            self.assertIsNone(dialog.metadata_thread)
+            self.assertEqual(dialog._metadata_threads, [])
+            self.assertEqual(dialog._after_metadata_idle, [])
 
     def test_successful_fast_then_enrich_requests_modeless_metadata_enrichment(self):
         parent = _DummyParent()
