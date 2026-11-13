@@ -181,11 +181,38 @@ class _Journey:
         self.modal(trigger, QMessageBox, lambda box: box.button(QMessageBox.StandardButton.Yes).click())
 
     def choose_path(self, trigger, path):
-        from PyQt6.QtWidgets import QFileDialog
+        from PyQt6.QtWidgets import QFileDialog, QDialogButtonBox
         def choose(dialog):
             dialog.selectFile(str(path))
-            dialog.accept()
-        self.modal(trigger, QFileDialog, choose)
+            buttons = dialog.findChild(QDialogButtonBox)
+            _require(buttons is not None)
+            accept = next((button for button in buttons.buttons()
+                           if buttons.buttonRole(button) == QDialogButtonBox.ButtonRole.AcceptRole), None)
+            _require(accept is not None and accept.isEnabled())
+            accept.click()
+        names = ('getSaveFileName', 'getOpenFileName')
+        descriptors = {name: vars(QFileDialog)[name] for name in names}
+        originals = {name: getattr(QFileDialog, name) for name in names}
+        def owned_picker(original):
+            def delegate(*args, **kwargs):
+                parent = args[0] if args else kwargs.get('parent')
+                if parent is self.csv or parent is self.window:
+                    args = list(args)
+                    option = QFileDialog.Option.DontUseNativeDialog
+                    if len(args) > 5:
+                        args[5] |= option
+                    else:
+                        kwargs['options'] = kwargs.get('options', QFileDialog.Option(0)) | option
+                return original(*args, **kwargs)
+            return delegate
+        try:
+            for name in names:
+                setattr(QFileDialog, name, staticmethod(owned_picker(originals[name])))
+            self.modal(trigger, QFileDialog, choose)
+        finally:
+            for name in names:
+                setattr(QFileDialog, name, descriptors[name])
+        _require(all(vars(QFileDialog)[name] is descriptors[name] for name in names))
 
     def take(self, name, widget):
         _require(name in CAPTURE_STATES and name not in self.evidence['captures'], 'tabular_capture_failed')
