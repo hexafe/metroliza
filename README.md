@@ -4,6 +4,18 @@
 
 Metroliza is a Python desktop app for industrial metrology workflows: parsing measurement reports, organizing data in SQLite, and exporting analysis-ready Excel summaries.
 
+## Repository branches
+
+`main` preserves the accepted production/history state; normal Issue work starts from and targets
+`dev`. `rc` holds the separately frozen candidate. The 2026-11-13 topology migration under
+[#960](https://github.com/hexafe/metroliza/issues/960) changes names and repository governance,
+without promoting development or candidate product content to production. Historical build, tag
+and source identities keep their original names. See the [branching strategy](docs/release_checks/branching_strategy.md).
+
+The default-branch PR template is synchronized as governance from accepted development commit
+`dd10cdd7cf6db6aec0ccbf26e65cd880dabe9310`, with current `dev` links. Record its exact source
+commit and verify the published PR body; template synchronization grants no release approval.
+
 ## Quickstart
 
 ```bash
