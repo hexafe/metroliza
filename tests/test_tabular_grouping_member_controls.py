@@ -660,13 +660,58 @@ def test_sqlite_member_labels_and_pager_fit_actual_application_fonts(
         assert all(not first.intersects(second) for index, first in enumerate(bounds) for second in bounds[index + 1:])
         assert all(button.height() >= 36 and button.width() >= button.minimumSizeHint().width() for button in buttons)
         assert window.page_jump_input.width() == 64
+        target = os.environ.get('METROLIZA_GROUPING_FONT_ARTIFACT_DIR')
+        if target:
+            directory = Path(target)
+            directory.mkdir(parents=True, exist_ok=True)
+            stem = 'grouping-' + family.lower().replace(' ', '-')
+            assert window.grab().save(str(directory / (stem + '.png')))
+        from PyQt6.QtWidgets import QStyle, QStyleOptionButton
+        from metroliza.ui.shortcuts import plain_text
+        footer = [(name, getattr(window, name)) for name in (
+            'assign_filtered_rows_button', 'create_group_button', 'rename_group_button',
+            'delete_group_button', 'clear_selection_button', 'dont_use_grouping_button',
+            'cancel_button', 'use_grouping_button')]
+        footer_bounds, footer_facts = [], []
+        for name, button in footer:
+            assert button.isVisibleTo(window) and button.height() >= 36
+            assert button.width() >= button.minimumSizeHint().width()
+            rectangle = QRect(button.mapTo(window, QPoint()), button.size())
+            assert window.rect().contains(rectangle)
+            assert not scroll.isAncestorOf(button)
+            option = QStyleOptionButton()
+            option.initFrom(button)
+            if button.isDefault():
+                option.features |= QStyleOptionButton.ButtonFeature.DefaultButton
+            if button.autoDefault():
+                option.features |= QStyleOptionButton.ButtonFeature.AutoDefaultButton
+            content = button.style().subElementRect(QStyle.SubElement.SE_PushButtonContents, option, button)
+            text = plain_text(button.text())
+            assert content.width() >= button.fontMetrics().horizontalAdvance(text), (name, text, content)
+            assert content.height() >= button.fontMetrics().height()
+            footer_bounds.append(rectangle)
+            footer_facts.append({'id': name, 'caption': text, 'width': button.width(),
+                                 'minimum_hint': button.minimumSizeHint().width(),
+                                 'content_width': content.width(), 'text_width': button.fontMetrics().horizontalAdvance(text),
+                                 'bounds': [rectangle.x(), rectangle.y(), rectangle.width(), rectangle.height()]})
+        assert all(not first.intersects(second) for index, first in enumerate(footer_bounds)
+                   for second in footer_bounds[index + 1:])
+        assert not window.create_group_button.isEnabled() and not window.clear_selection_button.isEnabled()
+        tab_order = (window.assign_filtered_rows_button, window.rename_group_button, window.delete_group_button,
+                     window.dont_use_grouping_button, window.cancel_button, window.use_grouping_button)
+        activate_for_key(qapplication_session, tab_order[0])
+        for expected in tab_order[1:]:
+            QTest.keyClick(qapplication_session.focusWidget(), Qt.Key.Key_Tab)
+            assert qapplication_session.focusWidget() is expected
         screen = window.screen().availableGeometry()
         facts = {'font': actual, 'points': 9, 'screen': [screen.width(), screen.height()],
                  'platform': qapplication_session.platformName(), 'dpr': window.devicePixelRatioF(),
                  'window': [window.width(), window.height()],
                  'body_width': scroll.widget().width(), 'viewport_width': scroll.viewport().width(),
                  'horizontal_maximum': scroll.horizontalScrollBar().maximum(),
-                 'pager_bounds': [[r.x(), r.y(), r.width(), r.height()] for r in bounds]}
+                 'pager_bounds': [[r.x(), r.y(), r.width(), r.height()] for r in bounds],
+                 'footer': footer_facts,
+                 'footer_tab': [name for name, button in footer if button in tab_order]}
         observed.append(facts)
         print('GROUPING_FONT_FIT ' + json.dumps(facts))
         target = os.environ.get('METROLIZA_GROUPING_FONT_ARTIFACT_DIR')

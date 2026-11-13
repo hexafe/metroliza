@@ -646,15 +646,22 @@ class TabularAnalyticsGroupingDialog(QDialog):
         configure_accessibility(self.dont_use_grouping_button, name="Reset CSV grouping draft")
         configure_accessibility(self.cancel_button, name="Cancel CSV analytics grouping")
         configure_accessibility(self.use_grouping_button, name="Use CSV analytics grouping")
-        footer.addWidget(self.assign_filtered_rows_button, 0, 0, 1, 2)
-        footer.addWidget(self.create_group_button, 0, 2, 1, 2)
-        footer.addWidget(self.rename_group_button, 0, 4)
-        footer.addWidget(self.delete_group_button, 1, 0)
-        footer.addWidget(self.clear_selection_button, 1, 1)
-        footer.addWidget(self.dont_use_grouping_button, 1, 2)
-        footer.addWidget(self.cancel_button, 1, 3)
-        footer.addWidget(self.use_grouping_button, 1, 4)
+        # Wide assignment actions get half a row; shorter actions and the
+        # final draft/Cancel/Apply row each have three readable columns.
+        footer.addWidget(self.assign_filtered_rows_button, 0, 0, 1, 3)
+        footer.addWidget(self.create_group_button, 0, 3, 1, 3)
+        footer.addWidget(self.rename_group_button, 1, 0, 1, 2)
+        footer.addWidget(self.delete_group_button, 1, 2, 1, 2)
+        footer.addWidget(self.clear_selection_button, 1, 4, 1, 2)
+        footer.addWidget(self.dont_use_grouping_button, 2, 0, 1, 2)
+        footer.addWidget(self.cancel_button, 2, 2, 1, 2)
+        footer.addWidget(self.use_grouping_button, 2, 4, 1, 2)
         outer_layout.addLayout(footer)
+        footer_order = (self.assign_filtered_rows_button, self.create_group_button, self.rename_group_button,
+                        self.delete_group_button, self.clear_selection_button, self.dont_use_grouping_button,
+                        self.cancel_button, self.use_grouping_button)
+        for first, second in zip(footer_order, footer_order[1:]):
+            self.setTabOrder(first, second)
 
         self.column_search.returnPressed.connect(self._apply_column_search)
         self.selected_column_search.returnPressed.connect(self._apply_selected_column_search)
