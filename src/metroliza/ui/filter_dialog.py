@@ -1,4 +1,5 @@
 from metroliza.shared.custom_logger import CustomLogger
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from time import monotonic
 try:
     from metroliza.ui.worker_progress_dialog import (
@@ -83,6 +84,34 @@ def build_distinct_value_query(column_name, *, source_view="vw_measurement_expor
 
 def build_measurement_expression_clause(expression_text):
     return _build_measurement_expression_clause(expression_text)
+
+
+def _record_filter_action(action: BugReportAction, *, enabled: bool | None = None) -> None:
+    try:
+        _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # A local report must never change the user's filter workflow.
+        return
+
+
+_FILTER_DATE_ACTIONS = {
+    "All dates": BugReportAction.OPTION_EXPORT_FILTER_DATE_ALL,
+    "Today": BugReportAction.OPTION_EXPORT_FILTER_DATE_TODAY,
+    "Yesterday": BugReportAction.OPTION_EXPORT_FILTER_DATE_YESTERDAY,
+    "Last 7 days": BugReportAction.OPTION_EXPORT_FILTER_DATE_LAST_SEVEN_DAYS,
+    "This month": BugReportAction.OPTION_EXPORT_FILTER_DATE_THIS_MONTH,
+    "Custom": BugReportAction.OPTION_EXPORT_FILTER_DATE_CUSTOM,
+}
+
+
+def _record_filter_submission_options(has_nok_only: bool, date_preset) -> None:
+    _record_filter_action(
+        BugReportAction.OPTION_EXPORT_FILTER_HAS_NOK_ONLY,
+        enabled=bool(has_nok_only),
+    )
+    action = _FILTER_DATE_ACTIONS.get(date_preset) if type(date_preset) is str else None
+    if type(action) is BugReportAction:
+        _record_filter_action(action)
 
 
 def ensure_report_schema(database):
@@ -564,7 +593,15 @@ class FilterDialog(QDialog):
             self.parser_id_search_input.textChanged.connect(lambda: self.search_list_widgets(self.parser_id_list, self.parser_id_search_input.text()))
             self.template_family_search_input.textChanged.connect(lambda: self.search_list_widgets(self.template_family_list, self.template_family_search_input.text()))
 
-            self._dimension_selections = {}
+            self._dimension_selections = {
+                getattr(self, attr_name): {
+                    item.text()
+                    for item in getattr(self, attr_name).selectedItems()
+                    if item is not None and hasattr(item, "text")
+                }
+                for attr_name in self._FILTER_LIST_ATTRS
+                if getattr(self, attr_name, None) is not None
+            }
             for attr_name in self._FILTER_LIST_ATTRS:
                 widget = getattr(self, attr_name)
                 widget.itemSelectionChanged.connect(
@@ -832,11 +869,15 @@ class FilterDialog(QDialog):
 
     def _normalize_dimension_selection(self, widget):
         values = {item.text() for item in widget.selectedItems()}
-        previous = self._dimension_selections.get(widget, set())
+        previous = set(self._dimension_selections.get(widget, set()))
         if "SELECT ALL" in values and len(values) > 1:
             values = {"SELECT ALL"} if "SELECT ALL" not in previous else values - {"SELECT ALL"}
             self._set_selected_values(widget, values)
         self._dimension_selections[widget] = values
+        if values - previous:
+            _record_filter_action(BugReportAction.WORKFLOW_EXPORT_FILTER_CRITERIA_ADDED)
+        if previous - values:
+            _record_filter_action(BugReportAction.WORKFLOW_EXPORT_FILTER_CRITERIA_REMOVED)
         self._refresh_choice_presentation(widget)
 
     def _restore_draft_snapshot(self, snapshot):
@@ -882,7 +923,8 @@ class FilterDialog(QDialog):
         self._refresh_filter_summary()
 
     def _request_reset_draft(self):
-        if self._has_active_draft() and not self._confirm_discard(
+        has_active_draft = self._has_active_draft()
+        if has_active_draft and not self._confirm_discard(
             title="Reset filter draft?",
             message=(
                 "Reset every condition in this draft? The applied filter will not change "
@@ -891,6 +933,8 @@ class FilterDialog(QDialog):
         ):
             return
         self._reset_draft()
+        if has_active_draft:
+            _record_filter_action(BugReportAction.WORKFLOW_EXPORT_FILTER_RESET)
 
     def _request_cancel(self):
         self.reject()
@@ -918,6 +962,7 @@ class FilterDialog(QDialog):
         committed = getattr(self, "_committed_draft_snapshot", None)
         if committed is not None:
             self._restore_draft_snapshot(committed)
+            _record_filter_action(BugReportAction.WORKFLOW_EXPORT_FILTER_CANCELLED)
         return True
 
     def reject(self):
@@ -1425,6 +1470,13 @@ class FilterDialog(QDialog):
                 parent.set_filter_state(filter_state)
             if parent is not None and hasattr(parent, "set_filter_applied"):
                 self._call_parent_filter_applied(parent, filter_state)
+
+            selected_date_preset = (
+                self.date_range_selector.currentText()
+                if hasattr(self, "date_range_selector")
+                else "All dates"
+            )
+            _record_filter_submission_options(has_nok_only, selected_date_preset)
 
             self._committed_draft_snapshot = self._draft_snapshot()
             self._applied_scope_text = summarize_filter_state(filter_state)[0]

@@ -21,7 +21,9 @@ from dataclasses import dataclass
 from pathlib import Path
 import tempfile
 
-from metroliza.shared.safe_bugreport import BugReportAction, BugReportCategory, MAX_REPORT_BYTES
+from metroliza.shared.safe_bugreport import (
+    AGENT_REPORT_GUIDANCE, ERROR_LOG_NOTE, BugReportAction, BugReportCategory, MAX_REPORT_BYTES,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,62 @@ _BOOLEAN_ACTIONS = frozenset({
     BugReportAction.CHECK_CHART_REQUEST_MATCH,
     BugReportAction.CHECK_FILTER_REQUEST_MATCH,
     BugReportAction.CHECK_GROUPING_REQUEST_MATCH,
+    BugReportAction.OPTION_EXPORT_CLOUD,
+    BugReportAction.OPTION_EXPORT_HTML,
+    BugReportAction.OPTION_EXPORT_CONTEXT,
+    BugReportAction.OPTION_HIDE_OK,
+    BugReportAction.REALTIME_TEMPORARY_STORAGE,
+    BugReportAction.PARSER_PROFILE_ENABLE_STATE,
+    BugReportAction.OPTION_MAPPING_REPLACE_EXISTING,
+    BugReportAction.OPTION_INDUSTRIAL_FETCH_ALL,
+    BugReportAction.OPTION_INDUSTRIAL_SOURCE_ORDER_BY,
+    BugReportAction.OPTION_INDUSTRIAL_LIVE_EXPORT,
+    BugReportAction.OPTION_INDUSTRIAL_EXPORT_CHARTS,
+    BugReportAction.OPTION_INDUSTRIAL_EXPORT_RAW,
+    BugReportAction.OPTION_SYNC_REMEMBER_CREDENTIALS,
+    BugReportAction.OPTION_EXPORT_FILTERS_APPLIED,
+    BugReportAction.OPTION_EXPORT_GROUPING_APPLIED,
+    BugReportAction.OPTION_EXPORT_DASHBOARD_VISUALS_ENABLED,
+    BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_WORKBOOK,
+    BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_DASHBOARD,
+    BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_GROUPING,
+    BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_CHARTS,
+    BugReportAction.OPTION_EXPORT_FILTER_HAS_NOK_ONLY,
+    BugReportAction.OPTION_REPORT_REVIEW_OCR,
+    BugReportAction.OPTION_DASHBOARD_STAT_ACCENT_ENABLED,
+    BugReportAction.OPTION_DASHBOARD_CUSTOM_PALETTE_ENABLED,
+    BugReportAction.OPTION_DASHBOARD_MARKER_OUTLINE_ENABLED,
+})
+_CSV_SCENARIO_ACTIONS = frozenset({
+    BugReportAction.APP_OPENED,
+    BugReportAction.CSV_OPENED,
+    BugReportAction.WORKSPACE_CSV_OPENED,
+    BugReportAction.CSV_LOAD_STARTED,
+    BugReportAction.CSV_LOAD_FINISHED,
+    BugReportAction.CSV_LOAD_FAILED,
+    BugReportAction.CSV_LOAD_CANCELLED,
+    BugReportAction.FILTER_APPLIED,
+    BugReportAction.GROUPING_APPLIED,
+    BugReportAction.OPTION_WORKBOOK,
+    BugReportAction.OPTION_HTML,
+    BugReportAction.OPTION_GROUPING,
+    BugReportAction.OPTION_CHARTS,
+    BugReportAction.CHECK_CHARTS_PRESENT,
+    BugReportAction.CHECK_WORKBOOK_REQUEST_MATCH,
+    BugReportAction.CHECK_FILTER_REQUEST_MATCH,
+    BugReportAction.CHECK_GROUPING_REQUEST_MATCH,
+    BugReportAction.CHECK_CHART_REQUEST_MATCH,
+    BugReportAction.OUTPUT_WITHOUT_REQUESTED_CHARTS,
+    BugReportAction.ANALYSIS_STARTED,
+    BugReportAction.ANALYSIS_FINISHED,
+    BugReportAction.ANALYSIS_FINISHED_WITH_WARNINGS,
+    BugReportAction.ANALYSIS_FAILED,
+    BugReportAction.ANALYSIS_CANCELLED,
+    BugReportAction.EXPORT_STARTED,
+    BugReportAction.EXPORT_FINISHED,
+    BugReportAction.EXPORT_FAILED,
+    BugReportAction.EXPORT_CANCELLED,
+    BugReportAction.PROBLEM_REPORTED,
 })
 _FIXED_LINES_BEFORE_ACTIVITY = (
     "# Metroliza bug report",
@@ -65,7 +123,11 @@ _FIXED_LINES_BEFORE_ACTIVITY = (
     "",
     "## Recent activity",
 )
-_CURRENT_COVERAGE = "Coverage: selected CSV workflow actions. Input data, paths, names, and configuration values are not included."
+_CURRENT_COVERAGE = (
+    "Coverage: selected actions across application workflows; not every action is recorded. "
+    "Input data, paths, names, and free-text values are not included."
+)
+_PREVIOUS_COVERAGE = "Coverage: selected CSV workflow actions. Input data, paths, names, and configuration values are not included."
 _CURRENT_ACTIVITY_HISTORY = "Activity history: retained local activity may include earlier launches."
 _CURRENT_SESSION_BOUNDARIES = "Session boundaries: unknown; prior activity is not evidence of a crash."
 _CURRENT_ASYNC_NOTE = "Recent activity is queued asynchronously and may not survive forced exit."
@@ -97,17 +159,21 @@ class _ParsedSafeReport:
 
 def _current_report_layout(lines: list[str]) -> _ReportLayout | None:
     if (len(lines) < 19 or lines[5] != _CURRENT_ACTIVITY_HISTORY
-            or lines[6] != _CURRENT_SESSION_BOUNDARIES or lines[7] != _CURRENT_ASYNC_NOTE
-            or lines[9:11] != ["Reproduction status: `NOT_RUN`", "External input data: `not included`"]
-            or lines[11] != ""):
+            or lines[6] != _CURRENT_SESSION_BOUNDARIES or lines[7] != _CURRENT_ASYNC_NOTE):
+        return None
+    offset = int(lines[8] == ERROR_LOG_NOTE)
+    if (len(lines) < 19 + offset
+            or lines[9 + offset:11 + offset] != [
+                "Reproduction status: `NOT_RUN`", "External input data: `not included`"
+            ] or lines[11 + offset] != ""):
         return None
     restored = re.fullmatch(
         r"Previous activity restored: `(unknown|available|not_available|loading)`",
-        lines[8],
+        lines[8 + offset],
     )
     if restored is None:
         return None
-    return _ReportLayout(12, 13, 15, restored.group(1))
+    return _ReportLayout(12 + offset, 13 + offset, 15 + offset, restored.group(1))
 
 
 def _legacy_report_layout(lines: list[str]) -> _ReportLayout | None:
@@ -121,7 +187,7 @@ def _report_layout(lines: list[str]) -> _ReportLayout | None:
             or not _VERSION_LINE.fullmatch(lines[2])
             or lines[3] != _FIXED_LINES_BEFORE_ACTIVITY[3]):
         return None
-    if lines[4] == _CURRENT_COVERAGE:
+    if lines[4] in {_CURRENT_COVERAGE, _PREVIOUS_COVERAGE}:
         return _current_report_layout(lines)
     if lines[4] == _FIXED_LINES_BEFORE_ACTIVITY[4]:
         return _legacy_report_layout(lines)
@@ -143,10 +209,17 @@ def _report_metadata(lines: list[str], layout: _ReportLayout):
 
 def _report_actions(lines: list[str], layout: _ReportLayout):
     footer = ["", "## Reproduction", "Reproduction not performed. Input data was not captured."]
-    if len(lines) < layout.activity_index + 4 or lines[-3:] != footer:
+    full_footer = footer + list(AGENT_REPORT_GUIDANCE)
+    if lines[-len(full_footer):] == full_footer:
+        footer_size = len(full_footer)
+    elif lines[-len(footer):] == footer:
+        footer_size = len(footer)
+    else:
+        return None
+    if len(lines) < layout.activity_index + footer_size + 1:
         return None
     actions: list[tuple[BugReportAction, bool | None]] = []
-    for line in lines[layout.activity_index + 1:-3]:
+    for line in lines[layout.activity_index + 1:-footer_size]:
         match = _ACTIVITY_LINE.fullmatch(line)
         if match is None:
             return None
@@ -231,6 +304,10 @@ def _scenario_matches(report: _ParsedSafeReport) -> bool:
         return False
     bounds = _analysis_bounds(report.actions, state)
     if bounds is None:
+        return False
+    # A later action in another module means the observed problem may have
+    # occurred there. Do not silently match stale CSV activity to that report.
+    if any(action not in _CSV_SCENARIO_ACTIONS for action, _ in report.actions[bounds[2] + 1:]):
         return False
     return _operation_has_grouping_workbook(report.actions, *bounds)
 

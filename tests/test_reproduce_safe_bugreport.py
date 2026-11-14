@@ -205,6 +205,25 @@ def test_report_without_required_actions_does_not_run_a_scenario(monkeypatch):
     assert result.reproduced_report is False
 
 
+def test_later_non_csv_workflow_does_not_match_stale_csv_activity():
+    recorder = SafeBugReportRecorder()
+    recorder.record(BugReportAction.GROUPING_APPLIED)
+    recorder.record(BugReportAction.OPTION_WORKBOOK, enabled=True)
+    recorder.record(BugReportAction.OPTION_GROUPING, enabled=True)
+    recorder.record(BugReportAction.ANALYSIS_STARTED)
+    recorder.record(BugReportAction.ANALYSIS_FINISHED)
+    recorder.record(BugReportAction.WORKSPACE_REALTIME_OPENED)
+    recorder.record(BugReportAction.REALTIME_TEMPORARY_STORAGE, enabled=True)
+    recorder.record(BugReportAction.REALTIME_POLL_FAILED)
+
+    result = match_safe_bugreport(
+        build_bug_report_markdown(BugReportCategory.WRONG_OUTPUT, recorder.snapshot())
+    )
+
+    assert result.status == "NO_SCENARIO_MATCH"
+    assert result.scenario == "none"
+
+
 def test_preloaded_source_can_match_from_analysis_event_without_csv_load():
     recorder = SafeBugReportRecorder()
     recorder.record(BugReportAction.GROUPING_APPLIED)

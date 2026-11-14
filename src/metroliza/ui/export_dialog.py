@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date
 
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.data_grouping import DataGrouping
@@ -68,6 +69,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+
 try:
     from metroliza.ui.worker_progress_dialog import (
         create_delayed_worker_progress_dialog as create_worker_progress_dialog,
@@ -112,6 +115,33 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
+
+
+def _record_export_action(action, *, enabled=None) -> None:
+    try:
+        _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # A local diagnostic must never change export behavior.
+        return
+
+
+def _record_export_option_states(options, *, filters_applied=False, grouping_applied=False) -> None:
+    """Best-effort option evidence, restricted to fixed boolean fields."""
+    try:
+        for action, enabled in (
+            (BugReportAction.OPTION_EXPORT_CLOUD, getattr(options, "backend_target", None) == "google"),
+            (BugReportAction.OPTION_EXPORT_HTML, bool(getattr(options, "generate_html_dashboard", False))),
+            (BugReportAction.OPTION_EXPORT_CONTEXT, bool(getattr(options, "include_industrial_context", False))),
+            (BugReportAction.OPTION_HIDE_OK, bool(getattr(options, "hide_ok_results", False))),
+            (BugReportAction.OPTION_EXPORT_FILTERS_APPLIED, bool(filters_applied)),
+            (BugReportAction.OPTION_EXPORT_GROUPING_APPLIED, bool(grouping_applied)),
+            (BugReportAction.OPTION_EXPORT_DASHBOARD_VISUALS_ENABLED,
+             bool(getattr(options, "generate_html_dashboard", False))),
+        ):
+            _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # Diagnostics cannot alter whether the requested export starts.
+        return
 
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
@@ -1261,6 +1291,7 @@ class ExportDialog(QDialog):
                 self.filter_window = FilterDialog(self, db_file=self.db_file)
             if not self.filter_window.isVisible():
                 self.filter_window.show()
+                _record_export_action(BugReportAction.WORKFLOW_EXPORT_FILTER_DIALOG_OPENED)
 
             # Raise the export dialog to the top and activate it
             self.filter_window.raise_()
@@ -1282,6 +1313,7 @@ class ExportDialog(QDialog):
                 self.grouping_window.refresh_data()
             if not self.grouping_window.isVisible():
                 self.grouping_window.show()
+                _record_export_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_DIALOG_OPENED)
 
             # Raise the grouping dialog to the top and activate it
             self.grouping_window.raise_()
@@ -1324,6 +1356,8 @@ class ExportDialog(QDialog):
             if filter_state is not None:
                 self.filter_state = filter_state
             self._refresh_filter_state_summary()
+            _record_export_action(BugReportAction.WORKFLOW_EXPORT_FILTER_APPLIED)
+            _record_export_action(BugReportAction.OPTION_EXPORT_FILTERS_APPLIED, enabled=True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1341,6 +1375,7 @@ class ExportDialog(QDialog):
             self._refresh_filter_state_summary()
             self._discard_child_dialog('filter_window')
             self._refresh_draft_request_summary()
+            _record_export_action(BugReportAction.OPTION_EXPORT_FILTERS_APPLIED, enabled=False)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1349,6 +1384,8 @@ class ExportDialog(QDialog):
             self.df_for_grouping = None
             self.set_grouping_applied(False)
             self._discard_child_dialog('grouping_window')
+            _record_export_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_CLEARED)
+            _record_export_action(BugReportAction.OPTION_EXPORT_GROUPING_APPLIED, enabled=False)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1360,6 +1397,9 @@ class ExportDialog(QDialog):
             else:
                 self.select_group_label.setText("Not applied")
             self._sync_html_dashboard_only_state()
+            _record_export_action(BugReportAction.OPTION_EXPORT_GROUPING_APPLIED, enabled=bool(applied))
+            if applied:
+                _record_export_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_APPLIED)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1483,6 +1523,13 @@ class ExportDialog(QDialog):
             completion_signal.connect(self.on_export_finished)
             self.export_thread.finished.connect(self.on_export_thread_stopped)
             self.export_thread.canceled.connect(self.on_export_canceled)
+            # Keep only closed option states. Never retain the target path, query,
+            # preset label, chart text, or values from the export request.
+            _record_export_option_states(
+                getattr(export_request, "options", None),
+                filters_applied=getattr(self, "filter_state", None) is not None,
+                grouping_applied=getattr(self, "df_for_grouping", None) is not None,
+            )
             self.export_thread.start()
             self.loading_dialog.show()
         except Exception as e:
@@ -1848,9 +1895,17 @@ class ExportDialog(QDialog):
                     getattr(self, "df_for_grouping", None)
                 ),
             )
+            _record_export_action(BugReportAction.WORKFLOW_EXPORT_DASHBOARD_VISUAL_OPTIONS_OPENED)
             if dialog.exec():
                 self.dashboard_visual_settings = dialog.visual_settings()
                 self._sync_dashboard_visual_controls()
+                _record_export_action(
+                    BugReportAction.WORKFLOW_EXPORT_DASHBOARD_VISUAL_OPTIONS_APPLIED
+                )
+            else:
+                _record_export_action(
+                    BugReportAction.WORKFLOW_EXPORT_DASHBOARD_VISUAL_OPTIONS_CANCELLED
+                )
         except Exception as exc:
             QMessageBox.warning(self, "Dashboard visuals", f"Could not open dashboard visuals: {exc}")
 

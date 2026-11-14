@@ -8,6 +8,15 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from metroliza.parsing.preflight import ParsePreflightService
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
+
+
+def _record_preflight_action(action: BugReportAction) -> None:
+    try:
+        _bugreport_recorder.record(action)
+    except Exception:
+        # Copyable diagnostics must never change scan completion or cancellation.
+        return
 
 
 class ParsePreflightThread(QThread):
@@ -40,6 +49,7 @@ class ParsePreflightThread(QThread):
         )
 
     def run(self) -> None:
+        _record_preflight_action(BugReportAction.REPORT_PREFLIGHT_STARTED)
         try:
             result = ParsePreflightService().scan_source(
                 source_path=self.source_path,
@@ -49,6 +59,17 @@ class ParsePreflightThread(QThread):
                 on_progress=self._on_progress,
             )
         except Exception as exc:  # pragma: no cover - defensive worker boundary
+            _record_preflight_action(BugReportAction.REPORT_PREFLIGHT_FAILED)
             self.failed.emit(f"{type(exc).__name__}: {exc}")
             return
+        try:
+            action = (
+                BugReportAction.REPORT_PREFLIGHT_CANCELLED
+                if result.cancelled
+                else BugReportAction.REPORT_PREFLIGHT_COMPLETED
+            )
+        except Exception:
+            # Projection failures must not suppress the worker's original result.
+            action = BugReportAction.REPORT_PREFLIGHT_RESULT_UNKNOWN
+        _record_preflight_action(action)
         self.completed.emit(result)

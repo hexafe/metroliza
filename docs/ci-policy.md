@@ -109,8 +109,9 @@ For docs-only changes the Tier-0 result and explicit heavy-job skips described a
 
 The `Run native Windows safe bug report tests` step in `windows-core-smoke` checks the
 fixed-schema local recorder, private history lifecycle, report dialog, synthetic replay,
-and a real CSV worker-to-clipboard flow with the Windows Qt plugin. These are source
-tests; they do not qualify a packaged EXE.
+early startup-failure recovery, closed error categories, and application-wide workflow
+instrumentation, including a real CSV worker-to-clipboard flow with the Windows Qt
+plugin. These are source tests; they do not qualify a packaged EXE.
 
 The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
 checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite

@@ -222,9 +222,13 @@ def start_local_bugreport_history(parent, app) -> None:
     """Start private history in the normal UI, without disk I/O on the GUI thread."""
     try:
         root = IncidentStore().root
-        if root is None or not recorder.configure_history(root.parent / "safe-bugreport-activity"):
+        if root is None:
             return
-        recorder.record(BugReportAction.APP_OPENED)
+        history_root = root.parent / "safe-bugreport-activity"
+        if recorder.configure_history(history_root):
+            recorder.record(BugReportAction.APP_OPENED)
+        elif not recorder.history_is_running(history_root):
+            return
         # A short best-effort drain on orderly exit; abrupt exits can lose queued events.
         app.aboutToQuit.connect(lambda: recorder.close_history(timeout=0.2))
         QTimer.singleShot(250, lambda: _offer_previous_history(parent, 0))

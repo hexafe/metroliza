@@ -1764,7 +1764,7 @@ jobs:
           METROLIZA_EXPECT_QT_PLATFORM: windows
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -v tests/test_safe_bugreport.py tests/test_safe_bugreport_dialog.py tests/test_safe_bugreport_csv_integration.py tests/test_safe_bugreport_recovery.py tests/test_safe_bugreport_user_flow.py tests/test_reproduce_safe_bugreport.py
+          python -m pytest -v tests/test_safe_bugreport.py tests/test_safe_bugreport_dialog.py tests/test_safe_bugreport_csv_integration.py tests/test_safe_bugreport_recovery.py tests/test_safe_bugreport_user_flow.py tests/test_reproduce_safe_bugreport.py tests/test_appwide_safe_errors.py tests/test_app_wide_bugreport_instrumentation.py tests/test_workflow_bugreport_actions.py tests/test_safe_bugreport_real_export.py tests/test_report_worker_safe_bugreport.py tests/test_bugreport_cancellation_outcomes.py tests/test_parse_reports_backend_bugreport.py tests/test_mapping_bugreport_terminal.py
 
       - name: Run Windows candidate receipt and ownership contracts
         env:

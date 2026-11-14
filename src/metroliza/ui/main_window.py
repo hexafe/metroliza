@@ -13,6 +13,7 @@ from metroliza.app.startup_profile import record_event
 from metroliza.reports.db import sqlite_query_only_connection_scope
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.help_menu import build_help_menu
 from metroliza.ui.shortcuts import (
     LEGACY_MAIN_SHORTCUTS, MAIN_SHORTCUTS, WORKSPACE_SHORTCUTS,
@@ -954,6 +955,21 @@ class MainWindow(QMainWindow):
         return callback() if callback else None
 
     def _on_navigation_changed(self, index):
+        page_id = self.navigation_combo.itemData(index)
+        activities = {
+            "reports": BugReportAction.WORKSPACE_REPORTS_OPENED,
+            "database": BugReportAction.WORKSPACE_DATABASE_OPENED,
+            "characteristic_mapping": BugReportAction.WORKSPACE_CHARACTERISTIC_MAPPING_OPENED,
+            "metadata_enrichment": BugReportAction.WORKSPACE_METADATA_ENRICHMENT_OPENED,
+            "export": BugReportAction.WORKSPACE_EXPORT_OPENED,
+            "csv_summary": BugReportAction.WORKSPACE_CSV_OPENED,
+            "industrial_data": BugReportAction.WORKSPACE_INDUSTRIAL_OPENED,
+            "realtime_monitor": BugReportAction.WORKSPACE_REALTIME_OPENED,
+            "parser_profiles": BugReportAction.WORKSPACE_PARSER_PROFILES_OPENED,
+        }
+        activity = activities.get(page_id) if type(page_id) is str else None
+        if activity is not None:
+            _bugreport_recorder.record(activity)
         if self._reports_first_paint and self.navigation_combo.itemData(index) == "reports":
             self._ensure_reports_workspace()
         self.workspace_stack.setCurrentIndex(index)
@@ -1286,8 +1302,11 @@ class MainWindow(QMainWindow):
             self.cancel_metadata_enrichment_button.setVisible(True)
             self.enrich_metadata_action.setEnabled(False)
             self._start_metadata_enrichment_progress()
+            self._metadata_enrichment_bugreport_reported = False
+            _bugreport_recorder.record(BugReportAction.METADATA_ENRICHMENT_STARTED)
             self.metadata_enrichment_thread.start()
         except Exception as e:
+            self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_FAILED)
             self.log_and_exit(e)
 
     def _clear_metadata_enrichment_thread(self):
@@ -1326,6 +1345,7 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def on_metadata_enrichment_error(self, message):
+        self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_FAILED)
         self.metadata_enrichment_error_message = message
         self.metadata_enrichment_status_label.setText(f"Metadata enrichment failed: {message}")
         set_status_variant(self.metadata_enrichment_status_label, "danger")
@@ -1352,6 +1372,17 @@ class MainWindow(QMainWindow):
                 if result is not None:
                     self._show_metadata_enrichment_result(result)
                     detail = f"\n{self.metadata_enrichment_status_label.text()}"
+                    failed = int(getattr(result, "failed_files", 0) or 0)
+                    enriched = int(getattr(result, "enriched_files", 0) or 0)
+                    self._record_metadata_enrichment_bugreport(
+                        BugReportAction.METADATA_ENRICHMENT_FINISHED_WITH_WARNINGS
+                        if enriched > 0 and failed > 0
+                        else BugReportAction.METADATA_ENRICHMENT_FAILED
+                    )
+                else:
+                    self._record_metadata_enrichment_bugreport(
+                        BugReportAction.METADATA_ENRICHMENT_RESULT_UNKNOWN
+                    )
                 self.metadata_enrichment_status_label.setText(
                     f"Metadata enrichment failed: {self.metadata_enrichment_error_message}{detail}"
                 )
@@ -1362,8 +1393,34 @@ class MainWindow(QMainWindow):
             result = getattr(self.metadata_enrichment_thread, "result", None)
             if result is not None:
                 self._show_metadata_enrichment_result(result)
+                cancelled = (
+                    bool(getattr(result, "cancellation_requested", False))
+                    or getattr(result, "termination_reason", None) == "cancelled"
+                )
+                failed = getattr(result, "failed_files", 0)
+                skipped = getattr(result, "skipped_files", 0)
+                warnings = getattr(self, "metadata_enrichment_warnings", ())
+                if cancelled:
+                    self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_CANCELLED)
+                elif failed and not getattr(result, "enriched_files", 0):
+                    self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_FAILED)
+                elif failed or skipped or warnings:
+                    self._record_metadata_enrichment_bugreport(
+                        BugReportAction.METADATA_ENRICHMENT_FINISHED_WITH_WARNINGS
+                    )
+                else:
+                    self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_FINISHED)
+            else:
+                self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_RESULT_UNKNOWN)
         except Exception as e:
+            self._record_metadata_enrichment_bugreport(BugReportAction.METADATA_ENRICHMENT_FAILED)
             self.log_and_exit(e)
+
+    def _record_metadata_enrichment_bugreport(self, action):
+        if getattr(self, "_metadata_enrichment_bugreport_reported", False):
+            return
+        _bugreport_recorder.record(action)
+        self._metadata_enrichment_bugreport_reported = True
 
     def _show_metadata_enrichment_result(self, result):
         failed = getattr(result, "failed_files", 0)
@@ -1615,6 +1672,7 @@ class MainWindow(QMainWindow):
         """Compatibility action: focus the one persistent Reports owner."""
         self._show_workspace_page("reports")
         self.reports_workspace.focus_primary_action()
+        _bugreport_recorder.record(BugReportAction.WORKSPACE_REPORTS_OPENED)
         return self.reports_workspace
 
     def start_metadata_enrichment_from_parsing(self, db_file):
@@ -1645,6 +1703,7 @@ class MainWindow(QMainWindow):
             self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
+            _bugreport_recorder.record(BugReportAction.WORKFLOW_DATABASE_EDIT_OPENED)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1669,6 +1728,7 @@ class MainWindow(QMainWindow):
             self.export_dialog.database_change_allowed = self._report_context_change_allowed
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
+            _bugreport_recorder.record(BugReportAction.WORKSPACE_EXPORT_OPENED)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1735,6 +1795,7 @@ class MainWindow(QMainWindow):
             self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
+            _bugreport_recorder.record(BugReportAction.WORKSPACE_INDUSTRIAL_OPENED)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1806,6 +1867,7 @@ class MainWindow(QMainWindow):
             self.last_realtime_dashboard_db_path = dashboard_db_path
             self.realtime_monitoring_dialog.raise_()
             self.realtime_monitoring_dialog.activateWindow()
+            _bugreport_recorder.record(BugReportAction.REALTIME_MONITORING_OPENED)
             if using_session_db:
                 self.statusBar().showMessage(
                     "Real-time industrial monitoring opened with temporary session DB.",
@@ -2074,6 +2136,7 @@ class MainWindow(QMainWindow):
 
             self.parser_plugin_wizard_dialog.raise_()
             self.parser_plugin_wizard_dialog.activateWindow()
+            _bugreport_recorder.record(BugReportAction.WORKSPACE_PARSER_PROFILES_OPENED)
         except Exception as e:
             self.log_and_exit(e)
 
