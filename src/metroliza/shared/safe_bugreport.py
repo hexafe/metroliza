@@ -364,6 +364,12 @@ class _QueuedHistoryEvent:
 
 
 @dataclass(frozen=True, slots=True)
+class _QueuedHistoryEvents:
+    events: tuple[SafeBugReportEvent, ...]
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
 class _ClearHistory:
     generation: int
 
@@ -443,10 +449,19 @@ class LocalBugReportHistoryStore:
     def append_locked(
         self, event: SafeBugReportEvent, *, max_events: int, events_lost: bool = False
     ) -> bool:
+        return self.append_many_locked((event,), max_events=max_events, events_lost=events_lost)
+
+    def append_many_locked(
+        self,
+        appended: tuple[SafeBugReportEvent, ...],
+        *,
+        max_events: int,
+        events_lost: bool = False,
+    ) -> bool:
         try:
             events, lost = self.load_locked()
-            overflow = len(events) >= max_events
-            events = (*events, event)[-max_events:]
+            overflow = len(events) + len(appended) > max_events
+            events = (*events, *appended)[-max_events:]
             return self._replace_locked(events, lost or overflow or events_lost)
         except Exception:
             return False
@@ -510,7 +525,7 @@ class SafeBugReportRecorder:
         self._max_events = max_events
         self._history: LocalBugReportHistoryStore | None = None
         self._queue: queue.Queue[
-            _QueuedHistoryEvent | _ClearHistory | _StopHistoryWorker
+            _QueuedHistoryEvent | _QueuedHistoryEvents | _ClearHistory | _StopHistoryWorker
         ] | None = None
         self._worker: threading.Thread | None = None
         self._closed_baseline: tuple[SafeBugReportEvent, ...] | None = None
@@ -558,13 +573,15 @@ class SafeBugReportRecorder:
             self._queue = queue.Queue(maxsize=self._write_queue_size)
             self._previous_session_state = PreviousSessionState.LOADING.value
             initial = tuple(self._events)
-            for event in initial:
+            if initial:
                 try:
-                    self._queue.put_nowait(_QueuedHistoryEvent(event, self._history_generation))
+                    self._queue.put_nowait(
+                        _QueuedHistoryEvents(initial, self._history_generation)
+                    )
                     self._pending_writes += 1
                 except queue.Full:
                     self._events_lost = True
-                    break
+                    self._loss_since_clear = True
             with self._write_pending:
                 self._pending_writes += 1  # includes asynchronous root/restore bootstrap
             self._worker = threading.Thread(target=self._write_loop, daemon=True,
@@ -654,13 +671,8 @@ class SafeBugReportRecorder:
                                 self._events_lost = True
                                 self._loss_since_clear = True
                     continue
-                assert isinstance(command, _QueuedHistoryEvent)
-                with self._lock:
-                    lost = self._events_lost
-                if lock is None or not history.append_locked(
-                    command.event, max_events=self._max_events, events_lost=lost
-                ):
-                    self._mark_events_lost(command.generation)
+                assert isinstance(command, (_QueuedHistoryEvent, _QueuedHistoryEvents))
+                self._append_queued_history(history, command, lock is not None)
             finally:
                 work_queue.task_done()
                 with self._write_pending:
@@ -668,6 +680,23 @@ class SafeBugReportRecorder:
                     self._write_pending.notify_all()
         if lock is not None:
             lock.release()
+
+    def _append_queued_history(self, history, command, has_store_lock: bool) -> None:
+        with self._lock:
+            lost = self._events_lost
+        if not has_store_lock:
+            self._mark_events_lost(command.generation)
+            return
+        if isinstance(command, _QueuedHistoryEvent):
+            saved = history.append_locked(
+                command.event, max_events=self._max_events, events_lost=lost
+            )
+        else:
+            saved = history.append_many_locked(
+                command.events, max_events=self._max_events, events_lost=lost
+            )
+        if not saved:
+            self._mark_events_lost(command.generation)
 
     def record(self, action: object, *, enabled: object = None) -> bool:
         """Best-effort product hook; reject anything outside the closed schema."""
