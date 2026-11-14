@@ -15,7 +15,20 @@ ERROR_CODES = ('bugreport_gate_missing', 'bugreport_application_missing',
                'unexpected_exception')
 SENTINELS = ('SYNTHETIC_CONFIDENTIAL_PATH_7F3A', 'SYNTHETIC_SHEET_NAME_91BC',
              'SYNTHETIC_INPUT_VALUE_62DE')
-EXPECTED_ACTIONS = ['app_opened', 'csv_opened', 'option_workbook', 'option_html']
+# Fixed synthetic trace spanning report import, database editing, industrial / realtime,
+# parser profiles, and the original CSV export-choice regression. This is a qualification
+# fixture, not telemetry harvested from a user session.
+EXPECTED_ACTIONS = [
+    'app_opened', 'workspace_reports_opened',
+    'workflow_report_import_started', 'workflow_report_import_completed',
+    'option_report_review_ocr', 'workspace_database_opened',
+    'workflow_database_edit_opened', 'workflow_database_edit_completed',
+    'workspace_industrial_opened', 'industrial_sync_started', 'industrial_sync_finished',
+    'workspace_realtime_opened', 'realtime_source_config_apply_started',
+    'realtime_source_config_apply_finished', 'workspace_parser_profiles_opened',
+    'parser_profile_validation_started', 'parser_profile_validation_finished',
+    'csv_opened', 'option_workbook', 'option_html', 'log_error_reports',
+]
 
 
 class BugReportChecksFailure(ValueError):
@@ -46,10 +59,11 @@ def _expected_preview() -> str:
         '',
         f'Application version: `{RELEASE_VERSION}`',
         'This report serializes only fixed action/category codes and boolean states.',
-        'Coverage: selected CSV workflow actions. Input data, paths, names, and configuration values are not included.',
+        'Coverage: selected actions across application workflows; not every action is recorded. Input data, paths, names, and free-text values are not included.',
         'Activity history: retained local activity may include earlier launches.',
         'Session boundaries: unknown; prior activity is not evidence of a crash.',
         'Recent activity is queued asynchronously and may not survive forced exit.',
+        'Repeated error-log categories may be coalesced; detailed log text is not included.',
         'Previous activity restored: `available`',
         'Reproduction status: `NOT_RUN`',
         'External input data: `not included`',
@@ -59,12 +73,34 @@ def _expected_preview() -> str:
         '',
         '## Recent activity',
         '- `app_opened`',
+        '- `workspace_reports_opened`',
+        '- `workflow_report_import_started`',
+        '- `workflow_report_import_completed`',
+        '- `option_report_review_ocr` (enabled: `true`)',
+        '- `workspace_database_opened`',
+        '- `workflow_database_edit_opened`',
+        '- `workflow_database_edit_completed`',
+        '- `workspace_industrial_opened`',
+        '- `industrial_sync_started`',
+        '- `industrial_sync_finished`',
+        '- `workspace_realtime_opened`',
+        '- `realtime_source_config_apply_started`',
+        '- `realtime_source_config_apply_finished`',
+        '- `workspace_parser_profiles_opened`',
+        '- `parser_profile_validation_started`',
+        '- `parser_profile_validation_finished`',
         '- `csv_opened`',
         '- `option_workbook` (enabled: `true`)',
         '- `option_html` (enabled: `false`)',
+        '- `log_error_reports`',
         '',
         '## Reproduction',
         'Reproduction not performed. Input data was not captured.',
+        '',
+        '## Instructions for a coding agent',
+        'Inspect the source for the recorded actions, results and options; investigate the reported category.',
+        'Use synthetic inputs only. Do not request or infer confidential files, values, paths or names.',
+        'Attempt a relevant reproduction where possible; distinguish evidence, hypotheses and unverified behavior.',
     )
     return '\n'.join(lines) + '\n'
 
@@ -84,15 +120,37 @@ def _restore_synthetic_history(app, history_root, observation, resources):
         BugReportAction, PreviousSessionState, SafeBugReportRecorder,
     )
 
-    recorder = SafeBugReportRecorder(max_events=16)
+    recorder = SafeBugReportRecorder(max_events=32)
     resources['recorder'] = recorder
     _require(recorder.configure_history(history_root), 'bugreport_history_invalid')
-    for action, enabled in ((BugReportAction.APP_OPENED, None), (BugReportAction.CSV_OPENED, None),
-                            (BugReportAction.OPTION_WORKBOOK, True), (BugReportAction.OPTION_HTML, False)):
+    synthetic_events = (
+        (BugReportAction.APP_OPENED, None),
+        (BugReportAction.WORKSPACE_REPORTS_OPENED, None),
+        (BugReportAction.WORKFLOW_REPORT_IMPORT_STARTED, None),
+        (BugReportAction.WORKFLOW_REPORT_IMPORT_COMPLETED, None),
+        (BugReportAction.OPTION_REPORT_REVIEW_OCR, True),
+        (BugReportAction.WORKSPACE_DATABASE_OPENED, None),
+        (BugReportAction.WORKFLOW_DATABASE_EDIT_OPENED, None),
+        (BugReportAction.WORKFLOW_DATABASE_EDIT_COMPLETED, None),
+        (BugReportAction.WORKSPACE_INDUSTRIAL_OPENED, None),
+        (BugReportAction.INDUSTRIAL_SYNC_STARTED, None),
+        (BugReportAction.INDUSTRIAL_SYNC_FINISHED, None),
+        (BugReportAction.WORKSPACE_REALTIME_OPENED, None),
+        (BugReportAction.REALTIME_SOURCE_CONFIG_APPLY_STARTED, None),
+        (BugReportAction.REALTIME_SOURCE_CONFIG_APPLY_FINISHED, None),
+        (BugReportAction.WORKSPACE_PARSER_PROFILES_OPENED, None),
+        (BugReportAction.PARSER_PROFILE_VALIDATION_STARTED, None),
+        (BugReportAction.PARSER_PROFILE_VALIDATION_FINISHED, None),
+        (BugReportAction.CSV_OPENED, None),
+        (BugReportAction.OPTION_WORKBOOK, True),
+        (BugReportAction.OPTION_HTML, False),
+        (BugReportAction.LOG_ERROR_REPORTS, None),
+    )
+    for action, enabled in synthetic_events:
         _require(recorder.record(action, enabled=enabled), 'bugreport_history_invalid')
     _require(recorder.flush(5.0) and recorder.close_history(5.0), 'bugreport_history_invalid')
     resources['recorder_closed'] = True
-    restored = SafeBugReportRecorder(max_events=16)
+    restored = SafeBugReportRecorder(max_events=32)
     resources['restored'] = restored
     _require(restored.configure_history(history_root), 'bugreport_history_invalid')
     ready = _wait(app, lambda: restored.snapshot().previous_session_state != PreviousSessionState.LOADING.value)
@@ -100,10 +158,15 @@ def _restore_synthetic_history(app, history_root, observation, resources):
     snapshot = restored.snapshot()
     actions = [event.action.value for event in snapshot.events]
     _require(snapshot.previous_session_state == PreviousSessionState.AVAILABLE.value
-             and actions == EXPECTED_ACTIONS and snapshot.events[2].enabled is True
-             and snapshot.events[3].enabled is False, 'bugreport_history_invalid')
+             and actions == EXPECTED_ACTIONS
+             and snapshot.events[4].enabled is True
+             and snapshot.events[18].enabled is True
+             and snapshot.events[19].enabled is False,
+             'bugreport_history_invalid')
     observation['evidence'].update(history_state=snapshot.previous_session_state, actions=actions,
-        option_states={'workbook': snapshot.events[2].enabled, 'html': snapshot.events[3].enabled})
+        option_states={'report_review_ocr': snapshot.events[4].enabled,
+                       'workbook': snapshot.events[18].enabled,
+                       'html': snapshot.events[19].enabled})
     observation['facets']['history_restore'] = 'passed'
     return recorder, restored
 

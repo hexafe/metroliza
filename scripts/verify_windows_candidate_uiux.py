@@ -796,8 +796,8 @@ def bugreport_leaf(value, *, packaged, qpa):
     literal(evidence['execution'], 'packaged' if packaged else 'source')
     literal(evidence['platform'], qpa)
     literal(evidence['history_state'], 'available')
-    literal(evidence['actions'], ['app_opened', 'csv_opened', 'option_workbook', 'option_html'])
-    literal(evidence['option_states'], {'workbook': True, 'html': False})
+    literal(evidence['actions'], BUGREPORT_ACTIONS)
+    literal(evidence['option_states'], {'report_review_ocr': True, 'workbook': True, 'html': False})
     literal(evidence['category'], 'wrong_output')
     literal(evidence['reproduction_status'], 'NOT_RUN')
     digest(evidence['preview_sha256'])
@@ -811,7 +811,17 @@ BUGREPORT_ERRORS = ('bugreport_gate_missing', 'bugreport_application_missing',
     'bugreport_route_missing', 'bugreport_preview_invalid', 'bugreport_clipboard_invalid',
     'bugreport_history_invalid', 'bugreport_privacy_invalid', 'bugreport_cleanup_failed',
     'unexpected_exception')
-BUGREPORT_ACTIONS = ['app_opened', 'csv_opened', 'option_workbook', 'option_html']
+BUGREPORT_ACTIONS = [
+    'app_opened', 'workspace_reports_opened',
+    'workflow_report_import_started', 'workflow_report_import_completed',
+    'option_report_review_ocr', 'workspace_database_opened',
+    'workflow_database_edit_opened', 'workflow_database_edit_completed',
+    'workspace_industrial_opened', 'industrial_sync_started', 'industrial_sync_finished',
+    'workspace_realtime_opened', 'realtime_source_config_apply_started',
+    'realtime_source_config_apply_finished', 'workspace_parser_profiles_opened',
+    'parser_profile_validation_started', 'parser_profile_validation_finished',
+    'csv_opened', 'option_workbook', 'option_html', 'log_error_reports',
+]
 
 
 def bugreport_diagnostic_leaf(value, *, packaged, qpa):
@@ -834,10 +844,13 @@ def bugreport_diagnostic_leaf(value, *, packaged, qpa):
     require(type(actions) is list and len(actions) <= len(BUGREPORT_ACTIONS)
             and actions == BUGREPORT_ACTIONS[:len(actions)])
     expected_options = {}
-    if 'option_workbook' in actions:
-        expected_options['workbook'] = True
-    if 'option_html' in actions:
-        expected_options['html'] = False
+    for action, key, state in (
+        ('option_report_review_ocr', 'report_review_ocr', True),
+        ('option_workbook', 'workbook', True),
+        ('option_html', 'html', False),
+    ):
+        if action in actions:
+            expected_options[key] = state
     literal(evidence['option_states'], expected_options)
     literal(evidence['category'], 'wrong_output')
     literal(evidence['reproduction_status'], 'NOT_RUN')

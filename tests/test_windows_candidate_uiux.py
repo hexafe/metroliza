@@ -587,8 +587,8 @@ def bugreport_observation(*, failed=False):
     value = dict(schema_version=1, status='passed', facets=dict.fromkeys(
         ('help_action', 'preview', 'clipboard', 'history_restore', 'privacy_guards', 'cleanup'), 'passed'),
         error_codes=[], evidence=dict(execution='packaged', platform='windows', history_state='available',
-            actions=['app_opened', 'csv_opened', 'option_workbook', 'option_html'],
-            option_states={'workbook': True, 'html': False}, category='wrong_output',
+            actions=list(uiux.BUGREPORT_ACTIONS),
+            option_states={'report_review_ocr': True, 'workbook': True, 'html': False}, category='wrong_output',
             reproduction_status='NOT_RUN', preview_sha256='b' * 64, clipboard_match=True,
             excluded_sentinels_absent=True, dialog_closed=True))
     if failed:
