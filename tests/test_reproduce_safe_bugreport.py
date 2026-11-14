@@ -50,6 +50,128 @@ def test_synthetic_csv_grouping_xlsx_reference_uses_product_pipeline():
     }
 
 
+def test_synthetic_reference_rejects_swapped_row_group_assignments(monkeypatch):
+    from metroliza.tabular import tabular_analytics_service as service
+
+    real_grouping = service.apply_tabular_grouping
+
+    def swapped_grouping(*args, **kwargs):
+        result = real_grouping(*args, **kwargs)
+        dataframe = result.dataframe.copy()
+        dataframe["GROUP"] = dataframe["GROUP"].map({
+            "SYNTHETIC_A": "SYNTHETIC_B",
+            "SYNTHETIC_B": "SYNTHETIC_A",
+        })
+        assert len(dataframe) == 8
+        assert set(dataframe["GROUP"]) == {"SYNTHETIC_A", "SYNTHETIC_B"}
+        return replace(result, dataframe=dataframe)
+
+    monkeypatch.setattr(service, "apply_tabular_grouping", swapped_grouping)
+
+    result = run_synthetic_csv_grouping_repro()
+
+    assert result.status == "GROUPING_MISMATCH"
+    assert result.row_count == 8
+    assert result.group_count == 2
+    assert result.reproduced_report is False
+
+
+def test_synthetic_reference_rejects_boolean_grouping_row_identity(monkeypatch):
+    from metroliza.tabular import tabular_analytics_service as service
+
+    real_grouping = service.apply_tabular_grouping
+
+    def boolean_row_identity(*args, **kwargs):
+        result = real_grouping(*args, **kwargs)
+        dataframe = result.dataframe.copy()
+        dataframe["source_row_number"] = dataframe["source_row_number"].astype(object)
+        dataframe.at[dataframe.index[0], "source_row_number"] = True
+        assert dataframe.iloc[0]["source_row_number"] is True
+        assert len(dataframe) == 8 and set(dataframe["GROUP"]) == {"SYNTHETIC_A", "SYNTHETIC_B"}
+        return replace(result, dataframe=dataframe)
+
+    monkeypatch.setattr(service, "apply_tabular_grouping", boolean_row_identity)
+
+    result = run_synthetic_csv_grouping_repro()
+
+    assert result.status == "GROUPING_MISMATCH"
+    assert result.row_count == 8
+    assert result.group_count == 2
+    assert result.reproduced_report is False
+
+
+def test_synthetic_reference_rejects_wrong_exported_value_with_same_shape(monkeypatch):
+    from openpyxl import load_workbook
+    from metroliza.tabular import tabular_analytics_service as service
+
+    real_export = service.export_tabular_analytics_workbook
+
+    def export_with_wrong_value(*args, **kwargs):
+        written = real_export(*args, **kwargs)
+        output = kwargs["output_file"]
+        workbook = load_workbook(output)
+        sheet = workbook["Table Data"]
+        value_column = next(
+            index for index, cell in enumerate(sheet[1], start=1) if cell.value == "value"
+        )
+        sheet.cell(row=2, column=value_column).value = 0
+        workbook.save(output)
+        workbook.close()
+        old_check = load_workbook(output, read_only=True, data_only=True)
+        try:
+            table = old_check["Table Data"]
+            headers = tuple(next(table.iter_rows(values_only=True)))
+            groups = {row[headers.index("GROUP")] for row in table.iter_rows(min_row=2, values_only=True)}
+            rows = sum(1 for _ in table.iter_rows(min_row=2, values_only=True))
+            assert tuple(old_check.sheetnames) == reproduce_safe_bugreport.EXPECTED_SHEETS
+            assert groups == set(reproduce_safe_bugreport.EXPECTED_GROUPS)
+            assert rows == 8
+        finally:
+            old_check.close()
+        return written
+
+    monkeypatch.setattr(service, "export_tabular_analytics_workbook", export_with_wrong_value)
+
+    result = run_synthetic_csv_grouping_repro()
+
+    assert result.status == "WORKBOOK_MISMATCH"
+    assert result.row_count == 8
+    assert result.group_count == 2
+    assert result.workbook_sheet_count == 3
+    assert result.reproduced_report is False
+
+
+def test_synthetic_reference_rejects_boolean_xlsx_row_identity(monkeypatch):
+    from openpyxl import load_workbook
+    from metroliza.tabular import tabular_analytics_service as service
+
+    real_export = service.export_tabular_analytics_workbook
+
+    def export_with_boolean_identity(*args, **kwargs):
+        written = real_export(*args, **kwargs)
+        output = kwargs["output_file"]
+        workbook = load_workbook(output)
+        sheet = workbook["Table Data"]
+        row_column = next(
+            index for index, cell in enumerate(sheet[1], start=1)
+            if cell.value == "source_row_number"
+        )
+        sheet.cell(row=2, column=row_column).value = True
+        workbook.save(output)
+        workbook.close()
+        return written
+
+    monkeypatch.setattr(service, "export_tabular_analytics_workbook", export_with_boolean_identity)
+
+    result = run_synthetic_csv_grouping_repro()
+
+    assert result.status == "WORKBOOK_MISMATCH"
+    assert result.row_count == 8
+    assert result.group_count == 2
+    assert result.workbook_sheet_count == 3
+    assert result.reproduced_report is False
+
+
 def test_closed_report_codes_select_only_prebuilt_synthetic_scenario():
     report = _grouping_workbook_report()
     match = match_safe_bugreport(report)

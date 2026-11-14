@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import numbers
 import re
 import sys
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 import tempfile
@@ -28,6 +31,12 @@ ORACLE_FILE = FIXTURE_ROOT / "oracles.json"
 FIXTURE_KEY = "analysis.csv"
 EXPECTED_SHEETS = ("Table Data", "Metrics", "Diagnostics")
 EXPECTED_GROUPS = ("SYNTHETIC_A", "SYNTHETIC_B")
+EXPECTED_ROW_GROUPS = (
+    (1, "SYNTHETIC_A"), (2, "SYNTHETIC_B"),
+    (3, "SYNTHETIC_A"), (4, "SYNTHETIC_B"),
+    (5, "SYNTHETIC_A"), (6, "SYNTHETIC_B"),
+    (7, "SYNTHETIC_A"), (8, "SYNTHETIC_B"),
+)
 SCENARIO = "csv_grouping_xlsx_v1"
 _VERSION_LINE = re.compile(r"Application version: `(?:UNKNOWN|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:dev|rc)\.[0-9]{1,3})?)`\Z")
 _ACTIVITY_LINE = re.compile(r"- `([a-z_]+)`(?: \(enabled: `(true|false)`\))?\Z")
@@ -271,6 +280,75 @@ def _fixture_is_pinned() -> bool:
         return False
 
 
+def _expected_fixture_rows() -> tuple[tuple[object, ...], ...]:
+    """Read the pinned synthetic input independently of the product loader."""
+    with CSV_FIXTURE.open(newline="", encoding="utf-8-sig") as stream:
+        rows = tuple(csv.DictReader(stream))
+    if len(rows) != len(EXPECTED_ROW_GROUPS):
+        return ()
+    expected_groups = dict(EXPECTED_ROW_GROUPS)
+    return tuple(
+        (
+            index,
+            row["Operator lot code"],
+            row["Captured at"],
+            row["Line"],
+            float(row["Value"]),
+            expected_groups[index],
+        )
+        for index, row in enumerate(rows, start=1)
+    )
+
+
+def _is_exact_numeric_identifier(value: object, expected: int) -> bool:
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return False
+    return math.isfinite(value) and value == expected and int(value) == expected
+
+
+def _grouped_row_ids_match(dataframe, expected: tuple[tuple[int, str], ...]) -> bool:
+    if "GROUP" not in dataframe.columns:
+        return False
+    rows = tuple(dataframe[["source_row_number", "GROUP"]].itertuples(index=False, name=None))
+    return len(rows) == len(expected) and all(
+        _is_exact_numeric_identifier(actual_id, expected_id) and actual_group == expected_group
+        for (actual_id, actual_group), (expected_id, expected_group) in zip(rows, expected, strict=True)
+    )
+
+
+def _exported_rows_match(actual_rows: tuple[tuple[object, ...], ...],
+                         expected_rows: tuple[tuple[object, ...], ...]) -> bool:
+    return len(actual_rows) == len(expected_rows) and all(
+        _is_exact_numeric_identifier(actual[0], expected[0]) and actual[1:] == expected[1:]
+        for actual, expected in zip(actual_rows, expected_rows, strict=True)
+    )
+
+
+def _workbook_matches_fixture(output: Path, expected_rows: tuple[tuple[object, ...], ...]) -> tuple[bool, int]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(output, read_only=True, data_only=True)
+    try:
+        sheets = tuple(workbook.sheetnames)
+        if sheets != EXPECTED_SHEETS:
+            return False, len(sheets)
+        table = workbook["Table Data"]
+        headers = tuple(next(table.iter_rows(values_only=True)))
+        expected_columns = (
+            "source_row_number", "operator_lot_code", "captured_at", "line", "value", "GROUP"
+        )
+        if any(column not in headers for column in expected_columns):
+            return False, len(sheets)
+        column_indexes = tuple(headers.index(column) for column in expected_columns)
+        actual_rows = tuple(
+            tuple(row[index] for index in column_indexes)
+            for row in table.iter_rows(min_row=2, values_only=True)
+        )
+        return _exported_rows_match(actual_rows, expected_rows), len(sheets)
+    finally:
+        workbook.close()
+
+
 def run_synthetic_csv_grouping_repro() -> ReproductionResult:
     """Exercise product CSV loading, grouping, and XLSX writer on fixed data."""
     if not _fixture_is_pinned():
@@ -280,8 +358,6 @@ def run_synthetic_csv_grouping_repro() -> ReproductionResult:
     result = ReproductionResult("RUN_FAILED", "csv_grouping_xlsx_v1", "synthetic", 0, 0, 0, False)
     try:
         import pandas as pd
-        from openpyxl import load_workbook
-
         from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
         from metroliza.tabular.tabular_analytics_service import (
             apply_tabular_grouping,
@@ -292,18 +368,20 @@ def run_synthetic_csv_grouping_repro() -> ReproductionResult:
 
         loaded = load_tabular_analytics_file(CSV_FIXTURE)
         frame = loaded.dataframe
-        if not isinstance(frame, pd.DataFrame) or len(frame) != 8:
-            result = ReproductionResult("LOAD_MISMATCH", "csv_grouping_xlsx_v1", "synthetic", 0, 0, 0)
+        expected_rows = _expected_fixture_rows()
+        if not isinstance(frame, pd.DataFrame) or len(frame) != 8 or len(expected_rows) != 8:
+            status = "FIXTURE_INVALID" if len(expected_rows) != 8 else "LOAD_MISMATCH"
+            result = ReproductionResult(status, "csv_grouping_xlsx_v1", "synthetic", 0, 0, 0)
         else:
             grouping = pd.DataFrame({
-                "REPORT_ID": tuple(range(1, 9)),
-                "GROUP": ("SYNTHETIC_A", "SYNTHETIC_B") * 4,
+                "REPORT_ID": tuple(row_number for row_number, _group in EXPECTED_ROW_GROUPS),
+                "GROUP": tuple(group for _row_number, group in EXPECTED_ROW_GROUPS),
             })
             grouped = apply_tabular_grouping(frame, grouping)
             if not grouped.applied or grouped.group_count != 2:
                 result = ReproductionResult("GROUPING_MISMATCH", "csv_grouping_xlsx_v1", "synthetic", len(frame),
                                             grouped.group_count, 0)
-            elif "GROUP" not in grouped.dataframe.columns or set(grouped.dataframe["GROUP"]) != set(EXPECTED_GROUPS):
+            elif not _grouped_row_ids_match(grouped.dataframe, EXPECTED_ROW_GROUPS):
                 result = ReproductionResult("GROUPING_MISMATCH", "csv_grouping_xlsx_v1", "synthetic", len(frame),
                                             grouped.group_count, 0)
             else:
@@ -318,25 +396,13 @@ def run_synthetic_csv_grouping_repro() -> ReproductionResult:
                             time_series=False, histogram=False, violin=False, box=False, groupstats=False,
                         ),
                     )
-                    workbook = load_workbook(output, read_only=True, data_only=True)
-                    try:
-                        sheets = tuple(workbook.sheetnames)
-                        table = workbook["Table Data"]
-                        headers = tuple(next(table.iter_rows(values_only=True)))
-                        group_column = headers.index("GROUP")
-                        groups = {
-                            row[group_column]
-                            for row in table.iter_rows(min_row=2, values_only=True)
-                        }
-                        rows = sum(1 for _ in table.iter_rows(min_row=2, values_only=True))
-                    finally:
-                        workbook.close()
-                    if sheets != EXPECTED_SHEETS or groups != set(EXPECTED_GROUPS) or rows != 8:
+                    workbook_matches, sheet_count = _workbook_matches_fixture(output, expected_rows)
+                    if not workbook_matches:
                         result = ReproductionResult("WORKBOOK_MISMATCH", "csv_grouping_xlsx_v1", "synthetic", len(frame),
-                                                    grouped.group_count, len(sheets))
+                                                    grouped.group_count, sheet_count)
                     elif written.sheet_names != EXPECTED_SHEETS:
                         result = ReproductionResult("WORKBOOK_MISMATCH", "csv_grouping_xlsx_v1", "synthetic", len(frame),
-                                                    grouped.group_count, len(sheets))
+                                                    grouped.group_count, sheet_count)
                     else:
                         result = ReproductionResult("REFERENCE_PASS", "csv_grouping_xlsx_v1", "synthetic", len(frame), 2,
                                                     len(EXPECTED_SHEETS), False)
