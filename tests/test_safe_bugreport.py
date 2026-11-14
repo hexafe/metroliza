@@ -243,9 +243,27 @@ def test_saturated_history_clear_then_new_scenario_is_fifo_and_complete(tmp_path
     assert recorder.snapshot().events_lost
     negative = build_bug_report_markdown(BugReportCategory.WRONG_OUTPUT, recorder.snapshot())
     assert match_safe_bugreport(negative).status == "NO_SCENARIO_MATCH"
+    initial_batches = []
+    original_append_many = safe_bugreport.LocalBugReportHistoryStore.append_many_locked
+
+    def observe_initial_batch(store, events, **kwargs):
+        initial_batches.append(len(events))
+        return original_append_many(store, events, **kwargs)
+
+    monkeypatch.setattr(
+        safe_bugreport.LocalBugReportHistoryStore,
+        "append_many_locked",
+        observe_initial_batch,
+    )
     assert recorder.configure_history(root)
     assert recorder.flush(3)
+    assert initial_batches == [safe_bugreport.MAX_EVENTS]
     assert recorder.snapshot().events_lost
+    initial_payload = json.loads((root / "activity.json").read_text(encoding="ascii"))
+    assert initial_payload["events"] == [
+        {"action": BugReportAction.ANALYSIS_FAILED.value, "enabled": None}
+    ] * safe_bugreport.MAX_EVENTS
+    assert initial_payload["events_lost"] is True
 
     new_actions = (
         BugReportAction.GROUPING_APPLIED,
