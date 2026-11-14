@@ -10,8 +10,8 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 
 The accepted [versioning policy](docs/project/versioning_policy.md) uses development packages
 `0.8.0-dev.N`, frozen candidates `0.8.0-rc.N` and the accepted current-scope release `0.8.0`.
-Actual build dates and qualification receipts are separate. The next public identity is `0.8.0-dev.2`;
-version assignment does not claim a new package passed or was delivered. See
+Actual build dates and qualification receipts are separate. This source checkout's identity is
+`0.8.0-dev.3`; version assignment does not claim a new package passed or was delivered. See
 [release status](docs/release_checks/release_status.md) for exact evidence and the separate `1.0.0` targets.
 Normal work targets `dev`; `main` remains the production/history default. Historical June RC2
 evidence is preserved through immutable recovery refs; promotion to `main` is separately gated.
@@ -329,9 +329,9 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`0.8.0-dev.2`): Local bug reports match closed activity codes to predefined scenarios and check reference workflows with synthetic data; they do not reproduce the user's incident or include confidential inputs.
+Current release highlight (`0.8.0-dev.3`): Extend local-only bug reports to selected, predefined application actions across modules. Reports omit confidential input data and free text; coverage is selective and does not guarantee incident reconstruction or user acceptance.
 
-Build `261119` contains the main Reports HTML export and safe diagnostics correction
+Historical build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
 recorded in the [release status hub](docs/release_checks/release_status.md) and its linked
 issue ledger. Earlier builds retain their original source/package outcomes; a current
@@ -342,9 +342,9 @@ version label does not change those historical receipts. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `0.8.0-dev.2`)
+### Changelog highlights (release `0.8.0-dev.3`)
 
-- Local bug reports match closed activity codes to predefined scenarios and check reference workflows with synthetic data; they do not reproduce the user's incident or include confidential inputs.
+- Extend local-only bug reports to selected, predefined application actions across modules. Reports omit confidential input data and free text; coverage is selective and does not guarantee incident reconstruction or user acceptance.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
 Sync docs from release metadata:

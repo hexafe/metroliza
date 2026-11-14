@@ -23,11 +23,11 @@ def test_report_contains_only_closed_codes_and_boolean_states():
     assert recorder.record(BugReportAction.CSV_OPENED)
     assert recorder.record(BugReportAction.OPTION_WORKBOOK, enabled=True)
     report = build_bug_report_markdown(
-        BugReportCategory.WRONG_OUTPUT, recorder.snapshot(), release_version="0.8.0-dev.2"
+        BugReportCategory.WRONG_OUTPUT, recorder.snapshot(), release_version="0.8.0-dev.3"
     )
 
     assert "Category: `wrong_output`" in report
-    assert "Application version: `0.8.0-dev.2`" in report
+    assert "Application version: `0.8.0-dev.3`" in report
     assert "Reproduction status: `NOT_RUN`" in report
     assert "External input data: `not included`" in report
     assert "`csv_opened`" in report

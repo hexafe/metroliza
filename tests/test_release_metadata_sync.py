@@ -10,7 +10,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertEqual(metadata.release_version, "0.8.0-dev.2")
+        self.assertEqual(metadata.release_version, "0.8.0-dev.3")
         self.assertEqual(metadata.build, "")
         self.assertEqual(metadata.version_label, metadata.release_version)
         self.assertEqual(metadata.public_version_label, metadata.release_version)
@@ -50,12 +50,16 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                '- Generate a local bug report with a bounded activity history and selected options; input data and user content are not included<br>',
-                '- Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user\'s incident<br>',
+                '- Create a local-only report from a bounded history of selected, predefined actions and boolean options across application modules; confidential input data and free text are excluded<br>',
+                '- Coverage is selective; a report may not reconstruct the incident and does not establish user acceptance<br>',
             ],
         )
         changelog = sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8")
         self.assertIn("## 0.8.0-dev.1 — previous source version", changelog)
+        self.assertIn("## 0.8.0-dev.2 — previous source version", changelog)
+        dev2_section = changelog.split("## 0.8.0-dev.2 — previous source version", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Generate a local bug report with a bounded activity history and selected options; input data, paths, names and configuration values are excluded.", dev2_section)
+        self.assertIn("Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident.", dev2_section)
         previous_section = changelog.split("## 0.8.0-dev.1 — previous source version", 1)[1].split("\n## ", 1)[0]
         for original_point in (
             "Adopt development package versions `dev.N`, frozen candidates `rc.N`",
@@ -98,7 +102,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("0.8.0-dev.2", updated)
+            self.assertIn("0.8.0-dev.3", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

@@ -1,14 +1,14 @@
-RELEASE_VERSION = "0.8.0-dev.2"
+RELEASE_VERSION = "0.8.0-dev.3"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Local bug reports match closed activity codes to predefined scenarios and check reference workflows with synthetic data; they do not reproduce the user\'s incident or include confidential inputs.'
+CURRENT_RELEASE_HIGHLIGHT = 'Extend local-only bug reports to selected, predefined application actions across modules. Reports omit confidential input data and free text; coverage is selective and does not guarantee incident reconstruction or user acceptance.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Generate a local bug report with a bounded activity history and selected options; input data and user content are not included<br>
-    - Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident<br>
+    - Create a local-only report from a bounded history of selected, predefined actions and boolean options across application modules; confidential input data and free text are excluded<br>
+    - Coverage is selective; a report may not reconstruct the incident and does not establish user acceptance<br>
 
     <br><b>Archive:</b><br>
     <br><b>Version 2026.09rc1 (build 261115), superseded candidate build:</b><br>

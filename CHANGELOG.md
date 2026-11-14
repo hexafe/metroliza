@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.2 — current version
+## 0.8.0-dev.3 — current version
+- Extend local-only bug reports to selected, predefined application actions across modules, with a bounded history and boolean options.
+- Exclude confidential input data and free text. Coverage is selective and does not guarantee incident reconstruction or user acceptance.
+
+## 0.8.0-dev.2 — previous source version
 - Generate a local bug report with a bounded activity history and selected options; input data, paths, names and configuration values are excluded.
 - Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident.
 
