@@ -2,6 +2,7 @@ from dataclasses import replace
 import json
 from threading import Event
 import time
+import types
 
 from metroliza.shared import safe_bugreport
 from scripts.reproduce_safe_bugreport import match_safe_bugreport
@@ -97,6 +98,60 @@ def test_persistent_history_restores_only_closed_enum_and_boolean_values(tmp_pat
         BugReportAction.OPTION_WORKBOOK,
     ]
     assert snapshot.events[-1].enabled is True
+    assert second.close_history(3)
+
+
+def test_persistent_history_restores_when_direntry_metadata_is_incomplete(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "safe-bugreport-activity"
+    first = SafeBugReportRecorder()
+    assert first.configure_history(root)
+    assert first.record(BugReportAction.GROUPING_APPLIED)
+    assert first.flush(3)
+    assert first.close_history(3)
+
+    real_scandir = safe_bugreport.os.scandir
+    with real_scandir(root) as entries:
+        scanned = tuple((entry.name, entry.path) for entry in entries)
+    weak_stat_calls: list[str] = []
+
+    class WeakWindowsEntry:
+        def __init__(self, name, path):
+            self.name, self.path = name, path
+
+        def stat(self, *, follow_symlinks=True):
+            weak_stat_calls.append(self.name)
+            metadata = safe_bugreport.os.stat(
+                self.path, follow_symlinks=follow_symlinks
+            )
+            return types.SimpleNamespace(
+                st_mode=metadata.st_mode,
+                st_ino=0,
+                st_dev=0,
+                st_nlink=0,
+                st_uid=metadata.st_uid,
+                st_size=metadata.st_size,
+                st_file_attributes=getattr(metadata, "st_file_attributes", 0),
+            )
+
+    class WeakWindowsScan:
+        def __enter__(self):
+            return iter(WeakWindowsEntry(*entry) for entry in scanned)
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(safe_bugreport.os, "scandir", lambda _root: WeakWindowsScan())
+
+    second = SafeBugReportRecorder()
+    assert second.configure_history(root)
+    assert second.flush(3)
+    assert second.snapshot().previous_session_state == "available"
+    assert [event.action for event in second.snapshot().events[-1:]] == [
+        BugReportAction.GROUPING_APPLIED,
+    ]
+    assert weak_stat_calls == []
     assert second.close_history(3)
 
 
