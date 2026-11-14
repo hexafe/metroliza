@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_on": "2026-10-26",
+  "generated_on": "2026-11-14",
   "entries": [
     {
       "repository": "hexafe-plotstats",
@@ -1255,7 +1255,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2619023f3d088a17257674383e3d597886c514f3209494d3652fc196ab856ea2",
+      "fingerprint": "7f06e9bde583a01eb881e15574f6c5d89fc563f5754fa4d52477014c4061e35c",
       "test_id": "B608",
       "path": "src/metroliza/ui/industrial_linking_dialog.py",
       "owner": "Security review",
@@ -1264,7 +1264,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4da753747dd9e747aaa5a5487951f00ea989b95b58604cffdde1cba8e1d50209",
+      "fingerprint": "2c140f6eba86d23fa19db469d69cebb93ec21eaf8e3b6fe138e780dc4eb287fe",
       "test_id": "B608",
       "path": "src/metroliza/ui/industrial_linking_dialog.py",
       "owner": "Security review",
@@ -1273,7 +1273,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "eabf41365592fc4805ec0e036ab5f60c0849f419596b09ff0c18aba48d08b7f6",
+      "fingerprint": "432b7b3231c00cc13075778fbf6b623cc76466791ddd803032a571af902f3cd6",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1282,7 +1282,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1a1ce85f4eb387ed6d12e62f92d55611bf3de561dafdc7d55226ab85d98b7cb3",
+      "fingerprint": "9ca6f107cf53a9c348432106d995a79b5669c819f65e7dbb9f686e7fe7274343",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1291,7 +1291,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "02118c25fac8bc62d2442b6e9f5adcbcb4bd7b97b03bb61adfcf79ac33f8f318",
+      "fingerprint": "3d1c05b38fb6f6a5c0685285b1291e77dd03619e6aca7d63b7fe30273098fee0",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1300,7 +1300,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "23ffe8eef2dccf418058d0580932601d17e9c76e6521581d9e322132180933ff",
+      "fingerprint": "052f95f649a8c792e06f420e1131281752ca59a2cd6d0a3e1e499f785d05c7f4",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1309,7 +1309,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "bd48017ae55712a6ccc114c1da478370b17c16ed20f880a393921288655c5b9c",
+      "fingerprint": "55da3b15a8fc8779d0fb80c3715b3c6d371a4a5cf98326120d3629e0ef4fe6dc",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1318,7 +1318,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1cedcf8e3feadfb83082d723e1a518a1a2e28fd827790333f6d9a9688f71e1d8",
+      "fingerprint": "9b5a6aadf57e14d44fef0eeb370dbace9dded35c9c029e65d4f52831ef893f92",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",

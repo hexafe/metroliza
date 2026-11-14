@@ -45,7 +45,8 @@ from metroliza.industrial.industrial_data_repository import (
 )
 from metroliza.industrial.industrial_source_config import (
     default_industrial_source_config_path,
-    import_source_profiles_to_repository,
+    load_source_profiles_from_config,
+    upsert_source_profile_to_repository,
 )
 from metroliza.industrial.realtime.monitor_config import (
     DEFAULT_AGGREGATION_METHODS,
@@ -67,6 +68,7 @@ from metroliza.industrial.industrial_workers import (
     RealtimeDashboardWriterThread,
     RealtimeMonitorPollThread,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
 from metroliza.ui.realtime_monitor_presentation import observed_freshness
@@ -83,6 +85,30 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
+
+
+_REALTIME_EVENT_REVIEW_ACTIONS = {
+    "acknowledge": (
+        BugReportAction.REALTIME_EVENT_ACKNOWLEDGE_STARTED,
+        BugReportAction.REALTIME_EVENT_ACKNOWLEDGE_FINISHED,
+        BugReportAction.REALTIME_EVENT_ACKNOWLEDGE_FAILED,
+    ),
+    "resolve": (
+        BugReportAction.REALTIME_EVENT_RESOLVE_STARTED,
+        BugReportAction.REALTIME_EVENT_RESOLVE_FINISHED,
+        BugReportAction.REALTIME_EVENT_RESOLVE_FAILED,
+    ),
+    "false_positive": (
+        BugReportAction.REALTIME_EVENT_FALSE_POSITIVE_STARTED,
+        BugReportAction.REALTIME_EVENT_FALSE_POSITIVE_FINISHED,
+        BugReportAction.REALTIME_EVENT_FALSE_POSITIVE_FAILED,
+    ),
+}
+
+
+def _record_realtime_event_review_action(action_codes, outcome_index: int) -> None:
+    if action_codes is not None:
+        _bugreport_recorder.record(action_codes[outcome_index])
 
 
 class RealtimeIndustrialMonitoringDialog(QDialog):
@@ -119,6 +145,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._dashboard_open_pending = False
         self._dashboard_open_after_current = False
         self._stop_requested = False
+        self._bugreport_monitor_session_active = False
+        self._bugreport_poll_error_state: bool | None = None
+        self._bugreport_monitor_stop_requested = False
+        self._bugreport_single_poll_pending = False
         self._closing = False
         self._shutdown_waiting = False
         self._shutdown_completion_emitted = False
@@ -228,6 +258,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def set_temporary_session_storage(self, temporary: bool) -> None:
         self.temporary_session = bool(temporary)
+        _bugreport_recorder.record(
+            BugReportAction.REALTIME_TEMPORARY_STORAGE,
+            enabled=self.temporary_session,
+        )
         if self.temporary_session:
             self.storage_lifecycle_label.setText(
                 "Temporary session storage · samples, events, and monitor setup must be saved "
@@ -728,7 +762,13 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             )
             set_status_variant(self.event_review_status_label, "warning")
             return
-        service = RealtimeDashboardService(self.db_file)
+        action_codes = _REALTIME_EVENT_REVIEW_ACTIONS.get(action)
+        _record_realtime_event_review_action(action_codes, 0)
+        try:
+            service = RealtimeDashboardService(self.db_file)
+        except Exception:
+            _record_realtime_event_review_action(action_codes, 2)
+            raise
         try:
             if action == "acknowledge":
                 service.acknowledge_event(
@@ -757,6 +797,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             else:
                 raise ValueError(f"Unsupported event action: {action}")
         except AnomalyEventStatusConflictError:
+            _record_realtime_event_review_action(action_codes, 2)
             self.refresh_event_review()
             self.event_review_status_label.setText(
                 "This event was already reviewed elsewhere. The open-event list was refreshed."
@@ -764,11 +805,13 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             set_status_variant(self.event_review_status_label, "warning")
             return
         except Exception as exc:
+            _record_realtime_event_review_action(action_codes, 2)
             message = redact_sensitive_text(exc)
             self.event_review_status_label.setText(f"Event review failed: {message}")
             set_status_variant(self.event_review_status_label, "danger")
             return
 
+        _record_realtime_event_review_action(action_codes, 1)
         self.event_comment_edit.clear()
         self.refresh_event_review()
         self.event_review_status_label.setText(f"Event {event_id} {verb} by {operator}.")
@@ -780,7 +823,26 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         config_path = Path(
             self.source_config_path_field.text() or self.config_path
         ).expanduser()
-        imported = import_source_profiles_to_repository(config_path, source_repository)
+        configured_profiles = load_source_profiles_from_config(config_path)
+        if configured_profiles:
+            _bugreport_recorder.record(
+                BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_STARTED
+            )
+            try:
+                imported = [
+                    upsert_source_profile_to_repository(source_repository, profile)
+                    for profile in configured_profiles
+                ]
+            except Exception:
+                _bugreport_recorder.record(
+                    BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_FAILED
+                )
+                raise
+            _bugreport_recorder.record(
+                BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_FINISHED
+            )
+        else:
+            imported = []
         profiles = source_repository.list_source_profiles(include_disabled=True)
         configs = config_repository.list_configs()
         return config_path, imported, profiles, configs
@@ -879,6 +941,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 if self.source_window.isVisible():
                     self.source_window.raise_()
                     self.source_window.activateWindow()
+                    _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCES_OPENED)
                     return
             except RuntimeError:
                 self.source_window = None
@@ -891,6 +954,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.source_window.show()
         self.source_window.raise_()
         self.source_window.activateWindow()
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCES_OPENED)
 
     def _close_source_profiles_for_context_change(self, action: str) -> bool:
         source_window = self.source_window
@@ -1098,6 +1162,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if profile is None or not profile.is_enabled:
             self._set_config_status("Select an enabled source to save.", "warning")
             return ()
+        _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_SAVE_STARTED)
         try:
             config = self.repository.upsert_config(self._config_from_form(profile))
             self.configs_by_profile_id[profile.id] = config
@@ -1107,8 +1172,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 "success",
             )
             self._sync_buttons()
+            _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_SAVE_FINISHED)
             return (config,)
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_SAVE_FAILED)
             message = redact_sensitive_text(exc)
             self._set_config_status(f"Config save failed: {message}", "danger")
             QMessageBox.warning(self, "Realtime monitor config", message)
@@ -1120,6 +1187,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_config_status("Select at least one source to monitor.", "warning")
             return ()
         saved: list[RealtimeMonitorConfig] = []
+        _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_APPLY_STARTED)
         try:
             for profile in profiles:
                 config = self.repository.upsert_config(self._config_from_form(profile))
@@ -1131,8 +1199,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 "success",
             )
             self._sync_buttons()
+            _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_APPLY_FINISHED)
             return tuple(saved)
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.REALTIME_SOURCE_CONFIG_APPLY_FAILED)
             message = redact_sensitive_text(exc)
             self._set_config_status(f"Config save failed: {message}", "danger")
             QMessageBox.warning(self, "Realtime monitor config", message)
@@ -1198,6 +1268,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         interval_ms = max(1_000, int(min(config.polling_interval_seconds for config in configs) * 1_000))
         self.poll_timer.start(interval_ms)
         self._sync_running_state(True)
+        self._bugreport_monitor_session_active = True
+        self._bugreport_poll_error_state = False
+        self._bugreport_monitor_stop_requested = False
+        _bugreport_recorder.record(BugReportAction.REALTIME_POLL_STARTED)
         self._set_monitor_status(
             f"Monitor: running {len(configs)} checked source(s)",
             "success",
@@ -1206,6 +1280,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.poll_once()
 
     def stop_monitoring(self, _checked: bool = False, *, wait_for_thread: bool = False) -> None:
+        self._record_monitor_stop_requested()
         self.poll_timer.stop()
         poll_owned = self.poll_thread is not None
         poll_running = poll_owned and self.poll_thread.isRunning()
@@ -1223,12 +1298,21 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_monitor_status("Monitor: stopping after the active poll", "warning")
             self._set_status("Stopping realtime monitoring...", "warning")
             return
+        if self._bugreport_monitor_session_active:
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_FINISHED)
+            self._bugreport_monitor_session_active = False
+        self._bugreport_monitor_stop_requested = False
         self._stop_requested = False
         self._sync_running_state(False)
         self._set_monitor_status("Monitor: stopped", "neutral")
         self._set_status("Stopped", "neutral")
         self.monitor_stopped.emit()
         self._emit_database_work_idle_if_ready()
+
+    def _record_monitor_stop_requested(self) -> None:
+        if self._bugreport_monitor_session_active and not self._bugreport_monitor_stop_requested:
+            _bugreport_recorder.record(BugReportAction.REALTIME_MONITOR_STOP_REQUESTED)
+            self._bugreport_monitor_stop_requested = True
 
     def poll_once(self) -> None:
         timer_active = self.poll_timer.isActive()
@@ -1249,9 +1333,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         poll_thread.update_label.connect(lambda text: self._set_poll_status(text, "info"))
         poll_thread.result_ready.connect(self._on_poll_results)
         poll_thread.error_occurred.connect(self._on_poll_error)
-        poll_thread.cancelled.connect(lambda text: self._set_poll_status(text, "warning"))
+        poll_thread.cancelled.connect(self._on_poll_cancelled)
         poll_thread.finished.connect(lambda: self._clear_poll_thread(poll_thread))
         self._set_poll_status("Polling realtime industrial sources...", "info")
+        if not self._bugreport_monitor_session_active:
+            self._bugreport_single_poll_pending = True
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_STARTED)
         poll_thread.start()
         self._sync_buttons()
 
@@ -1275,6 +1362,23 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.last_poll_results = tuple(results or ())
         self._populate_result_table(self.last_poll_results)
         failed = [result for result in self.last_poll_results if _result_has_actionable_failure(result)]
+        if self._bugreport_single_poll_pending:
+            _bugreport_recorder.record(
+                BugReportAction.REALTIME_POLL_FAILED
+                if failed
+                else BugReportAction.REALTIME_POLL_FINISHED
+            )
+            self._bugreport_single_poll_pending = False
+        if (
+            self._bugreport_monitor_session_active
+            and self._bugreport_poll_error_state != bool(failed)
+        ):
+            _bugreport_recorder.record(
+                BugReportAction.REALTIME_POLL_FAILED
+                if failed
+                else BugReportAction.REALTIME_POLL_FINISHED
+            )
+            self._bugreport_poll_error_state = bool(failed)
         inserted = sum(int(getattr(result, "samples_inserted", 0) or 0) for result in self.last_poll_results)
         event_count = sum(
             int(getattr(result, "detector_events_created", 0) or 0) for result in self.last_poll_results
@@ -1295,9 +1399,28 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
     def _on_poll_error(self, message: str) -> None:
         if self._closing:
             return
+        if self._bugreport_single_poll_pending:
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_FAILED)
+            self._bugreport_single_poll_pending = False
+        if (
+            self._bugreport_monitor_session_active
+            and self._bugreport_poll_error_state is not True
+        ):
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_FAILED)
+            self._bugreport_poll_error_state = True
         self._set_poll_status(f"Polling failed: {message}", "danger")
         self._append_diagnostic(message)
         self._sync_workflow_presentation()
+
+    def _on_poll_cancelled(self, message: str) -> None:
+        if self._bugreport_single_poll_pending:
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_CANCELLED)
+            self._bugreport_single_poll_pending = False
+        if self._bugreport_monitor_session_active:
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_CANCELLED)
+            if self._bugreport_monitor_stop_requested:
+                self._bugreport_monitor_session_active = False
+        self._set_poll_status(message, "warning")
 
     def _clear_poll_thread(self, finished_thread=None) -> None:
         if finished_thread is not None and finished_thread is not self.poll_thread:
@@ -1310,6 +1433,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._complete_deferred_shutdown()
             return
         if self._stop_requested:
+            if self._bugreport_monitor_session_active:
+                _bugreport_recorder.record(BugReportAction.REALTIME_POLL_FINISHED)
+                self._bugreport_monitor_session_active = False
+            self._bugreport_monitor_stop_requested = False
             self._stop_requested = False
             self._sync_running_state(False)
             self._set_monitor_status("Monitor: stopped", "neutral")
@@ -1411,9 +1538,13 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         )
         if self._dashboard_open_after_current:
             self._set_dashboard_status("Preparing realtime dashboard...", "info")
+        if self._dashboard_open_after_current:
+            _bugreport_recorder.record(BugReportAction.REALTIME_DASHBOARD_STARTED)
         dashboard_thread.start()
 
     def _on_dashboard_written(self, path: object) -> None:
+        if self._dashboard_open_after_current:
+            _bugreport_recorder.record(BugReportAction.REALTIME_DASHBOARD_FINISHED)
         if self._closing:
             return
         self.last_dashboard_path = Path(path)
@@ -1430,6 +1561,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             )
 
     def _on_dashboard_write_error(self, message: str) -> None:
+        if self._dashboard_open_after_current:
+            _bugreport_recorder.record(BugReportAction.REALTIME_DASHBOARD_FAILED)
         if self._closing:
             return
         self._append_diagnostic(f"Dashboard write failed: {message}")
@@ -1554,6 +1687,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._dashboard_cleanup_retry = False
         if not self._close_source_profiles_for_context_change("closing realtime monitoring"):
             return False
+        self._record_monitor_stop_requested()
         self._closing = True
         self.dashboard_write_debounce_timer.stop()
         self._dashboard_write_pending = False
@@ -1568,6 +1702,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_monitor_status("Monitor: stopping", "warning")
             self._set_status("Stopping realtime monitoring...", "warning")
             return False
+        if self._bugreport_monitor_session_active:
+            _bugreport_recorder.record(BugReportAction.REALTIME_POLL_FINISHED)
+            self._bugreport_monitor_session_active = False
+        self._bugreport_monitor_stop_requested = False
         return self._cleanup_dashboard_session()
 
     def is_close_deferred(self) -> bool:

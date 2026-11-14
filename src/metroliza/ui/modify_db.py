@@ -20,6 +20,7 @@ import PyQt6.QtWidgets as QtWidgets
 import logging
 import sqlite3
 from metroliza.shared.custom_logger import CustomLogger, LOG_ONLY
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
@@ -64,6 +65,16 @@ from metroliza.ui.worker_progress_dialog import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _record_database_edit_action(action: BugReportAction) -> None:
+    try:
+        _bugreport_recorder.record(action)
+    except Exception:
+        # Diagnostic history is best effort; an edit must keep its real outcome.
+        return
+
+
 QItemSelection = getattr(QtCore, "QItemSelection", None)
 QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
 
@@ -162,6 +173,7 @@ class ModifyDB(QDialog):
         self._storage_flavor = "current"
         self._changes_committed = False
         self._discard_confirmed = False
+        self._safe_report_open_recorded = False
 
         self.setup_ui()
 
@@ -209,6 +221,12 @@ class ModifyDB(QDialog):
                 ModifyDB._refresh_tables_for_view(self)
         except Exception as e:
             self.log_and_exit(e)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._safe_report_open_recorded:
+            self._safe_report_open_recorded = True
+            _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_OPENED)
 
     def create_widgets(self):
         try:
@@ -1172,6 +1190,7 @@ class ModifyDB(QDialog):
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
+            _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_STARTED)
             completed = self._apply_edit_payload(dict(
                 storage_flavor=self._storage_flavor,
                 normalization_changes=normalization_changes,
@@ -1184,12 +1203,14 @@ class ModifyDB(QDialog):
             self._report_save_error(e)
 
     def _edit_succeeded(self):
+        _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_COMPLETED)
         QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
         if "_changes_committed" not in vars(self) or not sip.isdeleted(self):
             self._changes_committed = True
             self.close()
 
     def _report_save_error(self, error):
+        _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_FAILED)
         if getattr(self.log_and_exit, "__func__", None) is not ModifyDB.log_and_exit:
             self.log_and_exit(error)
             return

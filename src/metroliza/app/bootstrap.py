@@ -58,6 +58,9 @@ class _StartupInvocation:
 _STARTUP_INVOCATION: ContextVar[_StartupInvocation | None] = ContextVar(
     "metroliza_startup_invocation", default=None
 )
+_BUGREPORT_HISTORY_OWNER: ContextVar[bool] = ContextVar(
+    "metroliza_bugreport_history_owner", default=False
+)
 
 
 def _begin_startup_context():
@@ -117,6 +120,12 @@ def _startup_failure(exception: Exception) -> None:
             return
         outcome = StartupOutcome.APPLICATION_FAILED if context.startup_complete else StartupOutcome.STARTUP_FAILED
         _startup_event(context.callsite, outcome, exception=exception)
+        from metroliza.shared.safe_bugreport import BugReportAction, recorder
+
+        recorder.record(
+            BugReportAction.APPLICATION_RUNTIME_FAILED
+            if context.startup_complete else BugReportAction.APPLICATION_STARTUP_FAILED
+        )
     except Exception:
         pass
 
@@ -447,7 +456,8 @@ def launch_ui(
     splash.show_message("Loading main window...", phase="main_window")
     _startup_event(StartupCallsite.MAIN_WINDOW_FACTORY)
     record_event("main_window_import_start")
-    if main_window_factory is None:
+    standard_main_window = main_window_factory is None
+    if standard_main_window:
         main_window_factory = load_main_window_factory()
     record_event("main_window_import_done")
 
@@ -463,6 +473,12 @@ def launch_ui(
     main_window.show()
     _startup_event(StartupCallsite.MAIN_WINDOW_SHOW_RETURNED)
     record_event("main_window_show_called")
+    if standard_main_window and not config.startup_ui_smoke_mode:
+        from PyQt6.QtCore import QTimer
+
+        start_history = getattr(main_window, "start_local_bugreport_history", None)
+        if callable(start_history):
+            QTimer.singleShot(0, start_history)
     if config.startup_ui_smoke_mode:
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
@@ -476,6 +492,37 @@ def launch_ui(
     shutdown_qt(app)
     record_event("event_loop_exit", exit_code=exit_code)
     return exit_code
+
+
+def _start_interactive_bugreport_history() -> bool:
+    """Start bounded history before interactive UI setup, with disk work on its worker."""
+    try:
+        from metroliza.shared.diagnostic_store import IncidentStore
+        from metroliza.shared.safe_bugreport import (
+            BugReportAction, install_application_error_hook, recorder,
+        )
+
+        root = IncidentStore().root
+        if root is not None and recorder.configure_history(root.parent / "safe-bugreport-activity"):
+            recorder.record(BugReportAction.APP_OPENED)
+            install_application_error_hook()
+            return True
+    except Exception:
+        # Diagnostics cannot affect application startup.
+        pass
+    return False
+
+
+def _finish_interactive_bugreport_history() -> None:
+    """Drain at most briefly when startup exits before Qt's aboutToQuit hook."""
+    try:
+        from metroliza.shared.safe_bugreport import recorder, remove_application_error_hook
+
+        remove_application_error_hook()
+        if recorder.history_is_running():
+            recorder.close_history(timeout=0.2)
+    except Exception:
+        pass
 
 
 def bootstrap_application() -> int:
@@ -500,12 +547,16 @@ def bootstrap_application() -> int:
             config.pdf_parser_smoke_expected_text or "",
         ))
 
+    if not config.startup_ui_smoke_mode:
+        if _start_interactive_bugreport_history():
+            _BUGREPORT_HISTORY_OWNER.set(True)
     return launch_ui(config)
 
 
 def run_application() -> int:
     """Run the original bootstrap flow with one optional invocation context."""
     token = None
+    history_token = _BUGREPORT_HISTORY_OWNER.set(False)
     try:
         token = _begin_startup_context()
     except Exception:
@@ -521,6 +572,9 @@ def run_application() -> int:
         _startup_event(StartupCallsite.APPLICATION_RETURN, StartupOutcome.APPLICATION_RETURNED, exit_code=exit_code)
         return exit_code
     finally:
+        if _BUGREPORT_HISTORY_OWNER.get():
+            _finish_interactive_bugreport_history()
+        _BUGREPORT_HISTORY_OWNER.reset(history_token)
         if token is not None:
             _STARTUP_INVOCATION.reset(token)
 

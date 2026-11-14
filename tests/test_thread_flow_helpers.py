@@ -1365,12 +1365,24 @@ class TestParseHelpers(unittest.TestCase):
         class FakeFuture:
             def __init__(self):
                 self.cancel_called = False
+                self._done = False
+                self._done_callbacks = []
 
             def done(self):
-                return False
+                return self._done
+
+            def add_done_callback(self, callback):
+                if self._done:
+                    callback(self)
+                else:
+                    self._done_callbacks.append(callback)
 
             def cancel(self):
                 self.cancel_called = True
+                self._done = True
+                for callback in self._done_callbacks:
+                    callback(self)
+                self._done_callbacks.clear()
                 return True
 
         class FakeExecutor:
