@@ -162,7 +162,7 @@ class LocalBugReportHistoryStore:
                     name = entry.name
                     if name == self._LOCK_NAME:
                         continue
-                    metadata = entry.stat(follow_symlinks=False)
+                    metadata = _diagnostic_store._scanned_metadata(entry)
                     if name == self._FILE_NAME:
                         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
                                 or _diagnostic_store._is_reparse_or_link(metadata)
