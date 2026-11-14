@@ -128,7 +128,7 @@ def test_canonical_and_compatibility_labels_have_no_pseudodate():
     import VersionDate
     from metroliza.app import version
 
-    assert VersionDate.VERSION_LABEL == version.VERSION_LABEL == "0.8.0-dev.1"
+    assert VersionDate.VERSION_LABEL == version.VERSION_LABEL == "0.8.0-dev.2"
     assert version.PUBLIC_VERSION_LABEL == version.RELEASE_VERSION == version.VERSION_LABEL
     assert version.VERSION_DATE == ""  # Deprecated import compatibility, never an artifact identity.
 
@@ -142,9 +142,9 @@ def test_owned_stub_copy_has_actual_full_pe_identity(tmp_path: Path):
     shutil.copy2(sys.executable, source)
     original = source.read_bytes()
     output = tmp_path / "versioned-stub.exe"
-    identity = ReleaseIdentity.parse("0.8.0-dev.1")
+    identity = ReleaseIdentity.parse("0.8.0-dev.2")
     stamp_stub(source, output, identity)
     assert source.read_bytes() == original
     receipt = verify_pe(output, identity)
     assert receipt["FileVersion"] == receipt["ProductVersion"] == identity.label
-    assert receipt["numeric_version"] == [0, 8, 0, 1]
+    assert receipt["numeric_version"] == [0, 8, 0, 2]

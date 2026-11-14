@@ -1,24 +1,14 @@
-RELEASE_VERSION = "0.8.0-dev.1"
+RELEASE_VERSION = "0.8.0-dev.2"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Main Reports HTML exports keep long labels without oversized asset names, with safe export-stage diagnostics and recovery guidance. Clearer report results, visible keyboard commands, explicit HTML/workbook outputs, and guided setup for profiles, production data and monitoring.'
+CURRENT_RELEASE_HIGHLIGHT = 'Local bug reports match closed activity codes to predefined scenarios and check reference workflows with synthetic data; they do not reproduce the user\'s incident or include confidential inputs.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>
-    - Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>
-    - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>
-    - Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys<br>
-    - After import, keep per-report saved, skipped and failed results in view, then review again before importing more<br>
-    - Filter dialogs show hidden selection counts; groups have explicit column and member controls<br>
-    - Choose HTML dashboards and optional workbooks with visible paths and the scope that will be generated<br>
-    - Parser Profiles separates installed profiles from adding a format, with preparation, check, validation and installation stages<br>
-    - Industrial Data shows source setup, access checks, cache readiness and the next available action<br>
-    - Realtime separates polling, last-snapshot freshness and dashboard state, with visible Stop and event review<br>
-    - Offline dashboards use a compact overview, retain sampling warnings, and show local Enter/E/Esc/Q hints<br>
-    - Help opens manuals pinned to this build, including the shared keyboard reference<br>
+    - Generate a local bug report with a bounded activity history and selected options; input data and user content are not included<br>
+    - Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident<br>
 
     <br><b>Archive:</b><br>
     <br><b>Version 2026.09rc1 (build 261115), superseded candidate build:</b><br>

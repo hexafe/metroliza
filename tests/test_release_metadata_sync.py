@@ -10,7 +10,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertEqual(metadata.release_version, "0.8.0-dev.1")
+        self.assertEqual(metadata.release_version, "0.8.0-dev.2")
         self.assertEqual(metadata.build, "")
         self.assertEqual(metadata.version_label, metadata.release_version)
         self.assertEqual(metadata.public_version_label, metadata.release_version)
@@ -50,20 +50,20 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                '- Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>',
-                '- Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>',
-                '- Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>',
-                '- Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys<br>',
-                '- After import, keep per-report saved, skipped and failed results in view, then review again before importing more<br>',
-                '- Filter dialogs show hidden selection counts; groups have explicit column and member controls<br>',
-                '- Choose HTML dashboards and optional workbooks with visible paths and the scope that will be generated<br>',
-                '- Parser Profiles separates installed profiles from adding a format, with preparation, check, validation and installation stages<br>',
-                '- Industrial Data shows source setup, access checks, cache readiness and the next available action<br>',
-                '- Realtime separates polling, last-snapshot freshness and dashboard state, with visible Stop and event review<br>',
-                '- Offline dashboards use a compact overview, retain sampling warnings, and show local Enter/E/Esc/Q hints<br>',
-                '- Help opens manuals pinned to this build, including the shared keyboard reference<br>',
+                '- Generate a local bug report with a bounded activity history and selected options; input data and user content are not included<br>',
+                '- Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user\'s incident<br>',
             ],
         )
+        changelog = sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8")
+        self.assertIn("## 0.8.0-dev.1 — previous source version", changelog)
+        previous_section = changelog.split("## 0.8.0-dev.1 — previous source version", 1)[1].split("\n## ", 1)[0]
+        for original_point in (
+            "Adopt development package versions `dev.N`, frozen candidates `rc.N`",
+            "Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history",
+            "Reserve `1.0.0` for both a complete external-LLM parser authoring package",
+            "This versioning change does not by itself claim new functionality",
+        ):
+            self.assertIn(original_point, previous_section)
         self.assertIn("Version 2026.09rc1 (build 261115)", VersionDate.release_notes)
         self.assertNotIn("261115", current_section)
         self.assertIn("Version 2026.09rc1 (build 261114)", VersionDate.release_notes)
@@ -98,7 +98,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("0.8.0-dev.1", updated)
+            self.assertIn("0.8.0-dev.2", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):
