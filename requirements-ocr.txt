@@ -1,5 +1,5 @@
 # Optional OCR backend dependencies for packaged builds.
 # OpenVINO is dev/benchmark only: see requirements-ocr-benchmark.txt.
-rapidocr==3.8.1
-onnxruntime==1.30.0
-opencv-python==4.14.0.94
+rapidocr==3.10.0
+onnxruntime==1.31.1
+opencv-python==5.0.0.93
