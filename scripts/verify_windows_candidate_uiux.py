@@ -653,9 +653,10 @@ TAB_ORACLE = {'busy': {'enabled': [True, False, False, True, False, False, False
 CONTROL_FACETS = ('workspace_routes', 'launcher_single_owner', 'reports_tab_initial_ready',
     'reports_tab_review_result', 'reports_tab_busy', 'text_modifier_guards', 'modal_shared_key_owner',
     'reports_filter_geometry', 'parser_profiles_geometry', 'active_child_capture', 'controls_cleanup')
-UIUX_FACETS = ('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures')
+UIUX_FACETS = ('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures', 'uiux_bugreport')
 WRAPPER_ERRORS = ('uiux_reports_failed', 'uiux_tabular_failed', 'uiux_controls_failed',
-                  'uiux_captures_failed', 'uiux_deadline', 'uiux_data_failed', 'uiux_unexpected')
+                  'uiux_captures_failed', 'uiux_bugreport_failed', 'uiux_deadline',
+                  'uiux_data_failed', 'uiux_unexpected')
 CAPTURE_ERRORS = ('capture_name_invalid', 'capture_owner_invalid', 'capture_pixels_failed', 'capture_state_failed')
 
 
@@ -772,7 +773,7 @@ def _wrapper(value, *, source, packaged, dpr, qpa):
     keys(value, ('schema_version', 'status', 'runtime_context', 'facets', 'error_codes', 'evidence'))
     literal(value['schema_version'], 1)
     literal(value['runtime_context'], 'packaged' if packaged else 'source')
-    evidence = keys(value['evidence'], ('context', 'reports', 'tabular', 'controls', 'captures', 'data'))
+    evidence = keys(value['evidence'], ('context', 'reports', 'tabular', 'controls', 'bugreport', 'captures', 'data'))
     literal(evidence['context'], dict(source_sha=source, qpa=qpa, dpr=float(dpr)))
     require(type(source) is str and re.fullmatch('[0-9a-f]{40}', source) is not None
             and type(dpr) in (int, float) and dpr in (1, 1.25, 1.5))
@@ -781,14 +782,91 @@ def _wrapper(value, *, source, packaged, dpr, qpa):
     return evidence
 
 
+def bugreport_leaf(value, *, packaged, qpa):
+    """Admit only the fixed synthetic Help/preview/clipboard observation."""
+    keys(value, ('schema_version', 'status', 'facets', 'error_codes', 'evidence'))
+    literal(value['schema_version'], 1)
+    literal(value['status'], 'passed')
+    literal(value['facets'], dict.fromkeys(('help_action', 'preview', 'clipboard',
+                                            'history_restore', 'privacy_guards', 'cleanup'), 'passed'))
+    literal(value['error_codes'], [])
+    evidence = keys(value['evidence'], ('execution', 'platform', 'history_state', 'actions',
+        'option_states', 'category', 'reproduction_status', 'preview_sha256', 'clipboard_match',
+        'excluded_sentinels_absent', 'dialog_closed'))
+    literal(evidence['execution'], 'packaged' if packaged else 'source')
+    literal(evidence['platform'], qpa)
+    literal(evidence['history_state'], 'available')
+    literal(evidence['actions'], ['app_opened', 'csv_opened', 'option_workbook', 'option_html'])
+    literal(evidence['option_states'], {'workbook': True, 'html': False})
+    literal(evidence['category'], 'wrong_output')
+    literal(evidence['reproduction_status'], 'NOT_RUN')
+    digest(evidence['preview_sha256'])
+    literal(evidence['clipboard_match'], True)
+    literal(evidence['excluded_sentinels_absent'], True)
+    literal(evidence['dialog_closed'], True)
+    return evidence
+
+
+BUGREPORT_ERRORS = ('bugreport_gate_missing', 'bugreport_application_missing',
+    'bugreport_route_missing', 'bugreport_preview_invalid', 'bugreport_clipboard_invalid',
+    'bugreport_history_invalid', 'bugreport_privacy_invalid', 'bugreport_cleanup_failed',
+    'unexpected_exception')
+BUGREPORT_ACTIONS = ['app_opened', 'csv_opened', 'option_workbook', 'option_html']
+
+
+def bugreport_diagnostic_leaf(value, *, packaged, qpa):
+    """Validate partial failure evidence while retaining only closed, typed fields."""
+    keys(value, ('schema_version', 'status', 'facets', 'error_codes', 'evidence'))
+    literal(value['schema_version'], 1)
+    literal(value['status'], 'failed')
+    facets = keys(value['facets'], ('help_action', 'preview', 'clipboard',
+                                    'history_restore', 'privacy_guards', 'cleanup'))
+    require(all(status in ('passed', 'failed') for status in facets.values()))
+    require(type(value['error_codes']) is list and len(value['error_codes']) == 1
+            and value['error_codes'][0] in BUGREPORT_ERRORS)
+    evidence = keys(value['evidence'], ('execution', 'platform', 'history_state', 'actions',
+        'option_states', 'category', 'reproduction_status', 'preview_sha256', 'clipboard_match',
+        'excluded_sentinels_absent', 'dialog_closed'))
+    literal(evidence['execution'], 'packaged' if packaged else 'source')
+    literal(evidence['platform'], qpa)
+    require(evidence['history_state'] in ('unknown', 'loading', 'available', 'not_available'))
+    actions = evidence['actions']
+    require(type(actions) is list and len(actions) <= len(BUGREPORT_ACTIONS)
+            and actions == BUGREPORT_ACTIONS[:len(actions)])
+    expected_options = {}
+    if 'option_workbook' in actions:
+        expected_options['workbook'] = True
+    if 'option_html' in actions:
+        expected_options['html'] = False
+    literal(evidence['option_states'], expected_options)
+    literal(evidence['category'], 'wrong_output')
+    literal(evidence['reproduction_status'], 'NOT_RUN')
+    if evidence['preview_sha256'] is not None:
+        digest(evidence['preview_sha256'])
+    for field in ('clipboard_match', 'excluded_sentinels_absent', 'dialog_closed'):
+        require(type(evidence[field]) is bool)
+    required_failure_facet = {
+        'bugreport_route_missing': 'help_action',
+        'bugreport_preview_invalid': 'preview',
+        'bugreport_clipboard_invalid': 'clipboard',
+        'bugreport_history_invalid': 'history_restore',
+        'bugreport_privacy_invalid': 'privacy_guards',
+        'bugreport_cleanup_failed': 'cleanup',
+    }.get(value['error_codes'][0])
+    if required_failure_facet is not None:
+        literal(facets[required_failure_facet], 'failed')
+    return evidence
+
+
 def validate(value, oracle, *, source, packaged, dpr, qpa):
     evidence = _wrapper(value, source=source, packaged=packaged, dpr=dpr, qpa=qpa)
     literal(value['status'], 'passed')
-    literal(value['facets'], dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'passed'))
+    literal(value['facets'], dict.fromkeys(('reports', 'tabular', 'controls', 'captures', 'bugreport'), 'passed'))
     literal(value['error_codes'], [])
     reports(evidence['reports'], oracle, packaged=packaged, dpr=dpr, qpa=qpa)
     tabular(evidence['tabular'], dpr=dpr)
     controls(evidence['controls'], oracle, packaged=packaged, dpr=dpr, qpa=qpa)
+    bugreport_leaf(evidence['bugreport'], packaged=packaged, qpa=qpa)
     capture_session(evidence['captures'], dpr=dpr)
     for name in ('reports', 'tabular', 'controls'):
         for key, record in evidence[name]['evidence']['captures'].items():
@@ -825,7 +903,7 @@ def diagnostic(value, oracle, *, source, packaged, dpr, qpa):
     """Separate failure admission; never a successful artifact/receipt validator."""
     evidence = _wrapper(value, source=source, packaged=packaged, dpr=dpr, qpa=qpa)
     literal(value['status'], 'failed')
-    keys(value['facets'], ('reports', 'tabular', 'controls', 'captures'))
+    keys(value['facets'], ('reports', 'tabular', 'controls', 'captures', 'bugreport'))
     require(all(v in ('passed', 'failed') for v in value['facets'].values()))
     require(type(value['error_codes']) is list and 1 <= len(value['error_codes']) <= 8
             and all(type(code) is str and code in WRAPPER_ERRORS for code in value['error_codes']))
@@ -833,9 +911,18 @@ def diagnostic(value, oracle, *, source, packaged, dpr, qpa):
     for name in ('reports', 'tabular', 'controls'):
         literal(value['facets'][name], 'passed' if type(evidence[name]) is dict
                 and evidence[name].get('status') == 'passed' else 'failed')
+    if evidence['bugreport'] is None:
+        literal(value['facets']['bugreport'], 'failed')
+    elif type(evidence['bugreport']) is dict and evidence['bugreport'].get('status') == 'passed':
+        bugreport_leaf(evidence['bugreport'], packaged=packaged, qpa=qpa)
+        literal(value['facets']['bugreport'], 'passed')
+    else:
+        bugreport_diagnostic_leaf(evidence['bugreport'], packaged=packaged, qpa=qpa)
+        literal(value['facets']['bugreport'], 'failed')
     session = keys(evidence['captures'], ('status', 'metadata', 'observations', 'error_codes'))
     require(session['status'] in ('passed', 'failed') and type(session['error_codes']) is list
             and len(session['error_codes']) <= 16 and all(type(code) is str and code in LEAF_ERRORS['controls'] for code in session['error_codes']))
+    literal(value['facets']['captures'], session['status'])
     manifest(session['metadata'], evidence['data'], dpr=dpr, diagnostic=True)
     require(type(session['observations']) is dict and set(session['observations']) <= set(session['metadata']))
     for name, record in session['observations'].items():

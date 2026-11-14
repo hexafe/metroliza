@@ -577,10 +577,24 @@ def wrapper_observation(source='1' * 40, dpr=1.0):
     tabular['evidence']['captures'] = {name: session['metadata'][name] for name in uiux.CAPTURES[4:9]}
     controls['evidence']['captures'] = {'active-child-modal': session['metadata']['active-child-modal']}
     return dict(schema_version=1, status='passed', runtime_context='packaged', error_codes=[],
-        facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'passed'),
+        facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures', 'bugreport'), 'passed'),
         evidence=dict(context=dict(source_sha=source, qpa='windows', dpr=dpr), reports=reports,
-                      tabular=tabular, controls=controls, captures=session,
+                      tabular=tabular, controls=controls, bugreport=bugreport_observation(), captures=session,
                       data={name: dict(path=relative, sha256='a' * 64, size=1) for name, relative in uiux.DATA.items()}))
+
+
+def bugreport_observation(*, failed=False):
+    value = dict(schema_version=1, status='passed', facets=dict.fromkeys(
+        ('help_action', 'preview', 'clipboard', 'history_restore', 'privacy_guards', 'cleanup'), 'passed'),
+        error_codes=[], evidence=dict(execution='packaged', platform='windows', history_state='available',
+            actions=['app_opened', 'csv_opened', 'option_workbook', 'option_html'],
+            option_states={'workbook': True, 'html': False}, category='wrong_output',
+            reproduction_status='NOT_RUN', preview_sha256='b' * 64, clipboard_match=True,
+            excluded_sentinels_absent=True, dialog_closed=True))
+    if failed:
+        value.update(status='failed', error_codes=['bugreport_preview_invalid'])
+        value['facets']['preview'] = 'failed'
+    return value
 
 
 def test_wrapper_schema_requires_all_original_leaf_facts_and_frozen_tab_vectors():
@@ -640,7 +654,7 @@ def diagnostic_observation():
     value['facets'] = dict.fromkeys(value['facets'], 'failed')
     value['evidence'].update(reports=dict(kind='failure_summary', phase='B', code='reports_invariant_failed',
         error_codes=['reports_invariant_failed']), tabular=None, controls=None, data=dict.fromkeys(uiux.DATA),
-        captures=dict(status='failed', metadata={}, observations={}, error_codes=[]))
+        bugreport=None, captures=dict(status='failed', metadata={}, observations={}, error_codes=[]))
     return value
 
 
@@ -655,6 +669,61 @@ def test_diagnostic_summary_rejects_unknown_details_and_never_satisfies_success(
     summary[{'phase': 'phase', 'code': 'code', 'keys': 'raw'}[defect]] = 'PRIVATE_PATH'
     with pytest.raises(uiux.UiuxVerificationFailure):
         uiux.diagnostic(value, oracle, source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
+
+
+def test_diagnostic_accepts_completed_bugreport_when_a_later_uiux_step_fails():
+    value = wrapper_observation()
+    value['evidence']['data']['csv_plotly']['sha256'] = uiux.PLOTLY_SHA
+    for suffix in ('html', 'xlsx'):
+        record = value['evidence']['data']['csv_' + suffix]
+        value['evidence']['tabular']['evidence']['csv']['outputs'][suffix] = {
+            key: record[key] for key in ('path', 'sha256')}
+    value.update(status='failed', error_codes=['uiux_data_failed'])
+    uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
+                    source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
+
+
+@pytest.mark.parametrize(('field', 'invalid'), [
+    ('actions', ['app_opened', '/private/customer/name.xlsx']),
+    ('option_states', {'workbook': 'yes'}),
+    ('preview_sha256', '/private/customer/bugreport.md'),
+    ('history_state', '/private/customer/incident.db'),
+])
+def test_diagnostic_rejects_open_ended_bugreport_failure_evidence(field, invalid):
+    value = wrapper_observation()
+    value['evidence']['data']['csv_plotly']['sha256'] = uiux.PLOTLY_SHA
+    for suffix in ('html', 'xlsx'):
+        record = value['evidence']['data']['csv_' + suffix]
+        value['evidence']['tabular']['evidence']['csv']['outputs'][suffix] = {
+            key: record[key] for key in ('path', 'sha256')}
+    value.update(status='failed', error_codes=['uiux_bugreport_failed'])
+    value['facets']['bugreport'] = 'failed'
+    leaf = value['evidence']['bugreport']
+    leaf.update(status='failed', error_codes=['bugreport_preview_invalid'])
+    leaf['facets'] = dict.fromkeys(leaf['facets'], 'failed')
+    leaf['evidence'][field] = invalid
+    with pytest.raises(uiux.UiuxVerificationFailure):
+        uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
+                        source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
+
+
+@pytest.mark.parametrize(('leaf_status', 'outer_status'), [('passed', 'failed'), ('failed', 'passed')])
+def test_diagnostic_requires_bugreport_receipt_facet_to_match_leaf(leaf_status, outer_status):
+    value = wrapper_observation()
+    value['evidence']['data']['csv_plotly']['sha256'] = uiux.PLOTLY_SHA
+    for suffix in ('html', 'xlsx'):
+        record = value['evidence']['data']['csv_' + suffix]
+        value['evidence']['tabular']['evidence']['csv']['outputs'][suffix] = {
+            key: record[key] for key in ('path', 'sha256')}
+    value.update(status='failed', error_codes=['uiux_data_failed'])
+    leaf = value['evidence']['bugreport']
+    if leaf_status == 'failed':
+        leaf.update(status='failed', error_codes=['bugreport_preview_invalid'])
+        leaf['facets'] = dict.fromkeys(leaf['facets'], 'failed')
+    value['facets']['bugreport'] = outer_status
+    with pytest.raises(uiux.UiuxVerificationFailure):
+        uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
+                        source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
 
 
 
@@ -760,16 +829,18 @@ def _producer_protocol(monkeypatch, root, *, failed=None):
     monkeypatch.setitem(sys.modules, 'metroliza.app.windows_candidate_uiux_controls', SimpleNamespace(
         make_capture=lambda *_a, **_kw: session, run_controls_checks=lambda *_a, **_kw: result('controls'),
         ERROR_CODES=uiux.LEAF_ERRORS['controls']))
+    monkeypatch.setitem(sys.modules, 'metroliza.app.windows_candidate_uiux_bugreport', SimpleNamespace(
+        run_bugreport_checks=lambda *_a: bugreport_observation(failed=failed == 'bugreport')))
     monkeypatch.setattr(PyQt6.QtWidgets, 'QApplication', SimpleNamespace(platformName=lambda: 'windows'))
     monkeypatch.setenv('METROLIZA_WINDOWS_CANDIDATE_DPR', '1.0')
     return producer, value
 
 
-def test_producer_bridge_adds_exact_one_artifact_and_four_facets(monkeypatch, tmp_path):
+def test_producer_bridge_adds_exact_one_artifact_and_four_receipt_facets(monkeypatch, tmp_path):
     producer, _value = _producer_protocol(monkeypatch, tmp_path)
     receipt = dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={})
     producer._run_uiux_slice(tmp_path, FIXTURES.parent, receipt)
-    assert receipt['facets'] == dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed')
+    assert receipt['facets'] == dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures', 'uiux_bugreport'), 'passed')
     assert receipt['artifacts'] == {'uiux_evidence': dict(path='uiux-observation.json', sha256=uiux.sha(tmp_path / 'uiux-observation.json'))}
     uiux.verify(tmp_path, uiux.load_json(tmp_path / 'uiux-observation.json'), uiux.load_json(FIXTURES / 'reports/oracles.json'),
                 source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
@@ -786,6 +857,27 @@ def test_failed_producer_atomically_retains_closed_phase_and_never_marks_uiux_pa
     assert value['evidence']['reports'] == dict(kind='failure_summary', phase='B', code='reports_invariant_failed', error_codes=['reports_invariant_failed'])
     assert value['evidence']['tabular'] is value['evidence']['controls'] is None
     uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'), source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
+
+
+def test_bugreport_failure_after_capture_retains_snapshot_and_passed_facet(monkeypatch, tmp_path):
+    producer, _value = _producer_protocol(monkeypatch, tmp_path, failed='bugreport')
+    receipt = dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={})
+    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+        producer._run_uiux_slice(tmp_path, FIXTURES.parent, receipt)
+    value = uiux.load_json(tmp_path / 'uiux-observation.json')
+    captures = value['evidence']['captures']
+    assert value['status'] == 'failed'
+    assert value['error_codes'] == ['uiux_bugreport_failed']
+    assert value['facets']['captures'] == 'passed'
+    assert captures['status'] == 'passed'
+    assert set(captures['metadata']) == set(uiux.CAPTURES)
+    assert all((tmp_path / item['path']).is_file() for item in captures['metadata'].values())
+    uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
+                    source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
+    value['facets']['captures'] = 'failed'
+    with pytest.raises(uiux.UiuxVerificationFailure):
+        uiux.diagnostic(value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
+                        source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
 
 
 def test_failed_host_retains_known_png_only_after_joined_cleanup_and_stays_failed(tmp_path):
@@ -970,7 +1062,7 @@ def test_actual_three_slices_and_independent_retained_assets(qapplication_sessio
     (output / 'source-slice-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     assert producer_seconds <= 300
     assert receipt['facets'] == dict.fromkeys(
-        ('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed')
+        ('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures', 'uiux_bugreport'), 'passed')
     value = uiux.load_json(output / 'uiux-observation.json')
     oracle, _ = uiux.load_inputs(FIXTURES)
     options = dict(source=source, packaged=False, dpr=dpr, qpa='windows')

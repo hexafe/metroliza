@@ -581,50 +581,79 @@ def _uiux_data(child):
     return data
 
 
-def _run_uiux_slice(child, fixtures, receipt):
-    from PyQt6.QtWidgets import QApplication
+def _run_uiux_checks(child, fixtures, dpr, record, started, session_holder):
     from metroliza.app.windows_candidate_uiux_reports import run_reports_checks, ERROR_CODES as report_errors
     from metroliza.app.windows_candidate_uiux_tabular import run_tabular_checks, ERROR_CODES as tabular_errors
     from metroliza.app.windows_candidate_uiux_controls import make_capture, run_controls_checks, ERROR_CODES as control_errors
+    from metroliza.app.windows_candidate_uiux_bugreport import run_bugreport_checks
+
+    session = make_capture(child, expected_dpr=dpr)
+    session_holder['session'] = session
+    for name, operation, inputs, errors in (
+        ('reports', run_reports_checks, fixtures / 'uiux/reports', report_errors),
+        ('tabular', run_tabular_checks, fixtures / 'uiux/tabular', tabular_errors),
+        ('controls', run_controls_checks, fixtures, control_errors),
+    ):
+        record['evidence'][name] = dict(kind='failure_summary', phase='admission',
+            code='unexpected_exception', error_codes=['unexpected_exception'])
+        result = operation(child, inputs, expected_dpr=dpr, capture=session)
+        if result.get('status') != 'passed':
+            record['evidence'][name] = _uiux_failure_summary(name, result, errors)
+            raise ScenarioFailure('uiux_' + name + '_failed')
+        record['evidence'][name] = result
+        record['facets'][name] = 'passed'
+        if time.monotonic() - started > 300:
+            raise ScenarioFailure('uiux_deadline')
+    record['evidence']['captures'] = session.snapshot(require_complete=True)
+    record['facets']['captures'] = 'passed'
+    bugreport = run_bugreport_checks(child)
+    record['evidence']['bugreport'] = bugreport
+    if bugreport.get('status') != 'passed':
+        raise ScenarioFailure('uiux_bugreport_failed')
+    record['facets']['bugreport'] = 'passed'
+    return session
+
+
+def _retain_uiux_captures_after_failure(session, record):
+    evidence = record['evidence']['captures']
+    if type(evidence) is dict and evidence.get('status') == 'passed':
+        return
+    if session is None:
+        snapshot = dict(status='failed', metadata={}, observations={}, error_codes=[])
+    else:
+        try:
+            snapshot = session.snapshot(require_complete=False)
+        except Exception:
+            snapshot = dict(status='failed', metadata={}, observations={}, error_codes=[])
+    record['evidence']['captures'] = snapshot
+    record['facets']['captures'] = 'passed' if snapshot.get('status') == 'passed' else 'failed'
+
+
+def _run_uiux_slice(child, fixtures, receipt):
+    from PyQt6.QtWidgets import QApplication
+
     scale = os.environ.get('METROLIZA_WINDOWS_CANDIDATE_DPR', '1.0')
     if scale not in {'1.0', '1.25', '1.5'}:
         raise ScenarioFailure('invalid_ui_scale')
     dpr = float(scale)
     record = dict(schema_version=1, status='failed', runtime_context='packaged' if receipt['packaged'] else 'source',
-        facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'failed'), error_codes=[],
+        facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures', 'bugreport'), 'failed'), error_codes=[],
         evidence=dict(context=dict(source_sha=receipt['source_sha'], qpa=QApplication.platformName(), dpr=dpr),
-                      reports=None, tabular=None, controls=None, captures=None, data=dict.fromkeys(UIUX_DATA)))
-    session, started = None, time.monotonic()
+                      reports=None, tabular=None, controls=None, bugreport=None, captures=None,
+                      data=dict.fromkeys(UIUX_DATA)))
+    session, started, session_holder = None, time.monotonic(), {}
     try:
-        session = make_capture(child, expected_dpr=dpr)
-        for name, operation, inputs, errors in (
-            ('reports', run_reports_checks, fixtures / 'uiux/reports', report_errors),
-            ('tabular', run_tabular_checks, fixtures / 'uiux/tabular', tabular_errors),
-            ('controls', run_controls_checks, fixtures, control_errors),
-        ):
-            record['evidence'][name] = dict(kind='failure_summary', phase='admission',
-                code='unexpected_exception', error_codes=['unexpected_exception'])
-            result = operation(child, inputs, expected_dpr=dpr, capture=session)
-            if result.get('status') != 'passed':
-                record['evidence'][name] = _uiux_failure_summary(name, result, errors)
-                raise ScenarioFailure('uiux_' + name + '_failed')
-            record['evidence'][name] = result
-            record['facets'][name] = 'passed'
-            if time.monotonic() - started > 300:
-                raise ScenarioFailure('uiux_deadline')
-        record['evidence']['captures'] = session.snapshot(require_complete=True)
-        record['facets']['captures'] = 'passed'
+        session = _run_uiux_checks(child, fixtures, dpr, record, started, session_holder)
         record['evidence']['data'] = _uiux_data(child)
         if any(value is None for value in record['evidence']['data'].values()):
             raise ScenarioFailure('uiux_data_failed')
         record['status'] = 'passed'
     except Exception as error:
-        allowed = {'uiux_reports_failed', 'uiux_tabular_failed', 'uiux_controls_failed',
+        allowed = {'uiux_reports_failed', 'uiux_tabular_failed', 'uiux_controls_failed', 'uiux_bugreport_failed',
                    'uiux_deadline', 'uiux_data_failed'}
         code = str(error) if isinstance(error, ScenarioFailure) and str(error) in allowed else 'uiux_unexpected'
         record['error_codes'] = [code]
-        record['evidence']['captures'] = session.snapshot(require_complete=False) if session else dict(
-            status='failed', metadata={}, observations={}, error_codes=[])
+        _retain_uiux_captures_after_failure(session_holder.get('session') or session, record)
         try:
             record['evidence']['data'] = _uiux_data(child)
         except Exception:
@@ -637,7 +666,8 @@ def _run_uiux_slice(child, fixtures, receipt):
     if record['status'] != 'passed':
         raise ScenarioFailure('uiux_checks_failed')
     receipt['artifacts']['uiux_evidence'] = dict(path=path.name, sha256=_sha256(path))
-    receipt['facets'].update(dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed'))
+    receipt['facets'].update(dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls',
+                                            'uiux_captures', 'uiux_bugreport'), 'passed'))
 
 
 def _run_main_html_slice(child, receipt):
