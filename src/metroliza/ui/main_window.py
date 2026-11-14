@@ -587,6 +587,9 @@ class MainWindow(QMainWindow):
         self.diagnostic_incidents_action = QAction("Diagnostic incidents…", self)
         self.diagnostic_incidents_action.triggered.connect(self.open_diagnostic_incidents)
         self.help_menu.addAction(self.diagnostic_incidents_action)
+        self.report_problem_action = QAction("Report a problem…", self)
+        self.report_problem_action.triggered.connect(self.open_safe_bug_report)
+        self.help_menu.addAction(self.report_problem_action)
         self.help_menu.aboutToShow.connect(self._refresh_incident_action)
         self._refresh_incident_action()
         self.help_menu.addAction(self.about_button)
@@ -782,6 +785,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Diagnostic incidents", "The diagnostic viewer could not be opened.")
             return False
         return True
+
+    def open_safe_bug_report(self):
+        """Open the fixed-schema local report flow without collecting free text."""
+        try:
+            module = importlib.import_module("metroliza.ui.safe_bugreport_dialog")
+            module.open_safe_bug_report_dialog(self)
+        except Exception:
+            QMessageBox.warning(
+                self,
+                "Report a problem",
+                "The local safe report could not be opened.",
+            )
+
+    def start_local_bugreport_history(self):
+        """Initialize bounded history without delaying the initial window paint."""
+        try:
+            module = importlib.import_module("metroliza.ui.safe_bugreport_dialog")
+            app = QApplication.instance()
+            if app is not None:
+                module.start_local_bugreport_history(self, app)
+        except Exception:
+            pass
 
     def setup_buttons_layout(self):
         """Compose primary workspaces around one persistent report owner."""

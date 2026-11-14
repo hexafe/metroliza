@@ -1757,6 +1757,15 @@ jobs:
           tests/test_packaging_setuptools_hook.py
           tests/test_windows_runtime_audit.py
 
+      - name: Run native Windows safe bug report tests
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+          METROLIZA_EXPECT_QT_PLATFORM: windows
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          python -m pytest -v tests/test_safe_bugreport.py tests/test_safe_bugreport_dialog.py tests/test_safe_bugreport_csv_integration.py tests/test_safe_bugreport_recovery.py tests/test_safe_bugreport_user_flow.py tests/test_reproduce_safe_bugreport.py
+
       - name: Run Windows candidate receipt and ownership contracts
         env:
           PYTHONPATH: src;.

@@ -447,7 +447,8 @@ def launch_ui(
     splash.show_message("Loading main window...", phase="main_window")
     _startup_event(StartupCallsite.MAIN_WINDOW_FACTORY)
     record_event("main_window_import_start")
-    if main_window_factory is None:
+    standard_main_window = main_window_factory is None
+    if standard_main_window:
         main_window_factory = load_main_window_factory()
     record_event("main_window_import_done")
 
@@ -463,6 +464,12 @@ def launch_ui(
     main_window.show()
     _startup_event(StartupCallsite.MAIN_WINDOW_SHOW_RETURNED)
     record_event("main_window_show_called")
+    if standard_main_window and not config.startup_ui_smoke_mode:
+        from PyQt6.QtCore import QTimer
+
+        start_history = getattr(main_window, "start_local_bugreport_history", None)
+        if callable(start_history):
+            QTimer.singleShot(0, start_history)
     if config.startup_ui_smoke_mode:
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
