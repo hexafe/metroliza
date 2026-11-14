@@ -20,6 +20,7 @@ from metroliza.industrial.industrial_workflow_state import (
     INDUSTRIAL_GROUPING_FIELDS,
     IndustrialGroupingState,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.shortcuts import install_button_commands, bind_search_shortcut
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
@@ -214,4 +215,5 @@ class IndustrialGroupingDialog(QDialog):
             parent.set_industrial_grouping_state(state)
         self.state = state
         self._committed_state = state
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_GROUPING_APPLIED)
         self.accept()

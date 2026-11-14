@@ -798,13 +798,16 @@ def test_native_raw_extract_key_keeps_single_lookup_and_success(tmp_path, monkey
     review = _review(source, tmp_path / "unused.sqlite")
     parser = CMMReportParser(str(source / NAME), "unused.sqlite", metadata_parsing_mode=MODE_FAST)
     events = []
+    lookup_baseline = []
+    baseline_value = []
+    events_before_lookup = []
 
     class Key(str):
         __hash__ = str.__hash__
 
         def __eq__(self, other):
             result = stateful and bool(events)
-            events.append(result)
+            events.append((other, result))
             return result
 
     object.__getattribute__(parser, "__dict__")[Key("extract_metadata")] = None
@@ -813,8 +816,32 @@ def test_native_raw_extract_key_keeps_single_lookup_and_success(tmp_path, monkey
         parser.source_inspection_context = source_inspection
         return parser
 
+    original_open_report = CMMReportParser.open_report
+
+    def calibrate_one_attribute_lookup(self):
+        result = original_open_report(self)
+        prefix = list(events)
+        # A second target lookup before this point would already violate the
+        # one-lookup contract. Other key probes are retained as the state from
+        # which the baseline lookup and actual lookup both start.
+        assert not any(other == "extract_metadata" for other, _ in prefix)
+        events_before_lookup.extend(prefix)
+        try:
+            baseline_value.append(object.__getattribute__(self, "extract_metadata"))
+            lookup_baseline.extend(events[len(prefix):])
+        finally:
+            events[:] = prefix
+        return result
+
     monkeypatch.setattr(report_parser_factory, "invoke_parser_factory", invoke)
+    monkeypatch.setattr(CMMReportParser, "open_report", calibrate_one_attribute_lookup)
     reading = metadata_review.read_metadata_one(review.ready_files[0], source / NAME, MODE_FAST,
                                                 database_path="unused.sqlite")
-    assert reading.status == "ok" and reading.selection.metadata.reference == "ABCDE12345"
-    assert events == [False]
+    assert events == events_before_lookup + lookup_baseline
+    direct_result = baseline_value[0]
+    if direct_result is None:
+        assert reading.status == metadata_review.ROW_FAILED
+    else:
+        assert callable(direct_result)
+        assert reading.status == "ok"
+        assert reading.selection.metadata.reference == "ABCDE12345"

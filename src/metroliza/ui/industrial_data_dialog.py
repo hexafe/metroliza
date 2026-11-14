@@ -62,6 +62,7 @@ from metroliza.industrial.industrial_workers import (
     IndustrialLinkRefreshThread,
     IndustrialOznakSyncThread as IndustrialOznakSyncThread,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.industrial.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from metroliza.industrial.oznak_adapter import get_oznak_adapter_status
 from metroliza.reports.db import _is_transient_sqlite_error, sqlite_query_only_connection_scope
@@ -1072,6 +1073,7 @@ class IndustrialDataDialog(QDialog):
         self.refresh_status()
 
     def open_sources_dialog(self) -> None:
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCES_OPENED)
         self.source_window = IndustrialSourceProfilesDialog(
             self,
             db_file=self.db_file,
@@ -1274,9 +1276,11 @@ class IndustrialDataDialog(QDialog):
         self.link_refresh_thread.error_occurred.connect(self.on_link_refresh_error)
         self.link_refresh_thread.finished.connect(self.on_link_refresh_thread_stopped)
         self._set_action_buttons_enabled(cache_available=False)
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_STARTED)
         self.link_refresh_thread.start()
 
     def on_link_refresh_finished(self, summary) -> None:
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FINISHED)
         self.refresh_status()
         self.status_label.setText(
             "Industrial links refreshed: "
@@ -1287,6 +1291,7 @@ class IndustrialDataDialog(QDialog):
         set_status_variant(self.status_label, "success")
 
     def on_link_refresh_error(self, message: str) -> None:
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FAILED)
         QMessageBox.warning(self, "Industrial data", f"Could not refresh links: {message}")
         self.refresh_status()
 

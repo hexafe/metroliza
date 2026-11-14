@@ -52,6 +52,7 @@ from metroliza.reports.characteristic_mapping_service import (
 from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite
 from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui import detached_threads
 from metroliza.ui.curation_presentation import bind_button
 from metroliza.ui.shortcuts import bind_search_shortcut, install_button_commands
@@ -86,6 +87,43 @@ _DEFAULT_ALIAS_IMPORT = import_characteristic_aliases_csv
 _DEFAULT_ALIAS_EXPORT = export_characteristic_aliases_csv
 _ALIAS_CSV_CONTROLS = ('select_db_button', 'add_button', 'add_from_selected_button',
                        'edit_button', 'delete_button', 'import_button', 'export_button')
+
+
+def _record_mapping_action(action: BugReportAction) -> None:
+    try:
+        _bugreport_recorder.record(action)
+    except Exception:
+        # A local diagnostic must never change mapping behavior.
+        return
+
+
+def _record_mapping_action_if(enabled: bool, action: BugReportAction) -> None:
+    if enabled:
+        _record_mapping_action(action)
+
+
+def _record_alias_csv_outcome(operation, error, phase, result_confirmed) -> None:
+    if error is not None:
+        outcome = 'failed'
+    elif phase == 'cancelled':
+        outcome = 'cancelled'
+    elif result_confirmed:
+        outcome = 'completed'
+    else:
+        outcome = 'unknown'
+    actions = {
+        ('import', 'completed'): BugReportAction.WORKFLOW_MAPPING_IMPORT_COMPLETED,
+        ('import', 'failed'): BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED,
+        ('import', 'cancelled'): BugReportAction.WORKFLOW_MAPPING_IMPORT_CANCELLED,
+        ('import', 'unknown'): BugReportAction.WORKFLOW_MAPPING_IMPORT_RESULT_UNKNOWN,
+        ('export', 'completed'): BugReportAction.WORKFLOW_MAPPING_EXPORT_COMPLETED,
+        ('export', 'failed'): BugReportAction.WORKFLOW_MAPPING_EXPORT_FAILED,
+        ('export', 'cancelled'): BugReportAction.WORKFLOW_MAPPING_EXPORT_CANCELLED,
+        ('export', 'unknown'): BugReportAction.WORKFLOW_MAPPING_EXPORT_RESULT_UNKNOWN,
+    }
+    action = actions.get((operation, outcome))
+    if action is not None:
+        _record_mapping_action(action)
 
 
 def _alias_csv_busy(owner):
@@ -124,6 +162,9 @@ class _AliasCsvThread(QThread):
         self.count, self.error, self.discard_result = None, None, False
         self.reviewed = threading.Event()
         self.choice = None
+        self._outcome_lock = threading.Lock()
+        self._phase = 'preflight'
+        self._result_confirmed = False
 
     def run(self):
         try:
@@ -132,14 +173,32 @@ class _AliasCsvThread(QThread):
                 self.preview_ready.emit(plan)
                 while not self.reviewed.wait(0.1):
                     if self.isInterruptionRequested() or self.discard_result:
+                        with self._outcome_lock:
+                            self._phase = 'cancelled'
                         return
-                if self.choice is not None and not self.discard_result and not self.isInterruptionRequested():
-                    self.count = apply_characteristic_alias_import(self.db_file, plan, replace=self.choice)
+                with self._outcome_lock:
+                    if self.error is not None:
+                        return
+                    if self.choice is None or self.discard_result or self.isInterruptionRequested():
+                        self._phase = 'cancelled'
+                        return
+                    # Once apply starts, closing the dialog only discards UI delivery.
+                    # The persistence operation itself remains authoritative.
+                    self._phase = 'applying'
+                self.count = apply_characteristic_alias_import(self.db_file, plan, replace=self.choice)
+                self._result_confirmed = True
             else:
+                with self._outcome_lock:
+                    self._phase = 'applying'
                 _DEFAULT_ALIAS_SCHEMA(self.db_file)
                 self.count = self.producer(self.db_file, self.filename)
+                self._result_confirmed = True
         except Exception as exc:
             self.error = exc
+        finally:
+            _record_alias_csv_outcome(
+                self.operation, self.error, self._phase, self._result_confirmed
+            )
 
     def result(self):
         if self.error is not None:
@@ -147,9 +206,10 @@ class _AliasCsvThread(QThread):
         return self.count
 
     def cancel_review(self, *_args):
-        self.discard_result = True
-        self.requestInterruption()
-        self.reviewed.set()
+        with self._outcome_lock:
+            self.discard_result = True
+            self.requestInterruption()
+            self.reviewed.set()
 
 
 def _cancel_alias_review(thread_ref, *_args):
@@ -1069,6 +1129,7 @@ class CharacteristicMappingDialog(QDialog):
         if payload is None:
             return
 
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_STARTED)
         try:
             ensure_characteristic_alias_schema(self.db_file)
             existing = fetch_all_characteristic_aliases(self.db_file)
@@ -1078,6 +1139,7 @@ class CharacteristicMappingDialog(QDialog):
                 and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
                 for row in existing
             ):
+                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_FAILED)
                 QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
                 return
 
@@ -1089,7 +1151,9 @@ class CharacteristicMappingDialog(QDialog):
                 scope_value=payload['scope_value'],
             )
             self.load_aliases()
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_COMPLETED)
         except Exception as exc:
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_FAILED)
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Save error', f'Could not save name match: {exc}')
 
@@ -1111,6 +1175,7 @@ class CharacteristicMappingDialog(QDialog):
         if payload is None:
             return
 
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_STARTED)
         try:
             ensure_characteristic_alias_schema(self.db_file)
             existing = fetch_all_characteristic_aliases(self.db_file)
@@ -1125,6 +1190,7 @@ class CharacteristicMappingDialog(QDialog):
                 )
                 for row in existing
             ):
+                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
                 QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
                 return
 
@@ -1147,7 +1213,9 @@ class CharacteristicMappingDialog(QDialog):
                     scope_value=selected['scope_value'],
                 )
             self.load_aliases()
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED)
         except Exception as exc:
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Save error', f'Could not update name match: {exc}')
 
@@ -1169,6 +1237,7 @@ class CharacteristicMappingDialog(QDialog):
         if confirmation != QMessageBox.StandardButton.Yes:
             return
 
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_DELETE_STARTED)
         try:
             delete_characteristic_alias(
                 self.db_file,
@@ -1177,7 +1246,9 @@ class CharacteristicMappingDialog(QDialog):
                 scope_value=selected['scope_value'],
             )
             self.load_aliases()
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_DELETE_COMPLETED)
         except Exception as exc:
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_DELETE_FAILED)
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Delete error', f'Could not delete name match: {exc}')
 
@@ -1286,6 +1357,8 @@ class CharacteristicMappingDialog(QDialog):
         if not filename:
             return
 
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_IMPORT_STARTED)
+
         if type(filename) is str and _native_alias_csv(self):
             CharacteristicMappingDialog._start_alias_csv(self, 'import', filename, started_at)
             return
@@ -1296,18 +1369,34 @@ class CharacteristicMappingDialog(QDialog):
                 return import_characteristic_aliases_csv(self.db_file, filename)
             plan = preview_characteristic_aliases_csv(self.db_file, filename)
             choice = self._confirm_alias_import(plan)
+            if choice is not None:
+                try:
+                    _bugreport_recorder.record(
+                        BugReportAction.OPTION_MAPPING_REPLACE_EXISTING, enabled=bool(choice)
+                    )
+                except Exception:
+                    pass
             return None if choice is None else apply_characteristic_alias_import(self.db_file, plan, replace=choice)
 
         CharacteristicMappingDialog._apply_alias_import(self, produce)
 
-    def _apply_alias_import(self, producer):
+    def _apply_alias_import(self, producer, *, record_outcome=True):
         try:
             imported_count = producer()
             if imported_count is None:
+                _record_mapping_action_if(
+                    record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_CANCELLED
+                )
                 return
             self.load_aliases()
+            _record_mapping_action_if(
+                record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_COMPLETED
+            )
             QMessageBox.information(self, 'Import complete', f'Imported {imported_count} mapping row(s).')
         except CharacteristicAliasImportValidationError as exc:
+            _record_mapping_action_if(
+                record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
+            )
             CustomLogger(exc, reraise=False)
             message, full_report = self._build_import_validation_summary(exc, preview_limit=10)
             details_box = QMessageBox(self)
@@ -1347,6 +1436,9 @@ class CharacteristicMappingDialog(QDialog):
                             f'Saved remediation report with {exported_rows} row issue(s).',
                         )
         except CharacteristicAliasCsvSchemaError as exc:
+            _record_mapping_action_if(
+                record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
+            )
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(
                 self,
@@ -1358,6 +1450,9 @@ class CharacteristicMappingDialog(QDialog):
                 'alias_name,canonical_name,scope_type,scope_value',
             )
         except Exception as exc:
+            _record_mapping_action_if(
+                record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
+            )
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
 
@@ -1377,6 +1472,8 @@ class CharacteristicMappingDialog(QDialog):
         if not filename:
             return
 
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_STARTED)
+
         if type(filename) is str and _native_alias_csv(self):
             CharacteristicMappingDialog._start_alias_csv(self, 'export', filename, started_at)
             return
@@ -1387,11 +1484,15 @@ class CharacteristicMappingDialog(QDialog):
 
         CharacteristicMappingDialog._apply_alias_export(self, produce)
 
-    def _apply_alias_export(self, producer):
+    def _apply_alias_export(self, producer, *, record_outcome=True):
         try:
             exported_count = producer()
+            if record_outcome:
+                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_COMPLETED)
             QMessageBox.information(self, 'Export complete', f'Exported {exported_count} mapping row(s).')
         except Exception as exc:
+            if record_outcome:
+                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_FAILED)
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
 
@@ -1481,6 +1582,14 @@ class CharacteristicMappingDialog(QDialog):
             detached_threads.delete_on_owner_thread(progress)
             if not thread.discard_result and self.db_file == thread.db_file:
                 thread.choice = self._confirm_alias_import(plan)
+                if thread.choice is not None:
+                    try:
+                        _bugreport_recorder.record(
+                            BugReportAction.OPTION_MAPPING_REPLACE_EXISTING,
+                            enabled=bool(thread.choice),
+                        )
+                    except Exception:
+                        pass
             if thread.choice is not None and not sip.isdeleted(self):
                 self._alias_csv_progress, _, bar, _ = create_delayed_worker_progress_dialog(
                     self, window_title='Import name matches', initial_status_text='Applying reviewed mappings atomically…',
@@ -1519,10 +1628,14 @@ class CharacteristicMappingDialog(QDialog):
         if thread is not self._alias_csv_thread:
             return
         try:
-            if thread.discard_result or type(self.db_file) is not str or self.db_file != thread.db_file:
+            if thread.discard_result:
+                return
+            if type(self.db_file) is not str or self.db_file != thread.db_file:
+                # A stale result from a changed DB context is dropped, but that is
+                # not evidence that the user cancelled the operation.
                 return
             apply = CharacteristicMappingDialog._apply_alias_import if thread.operation == 'import' else CharacteristicMappingDialog._apply_alias_export
-            apply(self, thread.result)
+            apply(self, thread.result, record_outcome=False)
         finally:
             CharacteristicMappingDialog._release_alias_csv(self)
             if not sip.isdeleted(self):

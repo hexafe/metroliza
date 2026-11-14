@@ -76,6 +76,9 @@ def test_enrichment_terminal_ui_is_not_green_100_for_partial_or_cancel(monkeypat
         _pdf_execution_available=lambda: True, log_and_exit=lambda error: pytest.fail(str(error)),
     )
     host._show_metadata_enrichment_result = lambda value: main_window.MainWindow._show_metadata_enrichment_result(host, value)
+    host._record_metadata_enrichment_bugreport = lambda action: main_window.MainWindow._record_metadata_enrichment_bugreport(
+        host, action
+    )
     monkeypatch.setattr(main_window, "set_status_variant", lambda _label, variant: variants.append(variant))
     main_window.MainWindow.on_metadata_enrichment_finished(host)
     if kind == "success":

@@ -255,10 +255,12 @@ message. Diagnostic preview and selected export are provided by that separate vi
 
 Choose a problem category to preview a local report, then use **Copy report** to
 copy the displayed text. You can paste it into a support conversation. The report
-contains fixed activity codes and selected true/false checks for CSV Summary. It
-does not include input files, worksheet or column names, filter values, paths,
-measurements, exception text, or screenshots. It cannot by itself establish that
-a reported error has been reproduced.
+contains fixed activity codes and selected true/false checks across application
+workflows, including reports, database editing, CSV Summary, export, industrial
+data, monitoring and parser profiles. Coverage is selective: not every click,
+option, or failure can be recorded. It does not include input files, worksheet or
+column names, filter values, paths, measurements, exception text, or screenshots.
+It cannot by itself establish that a reported error has been reproduced.
 
 Recent activity is kept in a bounded local history. Earlier activity may be offered
 after startup; that offer does not mean the previous session crashed. Forced exits

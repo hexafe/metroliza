@@ -14,12 +14,14 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
 from metroliza.reports.db import checkpoint_pending_import_commits
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.shared.workflow_diagnostics import start_workflow_trace
 from metroliza.shared.progress_status import (
     MonotonicProgressEmitterMixin,
@@ -488,6 +490,8 @@ def parse_new_reports(
     require_typed_persistence_outcome=False,
     on_file_accepted=None,
     prepare_pool=None,
+    on_parser_activity=None,
+    on_parser_worker_state=None,
 ):
     # Keep source evidence on each item, but release its potentially large text
     # representations even when processing aborts or leaves a cancelled suffix.
@@ -507,6 +511,8 @@ def parse_new_reports(
             log_file_failures=log_file_failures, on_file_imported=on_file_imported,
             require_typed_persistence_outcome=require_typed_persistence_outcome,
             on_file_accepted=on_file_accepted, prepare_pool=prepare_pool,
+            on_parser_activity=on_parser_activity,
+            on_parser_worker_state=on_parser_worker_state,
         )
     finally:
         _release_report_inspections(work_items)
@@ -528,6 +534,8 @@ def _parse_new_reports(
     require_typed_persistence_outcome=False,
     on_file_accepted=None,
     prepare_pool=None,
+    on_parser_activity=None,
+    on_parser_worker_state=None,
 ):
     work_items = tuple(_coerce_selected_report_work_item(report) for report in report_paths)
     parsed_files = 0
@@ -537,6 +545,21 @@ def _parse_new_reports(
     skipped_files = 0
     changed_files = 0
     total_files = len(work_items)
+
+    def _record_parser_activity(parser):
+        if parser is not None and on_parser_activity is not None:
+            try:
+                on_parser_activity(parser)
+            except Exception:
+                # Diagnostic collection must not change parse, persistence, or cancel outcomes.
+                return
+
+    def _set_parser_worker_active(active):
+        if on_parser_worker_state is not None:
+            try:
+                on_parser_worker_state(active)
+            except Exception:
+                return
 
     def _record_persistence_outcome(outcome):
         nonlocal parsed_files, imported_files, already_present_files
@@ -682,6 +705,7 @@ def _parse_new_reports(
         max_workers = worker_count or max(1, min(8, os.cpu_count() or 1))
 
         def _stage1_worker(work_item, enqueued_at, source_inspection):
+            parser = None
             try:
                 try:
                     prepared = _construct_prepared_report(
@@ -703,6 +727,8 @@ def _parse_new_reports(
                     except Exception as exc:
                         setattr(exc, "_metroliza_parse_failure_stage", "prepare")
                         raise
+                    finally:
+                        _record_parser_activity(parser)
 
                 return prepared, time.perf_counter()
 
@@ -735,18 +761,21 @@ def _parse_new_reports(
                     _emit_processed_progress()
                     continue
                 enqueued_at = time.perf_counter()
-                futures.append(
-                    (
+                _set_parser_worker_active(True)
+                try:
+                    future = executor.submit(
+                        _stage1_worker,
                         work_item,
-                        fingerprint,
-                        executor.submit(
-                            _stage1_worker,
-                            work_item,
-                            enqueued_at,
-                            source_inspection,
-                        ),
+                        enqueued_at,
+                        source_inspection,
                     )
+                except Exception:
+                    _set_parser_worker_active(False)
+                    raise
+                future.add_done_callback(
+                    lambda _future: _set_parser_worker_active(False)
                 )
+                futures.append((work_item, fingerprint, future))
 
             future_context = {
                 future: (work_item, fingerprint) for work_item, fingerprint, future in futures
@@ -801,7 +830,10 @@ def _parse_new_reports(
                         if should_cancel():
                             cancel_requested = True
                             break
-                        outcome = persist_report(parser)
+                        try:
+                            outcome = persist_report(parser)
+                        finally:
+                            _record_parser_activity(parser)
                         _record_persistence_outcome(outcome)
                     except Exception as exc:
                         if _is_selected_approval_drift(work_item, exc):
@@ -880,13 +912,19 @@ def _parse_new_reports(
 
                 try:
                     if require_typed_persistence_outcome:
-                        _prepare_report(work_item, prepared)
+                        try:
+                            _prepare_report(work_item, prepared)
+                        finally:
+                            _record_parser_activity(parser)
                     _require_prepared_report_approval(
                         prepared, verify_current=not require_typed_persistence_outcome
                     )
                     if should_cancel():
                         break
-                    outcome = persist_report(parser)
+                    try:
+                        outcome = persist_report(parser)
+                    finally:
+                        _record_parser_activity(parser)
                     _record_persistence_outcome(outcome)
                 except ImportPreparationCancelled:
                     break
@@ -1368,6 +1406,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.last_enrichment_result: MetadataEnrichmentBatchResult | None = None
         self._last_emitted_progress = -1
         self._progress_stage_ranges = dict(self.PROGRESS_STAGE_RANGES)
+        self._cmm_parse_backends_used: set[str] = set()
+        self._cmm_persistence_backends_used: set[str] = set()
+        self._cmm_backend_usage_lock = Lock()
+        self._cmm_active_parser_workers = 0
+        self._cmm_backend_actions_recorded = False
         if self.run_background_metadata_enrichment and self.metadata_parsing_mode == "light":
             self._progress_stage_ranges["parse_reports"] = (30, 75)
             self._progress_stage_ranges["enrich_metadata"] = (75, 100)
@@ -2060,6 +2103,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
                     backend = getattr(parser, "parse_backend_used", "unknown")
                     persistence_backend = getattr(parser, "persistence_backend_used", "unknown")
+                    self._collect_cmm_backend_usage(parser)
                     telemetry_batch_elapsed_s += parse_duration_s
                     telemetry_batch_backend_counts[backend] = telemetry_batch_backend_counts.get(backend, 0) + 1
                     telemetry_batch_persistence_backend_counts[persistence_backend] = telemetry_batch_persistence_backend_counts.get(persistence_backend, 0) + 1
@@ -2235,6 +2279,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     log_file_failures=False,
                     require_typed_persistence_outcome=True,
                     prepare_pool=prepare_pool,
+                    on_parser_activity=self._collect_cmm_backend_usage,
+                    on_parser_worker_state=self._set_cmm_parser_worker_active,
                 )
                 result = ParseBatchResult(
                     parsed_files=result.parsed_files,
@@ -2311,6 +2357,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(exc)
         finally:
+            self._record_cmm_backend_actions_once()
             diagnostic.finish_import(self.last_parse_result, self.parsing_canceled)
         if self._prepare_pool is not None:
             return  # Retain pool and archive ownership for a later cleanup retry.
@@ -2318,6 +2365,55 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             self._extracted_archive_dir.cleanup()
             self._extracted_archive_dir = None
         self._resolved_report_root = None
+
+    def _collect_cmm_backend_usage(self, parser) -> None:
+        """Keep only closed CMM backend codes observed before the operation is flushed."""
+
+        if not isinstance(parser, CMMReportParser):
+            return
+        parse_backend = getattr(parser, "parse_backend_used", None)
+        persistence_backend = getattr(parser, "persistence_backend_used", None)
+        with self._cmm_backend_usage_lock:
+            if self._cmm_backend_actions_recorded:
+                return
+            if type(parse_backend) is str and parse_backend in {"python", "native"}:
+                self._cmm_parse_backends_used.add(parse_backend)
+            if type(persistence_backend) is str and persistence_backend in {"python", "native"}:
+                self._cmm_persistence_backends_used.add(persistence_backend)
+
+    def _set_cmm_parser_worker_active(self, active: bool) -> None:
+        with self._cmm_backend_usage_lock:
+            if active:
+                self._cmm_active_parser_workers += 1
+            else:
+                self._cmm_active_parser_workers = max(
+                    0, self._cmm_active_parser_workers - 1
+                )
+
+    def _record_cmm_backend_actions_once(self) -> None:
+        """Flush known backends and mark the observation incomplete if a worker is active."""
+
+        parse_actions = {
+            "python": BugReportAction.CMM_PARSE_BACKEND_PYTHON_USED,
+            "native": BugReportAction.CMM_PARSE_BACKEND_NATIVE_USED,
+        }
+        persistence_actions = {
+            "python": BugReportAction.CMM_PERSISTENCE_BACKEND_PYTHON_USED,
+            "native": BugReportAction.CMM_PERSISTENCE_BACKEND_NATIVE_USED,
+        }
+        with self._cmm_backend_usage_lock:
+            if self._cmm_backend_actions_recorded:
+                return
+            self._cmm_backend_actions_recorded = True
+            parse_backends = tuple(self._cmm_parse_backends_used)
+            persistence_backends = tuple(self._cmm_persistence_backends_used)
+            observation_incomplete = self._cmm_active_parser_workers > 0
+        for backend in sorted(parse_backends):
+            _bugreport_recorder.record(parse_actions[backend])
+        for backend in sorted(persistence_backends):
+            _bugreport_recorder.record(persistence_actions[backend])
+        if observation_incomplete:
+            _bugreport_recorder.record(BugReportAction.CMM_BACKEND_OBSERVATION_INCOMPLETE)
 
     def _open_prepare_pool(self, work_items) -> ImportPreparePool | None:
         """Start the bounded worker pool for CMM light-mode preparation, if it pays off."""

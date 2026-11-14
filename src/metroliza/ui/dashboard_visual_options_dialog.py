@@ -55,6 +55,7 @@ from metroliza.charts.dashboard_visual_options import (
     upsert_dashboard_visual_theme,
 )
 from metroliza.charts.plotly_stat_helpers import normalize_group_label_key
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_accessibility, configure_window_size
 
@@ -95,6 +96,77 @@ _MARKER_SYMBOL_ITEMS = tuple(
     for symbol in DASHBOARD_VISUAL_MARKER_SYMBOLS
 )
 _OUTLINE_COLOR_MODE_ITEMS = (("Auto contrast", "auto"), ("Custom color", "custom"))
+_DASHBOARD_CHART_ACTIONS = {
+    "histogram": BugReportAction.OPTION_DASHBOARD_CHART_HISTOGRAM,
+    "violin": BugReportAction.OPTION_DASHBOARD_CHART_VIOLIN,
+    "iqr": BugReportAction.OPTION_DASHBOARD_CHART_IQR,
+    "scatter": BugReportAction.OPTION_DASHBOARD_CHART_SCATTER,
+}
+_DASHBOARD_RECIPE_ACTIONS = {
+    "auto": BugReportAction.OPTION_DASHBOARD_RECIPE_AUTO,
+    "professional_contrast": BugReportAction.OPTION_DASHBOARD_RECIPE_PROFESSIONAL_CONTRAST,
+    "colorblind_distinct": BugReportAction.OPTION_DASHBOARD_RECIPE_COLORBLIND_DISTINCT,
+    "high_color_groups": BugReportAction.OPTION_DASHBOARD_RECIPE_HIGH_COLOR_GROUPS,
+    "toned_report": BugReportAction.OPTION_DASHBOARD_RECIPE_TONED_REPORT,
+    "soft_pastel_review": BugReportAction.OPTION_DASHBOARD_RECIPE_SOFT_PASTEL_REVIEW,
+    "scientific_gradient": BugReportAction.OPTION_DASHBOARD_RECIPE_SCIENTIFIC_GRADIENT,
+    "diverging_nominal": BugReportAction.OPTION_DASHBOARD_RECIPE_DIVERGING_NOMINAL,
+    "print": BugReportAction.OPTION_DASHBOARD_RECIPE_PRINT,
+    "highlight_gradient": BugReportAction.OPTION_DASHBOARD_RECIPE_HIGHLIGHT_GRADIENT,
+    "custom": BugReportAction.OPTION_DASHBOARD_RECIPE_CUSTOM,
+}
+_DASHBOARD_PALETTE_ACTIONS = {
+    "metroliza": BugReportAction.OPTION_DASHBOARD_PALETTE_METROLIZA,
+    "okabe_ito": BugReportAction.OPTION_DASHBOARD_PALETTE_OKABE_ITO,
+    "tableau_10": BugReportAction.OPTION_DASHBOARD_PALETTE_TABLEAU_TEN,
+    "colorbrewer_set2": BugReportAction.OPTION_DASHBOARD_PALETTE_COLORBREWER_SET_TWO,
+    "colorbrewer_dark2": BugReportAction.OPTION_DASHBOARD_PALETTE_COLORBREWER_DARK_TWO,
+    "colorbrewer_paired": BugReportAction.OPTION_DASHBOARD_PALETTE_COLORBREWER_PAIRED,
+    "ibm_carbon": BugReportAction.OPTION_DASHBOARD_PALETTE_IBM_CARBON,
+    "viridis": BugReportAction.OPTION_DASHBOARD_PALETTE_VIRIDIS,
+    "cividis": BugReportAction.OPTION_DASHBOARD_PALETTE_CIVIDIS,
+    "plasma": BugReportAction.OPTION_DASHBOARD_PALETTE_PLASMA,
+    "magma": BugReportAction.OPTION_DASHBOARD_PALETTE_MAGMA,
+    "rdbu": BugReportAction.OPTION_DASHBOARD_PALETTE_RDBU,
+    "puor": BugReportAction.OPTION_DASHBOARD_PALETTE_PUOR,
+    "brbg": BugReportAction.OPTION_DASHBOARD_PALETTE_BRBG,
+    "custom": BugReportAction.OPTION_DASHBOARD_PALETTE_CUSTOM,
+}
+
+
+def _record_dashboard_action(action: BugReportAction, *, enabled: bool | None = None) -> None:
+    try:
+        _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # Local diagnostics are best effort and must not affect visual options.
+        return
+
+
+def _record_closed_dashboard_choice(value, actions) -> None:
+    action = actions.get(value) if type(value) is str else None
+    if type(action) is BugReportAction:
+        _record_dashboard_action(action)
+
+
+def _record_accepted_dashboard_settings(settings, *, marker_outline_enabled: bool | None) -> None:
+    if not isinstance(settings, Mapping):
+        return
+    _record_closed_dashboard_choice(settings.get("recipe"), _DASHBOARD_RECIPE_ACTIONS)
+    _record_closed_dashboard_choice(settings.get("palette_preset"), _DASHBOARD_PALETTE_ACTIONS)
+    stat_lines = settings.get("stat_lines")
+    _record_dashboard_action(
+        BugReportAction.OPTION_DASHBOARD_STAT_ACCENT_ENABLED,
+        enabled=bool(isinstance(stat_lines, Mapping) and stat_lines.get("accent_by_stat") is True),
+    )
+    _record_dashboard_action(
+        BugReportAction.OPTION_DASHBOARD_CUSTOM_PALETTE_ENABLED,
+        enabled=settings.get("palette_preset") == "custom",
+    )
+    if marker_outline_enabled is not None:
+        _record_dashboard_action(
+            BugReportAction.OPTION_DASHBOARD_MARKER_OUTLINE_ENABLED,
+            enabled=marker_outline_enabled,
+        )
 
 
 def _preview_label_key(label: str) -> str:
@@ -265,6 +337,15 @@ class DashboardVisualOptionsDialog(QDialog):
         if self._persist_on_accept:
             save_dashboard_visual_settings(self._settings)
         super().accept()
+        outline_checkbox = getattr(self, "element_outline_checkbox", None)
+        outline_enabled = (
+            bool(outline_checkbox.isChecked())
+            if outline_checkbox is not None and hasattr(outline_checkbox, "isChecked")
+            else None
+        )
+        _record_accepted_dashboard_settings(
+            self._settings, marker_outline_enabled=outline_enabled
+        )
 
     def _build_controls(self) -> None:
         root = QVBoxLayout(self)
@@ -500,7 +581,7 @@ class DashboardVisualOptionsDialog(QDialog):
         body.addLayout(preview_panel, 1)
         preview_header = QHBoxLayout()
         self.chart_type_combo = self._combo(_CHART_ITEMS)
-        self.chart_type_combo.currentIndexChanged.connect(lambda _index: self._schedule_preview())
+        self.chart_type_combo.currentIndexChanged.connect(self._handle_chart_type_changed)
         self.summary_label = QLabel("")
         self.summary_label.setWordWrap(True)
         preview_header.addWidget(QLabel("Preview"))
@@ -550,6 +631,12 @@ class DashboardVisualOptionsDialog(QDialog):
         self.setTabOrder(self.element_combo, self.element_color_button)
         self.setTabOrder(self.element_color_button, self.element_opacity_slider)
         self.setTabOrder(self.element_opacity_slider, self.element_opacity_spin)
+
+    def _handle_chart_type_changed(self, *_args) -> None:
+        _record_closed_dashboard_choice(
+            self.chart_type_combo.currentData(), _DASHBOARD_CHART_ACTIONS
+        )
+        self._schedule_preview()
 
     def _add_selection_row(
         self,

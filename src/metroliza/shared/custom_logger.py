@@ -5,6 +5,7 @@ from metroliza.shared.diagnostic_events import (
     DiagnosticOperation,
     build_exception_diagnostic_event,
 )
+from metroliza.shared.safe_bugreport import record_handled_exception
 
 
 LOG_ONLY = "log_only"
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 def log_exception(exception, *, logger_name=None, context="operation"):
     """Log closed exception structure without exception- or caller-controlled text."""
+    record_handled_exception(exception)
     active_logger = logging.getLogger(logger_name) if logger_name else logger
     active_logger.error(
         build_exception_diagnostic_event(

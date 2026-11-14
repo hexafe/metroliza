@@ -1608,6 +1608,33 @@ class IndustrialAnalyticsDialog(QDialog):
             str(self.tabular_filter_expression or ""),
         )
 
+    def _is_bugreport_industrial_context(self) -> bool:
+        return bool(self.is_production_source or self.is_industrial_cache_presentation)
+
+    def _record_bugreport_analytics_outcome(self, outcome: str, *, warnings: bool = False) -> None:
+        industrial_context = self._is_bugreport_industrial_context()
+        if industrial_context:
+            action = {
+                "finished": (
+                    BugReportAction.INDUSTRIAL_ANALYSIS_FINISHED_WITH_WARNINGS
+                    if warnings
+                    else BugReportAction.INDUSTRIAL_ANALYSIS_FINISHED
+                ),
+                "failed": BugReportAction.INDUSTRIAL_ANALYSIS_FAILED,
+                "cancelled": BugReportAction.INDUSTRIAL_ANALYSIS_CANCELLED,
+            }[outcome]
+        else:
+            action = {
+                "finished": (
+                    BugReportAction.ANALYSIS_FINISHED_WITH_WARNINGS
+                    if warnings
+                    else BugReportAction.ANALYSIS_FINISHED
+                ),
+                "failed": BugReportAction.ANALYSIS_FAILED,
+                "cancelled": BugReportAction.ANALYSIS_CANCELLED,
+            }[outcome]
+        _bugreport_recorder.record(action)
+
     def _tabular_scope_revision(self, *, include_filter: bool = True):
         """Snapshot native scope metadata; custom inputs retain the general path."""
         loaded = self.tabular_load_result
@@ -1861,6 +1888,7 @@ class IndustrialAnalyticsDialog(QDialog):
         dialog = IndustrialAnalyticsFilterDialog(self, filter_state=self.filter_state)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_FILTER_APPLIED)
         self.filter_state = dialog.filter_state
         self.metric_candidates = ()
         self.metrics_list.clear()
@@ -1934,7 +1962,11 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_expression = expression
         self.tabular_filter_columns = ()
         self.tabular_filter_keys = ()
-        _bugreport_recorder.record(BugReportAction.FILTER_APPLIED)
+        _bugreport_recorder.record(
+            BugReportAction.INDUSTRIAL_FILTER_APPLIED
+            if self._is_bugreport_industrial_context()
+            else BugReportAction.FILTER_APPLIED
+        )
         if self.grouping_applied:
             self._grouping_snapshot_owner.invalidate()
             self.df_for_grouping = grouping
@@ -2175,7 +2207,11 @@ class IndustrialAnalyticsDialog(QDialog):
         self._grouping_snapshot_owner.invalidate()
         self.grouping_applied = bool(applied)
         if self.grouping_applied:
-            _bugreport_recorder.record(BugReportAction.GROUPING_APPLIED)
+            _bugreport_recorder.record(
+                BugReportAction.INDUSTRIAL_GROUPING_APPLIED
+                if self._is_bugreport_industrial_context()
+                else BugReportAction.GROUPING_APPLIED
+            )
         if not self.grouping_applied:
             self.df_for_grouping = None
         self._sync_grouping_summary()
@@ -2906,14 +2942,42 @@ class IndustrialAnalyticsDialog(QDialog):
         self.start_button.setEnabled(False)
         self.readiness_label.setText("Generating analytics. Ctrl+Shift+S requests stop.")
         try:
-            _bugreport_recorder.record(BugReportAction.OPTION_WORKBOOK, enabled=bool(request.output_workbook_file))
-            _bugreport_recorder.record(BugReportAction.OPTION_HTML, enabled=bool(request.output_dashboard_file))
-            _bugreport_recorder.record(BugReportAction.OPTION_GROUPING, enabled=bool(self.grouping_applied))
-            _bugreport_recorder.record(BugReportAction.OPTION_CHARTS, enabled=bool(request.chart_selection.has_any))
+            industrial_context = self._is_bugreport_industrial_context()
+            _bugreport_recorder.record(
+                BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_WORKBOOK
+                if industrial_context
+                else BugReportAction.OPTION_WORKBOOK,
+                enabled=bool(request.output_workbook_file),
+            )
+            _bugreport_recorder.record(
+                BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_DASHBOARD
+                if industrial_context
+                else BugReportAction.OPTION_HTML,
+                enabled=bool(request.output_dashboard_file),
+            )
+            _bugreport_recorder.record(
+                BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_GROUPING
+                if industrial_context
+                else BugReportAction.OPTION_GROUPING,
+                enabled=bool(self.grouping_applied),
+            )
+            _bugreport_recorder.record(
+                BugReportAction.OPTION_INDUSTRIAL_ANALYTICS_CHARTS
+                if industrial_context
+                else BugReportAction.OPTION_CHARTS,
+                enabled=bool(request.chart_selection.has_any),
+            )
             worker_request = getattr(self.analytics_thread, "request", None)
-            if type(worker_request) is IndustrialAnalyticsRequest:
+            if (
+                not industrial_context
+                and type(worker_request) is IndustrialAnalyticsRequest
+            ):
                 self._record_safe_request_checks(request, worker_request)
-            _bugreport_recorder.record(BugReportAction.ANALYSIS_STARTED)
+            _bugreport_recorder.record(
+                BugReportAction.INDUSTRIAL_ANALYSIS_STARTED
+                if industrial_context
+                else BugReportAction.ANALYSIS_STARTED
+            )
         except Exception:
             # Diagnostic observation must not block the actual operation.
             pass
@@ -2964,8 +3028,14 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_analytics_finished(self, result) -> None:
-        _bugreport_recorder.record(BugReportAction.ANALYSIS_FINISHED)
-        if type(result.html_dashboard_chart_count) is int:
+        self._record_bugreport_analytics_outcome(
+            "finished",
+            warnings=_analytics_has_warnings(result),
+        )
+        if (
+            not self._is_bugreport_industrial_context()
+            and type(result.html_dashboard_chart_count) is int
+        ):
             _bugreport_recorder.record(
                 BugReportAction.CHECK_CHARTS_PRESENT, enabled=result.html_dashboard_chart_count > 0,
             )
@@ -2984,13 +3054,13 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, title, message)
 
     def on_analytics_error(self, message: str) -> None:
-        _bugreport_recorder.record(BugReportAction.ANALYSIS_FAILED)
+        self._record_bugreport_analytics_outcome("failed")
         self._close_worker_progress()
         self.last_result_row.set_result("failed")
         QMessageBox.warning(self, self.windowTitle(), f"Could not create analytics: {message}")
 
     def on_analytics_cancelled(self, message: str) -> None:
-        _bugreport_recorder.record(BugReportAction.ANALYSIS_CANCELLED)
+        self._record_bugreport_analytics_outcome("cancelled")
         self._close_worker_progress()
         self.last_result_row.set_result("cancelled")
         QMessageBox.information(self, self.windowTitle(), message or "Analytics generation was canceled.")
