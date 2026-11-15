@@ -64,7 +64,7 @@ class RecipeEditorService:
 
     def configure_reports(self, *, dates: bool, grouping_columns: tuple[str, ...],
                           additional_html: bool) -> StoredRecipe:
-        from metroliza.recipes.report_configuration_adapter import GROUPING_COLUMNS
+        from metroliza.recipes.report_configuration_adapter import GROUPING_COLUMNS, grouped_export_configuration
         if any(column not in GROUPING_COLUMNS for column in grouping_columns):
             raise RecipeError("unsupported_grouping_rule")
         kinds = [s.kind for s in self.current.definition.steps]
@@ -90,6 +90,10 @@ class RecipeEditorService:
             params[ParameterKey.GROUPING_RULES] = ParameterSpec(
                 ParameterKey.GROUPING_RULES, ParameterType.STRINGS, ParameterMode.FIXED)
             values[ParameterKey.GROUPING_RULES] = grouping_columns
+            params[ParameterKey.EXPORT_OPTIONS] = ParameterSpec(
+                ParameterKey.EXPORT_OPTIONS, ParameterType.TEXT, ParameterMode.FIXED)
+            values[ParameterKey.EXPORT_OPTIONS] = grouped_export_configuration(
+                replace(self.current.binding, values=tuple(values.items())))
             prefix.append(StepSpec(StepKind.GROUP, current, DataKind.SELECTION))
             current = DataKind.SELECTION
         else:
@@ -99,7 +103,7 @@ class RecipeEditorService:
         if main:
             prefix.append(StepSpec(StepKind.EXPORT_MAIN, current, DataKind.ARTIFACT))
             current = DataKind.ARTIFACT
-        if additional_html or not main:
+        if additional_html or grouping_columns or not main:
             prefix.append(StepSpec(StepKind.EXPORT_HTML, current, DataKind.ARTIFACT))
         prefix.append(StepSpec(StepKind.VERIFY_OUTPUT, DataKind.ARTIFACT, DataKind.ARTIFACT))
         return self._replace(definition=replace(self.current.definition, steps=tuple(prefix),

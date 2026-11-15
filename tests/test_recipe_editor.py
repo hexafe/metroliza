@@ -131,3 +131,25 @@ def test_editor_dirty_close_cancel_then_discard_emits_finished(qapplication_sess
     assert dialog.close()
     assert not dialog.isVisible() and len(finished) == 1
     assert not dialog._widgets_dirty and not dialog.service.modified
+
+
+def test_group_rule_enables_native_standard_analysis_and_html_without_resetting_options(tmp_path):
+    captured = capture_export_configuration(manual_request(tmp_path))
+    original = json.loads(captured.binding.value(ParameterKey.EXPORT_OPTIONS))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    configured = json.loads(editor.current.binding.value(ParameterKey.EXPORT_OPTIONS))
+    assert configured == {**original, "group_analysis_level": "standard", "generate_html_dashboard": True}
+    assert StepKind.EXPORT_HTML in {step.kind for step in editor.current.definition.steps}
+    assert configured["violin_plot_min_samplesize"] == 12
+    assert configured["chart_worker_count"] == 2
+    assert configured["generate_summary_sheet"] is True
+
+
+def test_capture_explicit_options_survive_unrelated_editor_change(tmp_path):
+    native = replace(manual_request(tmp_path), options=replace(manual_request(tmp_path).options,
+        group_analysis_level="light", group_analysis_scope="single_reference"))
+    editor = RecipeEditorService(capture_export_configuration(native))
+    editor.configure_reports(dates=True, grouping_columns=(), additional_html=False)
+    effective = build_export_request(editor.preview(), StepKind.EXPORT_MAIN)
+    assert effective.options == native.options

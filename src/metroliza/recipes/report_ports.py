@@ -121,7 +121,7 @@ class ReportsRecipeService:
         if previous is not None and previous.approved:
             if previous.preflight.result_id != scan.result_id or previous.request != request:
                 self._reviews.pop(plan.run_id, None)
-                return PreflightResult(False, ResultCode.SOURCE_CHANGED, True)
+                return PreflightResult(False, ResultCode.SOURCE_CHANGED)
             return PreflightResult(True)
         rows = self._read_review_rows(scan, context)
         if context.cancelled() or self._cancelled.is_set():
@@ -234,8 +234,13 @@ class ReportsRecipeService:
         if result.failed:
             return StepResult(StepStatus.PARTIAL if review.imported else StepStatus.FAILED,
                               ResultCode.PARTIAL_IMPORT, result.imported, result.failed)
-        return StepResult(StepStatus.COMPLETED, imported_count=result.imported,
-                          warnings=(ResultCode.DUPLICATES,) if result.duplicates else ())
+        warnings = []
+        if result.duplicates:
+            warnings.append(ResultCode.DUPLICATES)
+        if any(item.status not in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
+               for item in review.preflight.files):
+            warnings.append(ResultCode.UNSUPPORTED)
+        return StepResult(StepStatus.COMPLETED, imported_count=result.imported, warnings=tuple(warnings))
 
     def _export(self, step, plan, review, context):
         if not review.imported:

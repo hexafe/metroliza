@@ -466,7 +466,7 @@ def launch_ui(
     recipe_qualification_root = os.environ.get("METROLIZA_RECIPE_QUALIFICATION_ROOT")
     if recipe_qualification_root:
         from pathlib import Path
-        from metroliza.app.recipe_qualification import install_recipe_qualification
+        from metroliza.app.ui_entrypoint import install_recipe_qualification
 
         splash.finish(main_window)
         install_recipe_qualification(main_window, Path(recipe_qualification_root))

@@ -171,3 +171,23 @@ def test_existing_reports_database_uses_canonical_schema_readiness_without_migra
     before = database.read_bytes()
     assert not service.preflight(plan, context(plan)).ready
     assert database.read_bytes() == before
+
+
+def test_explicitly_reviewed_exclusions_survive_success_as_warning(tmp_path):
+    from dataclasses import replace
+    plan = make_plan(tmp_path)
+
+    class MixedScanner(Scanner):
+        def scan_source(self, **kwargs):
+            result = super().scan_source(**kwargs)
+            excluded = replace(result.files[0], display_name="unsupported.pdf", occurrence_id="unsupported.pdf",
+                               status=ParsePreflightStatus.UNSUPPORTED, fingerprint=None, parser_id=None)
+            return replace(result, files=(*result.files, excluded))
+
+    service = ReportsRecipeService(lambda *_args: ImportExecutionResult(imported=1), lambda *_args: None,
+                                   scanner=MixedScanner(), metadata_reader=MetadataReader)
+    assert service.preflight(plan, context(plan)).requires_decision
+    assert service.approve(plan, "continue")
+    result = service.execute(plan.definition.steps[1], plan, context(plan))
+    assert result.status is StepStatus.COMPLETED
+    assert result.warnings == (ResultCode.UNSUPPORTED,)

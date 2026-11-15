@@ -71,22 +71,81 @@ def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix
         runner.cancel()
 
 
+def _seed_export_scope(database):
+    """Authored measurements independent of product query/statistics helpers."""
+    from metroliza.reports.report_repository import ReportRepository
+    groups = {"A": (9.90, 9.92, 9.94, 9.96, 10.02),
+              "B": (10.02, 10.04, 10.06, 10.08, 10.10),
+              "EXCLUDED": (1234.5, 9876.5)}
+    repository = ReportRepository(str(database))
+    index = 0
+    for group, values in groups.items():
+        for value in values:
+            index += 1
+            source = database.with_name(f"synthetic-{index}.pdf")
+            source.write_bytes(f"synthetic authored measurement {index}".encode())
+            repository.persist_parsed_report(
+                source_path=source, parser_id="cmm", parser_version="1.0",
+                template_family="cmm_pdf_header_box", parse_status="parsed",
+                metadata={"reference": "REF-1", "part_name": "Synthetic part", "revision": group,
+                          "report_date": "2024-01-02" if group == "EXCLUDED" else "2024-01-01",
+                          "sample_number": str(index), "sample_number_kind": "explicit_sample_number"},
+                candidates=(), warnings=(), metadata_version="report_metadata_v1",
+                measurements=({"header": "FEATURE_1", "ax": "X", "nominal": 10.0,
+                               "tol_plus": 0.5, "tol_minus": -0.5, "meas": value,
+                               "dev": value - 10.0, "outtol": 0, "status_code": "ok"},),
+                identity_hash=f"synthetic-{index}", metadata_confidence=1.0)
+    return groups
+
+
+def _xlsx_cells(path, sheet_name):
+    """Read the emitted OOXML, using no application export/analysis helpers."""
+    import xml.etree.ElementTree as ET
+    ns = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(path) as archive:
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        relations = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in relations}
+        sheet = next(sheet for sheet in workbook.findall("x:sheets/x:sheet", ns)
+                     if sheet.attrib["name"] == sheet_name)
+        key = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        target = targets[sheet.attrib[key]].lstrip("/")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+        shared = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared = ["".join(node.itertext()) for node in ET.fromstring(archive.read("xl/sharedStrings.xml"))]
+        result = {}
+        for cell in ET.fromstring(archive.read(target)).findall(".//x:c", ns):
+            value = cell.find("x:v", ns)
+            if cell.attrib.get("t") == "s" and value is not None:
+                result[cell.attrib["r"]] = shared[int(value.text)]
+            elif cell.attrib.get("t") == "inlineStr":
+                result[cell.attrib["r"]] = "".join(cell.find("x:is", ns).itertext())
+            elif value is not None and value.text:
+                result[cell.attrib["r"]] = value.text if cell.attrib.get("t") == "e" else float(value.text)
+        return result
+
+
 def test_larger_saved_flow_uses_same_snapshot_and_real_outputs(tmp_path):
+    from statistics import mean
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
     from metroliza.recipes.contracts import ParameterKey
     from metroliza.recipes.editor_service import RecipeEditorService
-    from metroliza.recipes.storage import RecipeStore, StoredRecipe
+    from metroliza.recipes.report_configuration_adapter import capture_export_configuration
+    from metroliza.recipes.storage import RecipeStore
 
     app = QApplication.instance() or QApplication([])
-    source = tmp_path / "reports"
-    _write_complete_reports(source)
-    editor = RecipeEditorService(StoredRecipe(REPORTS_EXCEL_MAIN,
-        builtin_binding(REPORTS_EXCEL_MAIN, str(source), str(tmp_path / "Larger.xlsx"))))
-    editor.duplicate("Synthetic larger flow")
-    editor.configure_reports(dates=True, grouping_columns=("REFERENCE",), additional_html=True)
+    database = tmp_path / "authored.db"
+    groups = _seed_export_scope(database)
+    captured = capture_export_configuration(validate_export_request(ExportRequest(
+        AppPaths(str(database), excel_file=str(tmp_path / "Larger.xlsx")),
+        ExportOptions(preset="full_report", generate_summary_sheet=True, chart_worker_count=1))))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=True, grouping_columns=("REVISION",), additional_html=False)
     editor.set_value(ParameterKey.DATE_FROM, "2024-01-01")
     editor.set_value(ParameterKey.DATE_TO, "2024-01-01")
-    store = RecipeStore(tmp_path / "private")
-    saved = editor.save(store)
+    saved = editor.save(RecipeStore(tmp_path / "private"))
     reopened = RecipeStore(tmp_path / "private").load(saved.definition.recipe_id)
     plan = resolve_plan(reopened.definition, reopened.binding)
     editor.set_value(ParameterKey.OUTPUT_FILE, str(tmp_path / "Future.xlsx"))
@@ -96,13 +155,33 @@ def test_larger_saved_flow_uses_same_snapshot_and_real_outputs(tmp_path):
     try:
         record = runner.start(plan)
         assert record.state in (RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS), record
-        assert (tmp_path / "Larger.xlsx").is_file()
-        assert (tmp_path / "Larger.html").is_file()
         assert not (tmp_path / "Future.xlsx").exists()
-        with closing(sqlite3.connect(str(plan.database_file))) as connection:
-            # Independent literal fixture range, rather than the product query builder.
-            rows = connection.execute("SELECT meas FROM report_measurements").fetchall()
-            assert [row[0] for row in rows] == pytest.approx([10.02] * 5)
+        with closing(sqlite3.connect(str(database))) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM report_measurements").fetchone() == (12,)
+        # The manual Main export names measurement sheets by reference.
+        # This fixture has exactly the authored REF-1 family.
+        main = _xlsx_cells(plan.output_file, "REF-1")
+        assert main["C21"] == "FEATURE_1 - X"
+        expected = [*groups["A"], *groups["B"]]
+        assert sorted(main[f"C{row}"] for row in range(22, 32)) == pytest.approx(sorted(expected))
+        assert "C32" not in main  # Date exclusion removed both later measurements.
+        raw = _xlsx_cells(plan.output_file, "MEASUREMENTS")
+        assert raw["AD1"] == "MEAS" and raw["D1"] == "DATE"
+        assert sorted(raw[f"AD{row}"] for row in range(2, 12)) == pytest.approx(sorted(expected))
+        assert {raw[f"D{row}"] for row in range(2, 12)} == {"2024-01-01"}
+        assert [raw[f"G{row}"] for row in range(2, 12)].count("A") == 5
+        assert [raw[f"G{row}"] for row in range(2, 12)].count("B") == 5
+        assert "AD12" not in raw
+        analysis = _xlsx_cells(plan.output_file, "Group Analysis")
+        _xlsx_cells(plan.output_file, "Group Analysis Plots")
+        for group in ("A", "B"):
+            rows = [int(cell[1:]) for cell, value in analysis.items() if cell.startswith("A") and value == group]
+            assert any(analysis.get(f"B{row}") == 5 and
+                       analysis.get(f"C{row}") == pytest.approx(mean(groups[group])) for row in rows)
+        assert "EXCLUDED" not in analysis.values()
+        html = plan.output_file.with_suffix(".html").read_text(encoding="utf-8")
+        assert "<html" in html.lower()
+        assert "9876.5" not in html and "1234.5" not in html
         assert app is QApplication.instance()
     finally:
         runner.cancel()

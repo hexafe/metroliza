@@ -1,8 +1,6 @@
 """Lazy composition of the shared recipe workspace and existing service engines."""
 from __future__ import annotations
 
-from pathlib import Path
-
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
@@ -103,7 +101,8 @@ class RecipeWorkspace(QWidget):
             ReportsRecipeService(RecipeExecutionAdapter("import"), RecipeExecutionAdapter("export")),
             create_adapter_ports(),
         )
-        self.controller = RecipeController(RecipeRunner(ports), self, resolver=self.store.load)
+        self.controller = RecipeController(RecipeRunner(ports), self, resolver=self.store.load,
+            active_database=lambda: self.main_window.db_file)
         self._close_requested = False
         self._editors = []
         layout = QVBoxLayout(self)
@@ -157,10 +156,6 @@ class RecipeWorkspace(QWidget):
         if not identity:
             self.stack.setCurrentWidget(self.library)
             return
-        self.controller.runner.active_database = (
-            Path(self.main_window.db_file)
-            if self.main_window.db_file else None
-        )
         self.controller.launch(identity)
 
     def _changed(self, record):

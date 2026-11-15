@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
 
 from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, StepKind
 from metroliza.recipes.run_state import RunState
+from metroliza.recipes.ports import ResultCode
 from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
 
 _LABELS = {"input_folder": "Folder raportów", "output_file": "Plik wynikowy",
@@ -71,6 +72,7 @@ class RecipeRunnerPage(QWidget):
         self.open_button.clicked.connect(self._open)
         self.repeat_button.clicked.connect(controller.repeat)
         controller.selection_changed.connect(self._selection)
+        controller.prepared.connect(self._prepared)
         controller.changed.connect(self._changed)
         controller.failed.connect(self._failed)
         controller.event_received.connect(self._event)
@@ -81,6 +83,7 @@ class RecipeRunnerPage(QWidget):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.fields.clear()
+        self._review_rows = ()
         self.review_table.hide()
         self.scope.clear()
         self.status.setText("Sprawdź parametry. Start odczyta plan przed pierwszą zmianą bazy.")
@@ -132,14 +135,46 @@ class RecipeRunnerPage(QWidget):
             values[key] = value
         return values
 
+    def _path_value(self, key):
+        field = self.fields.get(key)
+        return field[0].text().strip() if field else str(self.controller.binding.value(key) or "")
+
     def _preview(self, *_):
-        output = self.fields.get(ParameterKey.OUTPUT_FILE)
-        if output:
-            from pathlib import Path
-            text = output[0].text().strip()
-            self.database.setText(f"Wyliczona baza: {Path(text).with_suffix('.db')}" if text else "Wyliczona baza: —")
-        else:
+        from pathlib import Path
+        if self.controller.definition is None:
             self.database.clear()
+            return
+        lines = []
+        output = self._path_value(ParameterKey.OUTPUT_FILE)
+        derived = any(p.key is ParameterKey.DATABASE_FILE and p.mode is ParameterMode.DERIVED
+                      for p in self.controller.definition.parameters)
+        existing = self._path_value(ParameterKey.EXISTING_DATABASE)
+        if derived:
+            lines.append(f"Wyliczona baza: {Path(output).with_suffix('.db')}" if output else "Wyliczona baza: —")
+        elif existing:
+            lines.append(f"Istniejąca baza: {existing}")
+        if output:
+            lines.append(f"Wynik: {output}")
+            kinds = {s.kind for s in self.controller.definition.steps}
+            if StepKind.EXPORT_MAIN in kinds and StepKind.EXPORT_HTML in kinds:
+                lines.append(f"Dashboard: {Path(output).with_suffix('.html')}")
+            if kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
+                lines.append(f"Zasoby: {Path(output).with_name(Path(output).stem + '_assets')}")
+        self.database.setText("\n".join(lines))
+
+    def _prepared(self, plan):
+        kinds = {step.kind for step in plan.definition.steps}
+        lines = []
+        if plan.database_file is not None:
+            label = "Wyliczona baza" if StepKind.PREPARE_DATABASE in kinds else "Istniejąca baza"
+            lines.append(f"{label}: {plan.database_file}")
+        if plan.output_file is not None:
+            lines.append(f"Wynik: {plan.output_file}")
+            if StepKind.EXPORT_MAIN in kinds and StepKind.EXPORT_HTML in kinds:
+                lines.append(f"Dashboard: {plan.output_file.with_suffix('.html')}")
+        if plan.assets_dir is not None and kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
+            lines.append(f"Zasoby: {plan.assets_dir}")
+        self.database.setText("\n".join(lines))
 
     def _browse(self, key):
         editor, _spec = self.fields[key]
@@ -179,9 +214,19 @@ class RecipeRunnerPage(QWidget):
 
     def _changed(self, record):
         self.status.setText(_STATE_LABELS.get(record.state, record.state.value))
+        if record.code is ResultCode.SOURCE_CHANGED:
+            self.status.setText("Źródło zmieniło się. Wybierz Powtórz, aby sprawdzić aktualny zbiór.")
         if record.state is RunState.REQUIRES_DECISION:
             result = self.controller.runner.review
-            if result is not None:
+            if record.decision == "copy_ready":
+                self._review_rows = ()
+                self.review_table.hide()
+                self.scope.setText("Nowa kopia jest gotowa. Sprawdź nowe ścieżki powyżej. Kontynuuj uruchomi ten plan.")
+            elif record.decision == "collision":
+                self._review_rows = ()
+                self.review_table.hide()
+                self.scope.setText("Baza lub jej pliki dziennika już istnieją. Wybierz nową kopię albo anuluj.")
+            elif result is not None:
                 self.scope.setText("\n".join(result.summary))
                 review = result.review
                 self._review_rows = getattr(review, "rows", ())
@@ -220,8 +265,9 @@ class RecipeRunnerPage(QWidget):
         decision = bool(record and record.state is RunState.REQUIRES_DECISION)
         self.start_button.setEnabled(not busy and self.controller.definition is not None)
         self.continue_button.setVisible(decision)
-        self.copy_button.setVisible(decision)
-        self.continue_button.setEnabled(self.controller._task is None)
+        self.copy_button.setVisible(decision and record.decision != "copy_ready")
+        self.continue_button.setEnabled(self.controller._task is None and bool(record)
+                                        and record.decision != "collision")
         self.copy_button.setEnabled(self.controller._task is None)
         self.cancel_button.setEnabled(busy)
         self.repeat_button.setEnabled(not busy and self.controller.definition is not None)

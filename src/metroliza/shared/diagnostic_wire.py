@@ -230,6 +230,11 @@ def decode_export_failure(payload: object) -> ExportFailureDiagnostic:
 
 def _workflow(payload: object) -> WorkflowDiagnosticEvent:
     failure = None
+    flow_state = None
+    if type(payload) is dict and "flow_state" in payload:
+        from metroliza.shared.diagnostic_events import RecipeFlowState
+        flow_state = _enum(RecipeFlowState, payload["flow_state"])
+        payload = {key: value for key, value in payload.items() if key != "flow_state"}
     correlation = {}
     if type(payload) is dict and any(key in payload for key in ("flow_id", "run_id", "step_id")):
         if not all(key in payload for key in ("flow_id", "run_id", "step_id")):
@@ -271,6 +276,7 @@ def _workflow(payload: object) -> WorkflowDiagnosticEvent:
         published_artifact_count=values["published_artifact_count"],
         duration_ms=values["duration_ms"],
         export_failure=failure,
+        flow_state=flow_state,
         **correlation,
     )
 

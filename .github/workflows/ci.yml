@@ -243,6 +243,7 @@ jobs:
       - name: Qualify packaged recipe journeys at three scales
         shell: pwsh
         run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
           $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Canonical recipe artifact identity failed' }
           $launcher = Join-Path $PWD (Join-Path 'dist' $artifactNames.launcher)
@@ -1815,6 +1816,8 @@ jobs:
           tests/test_recipe_editor.py tests/test_recipe_adapters.py
           tests/test_recipe_ui.py tests/test_recipe_workspace.py
           tests/test_recipe_real_flows.py tests/test_recipe_diagnostic_correlation.py
+          tests/test_recipe_flow_diagnostics.py
+          tests/test_recipe_qualification.py
 
       - name: Run native Windows report workspace tests
         if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}

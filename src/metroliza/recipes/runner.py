@@ -29,6 +29,8 @@ class RecipeRunner:
         self.review: PreflightResult | None = None
         self._cancelled = threading.Event()
         self._execution = threading.Lock()
+        self._state_lock = threading.RLock()
+        self._admission: tuple[str, str] | None = None
         self._started = 0.0
         self._next_step = 0
         self._sequence = 0
@@ -53,7 +55,25 @@ class RecipeRunner:
     def _publish(self, state: RunState | None = None, code: ResultCode | None = None,
                  *, step_id: str | None = None, step_kind: StepKind | None = None,
                  completed: int = 0, total: int = 0, decision: str = "") -> RunRecord:
+        with self._state_lock:
+            return self._publish_locked(state, code, step_id=step_id, step_kind=step_kind,
+                completed=completed, total=total, decision=decision)
+
+    def _cancelled_state(self, state, code):
+        if not self._cancelled.is_set():
+            return state, code
+        if state is RunState.RUNNING:
+            return RunState.CANCELLING, ResultCode.CANCELLED
+        if state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS,
+                     RunState.REQUIRES_DECISION, RunState.PARTIAL}:
+            return RunState.CANCELLED, ResultCode.CANCELLED
+        return state, code
+
+    def _publish_locked(self, state: RunState | None = None, code: ResultCode | None = None,
+                 *, step_id: str | None = None, step_kind: StepKind | None = None,
+                 completed: int = 0, total: int = 0, decision: str = "") -> RunRecord:
         assert self.record is not None
+        state, code = self._cancelled_state(state, code)
         terminal = state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS,
             RunState.PARTIAL, RunState.FAILED, RunState.CANCELLED}
         if terminal:
@@ -91,38 +111,85 @@ class RecipeRunner:
         from metroliza.shared.workflow_diagnostics import recipe_workflow_scope
         return recipe_workflow_scope(UUID(context.flow_id), UUID(context.run_id), UUID(context.step_id))
 
-    def start(self, plan: ResolvedRunPlan) -> RunRecord:
-        if not self._execution.acquire(blocking=False):
-            return RunRecord(plan.flow_id, plan.run_id, RunState.FAILED, ResultCode.BUSY)
-        try:
+    def admit_start(self, plan: ResolvedRunPlan) -> str:
+        """Admit on the UI thread before scheduling; cancellation then stays latched."""
+        with self._state_lock:
+            if self._admission is not None or self._owns():
+                raise RecipeError("busy")
+            token = str(uuid4())
+            self._cancelled.clear()
+            self._admission = (token, plan.run_id)
+            return token
+
+    def withdraw_start(self, token: str) -> None:
+        with self._state_lock:
+            if self._admission is not None and self._admission[0] == token:
+                self._admission = None
+                self._cancelled.set()
+
+    def _initialize(self, plan: ResolvedRunPlan, admission: str | None) -> RunRecord | None:
+        with self._state_lock:
+            if admission is None:
+                try:
+                    admission = self.admit_start(plan)
+                except RecipeError:
+                    return RunRecord(plan.flow_id, plan.run_id, RunState.FAILED, ResultCode.BUSY)
+            if self._admission != (admission, plan.run_id):
+                return RunRecord(plan.flow_id, plan.run_id, RunState.FAILED, ResultCode.INVALID_PLAN)
+            self._admission = None
             if not self._claim():
                 return RunRecord(plan.flow_id, plan.run_id, RunState.FAILED, ResultCode.BUSY)
             self._started = time.monotonic()
             self.plan, self.review = plan, None
             self._next_step, self._sequence = 0, 0
             self._finished = False
-            self._cancelled.clear()
             self.record = RunRecord(plan.flow_id, plan.run_id, ownership=True)
-            try:
-                validate_binding(plan.definition, plan.binding, complete=True)
-                resolved = resolve_plan(plan.definition, plan.binding)
-                if any(getattr(plan, key) != getattr(resolved, key) for key in
-                       ("input_folder", "output_file", "database_file", "assets_dir")):
-                    raise RecipeError("snapshot_mismatch")
-                validate_plan_paths(plan, self.active_database)
-                for identity in (plan.flow_id, plan.run_id):
-                    if UUID(identity).version != 4:
-                        raise RecipeError("invalid_runtime_id")
-                self._publish(RunState.RUNNING)
-                if self._database_collision():
-                    return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
-                                         decision="collision")
-                return self._preflight_and_execute()
-            except Exception:
-                return self._publish(RunState.CANCELLED if self._cancelled.is_set() else RunState.FAILED,
-                                     ResultCode.CANCELLED if self._cancelled.is_set() else ResultCode.INVALID_PLAN)
-        finally:
+            return None
+
+    def _validate_snapshot(self, plan: ResolvedRunPlan) -> None:
+        validate_binding(plan.definition, plan.binding, complete=True)
+        resolved = resolve_plan(plan.definition, plan.binding)
+        if any(getattr(plan, key) != getattr(resolved, key) for key in
+               ("input_folder", "output_file", "database_file", "assets_dir")):
+            raise RecipeError("snapshot_mismatch")
+        validate_plan_paths(plan, self.active_database)
+        for identity in (plan.flow_id, plan.run_id):
+            if UUID(identity).version != 4:
+                raise RecipeError("invalid_runtime_id")
+
+    def _release_execution(self) -> RunRecord | None:
+        with self._state_lock:
+            cancelled = None
+            if self._cancelled.is_set() and self._owns():
+                cancelled = self._publish(RunState.CANCELLED, ResultCode.CANCELLED)
             self._execution.release()
+            return cancelled
+
+    def _start_admitted(self, plan: ResolvedRunPlan, admission: str | None) -> RunRecord:
+        rejected = self._initialize(plan, admission)
+        if rejected is not None:
+            return rejected
+        try:
+            if self._cancelled.is_set():
+                return self._publish(RunState.CANCELLED, ResultCode.CANCELLED)
+            self._validate_snapshot(plan)
+            self._publish(RunState.RUNNING)
+            if self._database_collision():
+                return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
+                                     decision="collision")
+            return self._preflight_and_execute()
+        except Exception:
+            return self._publish(RunState.CANCELLED if self._cancelled.is_set() else RunState.FAILED,
+                                 ResultCode.CANCELLED if self._cancelled.is_set() else ResultCode.INVALID_PLAN)
+
+    def start(self, plan: ResolvedRunPlan, *, admission: str | None = None) -> RunRecord:
+        if not self._execution.acquire(blocking=False):
+            return RunRecord(plan.flow_id, plan.run_id, RunState.FAILED, ResultCode.BUSY)
+        try:
+            result = self._start_admitted(plan, admission)
+        finally:
+            cancelled = self._release_execution()
+        return cancelled or result
 
     def _database_collision(self) -> bool:
         assert self.plan is not None
@@ -153,22 +220,32 @@ class RecipeRunner:
             return self._publish(RunState.FAILED, self.review.code)
         return self._execute()
 
-    def _resume_decision(self, decision: str) -> RunRecord:
-        assert self.record is not None and self.plan is not None
-        pending = self.record.decision
-        if decision == "new_copy" and self._next_step == 0:
-            self.plan = new_output_copy(self.plan)
-            self.record = replace(self.record, run_id=self.plan.run_id)
-            self._publish(RunState.RUNNING, ResultCode.SUCCESS)
-            return self._preflight_and_execute()
-        if pending == "collision":
+    def _prepare_new_copy(self) -> RunRecord:
+        assert self.plan is not None
+        candidate = new_output_copy(self.plan)
+        # Finish the old run while its identity is still current. Never carry
+        # approval or private review state across the new random run identity.
+        finish = getattr(self.ports, "finish", None)
+        with self._state_lock:
+            self._finished = True
+        if finish is not None:
+            finish(self.plan)
+        with self._state_lock:
+            if self._cancelled.is_set():
+                return self._publish(RunState.CANCELLED, ResultCode.CANCELLED)
+            self.plan, self.review = candidate, None
+            self.record = replace(self.record, run_id=candidate.run_id)
+            self._finished = False
             return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
-                                 decision="collision")
-        if pending == "partial" and decision != "continue_partial":
-            return self._publish(RunState.REQUIRES_DECISION, ResultCode.PARTIAL_IMPORT,
-                                 decision="partial")
+                                 decision="copy_ready")
+
+    def _continue_decision(self, pending: str, decision: str) -> RunRecord:
+        assert self.plan is not None
         if decision not in {"continue", "continue_partial"}:
             raise RecipeError("invalid_decision")
+        if pending == "copy_ready":
+            self._publish(RunState.RUNNING, ResultCode.SUCCESS)
+            return self._preflight_and_execute()
         if not self.ports.approve(self.plan, decision):
             return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
                                  decision=pending)
@@ -177,11 +254,21 @@ class RecipeRunner:
             return self._execute()
         return self._preflight_and_execute()
 
-    def resume(self, decision: str) -> RunRecord:
-        if self.record is None or self.plan is None:
-            raise RecipeError("no_active_run")
-        if not self._execution.acquire(blocking=False):
-            return replace(self.record, code=ResultCode.BUSY)
+    def _resume_decision(self, decision: str) -> RunRecord:
+        assert self.record is not None and self.plan is not None
+        pending = self.record.decision
+        if decision == "new_copy" and self._next_step == 0:
+            return self._prepare_new_copy()
+        if pending == "collision":
+            return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
+                                 decision="collision")
+        if pending == "partial" and decision != "continue_partial":
+            return self._publish(RunState.REQUIRES_DECISION, ResultCode.PARTIAL_IMPORT,
+                                 decision="partial")
+        return self._continue_decision(pending, decision)
+
+    def _resume_admitted(self, decision: str) -> RunRecord:
+        assert self.record is not None
         try:
             if self.record.state is not RunState.REQUIRES_DECISION or not self._owns():
                 raise RecipeError("no_pending_decision")
@@ -193,14 +280,23 @@ class RecipeRunner:
         except Exception:
             return self._publish(RunState.CANCELLED if self._cancelled.is_set() else RunState.FAILED,
                                  ResultCode.CANCELLED if self._cancelled.is_set() else ResultCode.INVALID_PLAN)
+
+    def resume(self, decision: str) -> RunRecord:
+        if self.record is None or self.plan is None:
+            raise RecipeError("no_active_run")
+        if not self._execution.acquire(blocking=False):
+            return replace(self.record, code=ResultCode.BUSY)
+        try:
+            result = self._resume_admitted(decision)
         finally:
-            self._execution.release()
+            cancelled = self._release_execution()
+        return cancelled or result
 
     @staticmethod
     def _valid_result_values(result: StepResult) -> bool:
         return (type(result.warnings) is tuple and len(result.warnings) <= 32 and
                 all(isinstance(w, ResultCode) for w in result.warnings) and
-                all(type(n) is int and 0 <= n <= 10_000
+                all(type(n) is int and n >= 0
                     for n in (result.imported_count, result.rejected_count)))
 
     @classmethod
@@ -217,7 +313,8 @@ class RecipeRunner:
             return self._publish(RunState.FAILED, result.code)
         if result.status is StepStatus.PARTIAL:
             if kind is StepKind.IMPORT_REPORTS:
-                self.record = replace(self.record, partial_import=True)
+                with self._state_lock:
+                    self.record = replace(self.record, partial_import=True)
                 return self._publish(RunState.REQUIRES_DECISION, ResultCode.PARTIAL_IMPORT,
                                      decision="partial")
             return self._publish(RunState.PARTIAL, result.code)
@@ -236,9 +333,10 @@ class RecipeRunner:
         if not self._valid_result(result):
             return self._publish(RunState.FAILED, ResultCode.INVALID_PLAN)
         duration = min(86_400_000, max(0, round((time.monotonic()-started)*1000)))
-        self.record = replace(self.record,
-            steps=(*self.record.steps, StepRecord(context.step_id, step.kind, result, duration)))
-        self._next_step += 1
+        with self._state_lock:
+            self.record = replace(self.record,
+                steps=(*self.record.steps, StepRecord(context.step_id, step.kind, result, duration)))
+            self._next_step += 1
         return self._apply_result(step.kind, result)
 
     def _complete_run(self) -> RunRecord:
@@ -268,10 +366,11 @@ class RecipeRunner:
         return self._complete_run()
 
     def cancel(self) -> None:
-        self._cancelled.set()
-        if not self._owns():
-            return
-        self._publish(RunState.CANCELLING, ResultCode.CANCELLED)
+        with self._state_lock:
+            self._cancelled.set()
+            if not self._owns():
+                return
+            self._publish(RunState.CANCELLING, ResultCode.CANCELLED)
         try:
             self.ports.cancel()
         finally:

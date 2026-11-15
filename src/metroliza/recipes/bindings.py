@@ -5,7 +5,6 @@ import ntpath
 import os
 from dataclasses import replace
 from pathlib import Path
-from uuid import uuid4
 
 from .contracts import (
     LocalBinding, ParameterKey, ParameterMode, RecipeDefinition, RecipeError, ResolvedRunPlan, StepKind,
@@ -28,6 +27,29 @@ def paths_alias(first: Path, second: Path) -> bool:
         return False
 
 
+def _normalized_output(definition: RecipeDefinition, values: dict) -> Path | None:
+    raw = values.get(ParameterKey.OUTPUT_FILE)
+    if raw is None:
+        return None
+    output = Path(str(raw))
+    kinds = {step.kind for step in definition.steps}
+    if StepKind.EXPORT_MAIN in kinds:
+        output = output.with_suffix(".xlsx")
+    elif StepKind.EXPORT_HTML in kinds:
+        output = output.with_suffix(".html")
+    values[ParameterKey.OUTPUT_FILE] = str(output)
+    return output
+
+
+def _assets_path(definition: RecipeDefinition, output: Path | None) -> Path | None:
+    if output is None:
+        return None
+    if any(step.kind is StepKind.EXPORT_HTML for step in definition.steps):
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        return resolve_html_dashboard_assets_dir(output.with_suffix(".html"))
+    return output.with_name(output.stem + "_assets")
+
+
 def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> ResolvedRunPlan:
     validate_binding(definition, binding, complete=True)
     values = dict(binding.values)
@@ -37,7 +59,7 @@ def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> Resolve
             if not isinstance(raw, str) or not raw.strip():
                 raise RecipeError("invalid_path")
             values[key] = str(Path(raw).expanduser().resolve(strict=False))
-    output = Path(str(values[ParameterKey.OUTPUT_FILE])) if ParameterKey.OUTPUT_FILE in values else None
+    output = _normalized_output(definition, values)
     for spec in definition.parameters:
         if spec.mode is ParameterMode.DERIVED:
             if output is None:
@@ -48,59 +70,69 @@ def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> Resolve
     source_raw = values.get(ParameterKey.INPUT_FOLDER)
     source = Path(str(source_raw)) if source_raw else None
     snapshot = replace(binding, values=tuple(values.items()))
-    plan = ResolvedRunPlan(definition, snapshot, source, output, database,
-                           output.with_name(output.stem + "_assets") if output else None)
+    plan = ResolvedRunPlan(definition, snapshot, source, output, database, _assets_path(definition, output))
     validate_plan_paths(plan)
     return plan
 
 
-def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = None) -> None:
+def _writes_database(plan: ResolvedRunPlan) -> bool:
+    return any(s.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS}
+               for s in plan.definition.steps)
+
+
+def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
     targets = [p for p in (plan.database_file, plan.output_file, plan.assets_dir) if p is not None]
+    if plan.output_file is not None and any(s.kind is StepKind.EXPORT_HTML for s in plan.definition.steps):
+        html = plan.output_file.with_suffix(".html")
+        targets.extend((html, html.with_name(html.stem + "_assets")))
+    return tuple(dict.fromkeys(targets))
+
+
+def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
+    source = plan.value(ParameterKey.SOURCE_FILE)
+    if source and paths_alias(path, Path(str(source))):
+        raise RecipeError("source_alias")
+    if plan.input_folder is None:
+        return
+    if paths_alias(path, plan.input_folder):
+        raise RecipeError("source_alias")
+    source_identity = path_identity(plan.input_folder)
+    if path_identity(path).startswith(source_identity + "\\"):
+        raise RecipeError("target_inside_input")
+
+
+def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = None) -> None:
+    targets = _target_paths(plan)
     for index, path in enumerate(targets):
         if any(paths_alias(path, other) for other in targets[index + 1:]):
             raise RecipeError("target_alias")
-        writes_database = any(s.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS}
-                              for s in plan.definition.steps)
         if active_database is not None and paths_alias(path, active_database) and (
-                path != plan.database_file or writes_database):
+                path != plan.database_file or _writes_database(plan)):
             raise RecipeError("active_database_alias")
-        for key in (ParameterKey.SOURCE_FILE,):
-            source = plan.value(key)
-            if source and paths_alias(path, Path(str(source))):
-                raise RecipeError("source_alias")
-        if plan.input_folder is not None:
-            if paths_alias(path, plan.input_folder):
-                raise RecipeError("source_alias")
-            # Targets inside the report folder can become future input candidates.
-            try:
-                path.resolve().relative_to(plan.input_folder.resolve())
-            except ValueError:
-                pass
-            else:
-                raise RecipeError("target_inside_input")
+        _validate_source_target(plan, path)
+
+
+def _copy_is_free(plan: ResolvedRunPlan) -> bool:
+    from metroliza.exporting.output_publication import conflicting_outputs
+    targets = [p for p in _target_paths(plan) if p != plan.database_file]
+    if _writes_database(plan) and plan.database_file is not None:
+        database = plan.database_file
+        targets.extend((database, Path(str(database) + "-wal"), Path(str(database) + "-shm")))
+    return not conflicting_outputs(targets)
 
 
 def new_output_copy(plan: ResolvedRunPlan) -> ResolvedRunPlan:
     if plan.output_file is None:
         raise RecipeError("missing_output")
     original = plan.output_file
-    writes_database = any(s.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS}
-                          for s in plan.definition.steps)
     for index in range(1, 10001):
         output = original.with_name(f"{original.stem} ({index}){original.suffix}")
-        database = output.with_suffix(".db") if writes_database else plan.database_file
-        assets = output.with_name(output.stem + "_assets")
-        family = [output, output.with_suffix(".html"), assets]
-        if writes_database and database is not None:
-            family.extend((database, Path(str(database) + "-wal"), Path(str(database) + "-shm")))
-        if not any(p.exists() or p.is_symlink() for p in family):
-            values = dict(plan.binding.values)
-            values[ParameterKey.OUTPUT_FILE] = str(output)
-            if writes_database:
-                values[ParameterKey.DATABASE_FILE] = str(database)
-            result = replace(plan, binding=replace(plan.binding, values=tuple(values.items())),
-                             output_file=output, database_file=database, assets_dir=assets,
-                             run_id=str(uuid4()))
-            validate_plan_paths(result)
-            return result
+        values = dict(plan.binding.values)
+        values[ParameterKey.OUTPUT_FILE] = str(output)
+        if _writes_database(plan):
+            values[ParameterKey.DATABASE_FILE] = str(output.with_suffix(".db"))
+        binding = replace(plan.binding, values=tuple(values.items()))
+        candidate = replace(resolve_plan(plan.definition, binding), flow_id=plan.flow_id)
+        if _copy_is_free(candidate):
+            return candidate
     raise RecipeError("copy_limit")

@@ -1,6 +1,7 @@
 """Runner ordering, real receipts, cancellation, collision and privacy controls."""
 from dataclasses import replace
 import json
+import threading
 from uuid import UUID
 
 import pytest
@@ -123,7 +124,11 @@ def test_existing_database_requires_new_family_and_never_implicitly_appends(tmp_
         assert runner.start(plan).state is RunState.REQUIRES_DECISION
         assert not ports.calls
         assert runner.resume("continue").state is RunState.REQUIRES_DECISION
-        result = runner.resume("new_copy")
+        copy_ready = runner.resume("new_copy")
+        assert copy_ready.state is RunState.REQUIRES_DECISION
+        assert copy_ready.decision == "copy_ready"
+        assert not ports.calls and not runner.plan.database_file.exists()
+        result = runner.resume("continue")
         assert result.state is RunState.COMPLETED
         assert plan.database_file.read_bytes() == b"PREVIOUS_COMPLETE"
         assert runner.plan.database_file.stem == runner.plan.output_file.stem
@@ -171,3 +176,103 @@ def test_terminal_cleanup_runs_once_and_releases_owner(tmp_path):
     runner.cancel()
     assert cleaned == [record.run_id]
     assert not record.ownership
+
+
+def test_new_copy_cleans_old_identity_and_publishes_plan_before_any_effect(tmp_path):
+    plan = make_plan(tmp_path)
+    plan.database_file.parent.mkdir(parents=True)
+    plan.database_file.write_bytes(b"OLD_DATABASE")
+    ports = FakePorts()
+    cleaned, observed = [], []
+    runner = RecipeRunner(ports)
+    ports.finish = lambda old: cleaned.append((old.run_id, runner.plan.run_id))
+    runner.on_event = lambda event: observed.append((event.record, runner.plan))
+    try:
+        runner.start(plan)
+        copied = runner.resume("new_copy")
+        assert copied.decision == "copy_ready"
+        assert copied.state is RunState.REQUIRES_DECISION
+        assert cleaned == [(plan.run_id, plan.run_id)]
+        assert copied.run_id != plan.run_id
+        assert observed[-1][1].output_file == runner.plan.output_file
+        assert observed[-1][1].database_file == runner.plan.database_file
+        assert not ports.calls and not runner.plan.database_file.exists()
+        assert runner.resume("continue").state is RunState.COMPLETED
+        assert not ports.approvals  # New family obtains its own fresh preflight.
+        assert plan.database_file.read_bytes() == b"OLD_DATABASE"
+    finally:
+        runner.cancel()
+
+
+def test_large_committed_import_keeps_actual_success_and_bounds_only_diagnostics(tmp_path):
+    class LargePorts(FakePorts):
+        def execute(self, step, plan, context):
+            result = super().execute(step, plan, context)
+            return replace(result, imported_count=20_001) if step.kind is StepKind.IMPORT_REPORTS else result
+    ports = LargePorts()
+    record = RecipeRunner(ports).start(make_plan(tmp_path))
+    assert record.state is RunState.COMPLETED
+    imported = next(step for step in record.steps if step.kind is StepKind.IMPORT_REPORTS)
+    assert imported.result.imported_count == 20_001
+    safe = next(step for step in safe_run_projection(record)["steps"] if step["kind"] == "import_reports")
+    assert safe["imported_count"] == 10_000 and safe["imported_count_truncated"] is True
+    assert safe["rejected_count"] == 0 and safe["rejected_count_truncated"] is False
+
+
+def test_cancel_between_ui_admission_and_worker_start_is_not_erased(tmp_path):
+    ports = FakePorts()
+    runner = RecipeRunner(ports)
+    plan = make_plan(tmp_path)
+    token = runner.admit_start(plan)
+    runner.cancel()  # Deterministic UI cancellation before scheduled QThread entry.
+    record = runner.start(plan, admission=token)
+    assert record.state is RunState.CANCELLED and not record.ownership
+    assert not ports.calls
+    assert not plan.database_file.exists() and not plan.output_file.exists()
+
+
+def test_cancellation_serializes_receipts_and_event_sequences_across_threads(tmp_path):
+    entered, release = threading.Event(), threading.Event()
+    class BlockingPorts(FakePorts):
+        def execute(self, step, plan, context):
+            result = super().execute(step, plan, context)
+            if step.kind is StepKind.IMPORT_REPORTS:
+                entered.set()
+                assert release.wait(5)
+                return replace(result, imported_count=10_001)
+            return result
+    ports, events, returned = BlockingPorts(), [], []
+    runner = RecipeRunner(ports, events.append)
+    plan = make_plan(tmp_path)
+    token = runner.admit_start(plan)
+    worker = threading.Thread(target=lambda: returned.append(runner.start(plan, admission=token)))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        runner.cancel()
+        release.set()
+        worker.join(5)
+        assert not worker.is_alive()
+        assert returned[0].state is RunState.CANCELLED
+        assert returned[0].steps[-1].result.imported_count == 10_001
+        assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+        assert StepKind.EXPORT_MAIN not in ports.calls
+    finally:
+        release.set()
+        worker.join(5)
+        runner.cancel()
+
+
+def test_cancel_at_return_boundary_overrides_stale_decision_receipt(tmp_path, monkeypatch):
+    plan = make_plan(tmp_path)
+    plan.database_file.parent.mkdir(parents=True)
+    plan.database_file.touch()
+    runner = RecipeRunner(FakePorts())
+    release_execution = runner._release_execution
+    def cancel_before_native_retirement():
+        runner.cancel()  # Cancellation accepted after decision result was computed.
+        return release_execution()
+    monkeypatch.setattr(runner, "_release_execution", cancel_before_native_retirement)
+    record = runner.start(plan)
+    assert record.state is RunState.CANCELLED and not record.ownership
+    assert runner.record is record

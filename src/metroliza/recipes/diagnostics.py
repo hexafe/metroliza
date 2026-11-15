@@ -23,6 +23,12 @@ def _integer(value: int, maximum: int) -> int:
     return value
 
 
+def _count(value: int) -> tuple[int, bool]:
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid_runtime_count")
+    return min(value, 10_000), value > 10_000
+
+
 def _enum(value, kind):
     if not isinstance(value, kind):
         raise ValueError("invalid_runtime_code")
@@ -39,12 +45,14 @@ def safe_run_projection(record: RunRecord) -> dict:
     for step in record.steps:
         if type(step.result.warnings) is not tuple or len(step.result.warnings) > 32:
             raise ValueError("invalid_runtime_warnings")
+        imported, imported_truncated = _count(step.result.imported_count)
+        rejected, rejected_truncated = _count(step.result.rejected_count)
         steps.append({"step_id": _runtime_id(step.step_id),
             "kind": _enum(step.kind, StepKind), "status": _enum(step.result.status, StepStatus),
             "code": _enum(step.result.code, ResultCode),
             "duration_ms": _integer(step.duration_ms, 86_400_000),
-            "imported_count": _integer(step.result.imported_count, 10_000),
-            "rejected_count": _integer(step.result.rejected_count, 10_000),
+            "imported_count": imported, "imported_count_truncated": imported_truncated,
+            "rejected_count": rejected, "rejected_count_truncated": rejected_truncated,
             "warnings": [_enum(w, ResultCode) for w in step.result.warnings]})
     return {"flow_id": _runtime_id(record.flow_id), "run_id": _runtime_id(record.run_id),
         "state": _enum(record.state, RunState), "code": _enum(record.code, ResultCode),

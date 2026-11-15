@@ -151,6 +151,19 @@ class WorkflowOperation(str, Enum):
 
     SELECTED_IMPORT = "selected_import"
     LOCAL_EXPORT = "local_export"
+    RECIPE_FLOW = "recipe_flow"
+
+
+class RecipeFlowState(str, Enum):
+    READY = "ready"
+    RUNNING = "running"
+    REQUIRES_DECISION = "requires_decision"
+    COMPLETED = "completed"
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
+    PARTIAL = "partial"
+    FAILED = "failed"
+    CANCELLING = "cancelling"
+    CANCELLED = "cancelled"
 
 
 class WorkflowStage(str, Enum):
@@ -618,6 +631,7 @@ class WorkflowDiagnosticEvent:
     flow_id: uuid.UUID | None = None
     run_id: uuid.UUID | None = None
     step_id: uuid.UUID | None = None
+    flow_state: RecipeFlowState | None = None
 
     def __post_init__(self) -> None:
         _workflow_payload(self)
@@ -1077,6 +1091,9 @@ def _startup_payload(event: StartupDiagnosticEvent) -> dict[str, object]:
 
 
 _WORKFLOW_STAGES = {
+    WorkflowOperation.RECIPE_FLOW: (
+        WorkflowStage.STARTED, WorkflowStage.PROCESSING, WorkflowStage.FINISHED,
+    ),
     WorkflowOperation.SELECTED_IMPORT: (
         WorkflowStage.STARTED,
         WorkflowStage.PREFLIGHT_COMPLETE,
@@ -1156,21 +1173,23 @@ def _validate_workflow_outcome(event: WorkflowDiagnosticEvent) -> None:
         if event.operation is not WorkflowOperation.LOCAL_EXPORT:
             raise DiagnosticEventValidationError("invalid workflow fallback")
     if event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS:
-        if event.operation is not WorkflowOperation.SELECTED_IMPORT:
+        if event.operation not in (WorkflowOperation.SELECTED_IMPORT, WorkflowOperation.RECIPE_FLOW):
             raise DiagnosticEventValidationError("invalid workflow warnings")
 
 
 def _validate_workflow_error(event: WorkflowDiagnosticEvent) -> None:
     failed = event.outcome is WorkflowOutcome.FAILED
     warnings = event.outcome is WorkflowOutcome.COMPLETED_WITH_WARNINGS
-    if (failed or warnings) is (event.error is WorkflowError.NONE):
+    flow_warning = warnings and event.operation is WorkflowOperation.RECIPE_FLOW
+    if not flow_warning and (failed or warnings) is (event.error is WorkflowError.NONE):
         raise DiagnosticEventValidationError("inconsistent workflow error")
-    if warnings and event.error not in (
+    if warnings and not flow_warning and event.error not in (
         WorkflowError.INPUT_REJECTED,
         WorkflowError.PROCESSING_FAILED,
     ):
         raise DiagnosticEventValidationError("invalid workflow warning")
     allowed_errors = {
+        WorkflowOperation.RECIPE_FLOW: tuple(WorkflowError),
         WorkflowOperation.SELECTED_IMPORT: (
             WorkflowError.NONE,
             WorkflowError.INPUT_REJECTED,
@@ -1230,6 +1249,31 @@ def _validate_workflow_counts(event: WorkflowDiagnosticEvent) -> None:
 
 
 
+def _recipe_flow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
+    if event.operation is not WorkflowOperation.RECIPE_FLOW:
+        if event.flow_state is not None:
+            raise DiagnosticEventValidationError("unexpected flow state")
+        return {}
+    literal = _canonical_literal(event.flow_state,
+        tuple((member, member.value) for member in RecipeFlowState), "invalid flow state")
+    if any(value is None for value in (event.flow_id, event.run_id, event.step_id)):
+        raise DiagnosticEventValidationError("missing flow correlation")
+    terminal = {
+        RecipeFlowState.COMPLETED: WorkflowOutcome.COMPLETED,
+        RecipeFlowState.COMPLETED_WITH_WARNINGS: WorkflowOutcome.COMPLETED_WITH_WARNINGS,
+        RecipeFlowState.PARTIAL: WorkflowOutcome.COMPLETED_WITH_WARNINGS,
+        RecipeFlowState.FAILED: WorkflowOutcome.FAILED,
+        RecipeFlowState.CANCELLED: WorkflowOutcome.CANCELLED,
+    }
+    outcome = terminal.get(event.flow_state)
+    if outcome is not None:
+        if event.stage is not WorkflowStage.FINISHED or event.outcome is not outcome:
+            raise DiagnosticEventValidationError("inconsistent flow terminal")
+    elif event.stage is WorkflowStage.FINISHED:
+        raise DiagnosticEventValidationError("inconsistent flow state")
+    return {"flow_state": literal}
+
+
 def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
     operation = _canonical_literal(
         event.operation, _WORKFLOW_OPERATION_LITERALS, "invalid workflow operation"
@@ -1257,7 +1301,7 @@ def _workflow_payload(event: WorkflowDiagnosticEvent) -> dict[str, object]:
     if event.duration_ms is not None and not _bounded_integer(event.duration_ms, 86_400_000):
         raise DiagnosticEventValidationError("invalid workflow duration")
     _validate_workflow_state(event)
-    extra = {}
+    extra = _recipe_flow_payload(event)
     if event.export_failure is not None:
         if (event.operation is not WorkflowOperation.LOCAL_EXPORT
                 or event.stage is not WorkflowStage.FINISHED

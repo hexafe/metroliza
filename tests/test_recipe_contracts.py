@@ -79,3 +79,38 @@ def test_unknown_keys_and_mutable_values_rejected():
     binding = LocalBinding("reports_excel_main", "Private", values=((ParameterKey.COLUMNS, ["a"]),))
     with pytest.raises(RecipeError):
         validate_binding(REPORTS_EXCEL_MAIN, binding)
+
+
+@pytest.mark.parametrize("name", ["Result", "Result.txt", "Result.html", "Result.XLSX"])
+def test_main_normalizes_output_before_deriving_entire_family(tmp_path, name):
+    resolved = resolve_plan(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
+        str(tmp_path / "input"), str(tmp_path / name)))
+    assert resolved.output_file == tmp_path / "Result.xlsx"
+    assert resolved.database_file == tmp_path / "Result.db"
+    assert resolved.binding.value(ParameterKey.OUTPUT_FILE) == str(tmp_path / "Result.xlsx")
+    assert resolved.assets_dir == tmp_path / "Result_assets"
+
+
+def test_html_only_normalizes_wrong_suffix_and_checks_actual_asset_alias(tmp_path):
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    definition = replace(REPORTS_DASHBOARD_HTML, parameters=(*REPORTS_DASHBOARD_HTML.parameters,
+        ParameterSpec(ParameterKey.SOURCE_FILE, ParameterType.PATH, required=False)))
+    binding = builtin_binding(REPORTS_DASHBOARD_HTML, str(tmp_path / "input"),
+                              str(tmp_path / "Result.xlsx"))
+    resolved = resolve_plan(definition, binding)
+    assert resolved.output_file == tmp_path / "Result.html"
+    assert resolved.database_file == tmp_path / "Result.db"
+    private = replace(binding, values=(*binding.values,
+        (ParameterKey.SOURCE_FILE, str(resolved.assets_dir))))
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(definition, private)
+
+
+def test_normalized_case_alias_to_source_file_is_rejected_before_execution(tmp_path):
+    definition = replace(REPORTS_EXCEL_MAIN, parameters=(*REPORTS_EXCEL_MAIN.parameters,
+        ParameterSpec(ParameterKey.SOURCE_FILE, ParameterType.PATH, required=False)))
+    binding = builtin_binding(REPORTS_EXCEL_MAIN, str(tmp_path / "input"), str(tmp_path / "Result"))
+    private = replace(binding, values=(*binding.values,
+        (ParameterKey.SOURCE_FILE, str(tmp_path / "result.xlsx"))))
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(definition, private)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from metroliza.app.recipe_qualification import GATE, install_recipe_qualification, write_reports
+from metroliza.ui.recipe_qualification import GATE, install_recipe_qualification, write_reports
 from metroliza.recipes.bindings import resolve_plan
 from metroliza.recipes.builtin_recipes import REPORTS_EXCEL_MAIN, builtin_binding
 from metroliza.recipes.report_ports import ReportsRecipeService

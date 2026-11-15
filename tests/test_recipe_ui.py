@@ -84,3 +84,133 @@ def test_unavailable_catalogue_adapter_cannot_run_and_copy_edit_hooks_are_explic
     page.copy_button.click()
     assert copies == [entry]
     page.close()
+
+
+def test_copy_ready_refreshes_actual_form_paths_before_explicit_continue(qapplication_session, tmp_path, monkeypatch):
+    from metroliza.recipes.bindings import resolve_plan
+    from metroliza.recipes.ports import PreflightResult, StepResult, StepStatus
+    from metroliza.recipes.contracts import StepKind
+    from metroliza.recipes.runner import RecipeRunner
+
+    effects = []
+
+    class Ports:
+        def preflight(self, plan, context):
+            effects.append(("preflight", plan.run_id))
+            return PreflightResult(True)
+
+        def execute(self, step, plan, context):
+            effects.append((step.kind, plan.run_id))
+            if step.kind is StepKind.IMPORT_REPORTS:
+                plan.database_file.write_bytes(b"synthetic owned database")
+            elif step.kind is StepKind.EXPORT_MAIN:
+                from zipfile import ZipFile
+                with ZipFile(plan.output_file, "w") as archive:
+                    archive.writestr("[Content_Types].xml", "<Types/>")
+                    archive.writestr("xl/workbook.xml", "<workbook/>")
+            return StepResult(StepStatus.COMPLETED, artifact_verified=step.kind is StepKind.VERIFY_OUTPUT)
+
+        def cancel(self):
+            pass
+
+    source = tmp_path / "reports"
+    source.mkdir()
+    binding = builtin_binding(REPORTS_EXCEL_MAIN, str(source), str(tmp_path / "result.xlsx"))
+    plan = resolve_plan(REPORTS_EXCEL_MAIN, binding)
+    plan.database_file.write_bytes(b"existing complete database")
+    runner = RecipeRunner(Ports())
+    controller = RecipeController(runner)
+    page = RecipeRunnerPage(controller)
+    controller.launch(REPORTS_EXCEL_MAIN, binding)
+    try:
+        assert runner.start(plan).decision == "collision"
+        copied = runner.resume("new_copy")
+        assert copied.decision == "copy_ready" and not effects
+        controller._returned(copied)
+        actual = runner.plan
+        assert controller.binding == actual.binding
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == str(actual.output_file)
+        assert str(actual.database_file) in page.database.text()
+        assert str(actual.output_file) in page.database.text()
+        assert "(1)" in page.database.text()
+        assert not actual.database_file.exists() and not actual.output_file.exists()
+        assert page.continue_button.isVisibleTo(page)
+        pending = []
+        monkeypatch.setattr(controller, "_submit", lambda operation: pending.append(operation) or True)
+        assert controller.resume("continue")
+        assert not effects  # Scheduling still leaves the reviewed plan untouched.
+        completed = pending[0]()
+        assert completed.state is RunState.COMPLETED
+        assert actual.database_file.is_file() and actual.output_file.is_file()
+        assert effects and all(run_id == actual.run_id for _kind, run_id in effects)
+    finally:
+        runner.cancel()
+        page.close()
+
+
+def test_admitted_controller_cancel_before_worker_start_is_not_lost(qapplication_session, tmp_path, monkeypatch):
+    from metroliza.recipes.runner import RecipeRunner
+
+    class Ports:
+        def cancel(self):
+            pass
+
+        def preflight(self, *_args):
+            raise AssertionError("cancelled admission must not scan or write")
+
+    runner = RecipeRunner(Ports())
+    controller = RecipeController(runner)
+    controller.launch("reports_excel_main")
+    assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
+                               ParameterKey.OUTPUT_FILE: str(tmp_path / "result.xlsx")})
+    pending = []
+    monkeypatch.setattr(controller, "_submit", lambda operation: pending.append(operation) or True)
+    assert controller.start()
+    controller.cancel()
+    record = pending[0]()
+    assert record.state is RunState.CANCELLED
+    assert not controller.plan.database_file.exists()
+
+
+def test_all_catalog_home_and_favorite_launches_refresh_active_database(qapplication_session, tmp_path):
+    from metroliza.ui.recipe_library_page import RecipeQuickFlows
+    from PyQt6.QtWidgets import QPushButton
+
+    current = [tmp_path / "first.db"]
+    runner = Runner()
+    controller = RecipeController(runner, active_database=lambda: current[0])
+    entry = StoredRecipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN))
+    library = RecipeLibraryPage(controller, (entry,))
+    library.list.setCurrentRow(0)
+    library.run_button.click()
+    assert runner.active_database == current[0]
+    quick = RecipeQuickFlows(controller, (entry,))
+    current[0] = tmp_path / "second.db"
+    quick.findChildren(QPushButton)[0].click()
+    assert runner.active_database == current[0]
+    quick.set_favorites({REPORTS_EXCEL_MAIN.recipe_id})
+    current[0] = tmp_path / "third.db"
+    quick.favorite_buttons.itemAt(0).widget().click()
+    assert runner.active_database == current[0]
+    library.close()
+    quick.close()
+
+
+def test_active_database_refresh_precedes_resolver_and_start_admission(qapplication_session, tmp_path):
+    current = [tmp_path / "current.db"]
+    runner = Runner()
+    entry = StoredRecipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN))
+
+    def resolver(_identity):
+        assert runner.active_database == current[0]
+        return entry
+
+    controller = RecipeController(runner, resolver=resolver, active_database=lambda: current[0])
+    assert controller.launch("private-recipe-id")
+    assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
+                               ParameterKey.OUTPUT_FILE: str(tmp_path / "result.xlsx")})
+    errors = []
+    controller.failed.connect(errors.append)
+    current[0] = tmp_path / "result.db"
+    assert not controller.start()
+    assert errors == ["active_database_alias"]

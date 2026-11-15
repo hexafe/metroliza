@@ -88,7 +88,7 @@ def _options(plan: ResolvedRunPlan) -> ExportOptions:
         preset = str(plan.value(ParameterKey.EXPORT_PRESET, "fast_diagnostics"))
         values = build_export_options_for_preset(preset)
         options = ExportOptions(preset=preset, **values)
-        return validate_export_options(options)
+        return _apply_grouping_contract(plan, validate_export_options(options))
     if type(raw) is not str:
         raise RecipeError("invalid_export_configuration")
     values = _json_object(raw, _OPTION_FIELDS)
@@ -105,7 +105,19 @@ def _options(plan: ResolvedRunPlan) -> ExportOptions:
         raise RecipeError("export_configuration_requires_migration")
     if normalized.export_target not in {"excel_xlsx", "html_dashboard"}:
         raise RecipeError("unsupported_export_target")
+    return _apply_grouping_contract(plan, options)
+
+
+def _apply_grouping_contract(plan, options):
+    if plan.value(ParameterKey.GROUPING_RULES, ()):
+        return replace(options, group_analysis_level="standard", generate_html_dashboard=True)
     return options
+
+
+def grouped_export_configuration(binding):
+    """Apply the manual grouping contract while retaining every other native option."""
+    options = replace(_options(binding), group_analysis_level="standard", generate_html_dashboard=True)
+    return json.dumps(asdict(options), sort_keys=True)
 
 
 def validate_report_configuration(plan: ResolvedRunPlan) -> None:
@@ -205,7 +217,7 @@ def capture_export_configuration(request: ExportRequest, *, filter_state: Filter
         steps.append(StepSpec(StepKind.GROUP, current, DataKind.SELECTION))
         current = DataKind.SELECTION
     steps.append(StepSpec(StepKind.EXPORT_HTML if html else StepKind.EXPORT_MAIN, current, DataKind.ARTIFACT))
-    if not html and request.options.generate_html_dashboard:
+    if not html and (request.options.generate_html_dashboard or grouping_rules):
         steps.append(StepSpec(StepKind.EXPORT_HTML, DataKind.ARTIFACT, DataKind.ARTIFACT))
     steps.append(StepSpec(StepKind.VERIFY_OUTPUT, DataKind.ARTIFACT, DataKind.ARTIFACT))
     definition = RecipeDefinition(identity, tuple(steps), tuple(params))
