@@ -48,7 +48,8 @@ assert not any(n == 'metroliza.app' or n.startswith('metroliza.app.') for n in s
 
 @pytest.mark.parametrize("label, numeric", [
     ("0.8.0-dev.1", (0, 8, 0, 1)),
-    ("0.8.0-dev.4", (0, 8, 0, 3)),
+    ("0.8.0-dev.3", (0, 8, 0, 3)),
+    ("0.8.0-dev.4", (0, 8, 0, 4)),
     ("0.8.0-rc.1", (0, 8, 0, 20001)),
     ("0.8.0", (0, 8, 0, 65535)),
 ])

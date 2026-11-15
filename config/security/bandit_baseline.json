@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6a730cd86b78740976b430521849a9fcc71bff977e1e08c984941729f80403f1",
+      "fingerprint": "eff0ea5b6eef2b577035a1f0b3fdc53bb949999ade9c32e4f54a152c78a4bfb2",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4a2e1c5e06ece1838c89c80c907d60750c115d3ea047e1a1579f671efe432cbf",
+      "fingerprint": "fc7c5c5733c96379bf3545e2dca67bf46802b0b9175669787e5eb0087e579aeb",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
