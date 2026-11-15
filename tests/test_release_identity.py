@@ -145,7 +145,8 @@ def test_owned_stub_copy_has_actual_full_pe_identity(tmp_path: Path):
     shutil.copy2(sys.executable, source)
     original = source.read_bytes()
     output = tmp_path / "versioned-stub.exe"
-    identity = ReleaseIdentity.parse("0.8.0-dev.5")
+    # Fixed resource-writer fixture, independent of the current product release.
+    identity = ReleaseIdentity.parse("0.8.0-dev.3")
     stamp_stub(source, output, identity)
     assert source.read_bytes() == original
     receipt = verify_pe(output, identity)
