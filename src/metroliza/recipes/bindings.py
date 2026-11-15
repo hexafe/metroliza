@@ -140,12 +140,14 @@ def _source_in_asset_namespace(source, base):
     return first_component.startswith(prefix)
 
 
-def _validate_asset_sources(plan):
+def _validate_asset_sources(plan, active_database=None):
     protected = list(_source_paths(plan))
     # A writable DB is an owned durable result, not a generic read source. It
     # must survive asset retirement without becoming a self-alias in target checks.
     if _writes_database(plan) and plan.database_file is not None:
         protected.append(plan.database_file)
+    if active_database is not None:
+        protected.append(active_database)
     for base in _asset_bases(plan):
         if any(_source_in_asset_namespace(path, base) for path in protected):
             raise RecipeError("source_alias")
@@ -164,7 +166,7 @@ def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
 
 
 def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = None) -> None:
-    _validate_asset_sources(plan)
+    _validate_asset_sources(plan, active_database)
     targets = _target_paths(plan)
     for index, path in enumerate(targets):
         if any(paths_alias(path, other) for other in targets[index + 1:]):

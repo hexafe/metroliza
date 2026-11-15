@@ -305,3 +305,103 @@ def test_fixed_writable_database_outside_retirement_namespace_and_new_copy_are_a
     validate_plan_paths(copied)
     assert copied.database_file == copied.output_file.with_suffix(".db")
     assert copied.database_file != database and copied.run_id != original.run_id
+
+
+@pytest.mark.parametrize("generation", [False, True])
+@pytest.mark.parametrize("symlink", [False, True])
+def test_active_database_retirement_alias_rejects_before_real_publication(tmp_path, generation, symlink):
+    from pathlib import Path
+    from uuid import uuid4
+    from metroliza.exporting.output_publication import OutputConsent, write_dashboard_safely
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    from metroliza.recipes.ports import PreflightResult, StepResult, StepStatus
+    from metroliza.recipes.run_state import RunState
+    from metroliza.recipes.runner import RecipeRunner
+    from metroliza.reports.report_schema import ensure_report_schema
+    name = "result_assets" + (".generation-" + "2" * 32 if generation else "")
+    directory = tmp_path / name
+    directory.mkdir()
+    database = directory / "active.db"
+    ensure_report_schema(str(database))
+    active = database
+    if symlink:
+        active = tmp_path / "active-context.db"
+        try:
+            active.symlink_to(database)
+        except (OSError, NotImplementedError):
+            pytest.skip("database symlink creation unavailable")
+    before = database.read_bytes()
+    output = tmp_path / "result.html"
+    old_html = b"<html>previous complete dashboard</html>"
+    output.write_bytes(old_html)
+    resolved = resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        str(tmp_path / "reports"), str(output)))
+    calls = []
+
+    class PublicationPorts:
+        def preflight(self, *_args):
+            calls.append("preflight")
+            return PreflightResult(True)
+
+        def execute(self, step, current, _context):
+            calls.append(step.kind)
+            if step.kind is StepKind.PREPARE_DATABASE:
+                ensure_report_schema(str(current.database_file))
+            if step.kind is StepKind.EXPORT_HTML:
+                # If the context guard regresses, this real shared commit and
+                # retirement removes the directory holding the active database.
+                def render(*, output_path, assets_dir):
+                    assets = assets_dir.with_name(assets_dir.name + ".generation-" + uuid4().hex)
+                    assets.mkdir()
+                    (assets / "synthetic.js").write_bytes(b"synthetic complete dashboard resource")
+                    output_path.write_text('<html><script src="' + assets.name + '/synthetic.js"></script></html>',
+                                           encoding="utf-8")
+                    return {"html_dashboard_path": str(output_path), "html_dashboard_assets_path": str(assets)}
+                write_dashboard_safely(render, output_path=Path(current.output_file),
+                    consents=(OutputConsent.for_path(current.output_file),))
+            return StepResult(StepStatus.COMPLETED, artifact_verified=step.kind is StepKind.VERIFY_OUTPUT)
+
+        def cancel(self):
+            pass
+
+    runner = RecipeRunner(PublicationPorts(), active_database=active)
+    try:
+        record = runner.start(resolved)
+        assert record.state is RunState.FAILED
+        assert not calls  # Admission rejects before even preflight, rendering or retirement.
+        assert database.read_bytes() == before and active.read_bytes() == before
+        assert output.read_bytes() == old_html
+        assert not resolved.database_file.exists()
+    finally:
+        runner.cancel()
+
+
+@pytest.mark.parametrize("namespace", ["result_assets", "forged_assets"])
+@pytest.mark.parametrize("generation", [False, True])
+def test_active_database_guard_checks_actual_and_planned_asset_namespaces(tmp_path, namespace, generation):
+    from metroliza.recipes.bindings import validate_plan_paths
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    original = resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        str(tmp_path / "input"), str(tmp_path / "result.html")))
+    name = namespace + (".generation-" + "3" * 32 if generation else "")
+    active = tmp_path / name / "active.db"
+    forged = replace(original, assets_dir=tmp_path / "forged_assets")
+    with pytest.raises(RecipeError, match="source_alias"):
+        validate_plan_paths(forged, active_database=active)
+
+
+def test_active_database_outside_retirement_namespace_retains_existing_read_and_write_rules(tmp_path):
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
+    from metroliza.recipes.bindings import validate_plan_paths
+    from metroliza.recipes.report_configuration_adapter import capture_export_configuration
+    active = tmp_path / "context" / "active.db"
+    definition, binding = _fixed_reports_database(tmp_path, tmp_path / "owned" / "import.db")
+    writable = resolve_plan(definition, binding)
+    validate_plan_paths(writable, active_database=active)
+    with pytest.raises(RecipeError, match="active_database_alias"):
+        validate_plan_paths(writable, active_database=writable.database_file)
+    stored = capture_export_configuration(validate_export_request(ExportRequest(
+        AppPaths(str(active), excel_file=str(tmp_path / "read-only-export.xlsx")), ExportOptions())))
+    readonly = resolve_plan(stored.definition, stored.binding)
+    validate_plan_paths(readonly, active_database=active)
+    assert readonly.database_file == active

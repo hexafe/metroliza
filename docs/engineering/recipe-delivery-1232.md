@@ -71,6 +71,11 @@ A subsequent service P2 showed that a writable Reports database could itself sit
 inside the retired asset namespace. Admit one bounded delta for that guard and
 final database validation; preserve earlier review applicability elsewhere.
 
+The next service P1 applies the same retirement protection to the application's
+active database even when it is unrelated to recipe inputs/results. Admit one
+bounded delta for the active-context namespace guard and its ownership lifecycle;
+keep normal unrelated context changes available and retain all prior evidence.
+
 For the corrected stable candidate, use one authoritative full
 `workflow_dispatch` with both Windows package inputs enabled. The selected CI
 policy runs every blocking source job on dispatch. Retire a duplicate automatic

@@ -1,4 +1,5 @@
 """Source-window integration: persistent owner and unchanged numeric navigation."""
+import pytest
 from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QApplication
 
@@ -65,4 +66,65 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         assert workspace.controller.binding.value(ParameterKey.OUTPUT_FILE) == str(tmp_path / "updated.xlsx")
         assert app is QApplication.instance()
     finally:
+        window.close()
+
+
+@pytest.mark.parametrize("namespace", ["base", "generation"])
+def test_owned_recipe_vetoes_dangerous_database_rebind_before_inspection_but_allows_safe_context(
+        qapplication_session, tmp_path, monkeypatch, namespace):
+    from pathlib import Path
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.recipes.run_state import RunState
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "state"))
+    preferences = UiPreferences(QSettings(str(tmp_path / "owned-ui.ini"), QSettings.Format.IniFormat))
+    window = MainWindow("test", None, ui_preferences=preferences)
+    runner = None
+    try:
+        previous = tmp_path / "previous.db"
+        safe = tmp_path / "safe.db"
+        ensure_report_schema(str(previous))
+        ensure_report_schema(str(safe))
+        assert window.set_db_file(str(previous))
+        workspace = window._ensure_recipe_workspace()
+        controller = workspace.controller
+        controller.launch("reports_dashboard_html")
+        assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
+                                   ParameterKey.OUTPUT_FILE: str(tmp_path / "result.html")})
+        plan, runner = controller.plan, controller.runner
+        plan.database_file.write_bytes(b"retained previous database")
+        record = runner.start(plan)
+        assert record.state is RunState.REQUIRES_DECISION and record.ownership
+        controller._returned(record)
+        base = plan.assets_dir if namespace == "base" else Path(str(plan.assets_dir) + ".generation-old")
+        base.mkdir(parents=True)
+        forbidden = base / "active.db"
+        ensure_report_schema(str(forbidden))
+        untouched = forbidden.read_bytes()
+        inspected, recovered = [], []
+        original_inspect = window._inspect_database
+        def inspect(candidate):
+            inspected.append(candidate)
+            return original_inspect(candidate)
+        monkeypatch.setattr(window, "_inspect_database", inspect)
+        monkeypatch.setattr(window, "_recover_abandoned_realtime_staging",
+                            lambda candidate: recovered.append(candidate))
+        assert window.set_db_file(str(forbidden)) is False
+        assert not inspected and not recovered
+        assert window.db_file == str(previous)
+        assert window.workspace_context.snapshot.database_file == str(previous)
+        assert forbidden.read_bytes() == untouched
+        assert "active recipe" in window.workspace_notice_label.text()
+        window._show_workspace_page("home")
+        assert window.navigation_combo.currentData() == "home"
+        assert window.set_directory(str(tmp_path / "unrelated-folder"))
+        assert controller.busy and runner.plan is plan
+        assert window.set_db_file(str(safe)) is True
+        assert window.db_file == str(safe) and window.workspace_context.snapshot.database_file == str(safe)
+        assert inspected == [str(safe)] and recovered == [str(safe)]
+        assert controller.busy and runner.plan is plan
+    finally:
+        if runner is not None:
+            runner.cancel()
         window.close()

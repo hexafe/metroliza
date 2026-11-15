@@ -62,6 +62,22 @@ class RecipeController(QObject):
     def request_close(self):
         return not self.busy
 
+    def database_change_allowed(self, database_file) -> bool:
+        """Veto only unsafe GUI context rebinds while a recipe still owns work."""
+        if not self.busy or not database_file:
+            return True
+        plan = self.plan  # Includes admission before the worker acquires ownership.
+        record = getattr(self.runner, "record", None)
+        if record is not None and record.ownership:
+            plan = getattr(self.runner, "plan", None) or plan
+        if plan is None:
+            return True
+        try:
+            validate_plan_paths(plan, Path(database_file))
+        except (ValueError, OSError):
+            return False
+        return True
+
     def _sync_active_database(self):
         if self._active_database is not None:
             value = self._active_database()

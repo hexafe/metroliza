@@ -1,4 +1,5 @@
 """Shared-controller ownership and dynamic form contracts (Qt surface)."""
+import pytest
 from metroliza.recipes.builtin_recipes import REPORTS_EXCEL_MAIN, builtin_binding
 from metroliza.recipes.contracts import ParameterKey
 from metroliza.recipes.run_state import RunRecord, RunState
@@ -290,3 +291,67 @@ def test_busy_favorite_raises_current_flow_before_any_saved_revision_read(qappli
     assert controller.busy
     controller.last_record = None
     quick.close()
+
+
+@pytest.mark.parametrize("phase", ["prepare", "start", "resume"])
+@pytest.mark.parametrize("namespace", ["base", "generation"])
+def test_active_database_in_retired_namespace_blocks_each_admission_boundary(
+        qapplication_session, tmp_path, monkeypatch, phase, namespace):
+    from pathlib import Path
+    from metroliza.recipes.bindings import resolve_plan
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    from metroliza.recipes.runner import RecipeRunner
+
+    class Ports:
+        def cancel(self):
+            pass
+    runner = RecipeRunner(Ports())
+    current = [tmp_path / "outside.db"]
+    controller = RecipeController(runner, active_database=lambda: current[0])
+    controller.launch("reports_dashboard_html")
+    values = {ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
+              ParameterKey.OUTPUT_FILE: str(tmp_path / "result.html")}
+    resolved = resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        values[ParameterKey.INPUT_FOLDER], values[ParameterKey.OUTPUT_FILE]))
+    base = resolved.assets_dir if namespace == "base" else Path(str(resolved.assets_dir) + ".generation-old")
+    forbidden = base / "active.db"
+    errors, submissions = [], []
+    controller.failed.connect(errors.append)
+    monkeypatch.setattr(controller, "_submit", lambda operation: submissions.append(operation) or True)
+    try:
+        if phase == "prepare":
+            current[0] = forbidden
+            assert not controller.prepare(values)
+        else:
+            assert controller.prepare(values)
+            if phase == "resume":
+                controller.plan.database_file.touch()
+                controller._returned(runner.start(controller.plan))
+                assert controller.last_record.ownership
+            current[0] = forbidden
+            assert not (controller.start() if phase == "start" else controller.resume("continue"))
+        assert errors == ["source_alias"] and not submissions
+    finally:
+        runner.cancel()
+
+
+def test_admission_context_guard_uses_prepared_plan_instead_of_previous_runner_plan(
+        qapplication_session, tmp_path):
+    from pathlib import Path
+    from metroliza.recipes.bindings import resolve_plan
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+
+    runner = Runner()
+    controller = RecipeController(runner)
+    controller.launch("reports_dashboard_html")
+    assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
+                               ParameterKey.OUTPUT_FILE: str(tmp_path / "current.html")})
+    runner.plan = resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        str(tmp_path / "input"), str(tmp_path / "previous.html")))
+    runner.record = RunRecord("flow", "previous", RunState.COMPLETED)
+    controller._task = object()  # Admitted task has not entered runner.start yet.
+    try:
+        assert not controller.database_change_allowed(controller.plan.assets_dir / "active.db")
+        assert controller.database_change_allowed(Path(str(runner.plan.assets_dir)) / "outside-current.db")
+    finally:
+        controller._task = None

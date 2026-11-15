@@ -165,6 +165,9 @@ class RecipeWorkspace(QWidget):
         self.quick.set_favorites(identities)
         self.main_window.ui_preferences.set("presentation/recipes/favorites", sorted(identities))
 
+    def database_change_allowed(self, database_file):
+        return self.controller.database_change_allowed(database_file)
+
     def request_close(self):
         if any(editor.close() is False for editor in tuple(self._editors)):
             return False

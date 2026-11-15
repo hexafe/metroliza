@@ -2096,7 +2096,7 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
-            if not self._report_selection_change_allowed(db_file, self.db_file):
+            if not self._report_selection_change_allowed(db_file, self.db_file, database=True):
                 return False
             readiness = self._inspect_database(db_file)
             if readiness is None:
@@ -2229,7 +2229,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
-    def _report_selection_change_allowed(self, selected, current):
+    def _report_selection_change_allowed(self, selected, current, *, database=False):
+        if database and not self._recipe_database_change_allowed(selected):
+            return False
         if not self._report_context_change_allowed():
             return False
         host = self._reports_workspace
@@ -2243,6 +2245,17 @@ class MainWindow(QMainWindow):
             )
             return answer == QMessageBox.StandardButton.Yes and self._report_context_change_allowed()
         return True
+
+    def _recipe_database_change_allowed(self, database_file):
+        workspace = getattr(self, "recipe_workspace", None)
+        if workspace is None or workspace.database_change_allowed(database_file):
+            return True
+        self.workspace_notice_label.setText(
+            "This database overlaps an active recipe's outputs. Finish or cancel the recipe first."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
 
     def _report_context_change_allowed(self):
         if self._reports_workspace is None or self._reports_workspace.can_change_workspace():

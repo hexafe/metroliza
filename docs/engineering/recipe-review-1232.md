@@ -33,6 +33,10 @@ The next source correction also treats a writable database as a durable artifact
 protected from asset retirement. Final Reports verification must validate the
 database as well as the exported files before reporting completion.
 
+Active-context protection also covers databases unrelated to the recipe but
+located in its retirement namespace. Context changes during an owned flow must
+preserve that protection before selecting a database that could be retired.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an
