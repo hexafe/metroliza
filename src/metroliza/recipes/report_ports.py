@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import sqlite3
+from pathlib import Path
+import stat
 from threading import Event
 from typing import Callable
 from uuid import uuid4
@@ -45,6 +47,7 @@ class ReportReview:
     consents: tuple = ()
     import_plan: ImportPlan | None = None
     imported: bool = False
+    database_identity: tuple[int, int] | None = None
 
 
 class ReportsRecipeService:
@@ -203,10 +206,7 @@ class ReportsRecipeService:
         if step.kind in (StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML):
             return self._export(step, plan, review, context)
         if step.kind is StepKind.VERIFY_OUTPUT:
-            verified = all(self.export_service.verify(p) for p in self._output_targets(plan))
-            return StepResult(StepStatus.COMPLETED if verified else StepStatus.FAILED,
-                              ResultCode.SUCCESS if verified else ResultCode.OUTPUT_MISSING,
-                              artifact_verified=verified)
+            return self._verify_outputs(plan, review)
         return StepResult(StepStatus.FAILED, ResultCode.UNSUPPORTED)
 
     def _verify_import_source(self, review, context):
@@ -231,6 +231,8 @@ class ReportsRecipeService:
         if result.changed:
             return StepResult(StepStatus.FAILED, ResultCode.SOURCE_CHANGED, result.imported, result.changed)
         review.imported = result.imported + result.duplicates > 0
+        if review.imported:
+            review.database_identity = self._database_identity(Path(review.request.db_file))
         if result.failed:
             return StepResult(StepStatus.PARTIAL if review.imported else StepStatus.FAILED,
                               ResultCode.PARTIAL_IMPORT, result.imported, result.failed)
@@ -241,6 +243,44 @@ class ReportsRecipeService:
                for item in review.preflight.files):
             warnings.append(ResultCode.UNSUPPORTED)
         return StepResult(StepStatus.COMPLETED, imported_count=result.imported, warnings=tuple(warnings))
+
+    @staticmethod
+    def _database_identity(path: Path) -> tuple[int, int] | None:
+        try:
+            info = path.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+            return None
+        return info.st_dev, info.st_ino
+
+    def _verify_imported_database(self, plan, review) -> bool:
+        if not any(step.kind in (StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS)
+                   for step in plan.definition.steps):
+            return True  # Existing-DB export consumes an input, not a newly owned DB.
+        path = plan.database_file
+        if path is None or review.database_identity is None:
+            return False
+        if self._database_identity(path) != review.database_identity:
+            return False
+        try:
+            # Bounded structural sanity: no full-table integrity scan, migration,
+            # measurement reprocessing or source rescan at flow completion.
+            with sqlite_readonly_connection_scope(str(path)) as connection:
+                if not is_report_schema_ready(connection):
+                    return False
+                connection.execute("SELECT id FROM parsed_reports LIMIT 1").fetchone()
+                connection.execute("SELECT report_id FROM report_measurements LIMIT 1").fetchone()
+        except (OSError, sqlite3.Error):
+            return False
+        return self._database_identity(path) == review.database_identity
+
+    def _verify_outputs(self, plan, review) -> StepResult:
+        verified = self._verify_imported_database(plan, review) and all(
+            self.export_service.verify(path) for path in self._output_targets(plan))
+        return StepResult(StepStatus.COMPLETED if verified else StepStatus.FAILED,
+                          ResultCode.SUCCESS if verified else ResultCode.OUTPUT_MISSING,
+                          artifact_verified=verified)
 
     def _export(self, step, plan, review, context):
         if not review.imported:

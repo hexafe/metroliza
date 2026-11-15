@@ -239,3 +239,45 @@ def test_multi_column_delimiter_collision_keeps_distinct_native_group_counts_and
         assert app is QApplication.instance()
     finally:
         runner.cancel()
+
+
+@pytest.mark.parametrize("damage", ["deleted", "corrupted"])
+def test_real_import_database_lost_after_successful_export_cannot_complete(tmp_path, damage):
+    from metroliza.exporting.export_outcomes import ExportRunStatus
+    from metroliza.recipes.contracts import StepKind
+    from metroliza.recipes.ports import StepStatus
+
+    app = QApplication.instance() or QApplication([])
+    source = tmp_path / "reports"
+    _write_complete_reports(source)
+    plan = resolve_plan(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
+        str(source), str(tmp_path / "Retained.xlsx")))
+    actual_export = RecipeExecutionAdapter("export")
+    completed_exports = []
+    def export_then_lose_database(request, context):
+        result = actual_export(request, context)
+        assert result.status is ExportRunStatus.COMPLETE
+        completed_exports.append(plan.output_file.read_bytes())
+        if damage == "deleted":
+            plan.database_file.unlink()
+        else:
+            plan.database_file.write_bytes(b"not a SQLite database")
+        return result
+    runner = RecipeRunner(ReportsRecipeService(RecipeExecutionAdapter("import"), export_then_lose_database))
+    try:
+        record = runner.start(plan)
+        assert record.state is RunState.FAILED
+        imported = next(step.result for step in record.steps if step.kind is StepKind.IMPORT_REPORTS)
+        assert imported.status is StepStatus.COMPLETED and imported.imported_count == 5
+        assert record.steps[-1].kind is StepKind.VERIFY_OUTPUT
+        assert record.steps[-1].result.status is StepStatus.FAILED
+        assert completed_exports and plan.output_file.read_bytes() == completed_exports[0]
+        with zipfile.ZipFile(plan.output_file) as archive:
+            assert archive.testzip() is None and "xl/workbook.xml" in archive.namelist()
+        if damage == "deleted":
+            assert not plan.database_file.exists()
+        else:
+            assert plan.database_file.read_bytes() == b"not a SQLite database"
+        assert app is QApplication.instance()
+    finally:
+        runner.cancel()

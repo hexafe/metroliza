@@ -3,6 +3,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 from zipfile import ZipFile
 
+import pytest
+
 from metroliza.exporting.export_outcomes import ExportRunStatus
 from metroliza.recipes.export_service import ExportRecipeService
 from metroliza.parsing.preflight import ParseFilePreflight, ParsePreflightResult, ParsePreflightStatus
@@ -64,7 +66,8 @@ def test_headless_ready_preflight_does_not_write_and_orders_import_before_export
         assert request.preflight_result_id
         assert not plan.database_file.exists()
         events.append("import")
-        plan.database_file.write_bytes(b"synthetic database")
+        from metroliza.reports.report_schema import ensure_report_schema
+        ensure_report_schema(str(plan.database_file))
         return ImportExecutionResult(imported=1)
 
     def exporter(request, _context):
@@ -191,3 +194,67 @@ def test_explicitly_reviewed_exclusions_survive_success_as_warning(tmp_path):
     result = service.execute(plan.definition.steps[1], plan, context(plan))
     assert result.status is StepStatus.COMPLETED
     assert result.warnings == (ResultCode.UNSUPPORTED,)
+
+
+@pytest.mark.parametrize("damage", ["deleted", "corrupted", "replaced", "schema"])
+def test_final_verification_rejects_lost_import_database_with_valid_export(tmp_path, damage):
+    from metroliza.recipes.contracts import StepKind
+    from metroliza.reports.db import sqlite_connection_scope
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    plan = make_plan(tmp_path)
+    exported = []
+    def importer(_request, _context):
+        ensure_report_schema(str(plan.database_file))
+        return ImportExecutionResult(imported=1)
+    def exporter(request, _context):
+        workbook(request.paths.excel_file)
+        exported.append(plan.output_file.read_bytes())
+        if damage == "deleted":
+            plan.database_file.unlink()
+        elif damage == "corrupted":
+            plan.database_file.write_bytes(b"not a SQLite database")
+        elif damage == "replaced":
+            replacement = tmp_path / "replacement.db"
+            ensure_report_schema(str(replacement))
+            replacement.replace(plan.database_file)
+        else:
+            with sqlite_connection_scope(str(plan.database_file)) as connection:
+                connection.execute("DELETE FROM app_schema WHERE key='source_location_ownership_version'")
+                connection.commit()
+        return SimpleNamespace(status=ExportRunStatus.COMPLETE)
+    service = ReportsRecipeService(importer, exporter, scanner=Scanner(), metadata_reader=MetadataReader)
+    assert service.preflight(plan, context(plan)).ready
+    for step in plan.definition.steps:
+        result = service.execute(step, plan, context(plan))
+        if step.kind is not StepKind.VERIFY_OUTPUT:
+            assert result.status is StepStatus.COMPLETED
+    assert result.status is StepStatus.FAILED and result.code is ResultCode.OUTPUT_MISSING
+    assert not result.artifact_verified
+    assert service.export_service.verify(plan.output_file)
+    assert plan.output_file.read_bytes() == exported[0]
+    if damage == "deleted":
+        assert not plan.database_file.exists()  # Read-only verification never recreates it.
+
+
+def test_existing_database_export_does_not_require_import_owned_identity(tmp_path):
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
+    from metroliza.recipes.report_configuration_adapter import capture_export_configuration
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    database = tmp_path / "existing.db"
+    ensure_report_schema(str(database))
+    stored = capture_export_configuration(validate_export_request(ExportRequest(
+        AppPaths(str(database), excel_file=str(tmp_path / "existing.xlsx")), ExportOptions())))
+    plan = resolve_plan(stored.definition, stored.binding)
+    def exporter(request, _context):
+        workbook(request.paths.excel_file)
+        return SimpleNamespace(status=ExportRunStatus.COMPLETE)
+    service = ReportsRecipeService(lambda *_: None, exporter)
+    assert service.preflight(plan, context(plan)).ready
+    assert service._reviews[plan.run_id].database_identity is None
+    before = database.read_bytes()
+    for step in plan.definition.steps:
+        result = service.execute(step, plan, context(plan))
+        assert result.status is StepStatus.COMPLETED
+    assert result.artifact_verified and database.read_bytes() == before

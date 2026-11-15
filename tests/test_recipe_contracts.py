@@ -245,3 +245,63 @@ def test_ordinary_artifact_names_are_not_asset_generation_namespaces(tmp_path, a
         output_dashboard_file=str(tmp_path / "result.html"),
         output_workbook_file=str(tmp_path / "result.xlsx")))
     assert resolve_plan(entry.definition, entry.binding).output_file == tmp_path / "result.html"
+
+
+def _fixed_reports_database(tmp_path, database):
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    copied = copy_recipe(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        str(tmp_path / "input"), str(tmp_path / "result.html")), name="Fixed database")
+    parameters = tuple(replace(spec, mode=ParameterMode.FIXED, rule=None)
+                       if spec.key is ParameterKey.DATABASE_FILE else spec
+                       for spec in copied.definition.parameters)
+    values = dict(copied.binding.values)
+    values[ParameterKey.DATABASE_FILE] = str(database)
+    return replace(copied.definition, parameters=parameters), replace(copied.binding, values=tuple(values.items()))
+
+
+@pytest.mark.parametrize("generation", [False, True])
+def test_fixed_writable_reports_database_cannot_be_retired_with_assets(tmp_path, generation):
+    name = "result_assets" + (".generation-" + "f" * 32 if generation else "")
+    assets = tmp_path / name
+    assets.mkdir()
+    sentinel = assets / "existing.js"
+    sentinel.write_bytes(b"previous complete dashboard asset")
+    output = tmp_path / "result.html"
+    output.write_bytes(b"<html>previous complete dashboard</html>")
+    database = assets / "import.db"
+    definition, binding = _fixed_reports_database(tmp_path, database)
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(definition, binding)
+    assert not database.exists()  # Reject before the import creates its owned database.
+    assert sentinel.read_bytes() == b"previous complete dashboard asset"
+    assert output.read_bytes() == b"<html>previous complete dashboard</html>"
+
+
+@pytest.mark.parametrize("namespace", ["result_assets", "forged_assets"])
+@pytest.mark.parametrize("generation", [False, True])
+def test_fixed_database_guard_checks_actual_and_supplied_asset_namespaces(tmp_path, namespace, generation):
+    from metroliza.recipes.bindings import validate_plan_paths
+    definition, binding = _fixed_reports_database(tmp_path, tmp_path / "owned" / "import.db")
+    original = resolve_plan(definition, binding)
+    name = namespace + (".generation-" + "1" * 32 if generation else "")
+    database = tmp_path / name / "import.db"
+    values = dict(original.binding.values)
+    values[ParameterKey.DATABASE_FILE] = str(database)
+    forged = replace(original, database_file=database, assets_dir=tmp_path / "forged_assets",
+                     binding=replace(original.binding, values=tuple(values.items())))
+    with pytest.raises(RecipeError, match="source_alias"):
+        validate_plan_paths(forged)
+    assert not database.exists()
+
+
+def test_fixed_writable_database_outside_retirement_namespace_and_new_copy_are_allowed(tmp_path):
+    from metroliza.recipes.bindings import validate_plan_paths
+    database = tmp_path / "owned" / "import.db"
+    definition, binding = _fixed_reports_database(tmp_path, database)
+    original = resolve_plan(definition, binding)
+    validate_plan_paths(original)
+    assert original.database_file == database
+    copied = new_output_copy(original)
+    validate_plan_paths(copied)
+    assert copied.database_file == copied.output_file.with_suffix(".db")
+    assert copied.database_file != database and copied.run_id != original.run_id

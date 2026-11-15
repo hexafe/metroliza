@@ -67,6 +67,18 @@ Admit one bounded independent delta for their grouped corrections. Require real
 rerun/failure preservation controls and independent distinct-population statistics;
 keep all prior reports, source bindings and exact-head CI/package gates.
 
+A subsequent service P2 showed that a writable Reports database could itself sit
+inside the retired asset namespace. Admit one bounded delta for that guard and
+final database validation; preserve earlier review applicability elsewhere.
+
+For the corrected stable candidate, use one authoritative full
+`workflow_dispatch` with both Windows package inputs enabled. The selected CI
+policy runs every blocking source job on dispatch. Retire a duplicate automatic
+PR run explicitly as cancelled, never as passed; require every blocking job and
+both selected package lanes to pass on the same exact head. Confirm the current
+`dev` base and candidate tree before this run and again before merge. This keeps
+the required checks and their thresholds unchanged while using one heavy run.
+
 Write meaningful tests alongside implementation; run them only after all
 implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.

@@ -29,6 +29,10 @@ discarding the prior complete dashboard, and preserve distinct normalized groupi
 tuples in the native group assignment. Both require behavioral regression controls
 and a bounded delta before the final hosted qualification.
 
+The next source correction also treats a writable database as a durable artifact
+protected from asset retirement. Final Reports verification must validate the
+database as well as the exported files before reporting completion.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an
