@@ -1519,4 +1519,4 @@ class FilterDialog(QDialog):
             method()
 
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        CustomLogger(exception, reraise=False, logger_name=__name__)

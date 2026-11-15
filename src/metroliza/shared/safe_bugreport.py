@@ -25,7 +25,8 @@ import uuid
 from metroliza.shared import diagnostic_store as _diagnostic_store
 from metroliza.shared.safe_bugreport_context import (
     MAX_CONTEXT_EVENTS, MAX_OPTION_SNAPSHOTS, MAX_COUNTER, BugReportContextSelection, ContextOperationOutcome,
-    ExceptionCategory, SafeBugReportContextSnapshot, SafeContextEvent, SafeRequestContext,
+    ExceptionCategory, ExceptionSite, OutputVerificationKind, SafeBugReportContextSnapshot,
+    SafeContextEvent, SafeOutputVerification, SafeRequestContext, export_failure_context,
     SafeWorkflowContext, build_v2_report, context_payload, exception_category,
     option_snapshot, reject_duplicate_keys,
 )
@@ -953,12 +954,42 @@ class SafeBugReportRecorder:
                 self._context_events_lost = True
             return False
 
-    def record_exception_category(self, category: object) -> bool:
+    def _record_context_detail(self, **fields) -> bool:
         try:
-            if type(category) is not ExceptionCategory:
+            context_payload(SafeBugReportContextSnapshot(events=(
+                SafeContextEvent(uuid.uuid4(), 1, 0, **fields),
+            )))
+            with self._lock:
+                self._append_context_event_locked(**fields)
+                return self._enqueue_context_locked()
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
+            return False
+
+    def record_export_failure(self, failure: object) -> bool:
+        """Copy only the allowlisted projection of an existing typed diagnostic."""
+        try:
+            context = export_failure_context(failure)
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
+            return False
+        return self._record_context_detail(export_failure=context)
+
+    def record_output_verification(self, kind: OutputVerificationKind, passed: bool,
+                                   operation_id: uuid.UUID | None = None) -> bool:
+        return self._record_context_detail(output_verification=SafeOutputVerification(
+            kind, passed, operation_id,
+        ))
+
+    def record_exception_category(self, category: object,
+                                  site: object = ExceptionSite.UNKNOWN) -> bool:
+        try:
+            if type(category) is not ExceptionCategory or type(site) is not ExceptionSite:
                 raise ValueError("invalid_context")
             with self._lock:
-                self._append_context_event_locked(exception=category)
+                self._append_context_event_locked(exception=category, exception_site=site)
                 return self._enqueue_context_locked()
         except Exception:
             with self._lock:
@@ -1195,7 +1226,7 @@ def remove_application_error_hook() -> None:
         return
 
 
-def record_handled_exception(exception: object) -> None:
+def record_handled_exception(exception: object, site: ExceptionSite = ExceptionSite.UNKNOWN) -> None:
     """Record only a closed error category, never exception data or type names."""
     try:
         if isinstance(exception, MemoryError):
@@ -1209,7 +1240,7 @@ def record_handled_exception(exception: object) -> None:
         else:
             action = BugReportAction.HANDLED_EXCEPTION_OTHER
         recorder.record(action)
-        recorder.record_exception_category(exception_category(exception))
+        recorder.record_exception_category(exception_category(exception), site)
     except Exception:
         # Reporting must never change how the original exception is handled.
         return

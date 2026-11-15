@@ -9,7 +9,10 @@ import pytest
 from metroliza.shared import safe_bugreport as s
 from metroliza.shared.safe_bugreport_context import (
     BugReportContextSelection, ContextModule, ContextSymptom, ContextBehavior,
-    ContextOperationOutcome, MAX_OPTION_SNAPSHOTS, OptionSnapshotKind,
+    ContextOperationOutcome, ExceptionCategory, ExceptionSite, MAX_CONTEXT_EVENTS,
+    MAX_OPTION_SNAPSHOTS, OptionSnapshotKind, OutputVerificationKind,
+    SafeBugReportContextSnapshot, SafeContextEvent, SafeOutputVerification,
+    context_payload, parse_context_payload,
     SafeBugReportProvenance, V2_PREFIX, parse_v2_report,
 )
 from metroliza.shared.workflow_diagnostics import WorkflowTrace
@@ -237,3 +240,169 @@ def test_clear_from_another_dialog_invalidates_frozen_preview(qapplication_sessi
     finally:
         dialog.close()
         recorder.close_history(5)
+
+
+def test_exception_site_is_closed_and_old_v2_events_stay_canonical(monkeypatch):
+    recorder = s.SafeBugReportRecorder()
+    monkeypatch.setattr(s, "recorder", recorder)
+    assert recorder.record_exception_category(ExceptionCategory.IO)
+    original = report(recorder)
+    raw = parse_v2_report(original)
+    event = raw["context"]["events"][0]
+    assert event["kind"] == "exception" and "site" not in event
+    assert context_payload(parse_context_payload(raw["context"])) == raw["context"]
+    assert report(recorder) == original
+    s.record_handled_exception(PermissionError("SYNTHETIC_PRIVATE_PATH"), ExceptionSite.REPORT_EXPORT)
+    event = parse_v2_report(report(recorder))["context"]["events"][-1]
+    assert event["category"] == "permission" and event["site"] == "report_export"
+    assert "SYNTHETIC_PRIVATE" not in report(recorder)
+    before = recorder.context_snapshot().events
+    assert not recorder.record_exception_category(ExceptionCategory.IO, "report_export")
+    assert recorder.context_snapshot().events == before
+
+
+@pytest.mark.parametrize("kind", list(OutputVerificationKind))
+@pytest.mark.parametrize("passed", [True, False])
+@pytest.mark.parametrize("correlated", [True, False])
+def test_output_verification_has_explicit_boolean_result_and_optional_token(kind, passed, correlated):
+    recorder = s.SafeBugReportRecorder()
+    token = uuid.uuid4() if correlated else None
+    assert recorder.record_output_verification(kind, passed, token)
+    raw = parse_v2_report(report(recorder))
+    event = raw["context"]["events"][0]
+    assert event["kind"] == "output_verification"
+    assert event["output_verification"] == {
+        "kind": kind.value, "passed": passed,
+        "operation_id": str(token) if token is not None else None,
+    }
+    assert context_payload(parse_context_payload(raw["context"])) == raw["context"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"kind": "report_workbook"}, {"passed": 1}, {"passed": "false"},
+    {"operation_id": str(uuid.uuid4())}, {"operation_id": uuid.uuid1()},
+])
+def test_output_verification_rejects_untyped_values(kwargs):
+    recorder = s.SafeBugReportRecorder()
+    arguments = {"kind": OutputVerificationKind.REPORT_WORKBOOK, "passed": True, **kwargs}
+    assert not recorder.record_output_verification(**arguments)
+    assert recorder.context_snapshot().events == ()
+    assert recorder.context_snapshot().events_lost
+
+
+def test_new_context_variants_reject_mixed_events_and_dynamic_attributes():
+    class Hostile:
+        @property
+        def value(self):
+            raise AssertionError("must not inspect caller attributes")
+
+        def __str__(self):
+            raise AssertionError("must not stringify caller values")
+
+    stamp = (uuid.uuid4(), 1, 0)
+    verification = SafeOutputVerification(OutputVerificationKind.REPORT_WORKBOOK, True)
+    invalid = [
+        SafeContextEvent(*stamp, exception=ExceptionCategory.IO, output_verification=verification),
+        SafeContextEvent(*stamp, output_verification=verification, exception_site=ExceptionSite.REPORT_EXPORT),
+        SafeContextEvent(*stamp, output_verification=verification, enabled=True),
+        SafeContextEvent(*stamp, output_verification=SafeOutputVerification(Hostile(), True)),
+        SafeContextEvent(*stamp, output_verification=SafeOutputVerification(
+            OutputVerificationKind.REPORT_WORKBOOK, True, Hostile())),
+    ]
+    for event in invalid:
+        with pytest.raises(ValueError, match="invalid_context"):
+            context_payload(SafeBugReportContextSnapshot(events=(event,)))
+
+
+def test_export_failure_projection_preserves_only_fixed_cause_fields(monkeypatch):
+    from metroliza.shared.diagnostic_events import (
+        ExportFailureBackend, ExportFailureCode, ExportFailureStage, build_export_failure_diagnostic,
+    )
+    recorder = s.SafeBugReportRecorder()
+    monkeypatch.setattr(s, "recorder", recorder)
+    trace = WorkflowTrace(WorkflowOperation.LOCAL_EXPORT)
+    cause = PermissionError(13, "SYNTHETIC_PRIVATE_PATH")
+    wrapped = RuntimeError("SYNTHETIC_PRIVATE_WRAPPER")
+    wrapped.__cause__ = cause
+    failure = build_export_failure_diagnostic(
+        wrapped, invocation_id=trace.invocation_id, operation_id=trace.operation_id,
+        stage=ExportFailureStage.HTML_PUBLICATION, backend=ExportFailureBackend.HTML,
+        code=ExportFailureCode.ACCESS_DENIED,
+    )
+    trace.finish_export(completed=False, cancelled=False, export_failure=failure)
+    text = report(recorder)
+    raw = parse_v2_report(text)
+    failures = [event["export_failure"] for event in raw["context"]["events"]
+                if event["kind"] == "export_failure"]
+    assert failures == [{
+        "invocation_id": str(trace.invocation_id), "operation_id": str(trace.operation_id),
+        "stage": "html_publication", "code": "output_access_denied",
+        "backend": "html_dashboard", "cause_kind": "permission_error", "errno": 13, "winerror": None,
+    }]
+    assert "SYNTHETIC_PRIVATE" not in text
+    assert "traceback_frames" not in text and "recorder_connected" not in text
+    assert "selected_report_count" not in text and "exception_kind" not in text
+    assert context_payload(parse_context_payload(raw["context"])) == raw["context"]
+
+
+def test_export_failure_is_not_associated_with_a_foreign_workflow(monkeypatch):
+    from metroliza.shared.diagnostic_events import (
+        ExportFailureBackend, ExportFailureStage, build_export_failure_diagnostic,
+    )
+    recorder = s.SafeBugReportRecorder()
+    monkeypatch.setattr(s, "recorder", recorder)
+    trace = WorkflowTrace(WorkflowOperation.LOCAL_EXPORT)
+    failure = build_export_failure_diagnostic(
+        RuntimeError("SYNTHETIC_PRIVATE"), invocation_id=trace.invocation_id, operation_id=uuid.uuid4(),
+        stage=ExportFailureStage.HTML_WRITE, backend=ExportFailureBackend.HTML,
+    )
+    trace.finish_export(completed=False, cancelled=False, export_failure=failure)
+    assert not any(event.export_failure is not None for event in recorder.context_snapshot().events)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("errno", True), ("errno", -1), ("errno", 65536), ("winerror", "5"),
+    ("stage", "html_write"), ("cause_kind", "permission_error"),
+    ("invocation_id", str(uuid.uuid4())),
+])
+def test_failure_projection_revalidates_mutated_records(field, value):
+    from metroliza.shared.diagnostic_events import (
+        ExportFailureBackend, ExportFailureStage, build_export_failure_diagnostic,
+    )
+    recorder = s.SafeBugReportRecorder()
+    failure = build_export_failure_diagnostic(
+        RuntimeError("SYNTHETIC_PRIVATE"), invocation_id=uuid.uuid4(), operation_id=uuid.uuid4(),
+        stage=ExportFailureStage.HTML_WRITE, backend=ExportFailureBackend.HTML,
+    )
+    object.__setattr__(failure, field, value)
+    assert not recorder.record_export_failure(failure)
+    assert recorder.context_snapshot().events == ()
+
+
+def test_new_context_events_share_the_bounded_ring():
+    recorder = s.SafeBugReportRecorder()
+    for _ in range(MAX_CONTEXT_EVENTS + 1):
+        assert recorder.record_output_verification(OutputVerificationKind.ANALYTICS_DASHBOARD, False)
+    raw = parse_v2_report(report(recorder))
+    assert len(raw["context"]["events"]) == MAX_CONTEXT_EVENTS
+    assert raw["context"]["events_lost"]
+
+
+def test_new_context_parser_rejects_extra_fields_and_unbounded_os_codes():
+    from metroliza.shared.diagnostic_events import (
+        ExportFailureBackend, ExportFailureStage, build_export_failure_diagnostic,
+    )
+    recorder = s.SafeBugReportRecorder()
+    failure = build_export_failure_diagnostic(
+        RuntimeError("SYNTHETIC_PRIVATE"), invocation_id=uuid.uuid4(), operation_id=uuid.uuid4(),
+        stage=ExportFailureStage.HTML_WRITE, backend=ExportFailureBackend.HTML,
+    )
+    assert recorder.record_export_failure(failure)
+    raw = context_payload(recorder.context_snapshot())
+    raw["events"][0]["export_failure"]["errno"] = 65536
+    with pytest.raises(ValueError):
+        parse_context_payload(raw)
+    raw = context_payload(recorder.context_snapshot())
+    raw["events"][0]["export_failure"]["exception"] = "SYNTHETIC_PRIVATE"
+    with pytest.raises(ValueError):
+        parse_context_payload(raw)

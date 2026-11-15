@@ -53,6 +53,8 @@ from metroliza.shared.diagnostic_events import (
     build_export_failure_diagnostic,
 )
 from metroliza.shared.env_utils import env_bool
+from metroliza.shared.output_verification import verify_published_output
+from metroliza.shared.safe_bugreport_context import OutputVerificationKind
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
@@ -5108,6 +5110,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 if not local_outcome:
                     self._check_canceled()
                     return
+                if self.export_target in {"excel_xlsx", "google_sheets_drive_convert"}:
+                    verify_published_output(
+                        self.excel_file, OutputVerificationKind.REPORT_WORKBOOK,
+                        operation_id=getattr(diagnostic, "operation_id", None),
+                    )
                 diagnostic.stage(WorkflowStage.OUTPUT_PUBLISHED)
 
             if self.export_target == "google_sheets_drive_convert":

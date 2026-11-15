@@ -14,7 +14,9 @@ import re
 import uuid
 
 from metroliza.shared.diagnostic_events import (
-    WorkflowError, WorkflowOperation, WorkflowOutcome, WorkflowStage,
+    ExceptionKind, ExportFailureBackend, ExportFailureCode, ExportFailureDiagnostic,
+    ExportFailureStage, WorkflowError, WorkflowOperation, WorkflowOutcome, WorkflowStage,
+    export_failure_payload,
 )
 
 MAX_CONTEXT_EVENTS = 128
@@ -132,6 +134,26 @@ class ExceptionCategory(str, Enum):
     OTHER = "other"
 
 
+class ExceptionSite(str, Enum):
+    UNKNOWN = "unknown"
+    REPORT_PARSER = "report_parser"
+    REPORT_EXPORT = "report_export"
+    EXPORT_DIALOG = "export_dialog"
+    DATABASE_EDIT = "database_edit"
+    TABULAR_ANALYTICS = "tabular_analytics"
+    INDUSTRIAL_ANALYTICS = "industrial_analytics"
+    PARSER_PROFILES = "parser_profiles"
+    MAPPING = "mapping"
+    REALTIME = "realtime"
+    BOOTSTRAP = "bootstrap"
+
+
+class OutputVerificationKind(str, Enum):
+    REPORT_WORKBOOK = "report_workbook"
+    ANALYTICS_WORKBOOK = "analytics_workbook"
+    ANALYTICS_DASHBOARD = "analytics_dashboard"
+
+
 def exception_category(exception: object) -> ExceptionCategory:
     """Use static builtin classes only; never inspect a name/message/traceback."""
     for builtin, category in (
@@ -184,6 +206,34 @@ class SafeRequestContext:
 
 
 @dataclass(frozen=True, slots=True)
+class SafeOutputVerification:
+    kind: OutputVerificationKind
+    passed: bool
+    operation_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SafeExportFailureContext:
+    invocation_id: uuid.UUID
+    operation_id: uuid.UUID
+    stage: ExportFailureStage
+    code: ExportFailureCode
+    backend: ExportFailureBackend
+    cause_kind: ExceptionKind
+    errno: int | None = None
+    winerror: int | None = None
+
+
+def export_failure_context(failure: ExportFailureDiagnostic) -> SafeExportFailureContext:
+    """Validate the source record, then project only the approved failure fields."""
+    export_failure_payload(failure)
+    return SafeExportFailureContext(
+        failure.invocation_id, failure.operation_id, failure.stage, failure.code,
+        failure.backend, failure.cause_kind, failure.errno, failure.winerror,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class SafeContextEvent:
     session_id: uuid.UUID
     sequence: int
@@ -193,6 +243,9 @@ class SafeContextEvent:
     workflow: SafeWorkflowContext | None = None
     exception: ExceptionCategory | None = None
     request: SafeRequestContext | None = None
+    exception_site: ExceptionSite = ExceptionSite.UNKNOWN
+    output_verification: SafeOutputVerification | None = None
+    export_failure: SafeExportFailureContext | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,8 +319,14 @@ def _boolean(value):
     return value
 
 
+def _uuid_payload(value):
+    if type(value) is not uuid.UUID or value.version != 4:
+        raise ValueError("invalid_context")
+    return str(value)
+
+
 def _stamp(item):
-    return {"session_id": str(item.session_id), "sequence": item.sequence, "relative_ms": item.relative_ms}
+    return {"session_id": _uuid_payload(item.session_id), "sequence": item.sequence, "relative_ms": item.relative_ms}
 
 
 def _parse_stamp(item):
@@ -275,10 +334,13 @@ def _parse_stamp(item):
 
 
 def _workflow_payload(item):
-    if type(item) is not SafeWorkflowContext:
+    if (type(item) is not SafeWorkflowContext
+            or any(type(value) is not enum_type for value, enum_type in (
+                (item.operation, WorkflowOperation), (item.stage, WorkflowStage),
+                (item.outcome, WorkflowOutcome), (item.error, WorkflowError)))):
         raise ValueError("invalid_context")
     return {
-        "invocation_id": str(item.invocation_id), "operation_id": str(item.operation_id),
+        "invocation_id": _uuid_payload(item.invocation_id), "operation_id": _uuid_payload(item.operation_id),
         "sequence": item.sequence, "operation": item.operation.value, "stage": item.stage.value,
         "outcome": item.outcome.value, "error": item.error.value, "duration_ms": item.duration_ms,
     }
@@ -309,29 +371,80 @@ def _parse_workflow(raw):
     )
 
 
+def _failure_payload(item):
+    if (type(item) is not SafeExportFailureContext
+            or any(type(value) is not enum_type for value, enum_type in (
+                (item.stage, ExportFailureStage), (item.code, ExportFailureCode),
+                (item.backend, ExportFailureBackend), (item.cause_kind, ExceptionKind)))):
+        raise ValueError("invalid_context")
+    return {
+        "invocation_id": _uuid_payload(item.invocation_id),
+        "operation_id": _uuid_payload(item.operation_id), "stage": item.stage.value,
+        "code": item.code.value, "backend": item.backend.value,
+        "cause_kind": item.cause_kind.value, "errno": item.errno, "winerror": item.winerror,
+    }
+
+
+def _parse_failure(raw):
+    _keys(raw, "invocation_id operation_id stage code backend cause_kind errno winerror")
+    for key in ("errno", "winerror"):
+        if raw[key] is not None:
+            _counter(raw[key])
+            if raw[key] > 65535:
+                raise ValueError("invalid_context")
+    return SafeExportFailureContext(
+        _uuid(raw["invocation_id"]), _uuid(raw["operation_id"]),
+        _enum(ExportFailureStage, raw["stage"]), _enum(ExportFailureCode, raw["code"]),
+        _enum(ExportFailureBackend, raw["backend"]), _enum(ExceptionKind, raw["cause_kind"]),
+        raw["errno"], raw["winerror"],
+    )
+
+
 def _event_payload(item):
-    if type(item) is not SafeContextEvent:
+    if (type(item) is not SafeContextEvent or type(item.exception_site) is not ExceptionSite
+            or sum(value is not None for value in (
+                item.action, item.workflow, item.exception, item.request,
+                item.output_verification, item.export_failure)) != 1
+            or item.exception is None and item.exception_site is not ExceptionSite.UNKNOWN
+            or item.action is None and item.enabled is not None):
         raise ValueError("invalid_context")
     result = _stamp(item)
-    if item.action is not None and item.workflow is None and item.exception is None and item.request is None:
+    if item.action is not None:
         from metroliza.shared.safe_bugreport import BugReportAction
         if type(item.action) is not BugReportAction:
             raise ValueError("invalid_context")
         result.update(kind="action", action=item.action.value, enabled=item.enabled)
-    elif item.workflow is not None and item.action is None and item.exception is None and item.enabled is None and item.request is None:
+    elif item.workflow is not None:
         result.update(kind="workflow", workflow=_workflow_payload(item.workflow))
-    elif (type(item.exception) is ExceptionCategory and item.action is None
-          and item.workflow is None and item.enabled is None and item.request is None):
+    elif item.exception is not None:
+        if type(item.exception) is not ExceptionCategory:
+            raise ValueError("invalid_context")
         result.update(kind="exception", category=item.exception.value)
-    elif (type(item.request) is SafeRequestContext and item.action is None and item.workflow is None
-          and item.enabled is None and item.exception is None):
+        # Preserve canonical pre-site v2 reports byte for byte.
+        if item.exception_site is not ExceptionSite.UNKNOWN:
+            result["site"] = item.exception_site.value
+    elif item.request is not None:
         request = item.request
+        if (type(request) is not SafeRequestContext or type(request.kind) is not OptionSnapshotKind
+                or type(request.outcome) is not ContextOperationOutcome):
+            raise ValueError("invalid_context")
         result.update(kind="request", request={
-            "operation_id": str(request.operation_id), "kind": request.kind.value,
+            "operation_id": _uuid_payload(request.operation_id), "kind": request.kind.value,
             "outcome": request.outcome.value, "duration_ms": request.duration_ms,
         })
+    elif item.output_verification is not None:
+        verification = item.output_verification
+        if (type(verification) is not SafeOutputVerification
+                or type(verification.kind) is not OutputVerificationKind
+                or type(verification.passed) is not bool):
+            raise ValueError("invalid_context")
+        result.update(kind="output_verification", output_verification={
+            "kind": verification.kind.value, "passed": verification.passed,
+            "operation_id": (None if verification.operation_id is None
+                             else _uuid_payload(verification.operation_id)),
+        })
     else:
-        raise ValueError("invalid_context")
+        result.update(kind="export_failure", export_failure=_failure_payload(item.export_failure))
     return result
 
 
@@ -351,8 +464,10 @@ def _parse_event(raw):
         _keys(raw, base + "workflow")
         return SafeContextEvent(*_parse_stamp(raw), workflow=_parse_workflow(raw["workflow"]))
     if kind == "exception":
-        _keys(raw, base + "category")
-        return SafeContextEvent(*_parse_stamp(raw), exception=_enum(ExceptionCategory, raw["category"]))
+        _keys(raw, base + ("category site" if "site" in raw else "category"))
+        site = _enum(ExceptionSite, raw["site"]) if "site" in raw else ExceptionSite.UNKNOWN
+        return SafeContextEvent(*_parse_stamp(raw), exception=_enum(ExceptionCategory, raw["category"]),
+                                exception_site=site)
     if kind == "request":
         _keys(raw, base + "request")
         request = raw["request"]
@@ -366,6 +481,18 @@ def _parse_event(raw):
         return SafeContextEvent(*_parse_stamp(raw), request=SafeRequestContext(
             _uuid(request["operation_id"]), _enum(OptionSnapshotKind, request["kind"]), outcome, duration,
         ))
+    if kind == "output_verification":
+        _keys(raw, base + "output_verification")
+        verification = raw["output_verification"]
+        _keys(verification, "kind passed operation_id")
+        token = verification["operation_id"]
+        return SafeContextEvent(*_parse_stamp(raw), output_verification=SafeOutputVerification(
+            _enum(OutputVerificationKind, verification["kind"]), _boolean(verification["passed"]),
+            None if token is None else _uuid(token),
+        ))
+    if kind == "export_failure":
+        _keys(raw, base + "export_failure")
+        return SafeContextEvent(*_parse_stamp(raw), export_failure=_parse_failure(raw["export_failure"]))
     raise ValueError("invalid_context")
 
 
@@ -392,7 +519,7 @@ def context_payload(snapshot):
             raise ValueError("invalid_context")
     raw = {
         "events": [_event_payload(item) for item in snapshot.events],
-        "options": [dict(_stamp(item), kind=item.kind.value, options=dict(item.options), operation_id=str(item.operation_id))
+        "options": [dict(_stamp(item), kind=item.kind.value, options=dict(item.options), operation_id=_uuid_payload(item.operation_id))
                     for item in snapshot.options if type(item) is SafeOptionSnapshot],
         "events_lost": snapshot.events_lost, "snapshot_state": snapshot.snapshot_state,
         "snapshots_lost": snapshot.snapshots_lost,

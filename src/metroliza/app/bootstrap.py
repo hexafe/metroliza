@@ -369,7 +369,7 @@ def log_and_exit(exception: Exception) -> None:
     close_bootloader_splash(phase="top_level_exception")
     from metroliza.shared.custom_logger import CustomLogger
 
-    CustomLogger(exception, reraise=False)
+    CustomLogger(exception, reraise=False, logger_name=__name__)
 
 
 def run_startup_smoke_mode(logger: logging.Logger) -> int:

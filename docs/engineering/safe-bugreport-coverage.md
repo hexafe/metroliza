@@ -4,6 +4,7 @@ The copyable report is available from the main Help menu and records a bounded,
 local sequence of source-controlled action codes and selected boolean states.
 The detailed report adds validated build facts, session-relative event timing,
 explicit workflow correlation, closed error categories, retained option snapshots,
+closed source locations for covered exception handlers, output-publication checks,
 and closed user choices describing the symptom and expected/observed behaviour.
 It never includes input documents, worksheets, names, paths, SQL, measurements,
 exception messages or screenshots. It is not uploaded automatically.
@@ -25,6 +26,23 @@ module family for application ERROR records; it does not read or format their
 content and may coalesce repeated errors. Handled failures that neither emit a
 covered workflow result nor log an error can still be absent. Silent wrong output
 needs a workflow-specific check and is not inferred from operation completion.
+
+Report XLSX and analytics XLSX/HTML publication boundaries check that the final
+target is a regular, non-empty file. Analytics temporary outputs are also checked
+before replacement, preserving a prior complete output when a new temporary
+output is missing or empty. These checks use file metadata once per publication;
+they do not reopen workbooks or inspect measurements. The report retains only a
+closed check kind, pass/fail and an explicitly supplied operation token, if any.
+A passing check proves publication at that instant, not numerical correctness,
+chart completeness, or that the file remained available afterwards.
+
+Export failures additionally retain the validated stage, failure code, backend,
+cause category and bounded operating-system error numbers from the existing
+structured diagnostic. Exception locations are fixed module-family codes selected
+from exact source-owned logger names; arbitrary logger names and caller context
+remain excluded. Unknown locations stay unknown; these codes are not stack traces
+or exact source-line evidence. Failure and verification records use the same
+bounded detailed event ring and are subject to its loss indication.
 
 Detailed context has its own explicit bounded retention and loss status. Option
 snapshots are retained independently from the recent-action ring; they describe an

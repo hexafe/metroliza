@@ -1242,7 +1242,7 @@ class ModifyDB(QDialog):
         if getattr(self.log_and_exit, "__func__", None) is not ModifyDB.log_and_exit:
             self.log_and_exit(error)
             return
-        CustomLogger(error, reraise=False, behavior=LOG_ONLY)
+        CustomLogger(error, reraise=False, behavior=LOG_ONLY, logger_name=__name__)
         QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
 
     def _apply_edit_payload(self, payload):
@@ -1526,7 +1526,7 @@ class ModifyDB(QDialog):
         super().closeEvent(event)
 
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        CustomLogger(exception, reraise=False, logger_name=__name__)
 
 
 _DEFAULT_EDIT_APPLY = ReportEditService.apply_changes

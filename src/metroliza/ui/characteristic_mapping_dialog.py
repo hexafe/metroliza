@@ -558,7 +558,7 @@ class CharacteristicAliasEditorDialog(QDialog):
         try:
             impact = self.impact_resolver(alias_name, scope_type, scope_value)
         except Exception as exc:
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             self.impact_label.setText('Impact preview could not be loaded.')
             set_status_variant(self.impact_label, 'warning')
             return
@@ -965,7 +965,7 @@ class CharacteristicMappingDialog(QDialog):
             return
         self._source_loading = False
         self._dismiss_source_progress_dialog()
-        CustomLogger(exc, reraise=False)
+        CustomLogger(exc, reraise=False, logger_name=__name__)
         self.metric_options = []
         self.reference_options = []
         self._populate_metric_table()
@@ -1043,7 +1043,7 @@ class CharacteristicMappingDialog(QDialog):
             ensure_characteristic_alias_schema(self.db_file)
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
         except Exception as exc:
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Load error', f'Could not load name matches: {exc}')
             return
 
@@ -1154,7 +1154,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_COMPLETED)
         except Exception as exc:
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_FAILED)
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Save error', f'Could not save name match: {exc}')
 
     def edit_mapping(self):
@@ -1216,7 +1216,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED)
         except Exception as exc:
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Save error', f'Could not update name match: {exc}')
 
     def delete_mapping(self):
@@ -1249,7 +1249,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_DELETE_COMPLETED)
         except Exception as exc:
             _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_DELETE_FAILED)
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Delete error', f'Could not delete name match: {exc}')
 
     def _ensure_db_file_selected(self) -> bool:
@@ -1397,7 +1397,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action_if(
                 record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
             )
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             message, full_report = self._build_import_validation_summary(exc, preview_limit=10)
             details_box = QMessageBox(self)
             details_box.setIcon(QMessageBox.Icon.Critical)
@@ -1439,7 +1439,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action_if(
                 record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
             )
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(
                 self,
                 'Import error',
@@ -1453,7 +1453,7 @@ class CharacteristicMappingDialog(QDialog):
             _record_mapping_action_if(
                 record_outcome, BugReportAction.WORKFLOW_MAPPING_IMPORT_FAILED
             )
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Import error', f'Could not import mappings: {exc}')
 
     def export_mappings(self):
@@ -1493,7 +1493,7 @@ class CharacteristicMappingDialog(QDialog):
         except Exception as exc:
             if record_outcome:
                 _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_FAILED)
-            CustomLogger(exc, reraise=False)
+            CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
 
     def _start_alias_csv(self, operation, filename, started_at):

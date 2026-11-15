@@ -7,7 +7,8 @@ import time
 import uuid
 
 from metroliza.shared.diagnostic_events import (
-    WorkflowDiagnosticEvent, WorkflowError, WorkflowOperation, WorkflowOutcome, WorkflowStage,
+    ExportFailureDiagnostic, WorkflowDiagnosticEvent, WorkflowError, WorkflowOperation,
+    WorkflowOutcome, WorkflowStage, export_failure_payload,
 )
 from metroliza.shared.diagnostic_transport import supervised_invocation_id
 
@@ -85,8 +86,8 @@ class WorkflowTrace:
             )
             if stage is WorkflowStage.STARTED or stage is WorkflowStage.FINISHED:
                 _record_copyable_workflow_action(self.operation, outcome)
-            # Copy only explicit correlation and fixed workflow fields. Counts,
-            # export payloads and input identities never cross this boundary.
+            # Copy explicit correlation and fixed workflow/failure fields only.
+            # Counts, exception shapes and input identities stay outside the report.
             try:
                 from metroliza.shared.safe_bugreport import recorder
                 from metroliza.shared.safe_bugreport_context import SafeWorkflowContext
@@ -94,6 +95,16 @@ class WorkflowTrace:
                     self.invocation_id, self.operation_id, self.sequence, self.operation,
                     stage, outcome, error, elapsed if stage is WorkflowStage.FINISHED else None,
                 ))
+                if (type(export_failure) is ExportFailureDiagnostic
+                        and self.operation is WorkflowOperation.LOCAL_EXPORT
+                        and stage is WorkflowStage.FINISHED
+                        and outcome in {WorkflowOutcome.FAILED, WorkflowOutcome.CANCELLED,
+                                        WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+                                        WorkflowOutcome.COMPLETED_WITH_OMISSIONS}):
+                    export_failure_payload(export_failure)
+                    if (export_failure.invocation_id == self.invocation_id
+                            and export_failure.operation_id == self.operation_id):
+                        recorder.record_export_failure(export_failure)
             except Exception:
                 pass
             logging.getLogger(__name__).log(
