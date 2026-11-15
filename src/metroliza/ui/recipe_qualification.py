@@ -48,6 +48,28 @@ def _button(widget, label):
     return found[0]
 
 
+def _paint_ready(widget, window) -> bool:
+    """Require a visible, enabled control wholly inside all enclosing viewports."""
+    from PyQt6.QtCore import QPoint, QRect
+    from PyQt6.QtWidgets import QAbstractScrollArea
+    if not widget.isVisible() or not widget.isEnabled():
+        return False
+    if widget.rect().isEmpty() or widget.visibleRegion().isEmpty():
+        return False
+    bounds = QRect(widget.mapTo(window, QPoint(0, 0)), widget.size())
+    if not window.rect().contains(bounds):
+        return False
+    parent = widget.parentWidget()
+    while parent is not None and parent is not window:
+        if isinstance(parent, QAbstractScrollArea):
+            viewport = parent.viewport()
+            bounds = QRect(widget.mapTo(viewport, QPoint(0, 0)), widget.size())
+            if not viewport.rect().contains(bounds):
+                return False
+        parent = parent.parentWidget()
+    return True
+
+
 class _Probe:
     def __init__(self, window, root: Path):
         from PyQt6.QtCore import QTimer
@@ -57,6 +79,7 @@ class _Probe:
         self.controller, self.page = self.workspace.controller, self.workspace.run_page
         self.started = time.monotonic()
         self.index, self.waiting = 0, False
+        self.phase, self._home_captured = "home_select", False
         self.reason, self.cancel_started = "none", None
         provenance = load_build_provenance()
         self.receipt = {"schema_version": 1, "status": "running", "reason": "none",
@@ -102,34 +125,71 @@ class _Probe:
         if not self.controller.launch(reopened.definition, reopened.binding):
             raise ValueError("launch_failed")
 
+    def show_home(self):
+        self.window._show_workspace_page("home")
+        self.phase = "home_ready"
+
+    def home_ready(self):
+        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
+        try:
+            buttons = [_button(self.workspace.quick, label) for label in BUILTIN_LABELS.values()]
+        except ValueError:
+            return  # A normal Qt turn may still be making the Home controls visible.
+        if not all(_paint_ready(button, self.window) for button in buttons):
+            return
+        if not self._home_captured:
+            self.screenshot("home.png")
+            self._home_captured = True
+        self.phase = "select"
+
     def begin(self):
         from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
-        from metroliza.recipes.contracts import ParameterKey
         case = CASES[self.index]
         if case == "larger":
             self.larger()
         else:
-            self.window._show_workspace_page("home")
             identity = "reports_excel_main" if case == "main" else "reports_dashboard_html"
             _button(self.workspace.quick, BUILTIN_LABELS[identity]).click()
+        self.phase = "fill"  # Return to Qt after selection creates the form widgets.
+
+    def _expected_fields(self):
+        from metroliza.recipes.contracts import ParameterKey
         expected = {ParameterKey.INPUT_FOLDER, ParameterKey.OUTPUT_FILE}
-        if case == "larger":
+        if CASES[self.index] == "larger":
             expected.update({ParameterKey.DATE_FROM, ParameterKey.DATE_TO})
-        if set(self.page.fields) != expected:
+        return expected
+
+    def form_ready(self):
+        controls = [editor for editor, _spec in self.page.fields.values()]
+        return bool(controls) and all(_paint_ready(control, self.window)
+                                     for control in (*controls, self.page.start_button))
+
+    def fill(self):
+        from metroliza.recipes.contracts import ParameterKey
+        if set(self.page.fields) != self._expected_fields():
             raise ValueError("form_mismatch")
+        if not self.form_ready():
+            return
+        case = CASES[self.index]
         suffix = ".html" if case == "html" else ".xlsx"
         values = {ParameterKey.INPUT_FOLDER: str(self.root / "reports"),
                   ParameterKey.OUTPUT_FILE: str(self.root / (case + suffix)),
                   ParameterKey.DATE_FROM: "2024-01-01", ParameterKey.DATE_TO: "2024-01-01"}
         for key, (editor, _spec) in self.page.fields.items():
             editor.setText(values[key])
+        self.phase = "capture_start"  # Filling also changes/wraps the plan preview.
+
+    def capture_start(self):
+        if not self.form_ready():
+            return
+        case = CASES[self.index]
         self.screenshot(case + "-form.png")
         self.receipt["cases"].append({"case": case, "state": "running",
-            "prompt_fields": len(expected), "start_clicks": 1})
+            "prompt_fields": len(self._expected_fields()), "start_clicks": 1})
+        self.phase, self.waiting = "running", True
         self.page.start_button.click()
         if self.controller._task is None:
             raise ValueError("start_failed")
-        self.waiting = True
 
     def observe(self):
         from metroliza.recipes.run_state import RunState
@@ -140,11 +200,16 @@ class _Probe:
             return
         if record is None or record.state not in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}:
             raise ValueError("scenario_failed")
-        case = CASES[self.index]
         self.receipt["cases"][-1]["state"] = record.state.value
-        self.screenshot(case + "-result.png")
+        self.phase = "result_capture"
+
+    def capture_result(self):
+        if not self.form_ready():
+            return
+        self.screenshot(CASES[self.index] + "-result.png")
         self.index += 1
         self.waiting = False
+        self.phase = "home_select"
 
     def finish_receipt(self, cleanup):
         from PyQt6.QtWidgets import QApplication
@@ -176,10 +241,11 @@ class _Probe:
                 self.reason = "timeout"
             if self.reason != "none" or self.index == len(CASES):
                 self.closeout()
-            elif self.waiting:
-                self.observe()
             else:
-                self.begin()
+                actions = {"home_select": self.show_home, "home_ready": self.home_ready,
+                    "select": self.begin, "fill": self.fill, "capture_start": self.capture_start,
+                    "running": self.observe, "result_capture": self.capture_result}
+                actions[self.phase]()
         except Exception as error:
             reason = error.args[0] if error.args else None
             self.reason = reason if type(reason) is str and reason in FAILURES else "scenario_failed"

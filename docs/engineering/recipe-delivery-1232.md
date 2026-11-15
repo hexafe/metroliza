@@ -76,6 +76,15 @@ active database even when it is unrelated to recipe inputs/results. Admit one
 bounded delta for the active-context namespace guard and its ownership lifecycle;
 keep normal unrelated context changes available and retain all prior evidence.
 
+The first complete full-suite run on `0ecbd04d` passed 10,996 tests and failed one
+obsolete Home-button expectation. Windows source, both packaged jobs and the
+downloaded-ZIP gate passed. The retained `0.8.0-dev.2` bytes are not renamed.
+The grouped correction updates that expectation, resolves the verified QA
+capture-timing defect #1241, and increments the new artifact version to
+`0.8.0-dev.3`. Admit one bounded independent delta for this test/qualification/
+identity slice; runtime recipe algorithms and prior safety corrections remain
+unchanged. Require the full combined CI/package gate again on the new head.
+
 For the corrected stable candidate, use one authoritative full
 `workflow_dispatch` with both Windows package inputs enabled. The selected CI
 policy runs every blocking source job on dispatch. Retire a duplicate automatic

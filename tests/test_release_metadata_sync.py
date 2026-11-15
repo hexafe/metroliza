@@ -10,7 +10,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertEqual(metadata.release_version, "0.8.0-dev.2")
+        self.assertEqual(metadata.release_version, "0.8.0-dev.3")
         self.assertEqual(metadata.build, "")
         self.assertEqual(metadata.version_label, metadata.release_version)
         self.assertEqual(metadata.public_version_label, metadata.release_version)
@@ -101,7 +101,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("0.8.0-dev.2", updated)
+            self.assertIn("0.8.0-dev.3", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

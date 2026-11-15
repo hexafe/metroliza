@@ -216,7 +216,8 @@ def verify_png(path: Path) -> None:
 
 
 def verify_artifacts(root: Path) -> list[str]:
-    retained = []
+    verify_png(root / "home.png")
+    retained = ["home.png"]
     for case in CASES:
         verify_database(root / (case + ".db"))
         retained.append(case + ".db")

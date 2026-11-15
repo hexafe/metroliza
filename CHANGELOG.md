@@ -1,6 +1,12 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.2 — current version
+## 0.8.0-dev.3 — current version
+
+- Wait for visible recipe controls before qualification form captures and Start.
+- Keep the existing Home command-center checks aligned with the added recipe launchers.
+- Preserve the earlier `0.8.0-dev.2` EXE/ZIP bytes and qualification receipts under their original identity.
+
+## 0.8.0-dev.2 — previous development candidate
 
 - Add local report recipe quick flows, private revision-safe storage and a shared execution view.
 - Capture supported analysis settings and configure larger typed flows with dates, groups and outputs.

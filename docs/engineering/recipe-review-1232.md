@@ -37,6 +37,13 @@ Active-context protection also covers databases unrelated to the recipe but
 located in its retirement namespace. Context changes during an owned flow must
 preserve that protection before selecting a database that could be retired.
 
+The full suite later reported only an outdated Home-action expectation
+(10,996 passed, one failed, 154 platform/dependency skips). The expectation now
+includes the three required recipe actions without removing any existing action
+or layout check. QA issue #1241 tracks the verified pre-paint capture timing;
+its correction is grouped with the new `0.8.0-dev.3` identity. Earlier dev.2
+Windows bytes, native receipts and adverse unit-test evidence remain preserved.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an

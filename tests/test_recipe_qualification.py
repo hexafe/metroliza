@@ -224,3 +224,131 @@ def test_larger_xlsx_oracle_rejects_scope_and_statistic_regressions(tmp_path, fa
     _literal_workbook(path, fault=fault)
     with pytest.raises(ValueError, match=reason):
         driver.verify_larger_workbook(path)
+
+
+def test_paint_readiness_rejects_hidden_disabled_and_viewport_clipped_controls(qapplication_session):
+    from PyQt6.QtWidgets import QLineEdit, QScrollArea, QWidget
+    from metroliza.ui.recipe_qualification import _paint_ready
+
+    window = QWidget()
+    window.resize(640, 480)
+    scroll = QScrollArea(window)
+    scroll.setGeometry(0, 0, 300, 200)
+    content = QWidget()
+    content.resize(600, 600)
+    scroll.setWidget(content)
+    field = QLineEdit(content)
+    field.setGeometry(10, 10, 100, 30)
+    window.show()
+    qapplication_session.processEvents()  # Normal test event turn, outside any Qt callback.
+    try:
+        assert _paint_ready(field, window)
+        field.hide()
+        assert not _paint_ready(field, window)
+        field.show()
+        field.setEnabled(False)
+        assert not _paint_ready(field, window)
+        field.setEnabled(True)
+        field.move(250, 10)  # Part remains visible, but its full width leaves the viewport.
+        qapplication_session.processEvents()
+        assert not field.visibleRegion().isEmpty()
+        assert not _paint_ready(field, window)
+    finally:
+        window.close()
+
+
+def _pending_probe(tmp_path, monkeypatch, *, phase="select"):
+    import time
+    from metroliza.ui import recipe_qualification as qualification
+    from metroliza.recipes.contracts import ParameterKey
+
+    calls = {"select": 0, "start": 0, "home": [], "captures": [], "closeout": []}
+    ready = [False]
+    values = {}
+    probe = qualification._Probe.__new__(qualification._Probe)
+    probe.window = SimpleNamespace(_show_workspace_page=lambda name: calls["home"].append(name))
+    probe.workspace = SimpleNamespace(quick=object())
+    probe.controller = SimpleNamespace(_task=None, busy=True, last_record=None)
+    def start():
+        calls["start"] += 1
+        probe.controller._task = object()
+    fields = {key: (SimpleNamespace(setText=lambda text, k=key: values.__setitem__(k, text)), None)
+              for key in (ParameterKey.INPUT_FOLDER, ParameterKey.OUTPUT_FILE)}
+    probe.page = SimpleNamespace(fields=fields, start_button=SimpleNamespace(click=start))
+    selector = SimpleNamespace(click=lambda: calls.__setitem__("select", calls["select"] + 1))
+    monkeypatch.setattr(qualification, "_button", lambda *_args: selector)
+    monkeypatch.setattr(qualification, "_paint_ready", lambda *_args: ready[0])
+    probe.root, probe.started = tmp_path, time.monotonic()
+    probe.index, probe.waiting, probe.phase = 0, False, phase
+    probe._home_captured = False
+    probe.reason = "none"
+    probe.receipt = {"cases": []}
+    probe.screenshot = calls["captures"].append
+    probe.closeout = lambda: calls["closeout"].append(probe.reason)
+    return probe, calls, ready, values
+
+
+def test_probe_waits_after_selection_and_fill_and_double_ticks_never_repeat_start(tmp_path, monkeypatch):
+    probe, calls, ready, values = _pending_probe(tmp_path, monkeypatch)
+    probe.tick()  # Selection returns before the newly created form is used.
+    assert probe.phase == "fill" and calls["select"] == 1
+    probe.tick()
+    probe.tick()
+    assert not values and calls["captures"] == [] and calls["start"] == 0
+    ready[0] = True
+    probe.tick()  # Fill returns before capture, even when readiness was already true.
+    assert values and probe.phase == "capture_start"
+    assert not calls["captures"] and calls["start"] == 0
+    ready[0] = False  # The filled plan preview invalidates layout until another turn.
+    probe.tick()
+    probe.tick()
+    assert probe.phase == "capture_start" and calls["select"] == 1
+    assert not calls["captures"] and not probe.receipt["cases"]
+    ready[0] = True
+    probe.tick()
+    probe.tick()
+    probe.tick()
+    assert calls["captures"] == ["main-form.png"]
+    assert calls["start"] == 1 and calls["select"] == 1
+    assert probe.receipt["cases"][0]["start_clicks"] == 1
+    assert probe.phase == "running" and not calls["closeout"]
+
+
+def test_probe_captures_home_only_after_paint_before_first_quick_click(tmp_path, monkeypatch):
+    probe, calls, ready, _values = _pending_probe(tmp_path, monkeypatch, phase="home_select")
+    probe.tick()
+    assert calls["home"] == ["home"] and probe.phase == "home_ready"
+    probe.tick()
+    assert not calls["captures"] and calls["select"] == 0
+    ready[0] = True
+    probe.tick()
+    assert calls["captures"] == ["home.png"] and calls["select"] == 0
+    probe.tick()
+    assert calls["select"] == 1 and probe.phase == "fill"
+    probe.phase = "home_ready"  # Later Home visits retain the first painted capture.
+    probe.tick()
+    assert calls["captures"] == ["home.png"]
+
+
+def test_pending_form_readiness_has_finite_closed_timeout(tmp_path, monkeypatch):
+    from metroliza.ui import recipe_qualification as qualification
+    probe, calls, _ready, _values = _pending_probe(tmp_path, monkeypatch, phase="capture_start")
+    monkeypatch.setattr(qualification.time, "monotonic", lambda: probe.started + qualification.TIMEOUT_SECONDS + 1)
+    probe.tick()
+    assert calls["closeout"] == ["timeout"]
+    assert calls["captures"] == [] and calls["start"] == 0
+
+
+def test_artifact_oracle_requires_painted_home_in_addition_to_existing_thirteen(tmp_path, monkeypatch):
+    pngs = []
+    monkeypatch.setattr(driver, "verify_png", lambda path: pngs.append(path.name))
+    for name in ("verify_database", "verify_workbook", "verify_html", "verify_larger_workbook"):
+        monkeypatch.setattr(driver, name, lambda _path: None)
+    retained = driver.verify_artifacts(tmp_path)
+    assert retained[0] == "home.png" and len(retained) == 14
+    assert pngs == ["home.png", "main-form.png", "main-result.png", "html-form.png",
+                    "html-result.png", "larger-form.png", "larger-result.png"]
+    assert set(retained) - {"home.png"} == {
+        "main.db", "main.xlsx", "main-form.png", "main-result.png",
+        "html.db", "html.html", "html-form.png", "html-result.png",
+        "larger.db", "larger.xlsx", "larger.html", "larger-form.png", "larger-result.png"}

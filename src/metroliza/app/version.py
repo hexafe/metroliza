@@ -1,4 +1,4 @@
-RELEASE_VERSION = "0.8.0-dev.2"
+RELEASE_VERSION = "0.8.0-dev.3"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
