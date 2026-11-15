@@ -170,9 +170,9 @@ def _analytics_output_paths(output, payload):
     workbook_marker = payload["request"]["output_workbook_file"]
     if workbook_marker not in ("", "derived"):
         raise RecipeError("invalid_analytics_request")
-    from metroliza.industrial.industrial_analytics_dashboard import resolve_production_dashboard_assets_dir
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
     return AnalyticsOutputPaths(output, output.with_suffix(".xlsx") if workbook_marker else None,
-                                resolve_production_dashboard_assets_dir(output))
+                                resolve_html_dashboard_assets_dir(output))
 
 
 def analytics_output_family(binding, output):
@@ -391,8 +391,7 @@ class AnalyticsRecipePorts:
             result_holder = []
 
             def writer(*, output_path, assets_dir):
-                del assets_dir  # Native workflow chooses the same standard generation directory.
-                kwargs = dict(output_dashboard_file=str(output_path),
+                kwargs = dict(output_dashboard_file=str(output_path), output_assets_dir=assets_dir,
                     output_workbook_file=str(workbook) if workbook else None,
                     metric_selection=request.metric_selection, aggregation_state=request.aggregation_state,
                     cohort_state=request.cohort_state, chart_selection=request.chart_selection,
@@ -416,12 +415,15 @@ class AnalyticsRecipePorts:
                 return {"html_dashboard_path": result.html_dashboard_path,
                         "html_dashboard_assets_path": result.html_dashboard_assets_path}
 
-            write_dashboard_safely(writer, output_path=target, consents=consents, should_cancel=cancelled)
+            published = write_dashboard_safely(writer, output_path=target, consents=consents,
+                                               should_cancel=cancelled)
             if workbook:
                 if cancelled():
                     raise OutputPublicationCanceled()
                 publish_output(workbook, request.output_workbook_file, consents=consents)
-            return result_holder[0]
+            return replace(result_holder[0], html_dashboard_path=published["html_dashboard_path"],
+                           html_dashboard_assets_path=published["html_dashboard_assets_path"],
+                           workbook_path=request.output_workbook_file)
 
 
 def create_adapter_ports():

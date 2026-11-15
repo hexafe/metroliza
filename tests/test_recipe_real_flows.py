@@ -186,3 +186,56 @@ def test_larger_saved_flow_uses_same_snapshot_and_real_outputs(tmp_path):
         assert app is QApplication.instance()
     finally:
         runner.cancel()
+
+
+def test_multi_column_delimiter_collision_keeps_distinct_native_group_counts_and_means(tmp_path):
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
+    from metroliza.recipes.editor_service import RecipeEditorService
+    from metroliza.recipes.report_configuration_adapter import capture_export_configuration
+    from metroliza.reports.report_repository import ReportRepository
+
+    app = QApplication.instance() or QApplication([])
+    database = tmp_path / "group-collision.db"
+    repository = ReportRepository(str(database))
+    authored = [("A | B", "C", (9.90, 9.92, 9.94, 9.96, 10.02)),
+                ("A", "B | C", (10.02, 10.04, 10.06, 10.08, 10.10))]
+    index = 0
+    for revision, part, values in authored:
+        for measured in values:
+            index += 1
+            source = tmp_path / f"group-fixture-{index}.pdf"
+            source.write_bytes(f"synthetic group measurement {index}".encode())
+            repository.persist_parsed_report(
+                source_path=source, parser_id="cmm", parser_version="1.0",
+                template_family="cmm_pdf_header_box", parse_status="parsed",
+                metadata={"reference": "REF-1", "part_name": part, "revision": revision,
+                          "report_date": "2024-01-01", "sample_number": str(index),
+                          "sample_number_kind": "explicit_sample_number"},
+                candidates=(), warnings=(), metadata_version="report_metadata_v1",
+                measurements=({"header": "FEATURE_1", "ax": "X", "nominal": 10.0,
+                               "tol_plus": 0.5, "tol_minus": -0.5, "meas": measured,
+                               "dev": measured - 10.0, "outtol": 0, "status_code": "ok"},),
+                identity_hash=f"synthetic-group-{index}", metadata_confidence=1.0)
+    captured = capture_export_configuration(validate_export_request(ExportRequest(
+        AppPaths(str(database), excel_file=str(tmp_path / "Distinct.xlsx")),
+        ExportOptions(preset="full_report", generate_summary_sheet=True, chart_worker_count=1))))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=False, grouping_columns=("REVISION", "PART_NAME"), additional_html=False)
+    plan = editor.preview()
+    runner = RecipeRunner(ReportsRecipeService(
+        RecipeExecutionAdapter("import"), RecipeExecutionAdapter("export")))
+    try:
+        record = runner.start(plan)
+        assert record.state in (RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS), record
+        # Read actual native statistics from OOXML; literal populations/means
+        # are independent of recipe key normalization and analytics helpers.
+        analysis = _xlsx_cells(plan.output_file, "Group Analysis")
+        for label, expected_mean in (('["A | B", "C"]', 9.948), ('["A", "B | C"]', 10.06)):
+            rows = [int(cell[1:]) for cell, value in analysis.items()
+                    if cell[0] == "A" and cell[1:].isdigit() and value == label]
+            assert any(analysis.get(f"B{row}") == 5 and
+                       analysis.get(f"C{row}") == pytest.approx(expected_mean) for row in rows)
+        assert "A | B | C" not in analysis.values()
+        assert app is QApplication.instance()
+    finally:
+        runner.cancel()

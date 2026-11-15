@@ -61,6 +61,12 @@ bounded delta for these named blockers together. Use the already pinned safe XML
 parser, verify entity rejection, and resolve favorites from the current catalog.
 No security baseline or required check is relaxed.
 
+The next service review identified two further P2 blockers in unchanged paths:
+analytics replacement asset publication and ambiguous composite grouping labels.
+Admit one bounded independent delta for their grouped corrections. Require real
+rerun/failure preservation controls and independent distinct-population statistics;
+keep all prior reports, source bindings and exact-head CI/package gates.
+
 Write meaningful tests alongside implementation; run them only after all
 implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.

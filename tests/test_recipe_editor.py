@@ -176,3 +176,45 @@ def test_removing_group_rule_clears_analysis_preserves_native_options_and_reques
     effective = build_export_request(resolve_plan(reopened.definition, reopened.binding), StepKind.EXPORT_MAIN)
     assert effective.grouping_df is None
     assert effective.options == native.options  # HTML remains an explicit separate step.
+
+
+def test_multi_column_group_labels_are_unambiguous_deterministic_and_preserve_blank_semantics(tmp_path):
+    from contextlib import closing
+    from metroliza.recipes.report_configuration_adapter import _grouping
+
+    database = tmp_path / "source.db"
+    special = 'quotation " and comma, pipe | slash \\ newline\nżółć'
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE candidate(id INTEGER, revision TEXT, part_name TEXT)")
+        connection.executemany("INSERT INTO candidate VALUES (?, ?, ?)", [
+            (1, "A | B", "C"), (2, "A", "B | C"), (3, None, special), (4, "", special)])
+        connection.commit()
+    editor = RecipeEditorService(capture_export_configuration(manual_request(tmp_path)))
+    editor.configure_reports(dates=False, grouping_columns=("REVISION", "PART_NAME"), additional_html=False)
+    # Literal selected-source projection, not a reconstruction of the label code.
+    query = ("SELECT id AS REPORT_ID, revision AS REVISION, part_name AS PART_NAME, "
+             "'REF' AS REFERENCE, '2024-01-01' AS DATE, '' AS SAMPLE_NUMBER, "
+             "'' AS TEMPLATE_VARIANT, 0 AS HAS_NOK, 0 AS NOK_COUNT, '' AS FILENAME FROM candidate")
+    plan = editor.preview()
+    labels = {item.report_id: item.group for item in _grouping(plan, query)}
+    repeated = {item.report_id: item.group for item in _grouping(plan, query)}
+    assert labels == repeated
+    assert labels[1] == '["A | B", "C"]'
+    assert labels[2] == '["A", "B | C"]'
+    assert labels[1] != labels[2]
+    assert labels[3] == labels[4]  # Existing normalization combines None and blank.
+    assert json.loads(labels[3]) == ["(blank)", special]
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    single = {item.report_id: item.group for item in _grouping(editor.preview(), query)}
+    assert single == {1: "A | B", 2: "A", 3: "(blank)", 4: "(blank)"}
+
+
+@pytest.mark.parametrize("key", [
+    ("A | B", "C"), ("A", "B | C"), ("", "comma,inside"),
+    ('quote"inside', "back\\slash"), ("line\nbreak", "[bracket]"), ("żółć", "雪"),
+])
+def test_multi_column_label_roundtrips_normalized_tuple_without_delimiter_ambiguity(key):
+    from metroliza.recipes.report_configuration_adapter import _group_label
+    label = _group_label(key)
+    assert json.loads(label) == list(key)
+    assert _group_label(key) == label

@@ -180,3 +180,68 @@ def test_analytics_read_cache_remains_source_when_reserving_new_output_family(tm
     assert resolve(copied).db_file == str(source)
     assert resolve(copied).output_workbook_file == str(tmp_path / "result (1).xlsx")
     assert source.read_bytes() == b"synthetic read-only cache"
+
+
+@pytest.mark.parametrize("generation", [False, True])
+def test_reports_input_folder_cannot_be_retired_as_dashboard_assets(tmp_path, generation):
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    name = "result_assets" + (".generation-" + "c" * 32 if generation else "")
+    folder = tmp_path / name / "reports"
+    folder.mkdir(parents=True)
+    report = folder / "synthetic.pdf"
+    report.write_bytes(b"input reports must survive dashboard retirement")
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+            str(folder), str(tmp_path / "result.html")))
+    assert report.read_bytes() == b"input reports must survive dashboard retirement"
+    assert not (tmp_path / "result.html").exists() and not (tmp_path / "result.db").exists()
+
+
+@pytest.mark.parametrize("namespace", ["result_assets", "forged_assets"])
+def test_reports_retirement_guard_checks_canonical_and_supplied_asset_bases(tmp_path, namespace):
+    from metroliza.recipes.bindings import validate_plan_paths
+    from metroliza.recipes.builtin_recipes import REPORTS_DASHBOARD_HTML
+    original = resolve_plan(REPORTS_DASHBOARD_HTML, builtin_binding(REPORTS_DASHBOARD_HTML,
+        str(tmp_path / "safe-input"), str(tmp_path / "result.html")))
+    folder = tmp_path / (namespace + ".generation-" + "d" * 32) / "reports"
+    values = dict(original.binding.values)
+    values[ParameterKey.INPUT_FOLDER] = str(folder)
+    forged = replace(original, input_folder=folder, assets_dir=tmp_path / "forged_assets",
+                     binding=replace(original.binding, values=tuple(values.items())))
+    with pytest.raises(RecipeError, match="source_alias"):
+        validate_plan_paths(forged)
+
+
+def test_generation_validation_does_not_enumerate_directory_and_has_bounded_targets(tmp_path, monkeypatch):
+    from pathlib import Path
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.recipes.bindings import _target_paths
+    from metroliza.recipes.tabular_adapter import capture
+    # Resolve/import the canonical renderer before observing plan-only filesystem use.
+    from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+    output = tmp_path / "result.html"
+    resolve_html_dashboard_assets_dir(output)
+    entry = capture(IndustrialAnalyticsRequest(source_kind="tabular_file",
+        input_file=str(tmp_path / "source.csv"), output_dashboard_file=str(output),
+        output_workbook_file=str(tmp_path / "result.xlsx")))
+
+    def no_enumeration(*_args, **_kwargs):
+        raise AssertionError("planning must not enumerate old dashboard generations")
+
+    monkeypatch.setattr(Path, "glob", no_enumeration)
+    resolved = resolve_plan(entry.definition, entry.binding)
+    assert len(_target_paths(resolved)) == 3  # HTML, optional workbook, canonical assets base.
+
+
+@pytest.mark.parametrize("artifact", ["result.html", "result.xlsx"])
+def test_ordinary_artifact_names_are_not_asset_generation_namespaces(tmp_path, artifact):
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.recipes.tabular_adapter import capture
+    folder = tmp_path / (artifact + ".generation-" + "e" * 32)
+    folder.mkdir()
+    source = folder / "source.csv"
+    source.write_text("length_mm\n1.0\n1.1\n", encoding="utf-8")
+    entry = capture(IndustrialAnalyticsRequest(source_kind="tabular_file", input_file=str(source),
+        output_dashboard_file=str(tmp_path / "result.html"),
+        output_workbook_file=str(tmp_path / "result.xlsx")))
+    assert resolve_plan(entry.definition, entry.binding).output_file == tmp_path / "result.html"

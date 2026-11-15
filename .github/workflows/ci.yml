@@ -1822,6 +1822,7 @@ jobs:
           tests/test_recipe_contracts.py tests/test_recipe_storage.py
           tests/test_recipe_runner.py tests/test_recipe_ports.py
           tests/test_recipe_editor.py tests/test_recipe_adapters.py
+          tests/test_recipe_analytics_publication.py
           tests/test_recipe_ui.py tests/test_recipe_workspace.py
           tests/test_recipe_real_flows.py tests/test_recipe_diagnostic_correlation.py
           tests/test_recipe_flow_diagnostics.py

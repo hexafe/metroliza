@@ -110,7 +110,9 @@ For docs-only changes the Tier-0 result and explicit heavy-job skips described a
 The additive `Run native Windows recipe flow contracts` step in `windows-core-smoke`
 runs the recipe model, private storage, runner, Reports ports, editor, source
 adapters, shared UI, diagnostic correlation and real synthetic PDF-to-output
-tests with the Windows Qt plugin. These are native source contracts; separate
+tests with the Windows Qt plugin, including real analytics replacement, failure
+and cancellation preservation in `test_recipe_analytics_publication.py`.
+These are native source contracts; separate
 packaged recipe journeys and PO acceptance remain required by #1239.
 
 The opt-in portable/launcher job also runs `scripts/qualify_recipe_package.py`

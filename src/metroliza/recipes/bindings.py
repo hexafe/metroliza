@@ -97,11 +97,57 @@ def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(targets))
 
 
-def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
-    sources = [plan.value(ParameterKey.SOURCE_FILE)]
+def _source_overlaps_target(source: Path, target: Path) -> bool:
+    if paths_alias(target, source):
+        return True
+    # Existing asset bases/generations are retirement targets. Reading a source
+    # anywhere below them would let a successful publication remove that input.
+    return path_identity(source).startswith(path_identity(target).rstrip("\\") + "\\")
+
+
+def _source_paths(plan):
+    sources = [plan.value(ParameterKey.SOURCE_FILE), plan.input_folder]
     if not _writes_database(plan):
         sources.extend((plan.value(ParameterKey.EXISTING_DATABASE), plan.database_file))
-    if any(source and paths_alias(path, Path(str(source))) for source in sources):
+    return tuple(Path(str(source)) for source in sources if source)
+
+
+def _asset_bases(plan):
+    kinds = {step.kind for step in plan.definition.steps}
+    if not kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
+        return ()
+    bases = [plan.assets_dir] if plan.assets_dir is not None else []
+    if StepKind.ANALYZE_TABULAR in kinds:
+        from .tabular_adapter import analytics_output_family
+        bases.append(analytics_output_family(plan.binding, plan.output_file).assets)
+    elif plan.output_file is not None:
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        bases.append(resolve_html_dashboard_assets_dir(plan.output_file.with_suffix(".html")))
+    return tuple(dict.fromkeys(bases))
+
+
+def _source_in_asset_namespace(source, base):
+    if _source_overlaps_target(source, base):
+        return True
+    # Retirement removes the base entry and its generation-* siblings. Check
+    # the source's canonical ancestry, not every old directory in that family.
+    source_id = path_identity(source)
+    parent_id = path_identity(base.parent).rstrip("\\") + "\\"
+    if not source_id.startswith(parent_id):
+        return False
+    first_component = source_id[len(parent_id):].split("\\", 1)[0]
+    prefix = ntpath.normcase(base.name.rstrip(". ") + ".generation-")
+    return first_component.startswith(prefix)
+
+
+def _validate_asset_sources(plan):
+    for base in _asset_bases(plan):
+        if any(_source_in_asset_namespace(source, base) for source in _source_paths(plan)):
+            raise RecipeError("source_alias")
+
+
+def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
+    if any(_source_overlaps_target(source, path) for source in _source_paths(plan)):
         raise RecipeError("source_alias")
     if plan.input_folder is None:
         return
@@ -113,6 +159,7 @@ def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
 
 
 def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = None) -> None:
+    _validate_asset_sources(plan)
     targets = _target_paths(plan)
     for index, path in enumerate(targets):
         if any(paths_alias(path, other) for other in targets[index + 1:]):

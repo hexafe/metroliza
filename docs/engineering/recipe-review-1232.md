@@ -23,6 +23,12 @@ current-revision favorite launches. The grouped correction uses pinned
 `defusedxml` (including hostile-entity controls for every parsed workbook part)
 and removes captured saved snapshots from favorite launch callbacks.
 
+Later service findings cover nonempty analytics asset replacement and composite
+group-label collisions. Corrections must allocate safe render generations without
+discarding the prior complete dashboard, and preserve distinct normalized grouping
+tuples in the native group assignment. Both require behavioral regression controls
+and a bounded delta before the final hosted qualification.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an

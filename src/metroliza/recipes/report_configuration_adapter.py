@@ -137,6 +137,13 @@ def validate_report_configuration(plan: ResolvedRunPlan) -> None:
         raise RecipeError("duplicate_grouping_rule")
 
 
+def _group_label(key: tuple[str, ...]) -> str:
+    """Encode normalized tuples injectively; retain ordinary one-column labels."""
+    if len(key) == 1:
+        return key[0]
+    return json.dumps(key, ensure_ascii=False, separators=(", ", ": "))
+
+
 def _grouping(plan: ResolvedRunPlan, query: str):
     rules = plan.value(ParameterKey.GROUPING_RULES, ())
     if not rules:
@@ -156,7 +163,8 @@ def _grouping(plan: ResolvedRunPlan, query: str):
     result = []
     for row in rows:
         record = dict(zip(columns, row))
-        label = " | ".join(normalize_grouping_key(rules, (record[key] for key in rules)))
+        key = normalize_grouping_key(rules, (record[column] for column in rules))
+        label = _group_label(key)
         result.append(GroupingAssignment(group=label, report_id=record["REPORT_ID"]))
     return tuple(result)
 
