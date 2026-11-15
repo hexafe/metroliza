@@ -402,6 +402,29 @@ def _parse_failure(raw):
     )
 
 
+def _request_payload(request):
+    if (type(request) is not SafeRequestContext or type(request.kind) is not OptionSnapshotKind
+            or type(request.outcome) is not ContextOperationOutcome):
+        raise ValueError("invalid_context")
+    return {
+        "operation_id": _uuid_payload(request.operation_id), "kind": request.kind.value,
+        "outcome": request.outcome.value, "duration_ms": request.duration_ms,
+    }
+
+
+def _parse_request(request):
+    _keys(request, "operation_id kind outcome duration_ms")
+    outcome = _enum(ContextOperationOutcome, request["outcome"])
+    duration = request["duration_ms"]
+    if (outcome is ContextOperationOutcome.STARTED) != (duration is None):
+        raise ValueError("invalid_context")
+    if duration is not None:
+        _counter(duration)
+    return SafeRequestContext(
+        _uuid(request["operation_id"]), _enum(OptionSnapshotKind, request["kind"]), outcome, duration,
+    )
+
+
 def _event_payload(item):
     if (type(item) is not SafeContextEvent or type(item.exception_site) is not ExceptionSite
             or sum(value is not None for value in (
@@ -426,14 +449,7 @@ def _event_payload(item):
         if item.exception_site is not ExceptionSite.UNKNOWN:
             result["site"] = item.exception_site.value
     elif item.request is not None:
-        request = item.request
-        if (type(request) is not SafeRequestContext or type(request.kind) is not OptionSnapshotKind
-                or type(request.outcome) is not ContextOperationOutcome):
-            raise ValueError("invalid_context")
-        result.update(kind="request", request={
-            "operation_id": _uuid_payload(request.operation_id), "kind": request.kind.value,
-            "outcome": request.outcome.value, "duration_ms": request.duration_ms,
-        })
+        result.update(kind="request", request=_request_payload(item.request))
     elif item.output_verification is not None:
         verification = item.output_verification
         if (type(verification) is not SafeOutputVerification
@@ -472,17 +488,7 @@ def _parse_event(raw):
                                 exception_site=site)
     if kind == "request":
         _keys(raw, base + "request")
-        request = raw["request"]
-        _keys(request, "operation_id kind outcome duration_ms")
-        outcome = _enum(ContextOperationOutcome, request["outcome"])
-        duration = request["duration_ms"]
-        if (outcome is ContextOperationOutcome.STARTED) != (duration is None):
-            raise ValueError("invalid_context")
-        if duration is not None:
-            _counter(duration)
-        return SafeContextEvent(*_parse_stamp(raw), request=SafeRequestContext(
-            _uuid(request["operation_id"]), _enum(OptionSnapshotKind, request["kind"]), outcome, duration,
-        ))
+        return SafeContextEvent(*_parse_stamp(raw), request=_parse_request(raw["request"]))
     if kind == "output_verification":
         _keys(raw, base + "output_verification")
         verification = raw["output_verification"]
