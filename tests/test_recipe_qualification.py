@@ -1,6 +1,9 @@
 """Independent fixture, negative receipt, literal oracle and owned-exit controls."""
+from collections import Counter
 import json
 import sqlite3
+import zipfile
+import xml.etree.ElementTree as ET
 from contextlib import closing
 from types import SimpleNamespace
 
@@ -32,7 +35,9 @@ def test_authored_fixture_preflight_is_complete_without_decision(tmp_path):
     result = service.preflight(plan, context)
     try:
         assert result.ready and not result.requires_decision
-        assert len(result.review.rows) == 5
+        assert len(result.review.rows) == 12
+        assert Counter(row.value("reference") for row in result.review.rows) == {"ABCDE12345": 12}
+        assert Counter(row.value("revision") for row in result.review.rows) == {"A": 6, "B": 6}
     finally:
         service.finish(plan)
 
@@ -63,9 +68,17 @@ def test_literal_database_oracle_rejects_wrong_values_and_cardinality(tmp_path):
     database = tmp_path / "test.db"
     with closing(sqlite3.connect(database)) as connection:
         connection.executescript("CREATE TABLE parsed_reports(id INTEGER);"
-                                 "CREATE TABLE report_measurements(meas REAL);")
-        connection.executemany("INSERT INTO parsed_reports VALUES (?)", [(i,) for i in range(5)])
-        connection.executemany("INSERT INTO report_measurements VALUES (?)", [(10.02,)] * 5)
+                                 "CREATE TABLE report_metadata(report_id INTEGER, reference TEXT, revision TEXT, report_date TEXT);"
+                                 "CREATE TABLE report_measurements(report_id INTEGER, meas REAL);")
+        # Authored independently of both probe writer and driver implementation.
+        samples = [("A", value) for value in (9.90, 9.92, 9.94, 9.96, 10.02, 9.92)]
+        samples += [("B", value) for value in (10.02, 10.04, 10.06, 10.08, 10.10, 10.09)]
+        connection.executemany("INSERT INTO parsed_reports VALUES (?)", [(i,) for i in range(1, 13)])
+        connection.executemany("INSERT INTO report_metadata VALUES (?, ?, ?, ?)",
+                               [(i, "ABCDE12345", revision, "2024-01-02" if i in (6, 12) else "2024-01-01")
+                                for i, (revision, _) in enumerate(samples, start=1)])
+        connection.executemany("INSERT INTO report_measurements VALUES (?, ?)",
+                               [(i, value) for i, (_, value) in enumerate(samples, start=1)])
         connection.commit()
     driver.verify_database(database)
     with closing(sqlite3.connect(database)) as connection:
@@ -130,3 +143,67 @@ def test_png_oracle_decodes_complete_screenshot_and_rejects_truncation(tmp_path)
     path.write_bytes(path.read_bytes()[:30])
     with pytest.raises((OSError, ValueError, SyntaxError)):
         driver.verify_png(path)
+
+
+def _literal_workbook(path, *, fault=None):
+    """Small authored OOXML, with no product export/statistics implementation."""
+    raw = {"C1": "REFERENCE", "G1": "REVISION", "D1": "DATE", "AD1": "MEAS"}
+    samples = [("A", value) for value in (9.90, 9.92, 9.94, 9.96, 10.02)]
+    samples += [("B", value) for value in (10.02, 10.04, 10.06, 10.08, 10.10)]
+    for row, (revision, value) in enumerate(samples, start=2):
+        raw.update({f"C{row}": "ABCDE12345", f"G{row}": revision,
+                    f"D{row}": "2024-01-01", f"AD{row}": value})
+    analysis = {"A2": "A", "B2": 5, "C2": 9.948,
+                "A3": "B", "B3": 5, "C3": 10.06}
+    if fault == "date":
+        raw["D2"] = "2024-01-02"
+    elif fault == "extra":
+        raw["AD12"] = 9.92
+    elif fault == "count":
+        analysis["B2"] = 6
+    elif fault == "mean":
+        analysis["C2"] = 10.00
+    elif fault == "value":
+        raw["AD2"] = 9.93
+    sheets = {"MEASUREMENTS": raw, "Group Analysis": analysis, "Group Analysis Plots": {"A1": "Plots"}}
+    ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    with zipfile.ZipFile(path, "w") as archive:
+        workbook = ET.Element("workbook", xmlns=ns)
+        entries = ET.SubElement(workbook, "sheets")
+        relationships = ET.Element("Relationships")
+        for index, (name, cells) in enumerate(sheets.items(), start=1):
+            ET.SubElement(entries, "sheet", {"name": name, "sheetId": str(index), f"{{{rel}}}id": f"r{index}"})
+            ET.SubElement(relationships, "Relationship", Id=f"r{index}", Target=f"worksheets/sheet{index}.xml")
+            document = ET.Element("worksheet", xmlns=ns)
+            data = ET.SubElement(document, "sheetData")
+            for address, value in cells.items():
+                cell = ET.SubElement(data, "c", r=address)
+                if type(value) is str:
+                    cell.set("t", "inlineStr")
+                    ET.SubElement(ET.SubElement(cell, "is"), "t").text = value
+                else:
+                    ET.SubElement(cell, "v").text = str(value)
+            cached = ET.SubElement(data, "c", r="Z99", t="str")
+            ET.SubElement(cached, "f").text = 'HYPERLINK("#A1", "Go to metric")'
+            ET.SubElement(cached, "v").text = "Go to metric"
+            archive.writestr(f"xl/worksheets/sheet{index}.xml", ET.tostring(document))
+        archive.writestr("xl/workbook.xml", ET.tostring(workbook))
+        archive.writestr("xl/_rels/workbook.xml.rels", ET.tostring(relationships))
+
+
+def test_larger_xlsx_literal_scope_and_group_statistics_include_formula_strings(tmp_path):
+    path = tmp_path / "larger.xlsx"
+    _literal_workbook(path)
+    driver.verify_larger_workbook(path)
+    assert driver.workbook_cells(path, "Group Analysis")["Z99"] == "Go to metric"
+
+
+@pytest.mark.parametrize("fault,reason", [("date", "larger_export_scope"),
+    ("extra", "larger_export_scope"), ("value", "larger_export_scope"),
+    ("count", "larger_group_statistics"), ("mean", "larger_group_statistics")])
+def test_larger_xlsx_oracle_rejects_scope_and_statistic_regressions(tmp_path, fault, reason):
+    path = tmp_path / "larger.xlsx"
+    _literal_workbook(path, fault=fault)
+    with pytest.raises(ValueError, match=reason):
+        driver.verify_larger_workbook(path)

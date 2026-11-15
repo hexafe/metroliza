@@ -17,27 +17,33 @@ FAILURES = frozenset({"control_missing", "save_failed", "reopen_failed", "launch
 
 
 def write_reports(source: Path) -> None:
-    """Author five complete public synthetic CMM PDFs, with literal 10.02 values."""
+    """Author ten in-range-date measurements plus two explicit date exclusions."""
     from metroliza.parsing.pdf_backend import require_pdf_backend
     backend = require_pdf_backend()
     source.mkdir()
-    for index in range(5):
-        with backend.open() as document:
-            page = document.new_page()
-            page.insert_text((72, 72), "METROLIZA PDF PARSER SMOKE\nCMM REPORT\n"
-                "#SMOKE FEATURE\nDIM\nX 10 0.1 -0.1 10.02 0.02 0", fontsize=8)
-            for text, x, y in (("PART NAME", 150, 16), ("Recipe Part", 208, 16),
-                              ("DRAWING No", 296, 46), ("ABCDE12345", 358, 46),
-                              ("DRAWING REV", 167, 46), ("D.01", 232, 46)):
-                page.insert_text((x, y), text, fontsize=6)
-            page.insert_text((20, 62), f"SAMPLE NUMBER: {index}", fontsize=6)
-            document.save(str(source / f"ABCDE12345_Recipe_Part_2024-01-01_{index}.pdf"))
+    groups = {"A": (9.90, 9.92, 9.94, 9.96, 10.02, 9.92),
+              "B": (10.02, 10.04, 10.06, 10.08, 10.10, 10.09)}
+    for group_index, (revision, values) in enumerate(groups.items()):
+        for index, measured in enumerate(values):
+            with backend.open() as document:
+                page = document.new_page()
+                page.insert_text((72, 72), "METROLIZA PDF PARSER SMOKE\nCMM REPORT\n"
+                    "#SMOKE FEATURE\nDIM\n"
+                    f"X 10 0.5 -0.5 {measured:.2f} {measured - 10:.2f} 0", fontsize=8)
+                for text, x, y in (("PART NAME", 150, 16), ("Recipe Part", 208, 16),
+                                  ("DRAWING No", 296, 46), ("ABCDE12345", 358, 46),
+                                  ("DRAWING REV", 167, 46), (revision, 232, 46)):
+                    page.insert_text((x, y), text, fontsize=6)
+                sample = group_index * 6 + index
+                page.insert_text((20, 62), f"SAMPLE NUMBER: {sample}", fontsize=6)
+                report_date = "2024-01-02" if index == 5 else "2024-01-01"
+                document.save(str(source / f"ABCDE12345_Recipe_Part_{report_date}_{sample}.pdf"))
 
 
 def _button(widget, label):
     from PyQt6.QtWidgets import QPushButton
     found = [button for button in widget.findChildren(QPushButton) if button.text() == label]
-    if len(found) != 1:
+    if len(found) != 1 or not found[0].isVisible():
         raise ValueError("control_missing")
     return found[0]
 
@@ -78,9 +84,10 @@ class _Probe:
         store = RecipeStore(self.root / "private")
         editor = RecipeEditor(StoredRecipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
             str(self.root / "reports"), str(self.root / "larger.xlsx"))), store, self.window)
+        editor.show()
         editor.name.setText("Synthetic larger flow")
         editor.dates.setChecked(True)
-        editor.groups.setText("REFERENCE")
+        editor.groups.setText("REVISION")
         editor.html.setChecked(True)
         _button(editor, "Apply Reports steps").click()
         saved = []
@@ -102,6 +109,7 @@ class _Probe:
         if case == "larger":
             self.larger()
         else:
+            self.window._show_workspace_page("home")
             identity = "reports_excel_main" if case == "main" else "reports_dashboard_html"
             _button(self.workspace.quick, BUILTIN_LABELS[identity]).click()
         expected = {ParameterKey.INPUT_FOLDER, ParameterKey.OUTPUT_FILE}

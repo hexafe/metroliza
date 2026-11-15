@@ -14,6 +14,7 @@ import struct
 import sys
 import time
 import zipfile
+import xml.etree.ElementTree as ET
 from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,14 +64,29 @@ def _validate_case(case: str, record: object) -> None:
 
 
 def verify_database(path: Path) -> None:
+    # Independent literal oracle: do not import the fixture writer or product queries.
+    expected = [("ABCDE12345", "A", "2024-01-01", value) for value in (9.90, 9.92, 9.94, 9.96, 10.02)]
+    expected += [("ABCDE12345", "A", "2024-01-02", 9.92)]
+    expected += [("ABCDE12345", "B", "2024-01-01", value) for value in (10.02, 10.04, 10.06, 10.08, 10.10)]
+    expected += [("ABCDE12345", "B", "2024-01-02", 10.09)]
     with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
             raise ValueError("database_integrity")
-        if connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() != (5,):
+        if connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() != (12,):
             raise ValueError("report_count")
-        values = connection.execute("SELECT meas FROM report_measurements").fetchall()
-        if len(values) != 5 or any(not math.isfinite(row[0]) or abs(row[0] - 10.02) > 1e-9 for row in values):
+        values = connection.execute(
+            "SELECT metadata.reference, metadata.revision, metadata.report_date, measurements.meas "
+            "FROM report_measurements AS measurements "
+            "JOIN report_metadata AS metadata ON metadata.report_id = measurements.report_id "
+            "ORDER BY metadata.reference, metadata.revision, metadata.report_date, measurements.meas").fetchall()
+        if len(values) != 12 or any(not _literal_row(actual, wanted)
+                                    for actual, wanted in zip(values, expected)):
             raise ValueError("literal_measurement_oracle")
+
+
+def _literal_row(actual, expected) -> bool:
+    return (actual[:3] == expected[:3] and type(actual[3]) in (int, float) and
+            math.isfinite(actual[3]) and abs(actual[3] - expected[3]) <= 1e-9)
 
 
 def verify_workbook(path: Path) -> None:
@@ -80,6 +96,70 @@ def verify_workbook(path: Path) -> None:
             raise ValueError("workbook_invalid")
         if not any(name.startswith("xl/charts/chart") for name in names):
             raise ValueError("workbook_charts_missing")
+
+
+def _cell_value(cell, shared, namespace):
+    value = cell.find("x:v", namespace)
+    kind = cell.attrib.get("t")
+    if kind == "s" and value is not None:
+        return shared[int(value.text)]
+    if kind == "inlineStr":
+        inline = cell.find("x:is", namespace)
+        return "".join(inline.itertext()) if inline is not None else ""
+    if value is None or value.text is None:
+        return None
+    if kind in {"str", "e"}:
+        return value.text
+    return float(value.text)
+
+
+def workbook_cells(path: Path, sheet_name: str) -> dict:
+    namespace = {"x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with zipfile.ZipFile(path) as archive:
+        workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+        relations = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+        targets = {item.attrib["Id"]: item.attrib["Target"] for item in relations}
+        sheet = next(item for item in workbook.findall("x:sheets/x:sheet", namespace)
+                     if item.attrib["name"] == sheet_name)
+        key = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
+        target = targets[sheet.attrib[key]].lstrip("/")
+        if ".." in Path(target).parts:
+            raise ValueError("workbook_invalid")
+        if not target.startswith("xl/"):
+            target = "xl/" + target
+        shared = []
+        if "xl/sharedStrings.xml" in archive.namelist():
+            shared = ["".join(item.itertext())
+                      for item in ET.fromstring(archive.read("xl/sharedStrings.xml"))]
+        document = ET.fromstring(archive.read(target))
+        return {cell.attrib["r"]: _cell_value(cell, shared, namespace)
+                for cell in document.findall(".//x:c", namespace)}
+
+
+def _group_row_matches(analysis, row: int, mean: float) -> bool:
+    value = analysis.get(f"C{row}")
+    return (analysis.get(f"B{row}") == 5 and type(value) in (int, float) and
+            math.isfinite(value) and abs(value - mean) <= 1e-9)
+
+
+def verify_larger_workbook(path: Path) -> None:
+    raw = workbook_cells(path, "MEASUREMENTS")
+    if (raw.get("C1"), raw.get("G1"), raw.get("D1"), raw.get("AD1")) != (
+            "REFERENCE", "REVISION", "DATE", "MEAS"):
+        raise ValueError("larger_export_scope")
+    expected = [("ABCDE12345", "A", "2024-01-01", value) for value in (9.90, 9.92, 9.94, 9.96, 10.02)]
+    expected += [("ABCDE12345", "B", "2024-01-01", value) for value in (10.02, 10.04, 10.06, 10.08, 10.10)]
+    actual = sorted((raw.get(f"C{row}"), raw.get(f"G{row}"), raw.get(f"D{row}"), raw.get(f"AD{row}"))
+                    for row in range(2, 12))
+    if "AD12" in raw or any(not _literal_row(row, wanted) for row, wanted in zip(actual, expected)):
+        raise ValueError("larger_export_scope")
+    analysis = workbook_cells(path, "Group Analysis")
+    workbook_cells(path, "Group Analysis Plots")
+    for group, mean in (("A", 9.948), ("B", 10.06)):
+        rows = [int(cell[1:]) for cell, value in analysis.items()
+                if cell.startswith("A") and value == group]
+        if not any(_group_row_matches(analysis, row, mean) for row in rows):
+            raise ValueError("larger_group_statistics")
 
 
 class _Assets(HTMLParser):
@@ -149,6 +229,7 @@ def verify_artifacts(root: Path) -> list[str]:
             name = case + "-" + stage + ".png"
             verify_png(root / name)
             retained.append(name)
+    verify_larger_workbook(root / "larger.xlsx")
     if (root / "html.xlsx").exists():
         raise ValueError("html_flow_created_workbook")
     return retained
@@ -230,7 +311,8 @@ def main(argv=None) -> int:
             "one_start_required", "database_integrity", "report_count", "literal_measurement_oracle",
             "workbook_invalid", "workbook_charts_missing", "html_size", "html_invalid", "html_assets_invalid",
             "screenshot_invalid", "screenshot_geometry", "html_flow_created_workbook",
-            "application_failed", "owned_job_timeout", "executable_changed", "extraction_remained"}
+            "application_failed", "owned_job_timeout", "executable_changed", "extraction_remained",
+            "larger_export_scope", "larger_group_statistics"}
         reason = error.args[0] if error.args else None
         result = {"schema_version": 1, "status": "failed", "native_windows": sys.platform == "win32",
                   "reason": reason if type(reason) is str and reason in allowed else "qualification_failed"}

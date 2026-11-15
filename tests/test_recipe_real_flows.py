@@ -123,7 +123,8 @@ def _xlsx_cells(path, sheet_name):
             elif cell.attrib.get("t") == "inlineStr":
                 result[cell.attrib["r"]] = "".join(cell.find("x:is", ns).itertext())
             elif value is not None and value.text:
-                result[cell.attrib["r"]] = value.text if cell.attrib.get("t") == "e" else float(value.text)
+                result[cell.attrib["r"]] = (value.text if cell.attrib.get("t") in {"e", "str"}
+                                             else float(value.text))
         return result
 
 
