@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.4 — current version
+## 0.8.0-dev.5 — current version
+- Preserve detailed local bug reports and output-publication checks from dev.4.
+- Qualification update; no intentional change to analysis or export results.
+
+## 0.8.0-dev.4 — previous source version
 - Copy detailed local bug reports with request options, operation timing, technical build facts and safe failure stages.
 - Check published XLSX/HTML outputs for missing or empty files; analytics keeps the last complete output if a new temporary file is invalid.
 - Preview a frozen report before copying it. Input files, names, paths, measurements and exception text remain excluded.
