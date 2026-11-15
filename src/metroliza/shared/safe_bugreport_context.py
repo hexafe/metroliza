@@ -425,6 +425,16 @@ def _parse_request(request):
     )
 
 
+def _exception_payload(item):
+    if type(item.exception) is not ExceptionCategory:
+        raise ValueError("invalid_context")
+    result = {"kind": "exception", "category": item.exception.value}
+    # Preserve canonical pre-site v2 reports byte for byte.
+    if item.exception_site is not ExceptionSite.UNKNOWN:
+        result["site"] = item.exception_site.value
+    return result
+
+
 def _event_payload(item):
     if (type(item) is not SafeContextEvent or type(item.exception_site) is not ExceptionSite
             or sum(value is not None for value in (
@@ -442,12 +452,7 @@ def _event_payload(item):
     elif item.workflow is not None:
         result.update(kind="workflow", workflow=_workflow_payload(item.workflow))
     elif item.exception is not None:
-        if type(item.exception) is not ExceptionCategory:
-            raise ValueError("invalid_context")
-        result.update(kind="exception", category=item.exception.value)
-        # Preserve canonical pre-site v2 reports byte for byte.
-        if item.exception_site is not ExceptionSite.UNKNOWN:
-            result["site"] = item.exception_site.value
+        result.update(_exception_payload(item))
     elif item.request is not None:
         result.update(kind="request", request=_request_payload(item.request))
     elif item.output_verification is not None:
