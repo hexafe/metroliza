@@ -2,16 +2,19 @@
 
 The copyable report is available from the main Help menu and records a bounded,
 local sequence of source-controlled action codes and selected boolean states.
+The detailed report adds validated build facts, session-relative event timing,
+explicit workflow correlation, closed error categories, retained option snapshots,
+and closed user choices describing the symptom and expected/observed behaviour.
 It never includes input documents, worksheets, names, paths, SQL, measurements,
 exception messages or screenshots. It is not uploaded automatically.
 
 | Application workflow | Examples of recorded boundaries | Main implementation |
 | --- | --- | --- |
 | Startup and general errors | Start, caught startup/runtime failure, closed exception or log-error family | `app/bootstrap.py`, `shared/custom_logger.py`, `shared/safe_bugreport.py` |
-| Report import and metadata review | Preflight, review, OCR selection, import outcome, used CMM backend | `ui/parser_preflight_worker.py`, `ui/metadata_review_worker.py`, `parsing/parse_reports_thread.py`, `shared/workflow_diagnostics.py` |
+| Report import and metadata review | Preflight, review, OCR selection, import outcome, used CMM backend, explicit planner edit/copy/undo/reset/selection | `ui/parser_preflight_worker.py`, `ui/report_planner_model.py`, `ui/metadata_review_worker.py`, `parsing/parse_reports_thread.py`, `shared/workflow_diagnostics.py` |
 | Database and name matching | Edit lifecycle, mapping add/edit/delete and import/export | `ui/modify_db.py`, `ui/characteristic_mapping_dialog.py` |
 | Export, filters, grouping and dashboards | Export lifecycle and selected options, filter/group actions and fixed visual presets | `ui/export_dialog.py`, `ui/filter_dialog.py`, `ui/data_grouping.py`, `ui/dashboard_visual_options_dialog.py` |
-| CSV Summary | Load, filter, grouping, selected outputs, analysis and selected checks | `ui/industrial_analytics_dialog.py` |
+| CSV Summary | Load, filter, grouping, accepted request options including chart types and separate parameter sheets, analysis and selected request/result checks | `ui/industrial_analytics_dialog.py` |
 | Industrial data | Source profiles, sync, SQL preview/recipe operations, linking, analytics and export | `ui/industrial_*_dialog.py` |
 | Real-time monitoring | Source configuration, session and polling state transitions, event review and dashboard | `ui/realtime_industrial_monitoring_dialog.py` |
 | Parser profiles | Validation, installation and enabled state | `ui/parser_plugin_wizard.py` |
@@ -22,6 +25,21 @@ module family for application ERROR records; it does not read or format their
 content and may coalesce repeated errors. Handled failures that neither emit a
 covered workflow result nor log an error can still be absent. Silent wrong output
 needs a workflow-specific check and is not inferred from operation completion.
+
+Detailed context has its own explicit bounded retention and loss status. Option
+snapshots are retained independently from the recent-action ring; they describe an
+observed request or observation, never an inferred global configuration. Workflow
+IDs are generated operation identifiers, not user identities or hashes of input.
+Only explicit correlations are reported. Unknown, missing and truncated context is
+disclosed rather than presented as a complete session recording. Build facts use
+closed platform/runtime codes and validated versions/hashes of product builds;
+no machine name, account, installed-package path or environment contents are read.
+
+Detailed history uses the owned asynchronous writer and private store protections.
+Both legacy and detailed history reject duplicate JSON keys. Clearing history
+invalidates frozen previews as well as resetting retained context. Copying a report
+is an explicit operation and does not upload anything. Existing clipboard copies,
+logs and separately exported incidents are outside this clear action.
 
 History starts asynchronously before interactive window construction, after
 logging and startup configuration. Failures before that point, forced process

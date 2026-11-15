@@ -14,6 +14,7 @@ from metroliza.shared.safe_bugreport import (
 )
 import metroliza.ui.safe_bugreport_dialog as dialog_module
 import metroliza.shared.safe_bugreport as report_module
+from metroliza.shared.safe_bugreport_context import SafeBugReportContextSnapshot
 from metroliza.ui.safe_bugreport_dialog import SafeBugReportDialog
 
 
@@ -228,6 +229,12 @@ def test_second_dialog_cannot_copy_preview_while_history_clear_pending(qapplicat
     class Recorder:
         state = None
 
+        def report_snapshot(self):
+            return BugReportSnapshot((), False), SafeBugReportContextSnapshot()
+
+        def history_generation(self):
+            return 0
+
         def clear_history(self):
             self.state = "pending"
             return True
@@ -260,17 +267,19 @@ def test_second_dialog_cannot_copy_preview_while_history_clear_pending(qapplicat
         second.close()
 
 
-def test_changed_activity_requires_reviewing_refreshed_preview(qapplication_session, monkeypatch):
+def test_changed_activity_is_frozen_until_explicit_refresh(qapplication_session, monkeypatch):
     recorder = SafeBugReportRecorder()
     monkeypatch.setattr(dialog_module, "recorder", recorder)
     dialog = SafeBugReportDialog()
     clipboard = QGuiApplication.clipboard()
     clipboard.setText("existing clipboard")
     try:
+        original_preview = dialog.preview.toPlainText()
         recorder.record(BugReportAction.CSV_OPENED)
         dialog.copy_report()
-        assert clipboard.text() == "existing clipboard"
-        assert "Review the updated report" in dialog.status_label.text()
+        assert clipboard.text() == original_preview
+        assert "csv_opened" not in original_preview
+        dialog.refresh_snapshot()
         assert "csv_opened" in dialog.preview.toPlainText()
         dialog.copy_report()
         assert clipboard.text() == dialog.preview.toPlainText()

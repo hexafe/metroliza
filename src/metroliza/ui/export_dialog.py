@@ -95,6 +95,7 @@ except ImportError:  # pragma: no cover - compatibility with lightweight test st
         if callable(close):
             close()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
+from metroliza.shared.safe_bugreport_context import OptionSnapshotKind
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, install_button_commands, set_mnemonic, visible_shortcut
 from metroliza.ui.output_request_summary import (
     assignment_summary, install_output_commands, output_summary, set_output_summary,
@@ -141,6 +142,38 @@ def _record_export_option_states(options, *, filters_applied=False, grouping_app
             _bugreport_recorder.record(action, enabled=enabled)
     except Exception:
         # Diagnostics cannot alter whether the requested export starts.
+        return
+
+
+def _record_export_request_options(request):
+    """Keep the accepted request's closed flags outside the recent action ring."""
+    try:
+        options = request.options
+        return _bugreport_recorder.record_option_snapshot(
+            OptionSnapshotKind.REPORT_EXPORT,
+            {
+                "cloud": options.backend_target == "google",
+                "html": bool(options.generate_html_dashboard),
+                "workbook": options.export_target != "html_dashboard",
+                "industrial_context": bool(options.include_industrial_context),
+                "hide_ok": bool(options.hide_ok_results),
+                "summary_sheet": bool(options.generate_summary_sheet),
+                "allow_chart_skipping": bool(options.allow_non_essential_chart_skipping),
+                "chart_line": options.export_type == "line",
+                "chart_scatter": options.export_type == "scatter",
+                "filters_applied": bool(request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
+                "grouping_applied": request.grouping_df is not None,
+                "group_analysis_light": options.group_analysis_level == "light",
+                "group_analysis_standard": options.group_analysis_level == "standard",
+                "group_scope_single_reference": options.group_analysis_scope == "single_reference",
+                "group_scope_multi_reference": options.group_analysis_scope == "multi_reference",
+                "preset_fast_diagnostics": options.preset == "fast_diagnostics",
+                "preset_full_report": options.preset == "full_report",
+                "preset_html_dashboard_only": options.preset == "html_dashboard_only",
+            },
+        )
+    except Exception:
+        # Snapshot collection is best effort and does not control the export.
         return
 
 
@@ -1527,9 +1560,12 @@ class ExportDialog(QDialog):
             # preset label, chart text, or values from the export request.
             _record_export_option_states(
                 getattr(export_request, "options", None),
-                filters_applied=getattr(self, "filter_state", None) is not None,
-                grouping_applied=getattr(self, "df_for_grouping", None) is not None,
+                filters_applied=bool(
+                    export_request.filter_query and export_request.filter_query != DEFAULT_FILTER_QUERY
+                ),
+                grouping_applied=export_request.grouping_df is not None,
             )
+            self.export_thread._bugreport_option_token = _record_export_request_options(export_request)
             self.export_thread.start()
             self.loading_dialog.show()
         except Exception as e:

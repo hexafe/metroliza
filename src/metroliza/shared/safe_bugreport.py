@@ -1,8 +1,9 @@
 """Bounded in-memory, content-free activity trace for copyable bug reports.
 
-Only source-controlled action/category codes and an optional boolean state are
-accepted. Do not add user values, paths, names, timestamps, exception text, or
-diagnostic payloads to this module.
+The legacy stream accepts source-controlled action/category codes and optional
+boolean states. Explicit v2 context adds bounded runtime UUIDs, relative times,
+closed workflow fields and fixed request booleans. Neither form accepts user
+values, paths, names, wall-clock timestamps or exception text.
 """
 
 from __future__ import annotations
@@ -19,8 +20,18 @@ import re
 import stat
 import threading
 import time
+import uuid
 
 from metroliza.shared import diagnostic_store as _diagnostic_store
+from metroliza.shared.safe_bugreport_context import (
+    MAX_CONTEXT_EVENTS, MAX_OPTION_SNAPSHOTS, MAX_COUNTER, BugReportContextSelection, ContextOperationOutcome,
+    ExceptionCategory, SafeBugReportContextSnapshot, SafeContextEvent, SafeRequestContext,
+    SafeWorkflowContext, build_v2_report, context_payload, exception_category,
+    option_snapshot, reject_duplicate_keys,
+)
+from metroliza.shared.safe_bugreport_context_store import (
+    CONTEXT_FILE_NAME, load_context_locked, save_context_locked,
+)
 
 MAX_EVENTS = 128
 MAX_REPORT_BYTES = 16 * 1024
@@ -319,6 +330,13 @@ class BugReportAction(str, Enum):
     LOG_ERROR_NATIVE = "log_error_native"
     LOG_ERROR_SHARED = "log_error_shared"
     LOG_ERROR_OTHER = "log_error_other"
+    REPORT_PLAN_EDIT = "report_plan_edit"
+    REPORT_PLAN_COPY_CHECKED = "report_plan_copy_checked"
+    REPORT_PLAN_UNDO = "report_plan_undo"
+    REPORT_PLAN_RESET = "report_plan_reset"
+    REPORT_PLAN_SELECTION = "report_plan_selection"
+    CHECK_ANALYTICS_WORKBOOK_RESULT_MATCH = "check_analytics_workbook_result_match"
+    CHECK_ANALYTICS_DASHBOARD_RESULT_MATCH = "check_analytics_dashboard_result_match"
     PROBLEM_REPORTED = "problem_reported"
 
 
@@ -361,11 +379,19 @@ class HistoryClearState(str, Enum):
 class _QueuedHistoryEvent:
     event: SafeBugReportEvent
     generation: int
+    context: SafeBugReportContextSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _QueuedHistoryEvents:
     events: tuple[SafeBugReportEvent, ...]
+    generation: int
+    context: SafeBugReportContextSnapshot | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _QueuedContext:
+    context: SafeBugReportContextSnapshot
     generation: int
 
 
@@ -382,7 +408,7 @@ def _decode_history(data: bytes) -> tuple[tuple[SafeBugReportEvent, ...], bool]:
     """Parse only the exact bounded persisted schema; reject the whole file otherwise."""
     if type(data) is not bytes or len(data) > MAX_HISTORY_BYTES:
         raise ValueError("invalid_history")
-    payload = json.loads(data.decode("ascii"))
+    payload = json.loads(data.decode("ascii"), object_pairs_hook=reject_duplicate_keys)
     if type(payload) is not dict or set(payload) != {"schema", "events", "events_lost"}:
         raise ValueError("invalid_history")
     if type(payload["schema"]) is not int or payload["schema"] != 1:
@@ -419,7 +445,7 @@ class LocalBugReportHistoryStore:
                     if name == self._LOCK_NAME:
                         continue
                     metadata = _diagnostic_store._scanned_metadata(entry)
-                    if name == self._FILE_NAME:
+                    if name in {self._FILE_NAME, CONTEXT_FILE_NAME}:
                         if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
                                 or _diagnostic_store._is_reparse_or_link(metadata)
                                 or os.name != "nt" and metadata.st_uid != os.getuid()):
@@ -525,7 +551,7 @@ class SafeBugReportRecorder:
         self._max_events = max_events
         self._history: LocalBugReportHistoryStore | None = None
         self._queue: queue.Queue[
-            _QueuedHistoryEvent | _QueuedHistoryEvents | _ClearHistory | _StopHistoryWorker
+            _QueuedHistoryEvent | _QueuedHistoryEvents | _QueuedContext | _ClearHistory | _StopHistoryWorker
         ] | None = None
         self._worker: threading.Thread | None = None
         self._closed_baseline: tuple[SafeBugReportEvent, ...] | None = None
@@ -538,6 +564,16 @@ class SafeBugReportRecorder:
         self._history_generation = 0
         self._loss_since_clear = False
         self._clear_state: HistoryClearState | None = None
+        self._context_events: deque[SafeContextEvent] = deque(maxlen=MAX_CONTEXT_EVENTS)
+        self._option_snapshots = {}
+        self._option_snapshots_lost = False
+        self._active_requests = {}  # UUID -> (kind, monotonic start); bounded to 128
+        self._context_events_lost = False
+        self._context_state = "available"
+        self._session_id = uuid.uuid4()
+        self._session_started = time.monotonic()
+        self._context_sequence = 0
+        self._last_saved_context = None
 
     def configure_history(self, root: Path) -> bool:
         """Start asynchronous restore/persistence. Returns false if already configured."""
@@ -564,24 +600,33 @@ class SafeBugReportRecorder:
                     # Different roots are independent histories. Never transfer
                     # prior-root events; mark late, unassigned events as lost.
                     self._events_lost = bool(late_events)
+                    self._context_events.clear()
+                    self._option_snapshots.clear()
+                    self._option_snapshots_lost = True
+                    self._active_requests.clear()
+                    self._context_events_lost = True
                 self._closed_baseline = None
                 self._closed_root = None
                 self._history_generation = 0
                 self._clear_state = None
                 self._loss_since_clear = False
+            self._last_saved_context = None
             self._history = LocalBugReportHistoryStore(root)
             self._queue = queue.Queue(maxsize=self._write_queue_size)
             self._previous_session_state = PreviousSessionState.LOADING.value
+            self._context_state = "loading"
             initial = tuple(self._events)
             if initial:
                 try:
                     self._queue.put_nowait(
-                        _QueuedHistoryEvents(initial, self._history_generation)
+                        _QueuedHistoryEvents(initial, self._history_generation, self._context_snapshot_locked())
                     )
                     self._pending_writes += 1
                 except queue.Full:
                     self._events_lost = True
                     self._loss_since_clear = True
+            if not initial and (self._context_events or self._option_snapshots):
+                self._enqueue_context_locked()
             with self._write_pending:
                 self._pending_writes += 1  # includes asynchronous root/restore bootstrap
             self._worker = threading.Thread(target=self._write_loop, daemon=True,
@@ -611,11 +656,15 @@ class SafeBugReportRecorder:
             with self._lock:
                 self._events_lost = True
                 self._previous_session_state = PreviousSessionState.UNKNOWN.value
+                self._context_state = "error"
+                self._context_events_lost = True
         else:
             if not self._history.prepare_locked():
                 with self._lock:
                     self._events_lost = True
                     self._previous_session_state = PreviousSessionState.UNKNOWN.value
+                    self._context_state = "error"
+                    self._context_events_lost = True
                 lock.release()
                 lock = None
             else:
@@ -638,6 +687,25 @@ class SafeBugReportRecorder:
                             or len(prior) + len(current) > self._max_events
                         )
                     self._previous_session_state = previous_state
+                try:
+                    restored_context = load_context_locked(self._history.root)
+                except Exception:
+                    restored_context = SafeBugReportContextSnapshot(events_lost=True, snapshot_state="error")
+                with self._lock:
+                    if self._history_generation == 0:
+                        current_context = tuple(self._context_events)
+                        current_ids = {(item.session_id, item.sequence) for item in current_context}
+                        prior_context = tuple(item for item in restored_context.events
+                                              if (item.session_id, item.sequence) not in current_ids)
+                        combined = (*prior_context, *current_context)
+                        self._context_events.clear()
+                        self._context_events.extend(combined[-MAX_CONTEXT_EVENTS:])
+                        prior_options = {item.operation_id: item for item in restored_context.options}
+                        prior_options.update(self._option_snapshots)
+                        self._option_snapshots_lost |= restored_context.snapshots_lost or len(prior_options) > MAX_OPTION_SNAPSHOTS
+                        self._option_snapshots = dict(tuple(prior_options.items())[-MAX_OPTION_SNAPSHOTS:])
+                        self._context_events_lost |= restored_context.events_lost or len(combined) > MAX_CONTEXT_EVENTS
+                        self._context_state = restored_context.snapshot_state
         return lock
 
     def _write_loop(self) -> None:
@@ -657,19 +725,30 @@ class SafeBugReportRecorder:
                         lock = None
                     return
                 if isinstance(command, _ClearHistory):
-                    complete = lock is not None and history.clear_locked()
+                    self._last_saved_context = None
+                    activity_cleared = lock is not None and history.clear_locked()
+                    context_cleared = lock is not None and save_context_locked(
+                        history.root, SafeBugReportContextSnapshot(),
+                    )
+                    complete = activity_cleared and context_cleared
                     with self._lock:
                         if command.generation == self._history_generation:
                             if complete:
                                 self._clear_state = HistoryClearState.COMPLETE
+                                self._context_state = "available"
                                 self._events_lost = self._loss_since_clear
                                 self._previous_session_state = (
                                     PreviousSessionState.NOT_AVAILABLE.value
                                 )
                             else:
                                 self._clear_state = HistoryClearState.ERROR
+                                self._context_state = "error"
+                                self._context_events_lost = True
                                 self._events_lost = True
                                 self._loss_since_clear = True
+                    continue
+                if isinstance(command, _QueuedContext):
+                    self._save_queued_context(history, command, lock is not None)
                     continue
                 assert isinstance(command, (_QueuedHistoryEvent, _QueuedHistoryEvents))
                 self._append_queued_history(history, command, lock is not None)
@@ -697,6 +776,8 @@ class SafeBugReportRecorder:
             )
         if not saved:
             self._mark_events_lost(command.generation)
+        if command.context is not None:
+            self._save_queued_context(history, command, has_store_lock)
 
     def record(self, action: object, *, enabled: object = None) -> bool:
         """Best-effort product hook; reject anything outside the closed schema."""
@@ -705,11 +786,13 @@ class SafeBugReportRecorder:
                 with self._lock:
                     self._events_lost = True
                     self._loss_since_clear = True
+                    self._context_events_lost = True
                 return False
             if enabled is not None and type(enabled) is not bool:
                 with self._lock:
                     self._events_lost = True
                     self._loss_since_clear = True
+                    self._context_events_lost = True
                 return False
             with self._lock:
                 if len(self._events) == self._events.maxlen:
@@ -717,24 +800,169 @@ class SafeBugReportRecorder:
                     self._loss_since_clear = True
                 event = SafeBugReportEvent(action, enabled)
                 self._events.append(event)
+                self._append_context_event_locked(action=action, enabled=enabled)
                 if self._queue is not None:
                     with self._write_pending:
                         self._pending_writes += 1
                     try:
                         self._queue.put_nowait(
-                            _QueuedHistoryEvent(event, self._history_generation)
+                            _QueuedHistoryEvent(event, self._history_generation, self._context_snapshot_locked())
                         )
                     except queue.Full:
                         with self._write_pending:
                             self._pending_writes -= 1
                         self._events_lost = True
                         self._loss_since_clear = True
+                        self._context_events_lost = True
             return True
         except Exception:
             # Diagnostics must never interrupt application work.
             with self._lock:
                 self._events_lost = True
                 self._loss_since_clear = True
+                self._context_events_lost = True
+            return False
+
+    def _next_context_stamp_locked(self):
+        if self._context_sequence >= MAX_COUNTER:
+            # Rotate before bounded counters saturate; no wall-clock timestamps.
+            self._session_id = uuid.uuid4()
+            self._session_started = time.monotonic()
+            self._context_sequence = 0
+        self._context_sequence += 1
+        elapsed = min(MAX_COUNTER, max(0, round((time.monotonic() - self._session_started) * 1000)))
+        return self._session_id, self._context_sequence, elapsed
+
+    def _append_context_event_locked(self, **fields) -> None:
+        if len(self._context_events) == MAX_CONTEXT_EVENTS:
+            self._context_events_lost = True
+        self._context_events.append(SafeContextEvent(*self._next_context_stamp_locked(), **fields))
+
+    def _context_snapshot_locked(self) -> SafeBugReportContextSnapshot:
+        return SafeBugReportContextSnapshot(
+            tuple(self._context_events), tuple(self._option_snapshots.values()),
+            self._context_events_lost, self._context_state, self._history_generation,
+            self._option_snapshots_lost,
+        )
+
+    def context_snapshot(self) -> SafeBugReportContextSnapshot:
+        with self._lock:
+            return self._context_snapshot_locked()
+
+    def report_snapshot(self) -> tuple[BugReportSnapshot, SafeBugReportContextSnapshot]:
+        """Capture both views and the preview invalidation generation atomically."""
+        with self._lock:
+            return self.snapshot(), self._context_snapshot_locked()
+
+    def history_generation(self) -> int:
+        with self._lock:
+            return self._history_generation
+
+    def _enqueue_context_locked(self) -> bool:
+        if self._queue is None:
+            return True
+        with self._write_pending:
+            self._pending_writes += 1
+        try:
+            self._queue.put_nowait(_QueuedContext(self._context_snapshot_locked(), self._history_generation))
+            return True
+        except queue.Full:
+            with self._write_pending:
+                self._pending_writes -= 1
+            self._context_events_lost = True
+            return False
+
+    def _save_queued_context(self, history, command, has_store_lock: bool) -> None:
+        with self._lock:
+            if command.generation != self._history_generation:
+                return
+            # Coalesce on the same worker; this also includes context restored
+            # asynchronously after commands were queued during bootstrap.
+            snapshot = self._context_snapshot_locked()
+        saved_identity = (command.generation, snapshot)
+        if self._last_saved_context == saved_identity:
+            return
+        if has_store_lock and save_context_locked(history.root, snapshot):
+            self._last_saved_context = saved_identity
+            with self._lock:
+                if command.generation == self._history_generation and self._context_state == "missing":
+                    self._context_state = "available"
+        else:
+            with self._lock:
+                if command.generation == self._history_generation:
+                    self._context_events_lost = True
+                    self._context_state = "error"
+
+    def record_option_snapshot(self, kind: object, options: object) -> uuid.UUID | None:
+        """Retain fixed request booleans; returned token is the ONLY terminal association."""
+        try:
+            with self._lock:
+                operation_id = uuid.uuid4()
+                captured = option_snapshot(kind, options, *self._next_context_stamp_locked(), operation_id)
+                if len(self._option_snapshots) >= MAX_OPTION_SNAPSHOTS:
+                    del self._option_snapshots[next(iter(self._option_snapshots))]
+                    self._option_snapshots_lost = True
+                self._option_snapshots[operation_id] = captured
+                if len(self._active_requests) >= MAX_CONTEXT_EVENTS:
+                    del self._active_requests[next(iter(self._active_requests))]
+                    self._context_events_lost = True
+                self._active_requests[operation_id] = (kind, time.monotonic())
+                self._append_context_event_locked(request=SafeRequestContext(
+                    operation_id, kind, ContextOperationOutcome.STARTED,
+                ))
+                self._enqueue_context_locked()
+                return operation_id
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
+            return None
+
+    def record_option_outcome(self, token: object, outcome: object) -> bool:
+        """No latest-request guesses: absent, foreign or completed tokens are rejected."""
+        try:
+            with self._lock:
+                if (type(token) is not uuid.UUID or type(outcome) is not ContextOperationOutcome
+                        or outcome is ContextOperationOutcome.STARTED):
+                    self._context_events_lost = True
+                    return False
+                if token not in self._active_requests:
+                    # A completed or cleared request has no current event to lose.
+                    return False
+                kind, started = self._active_requests.pop(token)
+                duration = min(MAX_COUNTER, max(0, round((time.monotonic() - started) * 1000)))
+                self._append_context_event_locked(request=SafeRequestContext(token, kind, outcome, duration))
+                return self._enqueue_context_locked()
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
+            return False
+
+    def record_workflow(self, context: object) -> bool:
+        try:
+            if type(context) is not SafeWorkflowContext:
+                raise ValueError("invalid_context")
+            # Validate the closed schema without touching customer counts or payloads.
+            context_payload(SafeBugReportContextSnapshot(events=(
+                SafeContextEvent(uuid.uuid4(), 1, 0, workflow=context),
+            )))
+            with self._lock:
+                self._append_context_event_locked(workflow=context)
+                return self._enqueue_context_locked()
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
+            return False
+
+    def record_exception_category(self, category: object) -> bool:
+        try:
+            if type(category) is not ExceptionCategory:
+                raise ValueError("invalid_context")
+            with self._lock:
+                self._append_context_event_locked(exception=category)
+                return self._enqueue_context_locked()
+        except Exception:
+            with self._lock:
+                self._context_events_lost = True
             return False
 
     def snapshot(self) -> BugReportSnapshot:
@@ -747,6 +975,7 @@ class SafeBugReportRecorder:
         with self._lock:
             self._events_lost = True
             if generation == self._history_generation:
+                self._context_events_lost = True
                 self._loss_since_clear = True
 
     def clear_history(self) -> bool:
@@ -772,6 +1001,12 @@ class SafeBugReportRecorder:
             self._history_generation = generation
             self._clear_state = HistoryClearState.PENDING
             self._events.clear()
+            self._context_events.clear()
+            self._option_snapshots.clear()
+            self._option_snapshots_lost = False
+            self._active_requests.clear()
+            self._context_events_lost = False
+            self._context_state = "loading"
             self._events_lost = True
             self._loss_since_clear = False
             return True
@@ -842,9 +1077,12 @@ def build_bug_report_markdown(
     snapshot: object,
     *,
     release_version: object = None,
+    context: BugReportContextSelection | None = None,
 ) -> str:
     """Serialize only fixed enum literals and bools; fail closed on bad input."""
     try:
+        if context is not None:
+            return build_v2_report(category, snapshot, release_version, context)
         if type(category) is not BugReportCategory or type(snapshot) is not BugReportSnapshot:
             return BUG_REPORT_UNAVAILABLE
         if type(snapshot.events_lost) is not bool or type(snapshot.events) is not tuple:
@@ -971,6 +1209,7 @@ def record_handled_exception(exception: object) -> None:
         else:
             action = BugReportAction.HANDLED_EXCEPTION_OTHER
         recorder.record(action)
+        recorder.record_exception_category(exception_category(exception))
     except Exception:
         # Reporting must never change how the original exception is handled.
         return

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.app.version import RELEASE_VERSION
+from metroliza.app.bugreport_provenance import collect_bugreport_build_facts
 from metroliza.shared.diagnostic_store import IncidentStore
 from metroliza.shared.safe_bugreport import (
     BUG_REPORT_UNAVAILABLE,
@@ -24,6 +25,10 @@ from metroliza.shared.safe_bugreport import (
     PreviousSessionState,
     build_bug_report_markdown,
     recorder,
+)
+from metroliza.shared.safe_bugreport_context import (
+    BugReportContextSelection, ContextBehavior, ContextModule, ContextSymptom,
+    SafeBugReportProvenance,
 )
 from metroliza.ui.ui_foundation import apply_metroliza_theme, configure_window_size
 
@@ -50,12 +55,22 @@ class SafeBugReportDialog(QDialog):
         for label, category in _CATEGORY_CHOICES:
             self.category_combo.addItem(self.tr(label), category)
 
+        self.module_combo = self._closed_choices(ContextModule)
+        self.symptom_combo = self._closed_choices(ContextSymptom)
+        self.expected_combo = self._closed_choices(ContextBehavior)
+        self.observed_combo = self._closed_choices(ContextBehavior)
+        self._captured_activity = None
+        self._captured_context = None
+        self._provenance = SafeBugReportProvenance(**collect_bugreport_build_facts())
+        self._capture_activity()
+
         guidance = QLabel(
             self.tr(
-                "The report contains fixed diagnostic codes only. It excludes files, "
-                "names, paths, entered values, and report data. Activity is captured only "
-                "while the application responds, so a freeze may not appear in the report. "
-                "Review it before pasting."
+                "Choose the affected module and describe the symptom using the choices below. "
+                "The report includes technical build facts, fixed diagnostic codes and option states. "
+                "It excludes files, names, paths, entered values and report data. "
+                "This snapshot stays fixed while you review it. Use Refresh to capture later activity. "
+                "A freeze or abrupt exit may leave missing activity. Review before pasting."
             ),
             self,
         )
@@ -73,11 +88,13 @@ class SafeBugReportDialog(QDialog):
         self._clear_polling = False
 
         self.copy_button = QPushButton(self.tr("Copy report"), self)
+        self.refresh_button = QPushButton(self.tr("Refresh snapshot"), self)
         self.clear_button = QPushButton(self.tr("Clear activity history"), self)
         close_button = QPushButton(self.tr("Close"), self)
         buttons = QHBoxLayout()
         buttons.addWidget(self.status_label, stretch=1)
         buttons.addWidget(self.copy_button)
+        buttons.addWidget(self.refresh_button)
         buttons.addWidget(self.clear_button)
         buttons.addWidget(close_button)
 
@@ -85,17 +102,42 @@ class SafeBugReportDialog(QDialog):
         layout.addWidget(guidance)
         layout.addWidget(QLabel(self.tr("Problem category"), self))
         layout.addWidget(self.category_combo)
+        for label, combo in (
+            ("Affected module", self.module_combo), ("Symptom", self.symptom_combo),
+            ("Expected behaviour", self.expected_combo), ("Observed behaviour", self.observed_combo),
+        ):
+            layout.addWidget(QLabel(self.tr(label), self))
+            layout.addWidget(combo)
+            combo.currentIndexChanged.connect(self._refresh_preview)
         layout.addWidget(QLabel(self.tr("Report preview"), self))
         layout.addWidget(self.preview, stretch=1)
         layout.addLayout(buttons)
 
         self.category_combo.currentIndexChanged.connect(self._refresh_preview)
         self.copy_button.clicked.connect(self.copy_report)
+        self.refresh_button.clicked.connect(self.refresh_snapshot)
         self.clear_button.clicked.connect(self.clear_history)
         close_button.clicked.connect(self.close)
         self.finished.connect(self._stop_clear_polling)
-        configure_window_size(self, minimum=(560, 420), initial=(760, 560))
+        configure_window_size(self, minimum=(560, 580), initial=(800, 760))
         apply_metroliza_theme(self)
+        self._refresh_preview()
+
+    def _closed_choices(self, enum_type):
+        combo = QComboBox(self)
+        for value in enum_type:
+            label = "Unspecified" if value.value == "unknown" else value.value.replace("_", " ").capitalize()
+            combo.addItem(self.tr(label), value)
+        return combo
+
+    def _capture_activity(self) -> None:
+        try:
+            self._captured_activity, self._captured_context = recorder.report_snapshot()
+        except Exception:
+            self._captured_activity = self._captured_context = None
+
+    def refresh_snapshot(self) -> None:
+        self._capture_activity()
         self._refresh_preview()
 
     def _selected_category(self) -> BugReportCategory | None:
@@ -107,7 +149,16 @@ class SafeBugReportDialog(QDialog):
         if category is None:
             return None
         try:
-            return build_bug_report_markdown(category, recorder.snapshot(), release_version=RELEASE_VERSION)
+            if self._captured_activity is None or self._captured_context is None:
+                return None
+            context = BugReportContextSelection(
+                snapshot=self._captured_context, provenance=self._provenance,
+                module=self.module_combo.currentData(), symptom=self.symptom_combo.currentData(),
+                expected=self.expected_combo.currentData(), observed=self.observed_combo.currentData(),
+            )
+            return build_bug_report_markdown(
+                category, self._captured_activity, release_version=RELEASE_VERSION, context=context,
+            )
         except Exception:
             return None
 
@@ -149,15 +200,19 @@ class SafeBugReportDialog(QDialog):
             return
         try:
             clear_state = recorder.snapshot().clear_state
+            current_generation = recorder.history_generation()
         except Exception:
             self.status_label.setText(self.tr("A safe report is unavailable."))
             return
         if clear_state == "pending":
             self._refresh_preview()
             return
-        if self._report_text() != report:
-            self._refresh_preview()
-            self.status_label.setText(self.tr("History changed. Review the updated report before copying."))
+        if self._captured_context is None:
+            self.status_label.setText(self.tr("A safe report is unavailable."))
+            return
+        if current_generation != self._captured_context.generation:
+            self.refresh_snapshot()
+            self.status_label.setText(self.tr("History was cleared. Review the new snapshot before copying."))
             return
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:
@@ -195,6 +250,7 @@ class SafeBugReportDialog(QDialog):
                 return
             self._clear_polling = False
             self.clear_button.setEnabled(state != "pending")
+            self._capture_activity()
             self._refresh_preview()
             if state == "complete":
                 self.status_label.setText(self.tr("Local activity history cleared."))

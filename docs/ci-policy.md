@@ -111,7 +111,10 @@ The `Run native Windows safe bug report tests` step in `windows-core-smoke` chec
 fixed-schema local recorder, private history lifecycle, report dialog, synthetic replay,
 early startup-failure recovery, closed error categories, and application-wide workflow
 instrumentation, including a real CSV worker-to-clipboard flow with the Windows Qt
-plugin. These are source tests; they do not qualify a packaged EXE.
+plugin. The detailed-context acceptance tests also cover strict v2 parsing,
+retained request options, explicit operation tokens, history clear/restart,
+closed technical provenance and frozen previews. These are source tests; they do
+not qualify a packaged EXE.
 
 The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
 checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite

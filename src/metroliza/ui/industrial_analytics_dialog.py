@@ -73,6 +73,7 @@ from metroliza.industrial.industrial_workers import IndustrialAnalyticsThread, T
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
+from metroliza.shared.safe_bugreport_context import ContextOperationOutcome, OptionSnapshotKind
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
 from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
@@ -2981,8 +2982,68 @@ class IndustrialAnalyticsDialog(QDialog):
         except Exception:
             # Diagnostic observation must not block the actual operation.
             pass
+        self.analytics_thread._bugreport_option_token = self._record_safe_request_options(request)
         self.analytics_thread.start()
         self.loading_dialog.show()
+
+    def _record_safe_request_options(self, request: IndustrialAnalyticsRequest):
+        """Retain only closed option flags from the accepted execution request."""
+        try:
+            charts = request.chart_selection
+            aggregation = request.aggregation_state
+            industrial_cache = self.is_industrial_cache_presentation
+            production_cache = request.source_kind == SOURCE_PRODUCTION_CACHE
+            tabular_file = request.source_kind == SOURCE_TABULAR_FILE and not industrial_cache
+            # Inspect only the existing source descriptor, without opening the
+            # input. Neither the path nor its suffix enters diagnostic storage.
+            loaded = request.tabular_load_result
+            source = getattr(loaded, "source_file", "") or request.input_file
+            suffix = Path(source).suffix.lower() if tabular_file else ""
+            return _bugreport_recorder.record_option_snapshot(
+                OptionSnapshotKind.INDUSTRIAL_ANALYSIS
+                if production_cache or industrial_cache
+                else OptionSnapshotKind.CSV_ANALYSIS,
+                {
+                    "workbook": bool(request.output_workbook_file),
+                    "html": bool(request.output_dashboard_file),
+                    "separate_parameter_sheets": bool(request.separate_parameter_sheets),
+                    "chart_time_series": bool(charts.time_series),
+                    "chart_histogram": bool(charts.histogram),
+                    "chart_violin": bool(charts.violin),
+                    "chart_box": bool(charts.box),
+                    "chart_groupstats": bool(charts.groupstats),
+                    "filters_applied": bool(
+                        request.filter_state.is_applied
+                        or request.tabular_filter_expression
+                        or request.tabular_column_filters
+                        or (request.tabular_filter_columns and request.tabular_filter_keys)
+                    ),
+                    "grouping_applied": request.grouping_df is not None,
+                    "aggregation_configured": bool(
+                        aggregation.is_aggregated
+                        or aggregation.aggregation_methods != ("mean",)
+                    ),
+                    "cohort_configured": bool(request.cohort_state.is_applied),
+                    "source_production_cache": production_cache,
+                    "source_industrial_cache": industrial_cache,
+                    "source_csv": suffix == ".csv",
+                    "source_xlsx": suffix == ".xlsx",
+                },
+            )
+        except Exception:
+            # Option evidence must not affect worker startup or its outcome.
+            return None
+
+    def _record_safe_option_outcome(self, outcome: ContextOperationOutcome) -> None:
+        """Only the actual signal sender may complete its own option snapshot."""
+        try:
+            thread = self.sender()
+            if isinstance(thread, IndustrialAnalyticsThread):
+                token = getattr(thread, "_bugreport_option_token", None)
+                if token is not None:
+                    _bugreport_recorder.record_option_outcome(token, outcome)
+        except Exception:
+            return
 
     def _record_safe_request_checks(self, request, worker_request) -> None:
         """Compare bounded execution parameters locally; record booleans only."""
@@ -3028,6 +3089,12 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_analytics_finished(self, result) -> None:
+        self._record_safe_option_outcome(
+            ContextOperationOutcome.COMPLETED_WITH_WARNINGS
+            if _analytics_has_warnings(result)
+            else ContextOperationOutcome.COMPLETED
+        )
+        self._record_safe_result_paths(result)
         self._record_bugreport_analytics_outcome(
             "finished",
             warnings=_analytics_has_warnings(result),
@@ -3053,13 +3120,34 @@ class IndustrialAnalyticsDialog(QDialog):
         except Exception:
             QMessageBox.information(self, title, message)
 
+    def _record_safe_result_paths(self, result) -> None:
+        """Compare request/result targets locally; this does not validate file content."""
+        try:
+            thread = self.sender()
+            request = getattr(thread, "request", None)
+            if not isinstance(thread, IndustrialAnalyticsThread) or type(request) is not IndustrialAnalyticsRequest:
+                return
+            for action, expected, actual in (
+                (BugReportAction.CHECK_ANALYTICS_WORKBOOK_RESULT_MATCH,
+                 request.output_workbook_file, result.workbook_path),
+                (BugReportAction.CHECK_ANALYTICS_DASHBOARD_RESULT_MATCH,
+                 request.output_dashboard_file, result.html_dashboard_path),
+            ):
+                matches = Path(expected) == Path(actual) if expected and actual else not expected and not actual
+                _bugreport_recorder.record(action, enabled=bool(matches))
+        except Exception:
+            # Without an exact worker request, no match claim is recorded.
+            return
+
     def on_analytics_error(self, message: str) -> None:
+        self._record_safe_option_outcome(ContextOperationOutcome.FAILED)
         self._record_bugreport_analytics_outcome("failed")
         self._close_worker_progress()
         self.last_result_row.set_result("failed")
         QMessageBox.warning(self, self.windowTitle(), f"Could not create analytics: {message}")
 
     def on_analytics_cancelled(self, message: str) -> None:
+        self._record_safe_option_outcome(ContextOperationOutcome.CANCELLED)
         self._record_bugreport_analytics_outcome("cancelled")
         self._close_worker_progress()
         self.last_result_row.set_result("cancelled")

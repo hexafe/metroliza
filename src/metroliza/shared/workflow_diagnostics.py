@@ -85,6 +85,17 @@ class WorkflowTrace:
             )
             if stage is WorkflowStage.STARTED or stage is WorkflowStage.FINISHED:
                 _record_copyable_workflow_action(self.operation, outcome)
+            # Copy only explicit correlation and fixed workflow fields. Counts,
+            # export payloads and input identities never cross this boundary.
+            try:
+                from metroliza.shared.safe_bugreport import recorder
+                from metroliza.shared.safe_bugreport_context import SafeWorkflowContext
+                recorder.record_workflow(SafeWorkflowContext(
+                    self.invocation_id, self.operation_id, self.sequence, self.operation,
+                    stage, outcome, error, elapsed if stage is WorkflowStage.FINISHED else None,
+                ))
+            except Exception:
+                pass
             logging.getLogger(__name__).log(
                 logging.ERROR if outcome is WorkflowOutcome.FAILED else logging.INFO, event,
             )

@@ -25,6 +25,8 @@ from metroliza.shared.safe_bugreport import (
     AGENT_REPORT_GUIDANCE, ERROR_LOG_NOTE, BugReportAction, BugReportCategory, MAX_REPORT_BYTES,
 )
 
+from metroliza.shared.safe_bugreport_context import MAX_V2_REPORT_BYTES, parse_v2_report
+
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "windows_uiux" / "tabular"
@@ -43,6 +45,9 @@ SCENARIO = "csv_grouping_xlsx_v1"
 _VERSION_LINE = re.compile(r"Application version: `(?:UNKNOWN|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:-(?:dev|rc)\.[0-9]{1,3})?)`\Z")
 _ACTIVITY_LINE = re.compile(r"- `([a-z_]+)`(?: \(enabled: `(true|false)`\))?\Z")
 _BOOLEAN_ACTIONS = frozenset({
+    BugReportAction.CHECK_ANALYTICS_WORKBOOK_RESULT_MATCH,
+    BugReportAction.CHECK_ANALYTICS_DASHBOARD_RESULT_MATCH,
+    BugReportAction.REPORT_PLAN_SELECTION,
     BugReportAction.OPTION_WORKBOOK,
     BugReportAction.OPTION_HTML,
     BugReportAction.OPTION_GROUPING,
@@ -79,6 +84,8 @@ _BOOLEAN_ACTIONS = frozenset({
     BugReportAction.OPTION_DASHBOARD_MARKER_OUTLINE_ENABLED,
 })
 _CSV_SCENARIO_ACTIONS = frozenset({
+    BugReportAction.CHECK_ANALYTICS_WORKBOOK_RESULT_MATCH,
+    BugReportAction.CHECK_ANALYTICS_DASHBOARD_RESULT_MATCH,
     BugReportAction.APP_OPENED,
     BugReportAction.CSV_OPENED,
     BugReportAction.WORKSPACE_CSV_OPENED,
@@ -235,7 +242,25 @@ def _report_actions(lines: list[str], layout: _ReportLayout):
 
 def _parse_safe_report(report: object) -> _ParsedSafeReport | None:
     try:
-        if type(report) is not str or len(report.encode("utf-8")) > MAX_REPORT_BYTES:
+        if type(report) is not str or len(report.encode("utf-8")) > MAX_V2_REPORT_BYTES:
+            return None
+        if report.startswith("# Metroliza bug report v2"):
+            raw = parse_v2_report(report)
+            activity = raw["activity"]
+            actions = tuple((BugReportAction(item["action"]), item["enabled"]) for item in activity["events"])
+            # Rich context is validated but never used to infer a CSV scenario.
+            # A non-CSV module/symptom or any detailed loss cannot select it.
+            selection = raw["selection"]
+            permitted = (selection["module"] in {"unknown", "tabular"}
+                         and selection["symptom"] in {"unknown", "wrong_grouping", "wrong_output"}
+                         and raw["context"]["snapshot_state"] == "available")
+            return _ParsedSafeReport(
+                BugReportCategory(raw["category"]),
+                activity["events_lost"] or raw["context"]["events_lost"]
+                or raw["context"]["snapshots_lost"] or not permitted,
+                activity["previous_session_state"], actions,
+            )
+        if len(report.encode("utf-8")) > MAX_REPORT_BYTES:
             return None
         lines = report.splitlines()
         layout = _report_layout(lines)
@@ -511,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if arguments == ["--report-stdin"]:
         try:
-            report = sys.stdin.read(MAX_REPORT_BYTES + 1)
+            report = sys.stdin.read(MAX_V2_REPORT_BYTES + 1)
         except Exception:
             report = ""
         result = run_report_matched_synthetic_repro(report)

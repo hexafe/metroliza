@@ -5298,6 +5298,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                            and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
                 export_failure=self._export_failure,
             )
+            _record_export_request_outcome(
+                self, completed=emit_completed_after_cleanup,
+                cancelled=self.export_canceled or diagnostic_cancelled,
+                warnings=bool(self.completion_metadata.get("fallback_message"))
+                or (self.export_run_result is not None
+                    and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
+            )
 
     def add_measurements_horizontal_sheet(self, excel_writer):
         """Handle `add_measurements_horizontal_sheet` for `ExportDataThread`.
@@ -7520,3 +7527,26 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception:
             pass
         self.error_occurred.emit(message)
+
+
+def _record_export_request_outcome(worker, *, completed, cancelled, warnings) -> None:
+    """Close only this worker's explicitly supplied diagnostic request token."""
+    try:
+        from metroliza.shared.safe_bugreport import recorder
+        from metroliza.shared.safe_bugreport_context import ContextOperationOutcome
+
+        token = vars(worker).get("_bugreport_option_token")
+        if token is None:
+            return
+        if cancelled:
+            outcome = ContextOperationOutcome.CANCELLED
+        elif not completed:
+            outcome = ContextOperationOutcome.FAILED
+        elif warnings:
+            outcome = ContextOperationOutcome.COMPLETED_WITH_WARNINGS
+        else:
+            outcome = ContextOperationOutcome.COMPLETED
+        recorder.record_option_outcome(token, outcome)
+    except Exception:
+        # This observer must not alter publication, cleanup or terminal signals.
+        return
