@@ -41,6 +41,7 @@ from metroliza.parsing.parser_profile_handoff import (
     write_profile_repair_prompt,
     write_profile_validation_artifact,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
 from metroliza.ui import detached_threads
@@ -359,6 +360,10 @@ class ParserPluginWizardDialog(QDialog):
             self.manage_status_label.setText(str(exc))
             set_status_variant(self.manage_status_label, "warning")
             return
+        _bugreport_recorder.record(
+            BugReportAction.PARSER_PROFILE_ENABLE_STATE,
+            enabled=bool(enabled),
+        )
         self.refresh_status()
 
     def _set_handoff_actions_enabled(self, enabled: bool):
@@ -493,14 +498,24 @@ class ParserPluginWizardDialog(QDialog):
             return
         writer = write_profile_validation_artifact
         self.validation_status_label.setText("Last validation: running")
+        _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_VALIDATION_STARTED)
         snapshot = ParserPluginWizardDialog._validation_snapshot(self, workspace, getter, writer)
         if snapshot is not None:
             ParserPluginWizardDialog._start_validation(self, snapshot, workspace, writer, action_started_at)
             return
-        output, passed = writer(workspace)
+        try:
+            output, passed = writer(workspace)
+        except Exception:
+            _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_VALIDATION_FAILED)
+            raise
         ParserPluginWizardDialog._apply_validation_result(self, output, passed)
 
     def _apply_validation_result(self, output, passed):
+        _bugreport_recorder.record(
+            BugReportAction.PARSER_PROFILE_VALIDATION_FINISHED
+            if passed
+            else BugReportAction.PARSER_PROFILE_VALIDATION_FAILED
+        )
         self.validation_status_label.setText(f"Last validation: {'PASS' if passed else 'FAIL'} (observed result)")
         self._show_stage("3 · Install / enable" if passed else "2 · Correct validation problems",
                          self.install_button if passed else self.open_folder_button,
@@ -535,6 +550,7 @@ class ParserPluginWizardDialog(QDialog):
         try:
             thread.start()
         except Exception:
+            _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_VALIDATION_FAILED)
             detached_threads.discard(thread)
             ParserPluginWizardDialog._release_validation(self)
             raise
@@ -555,6 +571,7 @@ class ParserPluginWizardDialog(QDialog):
         if self._validation_closed or self.last_handoff_workspace is not thread.source_workspace:
             return
         if thread.error is not None:
+            _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_VALIDATION_FAILED)
             self.validation_status_label.setText("Last validation: error (no passing result)")
             self._show_stage("2 · Correct validation problems", self.open_folder_button,
                              "Inspect the error and materials, then validate again.", problem=True)
@@ -608,14 +625,17 @@ class ParserPluginWizardDialog(QDialog):
         workspace = self._current_workspace()
         if workspace is None:
             return
+        _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_INSTALL_STARTED)
         try:
             result = install_profile_handoff(workspace, approved_by="wizard", home=self.home)
         except ValueError as exc:
+            _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_INSTALL_FAILED)
             self._show_stage("3 · Installation blocked", self.open_folder_button,
                              "Open the folder and correct current samples/checked results. Diagnose or repair this problem, then validate again.", problem=True)
             self.result_label.setText(str(exc))
             set_status_variant(self.result_label, "warning")
             return
+        _bugreport_recorder.record(BugReportAction.PARSER_PROFILE_INSTALL_COMPLETED)
         self._show_stage("3 · Installed / enabled", self.refresh_button,
                          "Manage installed profiles shows the observed enabled and integrity state.")
         self.result_label.setText(f"Installed profile: {result.plugin_id}")

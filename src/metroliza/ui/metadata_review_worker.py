@@ -9,11 +9,22 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from metroliza.parsing.metadata_review import MODE_OCR, MetadataReviewReader
 from metroliza.shared.progress_status import build_three_line_status
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 
 
 # Running workers stay referenced here until they finish, so a QThread is never
 # destroyed while running even if its owner is garbage-collected first.
 _RUNNING_THREADS: set = set()
+
+
+def _record_metadata_review_action(
+    action: BugReportAction, *, enabled: bool | None = None
+) -> None:
+    try:
+        _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # Copyable diagnostics must never change a metadata review result.
+        return
 
 
 class MetadataReviewThread(QThread):
@@ -69,6 +80,11 @@ class MetadataReviewThread(QThread):
         )
 
     def run(self) -> None:
+        _record_metadata_review_action(BugReportAction.REPORT_METADATA_REVIEW_STARTED)
+        _record_metadata_review_action(
+            BugReportAction.OPTION_REPORT_REVIEW_OCR,
+            enabled=self.mode == MODE_OCR,
+        )
         try:
             summary = self._reader.read(
                 self._occurrence_ids,
@@ -78,6 +94,20 @@ class MetadataReviewThread(QThread):
                 on_progress=self._on_progress,
             )
         except Exception:  # pragma: no cover - defensive worker boundary
+            _record_metadata_review_action(BugReportAction.REPORT_METADATA_REVIEW_FAILED)
             self.failed.emit("Metadata could not be read.")
             return
+        try:
+            if summary.cancelled:
+                action = BugReportAction.REPORT_METADATA_REVIEW_CANCELLED
+            elif summary.failed and summary.read:
+                action = BugReportAction.REPORT_METADATA_REVIEW_COMPLETED_WITH_WARNINGS
+            elif summary.failed and summary.total:
+                action = BugReportAction.REPORT_METADATA_REVIEW_FAILED
+            else:
+                action = BugReportAction.REPORT_METADATA_REVIEW_COMPLETED
+        except Exception:
+            # A diagnostic projection cannot suppress the worker's result signal.
+            action = BugReportAction.REPORT_METADATA_REVIEW_RESULT_UNKNOWN
+        _record_metadata_review_action(action)
         self.completed.emit(summary)

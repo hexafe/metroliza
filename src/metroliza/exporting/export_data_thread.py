@@ -53,6 +53,8 @@ from metroliza.shared.diagnostic_events import (
     build_export_failure_diagnostic,
 )
 from metroliza.shared.env_utils import env_bool
+from metroliza.shared.output_verification import verify_published_output
+from metroliza.shared.safe_bugreport_context import OutputVerificationKind
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
@@ -5108,6 +5110,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 if not local_outcome:
                     self._check_canceled()
                     return
+                if self.export_target in {"excel_xlsx", "google_sheets_drive_convert"}:
+                    verify_published_output(
+                        self.excel_file, OutputVerificationKind.REPORT_WORKBOOK,
+                        operation_id=getattr(diagnostic, "operation_id", None),
+                    )
                 diagnostic.stage(WorkflowStage.OUTPUT_PUBLISHED)
 
             if self.export_target == "google_sheets_drive_convert":
@@ -5297,6 +5304,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 omissions=(self.export_run_result is not None
                            and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
                 export_failure=self._export_failure,
+            )
+            _record_export_request_outcome(
+                self, completed=emit_completed_after_cleanup,
+                cancelled=self.export_canceled or diagnostic_cancelled,
+                warnings=bool(self.completion_metadata.get("fallback_message"))
+                or (self.export_run_result is not None
+                    and self.export_run_result.status is ExportRunStatus.COMPLETE_WITH_OMISSIONS),
             )
 
     def add_measurements_horizontal_sheet(self, excel_writer):
@@ -7520,3 +7534,26 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         except Exception:
             pass
         self.error_occurred.emit(message)
+
+
+def _record_export_request_outcome(worker, *, completed, cancelled, warnings) -> None:
+    """Close only this worker's explicitly supplied diagnostic request token."""
+    try:
+        from metroliza.shared.safe_bugreport import recorder
+        from metroliza.shared.safe_bugreport_context import ContextOperationOutcome
+
+        token = vars(worker).get("_bugreport_option_token")
+        if token is None:
+            return
+        if cancelled:
+            outcome = ContextOperationOutcome.CANCELLED
+        elif not completed:
+            outcome = ContextOperationOutcome.FAILED
+        elif warnings:
+            outcome = ContextOperationOutcome.COMPLETED_WITH_WARNINGS
+        else:
+            outcome = ContextOperationOutcome.COMPLETED
+        recorder.record_option_outcome(token, outcome)
+    except Exception:
+        # This observer must not alter publication, cleanup or terminal signals.
+        return

@@ -36,6 +36,7 @@ from metroliza.industrial.industrial_source_config import (
     upsert_source_profile_in_config,
     upsert_source_profile_to_repository,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.ui_foundation import (
@@ -272,9 +273,21 @@ class IndustrialSourceProfilesDialog(QDialog):
             config_profiles = load_source_profiles_from_config(self.config_path)
             loaded_from_config = len(config_profiles)
             if self.db_file and config_profiles:
-                imported = import_source_profiles_to_repository(
-                    self.config_path,
-                    IndustrialDataRepository(self.db_file),
+                _bugreport_recorder.record(
+                    BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_STARTED
+                )
+                try:
+                    imported = import_source_profiles_to_repository(
+                        self.config_path,
+                        IndustrialDataRepository(self.db_file),
+                    )
+                except Exception:
+                    _bugreport_recorder.record(
+                        BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_FAILED
+                    )
+                    raise
+                _bugreport_recorder.record(
+                    BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_FINISHED
                 )
                 for profile in imported:
                     profiles_by_key[profile.profile_key] = profile
@@ -428,8 +441,13 @@ class IndustrialSourceProfilesDialog(QDialog):
         self.status_label.setText("New production source profile.")
 
     def save_source(self) -> None:
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCE_PROFILE_SAVE_STARTED)
         try:
             profile = self.profile_from_form()
+            _bugreport_recorder.record(
+                BugReportAction.OPTION_INDUSTRIAL_SOURCE_ORDER_BY,
+                enabled=profile.order_by_enabled,
+            )
             upsert_source_profile_in_config(self.config_path, profile)
             saved_profile = profile
             if self.db_file:
@@ -438,8 +456,13 @@ class IndustrialSourceProfilesDialog(QDialog):
                     profile,
                 )
         except (IndustrialSourceConfigError, ValueError) as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCE_PROFILE_SAVE_FAILED)
             QMessageBox.warning(self, "Production line source", str(exc))
             return
+        except Exception:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCE_PROFILE_SAVE_FAILED)
+            raise
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCE_PROFILE_SAVE_FINISHED)
         self.profile_saved.emit(saved_profile)
         parent = self.parent()
         if parent is not None and hasattr(parent, "refresh_status"):

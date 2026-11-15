@@ -29,6 +29,7 @@ from metroliza.industrial.industrial_workflow_state import (
     parse_reference_values,
     require_identifier,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui import detached_threads
 from metroliza.ui.shortcuts import install_button_commands
@@ -427,6 +428,7 @@ class IndustrialFilterDialog(QDialog):
             parent.set_industrial_filter_state(state)
         self.state = state
         self._committed_state = state
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_FILTER_APPLIED)
         self.accept()
 
     def _invalidate_reference_result(self) -> None:

@@ -60,7 +60,7 @@ REQUIRED_CHECKS = (
     "private_dashboard_generation", "offline_html_source",
     "declared_ocr_model_assets", "image_only_header_provenance",
     "rapidocr_header_inference", "parser_metadata_selection",
-    "uiux_reports", "uiux_tabular", "uiux_controls", "uiux_captures",
+    "uiux_reports", "uiux_tabular", "uiux_controls", "uiux_captures", "uiux_bugreport",
     "main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity",
 )
 ARTIFACTS = ("database", "workbook", "grouping", "tabular", "literal_workbook", "inference_database", "group_inference", "uiux_evidence", "main_html")

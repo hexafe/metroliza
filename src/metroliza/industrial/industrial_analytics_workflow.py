@@ -44,6 +44,11 @@ from metroliza.industrial.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
+from metroliza.shared.output_verification import (
+    require_nonempty_output_file,
+    verify_published_output,
+)
+from metroliza.shared.safe_bugreport_context import OutputVerificationKind
 from metroliza.shared.dashboard_interactivity import (
     normalize_dashboard_interactivity_mapping,
     summarize_dashboard_population_layer_options,
@@ -1032,7 +1037,9 @@ def _write_dashboard(
             **cancel_kwargs,
         )
         _raise_if_cancelled(cancel_check)
+        require_nonempty_output_file(dashboard["html_dashboard_path"], OutputVerificationKind.ANALYTICS_DASHBOARD_STAGING)
         Path(dashboard["html_dashboard_path"]).replace(target_path)
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_DASHBOARD)
     except DashboardCancelled as exc:
         temp_path.unlink(missing_ok=True)
         raise AnalyticsCancelled(str(exc)) from exc
@@ -1075,7 +1082,9 @@ def _export_production_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
         Path(workbook.output_file).replace(target_path)
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise
@@ -1110,7 +1119,9 @@ def _export_tabular_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
         Path(workbook.output_file).replace(target_path)
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:
         temp_path.unlink(missing_ok=True)
         raise

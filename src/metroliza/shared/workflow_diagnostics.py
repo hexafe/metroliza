@@ -7,9 +7,43 @@ import time
 import uuid
 
 from metroliza.shared.diagnostic_events import (
-    WorkflowDiagnosticEvent, WorkflowError, WorkflowOperation, WorkflowOutcome, WorkflowStage,
+    ExportFailureDiagnostic, WorkflowDiagnosticEvent, WorkflowError, WorkflowOperation,
+    WorkflowOutcome, WorkflowStage, export_failure_payload,
 )
 from metroliza.shared.diagnostic_transport import supervised_invocation_id
+
+
+_BUGREPORT_WORKFLOW_ACTIONS = {
+    WorkflowOperation.SELECTED_IMPORT: {
+        WorkflowOutcome.STARTED: "WORKFLOW_REPORT_IMPORT_STARTED",
+        WorkflowOutcome.COMPLETED: "WORKFLOW_REPORT_IMPORT_COMPLETED",
+        WorkflowOutcome.COMPLETED_WITH_WARNINGS: "WORKFLOW_REPORT_IMPORT_COMPLETED_WITH_WARNINGS",
+        WorkflowOutcome.CANCELLED: "WORKFLOW_REPORT_IMPORT_CANCELLED",
+        WorkflowOutcome.FAILED: "WORKFLOW_REPORT_IMPORT_FAILED",
+    },
+    WorkflowOperation.LOCAL_EXPORT: {
+        WorkflowOutcome.STARTED: "WORKFLOW_REPORT_EXPORT_STARTED",
+        WorkflowOutcome.COMPLETED: "WORKFLOW_REPORT_EXPORT_COMPLETED",
+        WorkflowOutcome.COMPLETED_WITH_FALLBACK: "WORKFLOW_REPORT_EXPORT_COMPLETED_WITH_FALLBACK",
+        WorkflowOutcome.COMPLETED_WITH_OMISSIONS: "WORKFLOW_REPORT_EXPORT_COMPLETED_WITH_OMISSIONS",
+        WorkflowOutcome.CANCELLED: "WORKFLOW_REPORT_EXPORT_CANCELLED",
+        WorkflowOutcome.FAILED: "WORKFLOW_REPORT_EXPORT_FAILED",
+    },
+}
+
+
+def _record_copyable_workflow_action(operation, outcome) -> None:
+    """Mirror only closed workflow boundaries into the private local report."""
+    try:
+        from metroliza.shared.safe_bugreport import BugReportAction, recorder
+
+        symbol = _BUGREPORT_WORKFLOW_ACTIONS.get(operation, {}).get(outcome)
+        action = getattr(BugReportAction, symbol, None) if symbol is not None else None
+        if type(action) is BugReportAction:
+            recorder.record(action)
+    except Exception:
+        # Copyable history is best effort and must never affect the real workflow.
+        return
 
 
 class WorkflowTrace:
@@ -50,6 +84,29 @@ class WorkflowTrace:
                 duration_ms=elapsed if stage is WorkflowStage.FINISHED else None,
                 export_failure=export_failure,
             )
+            if stage is WorkflowStage.STARTED or stage is WorkflowStage.FINISHED:
+                _record_copyable_workflow_action(self.operation, outcome)
+            # Copy explicit correlation and fixed workflow/failure fields only.
+            # Counts, exception shapes and input identities stay outside the report.
+            try:
+                from metroliza.shared.safe_bugreport import recorder
+                from metroliza.shared.safe_bugreport_context import SafeWorkflowContext
+                recorder.record_workflow(SafeWorkflowContext(
+                    self.invocation_id, self.operation_id, self.sequence, self.operation,
+                    stage, outcome, error, elapsed if stage is WorkflowStage.FINISHED else None,
+                ))
+                if (type(export_failure) is ExportFailureDiagnostic
+                        and self.operation is WorkflowOperation.LOCAL_EXPORT
+                        and stage is WorkflowStage.FINISHED
+                        and outcome in {WorkflowOutcome.FAILED, WorkflowOutcome.CANCELLED,
+                                        WorkflowOutcome.COMPLETED_WITH_FALLBACK,
+                                        WorkflowOutcome.COMPLETED_WITH_OMISSIONS}):
+                    export_failure_payload(export_failure)
+                    if (export_failure.invocation_id == self.invocation_id
+                            and export_failure.operation_id == self.operation_id):
+                        recorder.record_export_failure(export_failure)
+            except Exception:
+                pass
             logging.getLogger(__name__).log(
                 logging.ERROR if outcome is WorkflowOutcome.FAILED else logging.INFO, event,
             )

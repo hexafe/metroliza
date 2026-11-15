@@ -10,6 +10,7 @@ import re
 import sqlite3
 
 import metroliza.shared.custom_logger as custom_logger
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.reports.db import read_sql_dataframe
 from metroliza.tabular.data_grouping_service import (
     build_grouping_row_index,
@@ -77,6 +78,14 @@ from PyQt6.QtWidgets import(
     QInputDialog,
     QMessageBox,
 )
+
+
+def _record_grouping_action(action: BugReportAction) -> None:
+    try:
+        _bugreport_recorder.record(action)
+    except Exception:
+        # Local diagnostics must not change the grouping draft or applied result.
+        return
 
 
 def _can_batch_native_part_selection(part_list, items):
@@ -915,6 +924,7 @@ class DataGrouping(QDialog):
         ):
             return
         self._reset_grouping_draft()
+        _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_CANCELLED)
 
     def _request_cancel(self):
         self.reject()
@@ -941,6 +951,7 @@ class DataGrouping(QDialog):
             if not allowed:
                 return False
         self._reset_grouping_draft()
+        _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_CANCELLED)
         return True
 
     def reject(self):
@@ -2025,6 +2036,10 @@ class DataGrouping(QDialog):
 
             if ok_pressed and target_group_keys and new_group_name:
                 group_exists = bool((self.df['GROUP'] == new_group_name).any())
+                group_assignment_changes = bool(
+                    (self.df.loc[self.df['GROUP_KEY'].isin(target_group_keys), 'GROUP']
+                     != new_group_name).any()
+                )
                 assigned_color = self._next_group_color() if not group_exists else self.df.loc[self.df['GROUP'] == new_group_name, self.group_color_column].iloc[-1]
                 # Update the dataframe with the new group information
                 self.df.loc[
@@ -2036,6 +2051,12 @@ class DataGrouping(QDialog):
                     self.group_color_column
                 ] = assigned_color
                 self._invalidate_grouping_cache()
+                if not group_exists:
+                    _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUP_CREATED)
+                elif group_assignment_changes:
+                    _record_grouping_action(
+                        BugReportAction.WORKFLOW_EXPORT_GROUP_MEMBERS_ASSIGNED
+                    )
 
             preferred_group_name = new_group_name if ok_pressed and target_group_keys and new_group_name else None
             try:
@@ -2085,6 +2106,7 @@ class DataGrouping(QDialog):
                     default_color = getattr(self, 'default_group_color', existing_color)
                     self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = default_color
                 self._invalidate_grouping_cache()
+                _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUP_RENAMED)
 
             self.populate_list_widgets()
             self.remove_from_group_button.setDisabled(True)
@@ -2120,11 +2142,14 @@ class DataGrouping(QDialog):
         if selected_group is None or not selected_part_keys:
             return False
 
-        return self._reassign_group_keys_to_default(
+        did_reassign = self._reassign_group_keys_to_default(
             selected_part_keys,
             preferred_group_name=selected_group,
             preferred_reference_name=selected_reference,
         )
+        if did_reassign:
+            _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUP_MEMBERS_UNASSIGNED)
+        return did_reassign
 
     def _delete_selected_parts_from_part_list(self):
         selected_part_keys = [
@@ -2132,11 +2157,14 @@ class DataGrouping(QDialog):
             for item in self.part_list.selectedItems()
             if item.data(Qt.ItemDataRole.UserRole)
         ]
-        return self._reassign_group_keys_to_default(
+        did_reassign = self._reassign_group_keys_to_default(
             selected_part_keys,
             preferred_group_name=self._selected_group_name(),
             preferred_reference_name=self._selected_reference_name(),
         )
+        if did_reassign:
+            _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUP_MEMBERS_UNASSIGNED)
+        return did_reassign
 
     @staticmethod
     def _list_or_viewport_has_focus(list_widget):
@@ -2296,6 +2324,7 @@ class DataGrouping(QDialog):
                 self.df.loc[self.df['GROUP'] == selected_group, 'GROUP'] = self.default_group
                 self.df.loc[self.df['GROUP'] == self.default_group, self.group_color_column] = self.default_group_color
                 self._invalidate_grouping_cache()
+                _record_grouping_action(BugReportAction.WORKFLOW_EXPORT_GROUP_DELETED)
 
             # Repopulate the list widgets after updating the dataframe
             self.populate_list_widgets()

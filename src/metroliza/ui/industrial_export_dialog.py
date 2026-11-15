@@ -30,6 +30,7 @@ from metroliza.industrial.industrial_source_config import (
 )
 from metroliza.industrial.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from metroliza.industrial.industrial_workers import IndustrialExportThread, IndustrialLiveExportThread
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.shortcuts import install_button_commands, install_callback_command
@@ -494,16 +495,35 @@ class IndustrialExportDialog(QDialog):
         if hasattr(self.export_thread, "update_label"):
             self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.finished.connect(self.on_export_thread_stopped)
+        self._bugreport_export_reported = False
+        self._bugreport_export_cancel_requested = False
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_EXPORT_STARTED)
+        _bugreport_recorder.record(
+            BugReportAction.OPTION_INDUSTRIAL_LIVE_EXPORT,
+            enabled=bool(self.live_mode),
+        )
+        _bugreport_recorder.record(
+            BugReportAction.OPTION_INDUSTRIAL_EXPORT_CHARTS,
+            enabled=self.include_plots_checkbox.isChecked(),
+        )
+        _bugreport_recorder.record(
+            BugReportAction.OPTION_INDUSTRIAL_EXPORT_RAW,
+            enabled=self.include_raw_data_checkbox.isChecked(),
+        )
         self.export_thread.start()
         self.loading_dialog.show()
 
     def cancel_export(self) -> None:
         thread = self.export_thread
         if thread is not None and thread.isRunning():
+            if not getattr(self, "_bugreport_export_cancel_requested", False):
+                _bugreport_recorder.record(BugReportAction.INDUSTRIAL_EXPORT_CANCEL_REQUESTED)
+                self._bugreport_export_cancel_requested = True
             thread.cancel()
             self.loading_label.setText("Cancel requested. Waiting for workbook writer to stop.")
 
     def on_export_finished(self, result: dict[str, Any]) -> None:
+        self._record_bugreport_export_outcome(BugReportAction.INDUSTRIAL_EXPORT_FINISHED)
         dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
         if hasattr(self, "loading_bar"):
             self.loading_bar.setValue(100)
@@ -545,11 +565,13 @@ class IndustrialExportDialog(QDialog):
             )
 
     def on_export_error(self, message: str) -> None:
+        self._record_bugreport_export_outcome(BugReportAction.INDUSTRIAL_EXPORT_FAILED)
         dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None))
         self._pending_credentials_to_save = None
         QMessageBox.warning(self, "Industrial export", f"Could not export industrial data: {message}")
 
     def on_export_cancelled(self, message: str) -> None:
+        self._record_bugreport_export_outcome(BugReportAction.INDUSTRIAL_EXPORT_CANCELLED)
         dismiss_worker_progress_dialog(getattr(self, "loading_dialog", None), rejected=True)
         self._pending_credentials_to_save = None
         QMessageBox.information(self, "Industrial export", message or "Industrial export was cancelled.")
@@ -564,6 +586,12 @@ class IndustrialExportDialog(QDialog):
                 delattr(self, name)
         self.export_thread = None
         self._sync_ui_state()
+
+    def _record_bugreport_export_outcome(self, action: BugReportAction) -> None:
+        if getattr(self, "_bugreport_export_reported", False):
+            return
+        _bugreport_recorder.record(action)
+        self._bugreport_export_reported = True
 
     def _save_pending_credentials_after_success(self) -> str | None:
         pending = self._pending_credentials_to_save

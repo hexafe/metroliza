@@ -5,6 +5,25 @@ from metroliza.shared.diagnostic_events import (
     DiagnosticOperation,
     build_exception_diagnostic_event,
 )
+from metroliza.shared.safe_bugreport import record_handled_exception
+from metroliza.shared.safe_bugreport_context import ExceptionSite
+
+
+# Exact source-owned names only. Caller context, logger suffixes and traceback
+# contents must never become fields in the copyable report.
+_EXCEPTION_SITES = {
+    "app.bootstrap": ExceptionSite.BOOTSTRAP,
+    "parsing.parse_reports_thread": ExceptionSite.REPORT_PARSER,
+    "parsing.cmm_report_parser": ExceptionSite.REPORT_PARSER,
+    "parsing.metadata_enrichment_thread": ExceptionSite.REPORT_PARSER,
+    "ui.parsing_dialog": ExceptionSite.REPORT_PARSER,
+    "exporting.export_data_thread": ExceptionSite.REPORT_EXPORT,
+    "ui.export_dialog": ExceptionSite.EXPORT_DIALOG,
+    "ui.filter_dialog": ExceptionSite.EXPORT_DIALOG,
+    "ui.data_grouping": ExceptionSite.EXPORT_DIALOG,
+    "ui.modify_db": ExceptionSite.DATABASE_EDIT,
+    "ui.characteristic_mapping_dialog": ExceptionSite.MAPPING,
+}
 
 
 LOG_ONLY = "log_only"
@@ -13,8 +32,18 @@ LogBehavior = Literal["log_only", "log_and_dialog"]
 logger = logging.getLogger(__name__)
 
 
+def _exception_site_for_logger(name):
+    # Package-relative names classify records without importing those packages.
+    prefix = "metroliza."
+    if type(name) is not str or not name.startswith(prefix):
+        return ExceptionSite.UNKNOWN
+    return _EXCEPTION_SITES.get(name[len(prefix):], ExceptionSite.UNKNOWN)
+
+
 def log_exception(exception, *, logger_name=None, context="operation"):
     """Log closed exception structure without exception- or caller-controlled text."""
+    site = _exception_site_for_logger(logger_name)
+    record_handled_exception(exception, site=site)
     active_logger = logging.getLogger(logger_name) if logger_name else logger
     active_logger.error(
         build_exception_diagnostic_event(

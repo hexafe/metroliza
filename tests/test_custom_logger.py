@@ -154,3 +154,32 @@ def test_dynamic_logger_and_context_metadata_are_not_rendered_by_managed_formatt
     output = ManagedSafeFormatter().format(handler.records[0])
     _assert_marker_absent(marker, output)
     assert "exception_diagnostic" in output
+
+
+@pytest.mark.parametrize("logger_name, expected_site", [
+    ("metroliza.exporting.export_data_thread", "report_export"),
+    ("metroliza.ui.modify_db", "database_edit"),
+    ("metroliza.ui.characteristic_mapping_dialog", "mapping"),
+    ("metroliza.parsing.parse_reports_thread", "report_parser"),
+    ("metroliza.app.bootstrap", "bootstrap"),
+    ("metroliza.ui.modify_db.private_sheet", "unknown"),
+    ("ui.modify_db", "unknown"),
+    ("other.metroliza.ui.modify_db", "unknown"),
+    ("metroliza.metroliza.ui.modify_db", "unknown"),
+    (None, "unknown"),
+])
+def test_exception_location_is_an_exact_closed_source_mapping(monkeypatch, logger_name, expected_site):
+    from metroliza.shared import safe_bugreport
+    from metroliza.shared.safe_bugreport_context import context_payload
+
+    recorder = safe_bugreport.SafeBugReportRecorder()
+    monkeypatch.setattr(safe_bugreport, "recorder", recorder)
+    marker = "PRIVATE_SHEET_AND_VALUE_5D9E"
+    custom_logger.log_exception(ValueError(marker), logger_name=logger_name, context=marker)
+
+    payload = context_payload(recorder.context_snapshot())
+    event = payload["events"][-1]
+    assert event["kind"] == "exception"
+    assert event.get("site", "unknown") == expected_site
+    assert marker not in str(payload)
+    assert "logger_name" not in event

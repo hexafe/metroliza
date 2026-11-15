@@ -758,7 +758,12 @@ def test_google_fallback_dashboard_cancel_reports_cancellation(tmp_path, monkeyp
         options=ExportOptions(export_target="google_sheets_drive_convert", generate_html_dashboard=True),
     )
     thread = module.ExportDataThread(request)
-    thread.get_export_backend = lambda: SimpleNamespace(run=lambda _thread: True)
+
+    def publish_workbook(worker):
+        Path(worker.excel_file).write_bytes(b"synthetic workbook publication")
+        return True
+
+    thread.get_export_backend = lambda: SimpleNamespace(run=publish_workbook)
 
     def upload_fails(*_args, **_kwargs):
         raise GoogleDriveExportError("NOK upload failed")

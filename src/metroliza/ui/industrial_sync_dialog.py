@@ -70,6 +70,7 @@ from metroliza.industrial.industrial_workers import (
     IndustrialOznakAccessCheckThread,
     IndustrialOznakSyncThread,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
@@ -602,10 +603,18 @@ class IndustrialSyncDialog(QDialog):
             return  # the existing aggregate completion owns the final batch presentation
         status = result.get("status", "unknown")
         if not result.get("test_only"):
-            outcome = {"succeeded": "Fetch finished.", "completed_with_warnings": "Fetch finished with warnings.",
-                       "cancelled": "Fetch stopped.", "failed": "Fetch failed."}.get(status, "Fetch outcome needs attention.")
+            outcome = (
+                {
+                    "succeeded": "Fetch finished.",
+                    "completed_with_warnings": "Fetch finished with warnings.",
+                    "cancelled": "Fetch stopped.",
+                    "failed": "Fetch failed.",
+                }.get(status, "Fetch outcome needs attention.")
+                if type(status) is str
+                else "Fetch outcome needs attention."
+            )
             self._present_fetch_outcome(outcome, variant="success" if status == "succeeded" else "warning")
-        elif status not in {"succeeded", "completed_with_warnings"}:
+        elif type(status) is not str or status not in {"succeeded", "completed_with_warnings"}:
             text = "Access check stopped." if status == "cancelled" else "Access check failed. Check credentials and source settings."
             self._present_stage(text + " Next: Check access [Ctrl+R].", self.test_connection_button, variant="warning")
         else:
@@ -1066,8 +1075,13 @@ class IndustrialSyncDialog(QDialog):
         try:
             text = Path(filename).read_text(encoding="utf-8")
         except OSError as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_LOAD_FAILED)
             QMessageBox.warning(self, "SQL recipe", f"Could not open SQL recipe: {exc}")
             return
+        except Exception:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_LOAD_FAILED)
+            raise
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_LOADED)
         self._sql_recipe_path = Path(filename)
         self.sql_query_edit.setPlainText(text)
         self.sql_status_label.setText(f"SQL recipe loaded: {self._sql_recipe_path.name}")
@@ -1090,8 +1104,13 @@ class IndustrialSyncDialog(QDialog):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(self.sql_query_edit.toPlainText(), encoding="utf-8")
         except OSError as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_SAVE_FAILED)
             QMessageBox.warning(self, "SQL recipe", f"Could not save SQL recipe: {exc}")
             return
+        except Exception:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_SAVE_FAILED)
+            raise
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_RECIPE_SAVED)
         self._sql_recipe_path = path
         self.sql_status_label.setText(f"SQL recipe saved: {path.name}")
         set_status_variant(self.sql_status_label, "success")
@@ -1101,7 +1120,13 @@ class IndustrialSyncDialog(QDialog):
         return "sql" if self.mode_tabs.currentIndex() == 1 else "guided"
 
     def cancel_sync(self) -> None:
+        if self._active_operation is not None and not self._active_operation.test_only:
+            self._bugreport_sync_cancel_requested = True
+        elif self._active_operation is not None and getattr(self, "_pending_sql_preview", False):
+            self._bugreport_sql_preview_cancel_requested = True
         self._present_stage("Stop requested. Wait for the current operation to finish before Close.", self.cancel_sync_button)
+        if self._active_batch_total > 1 and self._batch_operations:
+            self._bugreport_sync_batch_truncated = True
         self._batch_operations.clear()
         if self._active_batch_total > 1:
             self._active_batch_total = len(self._batch_results) + 1
@@ -1115,6 +1140,14 @@ class IndustrialSyncDialog(QDialog):
                 self.status_label.setText("Waiting for industrial fetch to finish...")
             set_status_variant(self.status_label, "neutral")
             return
+        if thread is not None:
+            self._capture_stopped_worker_bugreport_snapshot()
+            self._active_operation = None
+            self._active_batch_total = 0
+            self.cancel_sync_button.setEnabled(False)
+            self._set_action_buttons_enabled(True)
+            return
+        self._record_stopped_worker_bugreport_outcome()
         self._active_operation = None
         self._active_batch_total = 0
         self.cancel_sync_button.setEnabled(False)
@@ -1192,7 +1225,57 @@ class IndustrialSyncDialog(QDialog):
         self._batch_results = []
         self._active_batch_total = len(operations)
         self._batch_operations = list(operations)
+        self._record_bugreport_operation_start(test_only=test_only)
         self._start_next_oznak_operation()
+
+    def _record_bugreport_operation_start(self, *, test_only: bool) -> None:
+        self._bugreport_sync_batch_truncated = False
+        self._bugreport_sync_batch_mode = self._active_batch_total > 1
+        self._bugreport_sync_unknown_seen = False
+        self._bugreport_sync_known_failure = False
+        self._bugreport_sync_known_cancelled = False
+        self._bugreport_sync_known_warning = False
+        self._bugreport_sync_known_success = False
+        if self._pending_sql_preview:
+            self._bugreport_sql_preview_reported = False
+            self._bugreport_sql_preview_cancel_requested = False
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SQL_PREVIEW_STARTED)
+        if test_only:
+            return
+        self._bugreport_sync_reported = False
+        self._bugreport_sync_cancel_requested = False
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SYNC_STARTED)
+        _bugreport_recorder.record(
+            BugReportAction.OPTION_INDUSTRIAL_FETCH_ALL,
+            enabled=self.fetch_all_checkbox.isChecked(),
+        )
+        _bugreport_recorder.record(
+            BugReportAction.OPTION_SYNC_REMEMBER_CREDENTIALS,
+            enabled=self.remember_credentials_checkbox.isChecked(),
+        )
+
+    def _capture_stopped_worker_bugreport_snapshot(self) -> None:
+        operation = self._active_operation
+        is_sql_preview = bool(getattr(self, "_pending_sql_preview", False))
+        is_sync = operation is not None and not operation.test_only
+        if not is_sql_preview and not is_sync:
+            self._bugreport_stopped_worker_snapshot = None
+            return
+        statuses = [item.get("status") for item in self._batch_results]
+        self._bugreport_stopped_worker_snapshot = {
+            "sync": is_sync,
+            "sql_preview": is_sql_preview,
+            "batch_mode": bool(getattr(self, "_bugreport_sync_batch_mode", False)),
+            "batch_truncated": bool(getattr(self, "_bugreport_sync_batch_truncated", False)),
+            "terminal_seen": bool(getattr(self, "_bugreport_worker_terminal_seen", False)),
+            "unknown_seen": bool(getattr(self, "_bugreport_sync_unknown_seen", False)),
+            "known_failure": bool(getattr(self, "_bugreport_sync_known_failure", False))
+            or any(type(status) is str and status == "failed" for status in statuses),
+            "known_cancelled": bool(getattr(self, "_bugreport_sync_known_cancelled", False)),
+            "known_warning": bool(getattr(self, "_bugreport_sync_known_warning", False)),
+            "known_success": bool(getattr(self, "_bugreport_sync_known_success", False)),
+            "sql_status": None,
+        }
 
     def _profiles_for_operation(
         self,
@@ -1296,6 +1379,7 @@ class IndustrialSyncDialog(QDialog):
             return
         operation = self._batch_operations.pop(0)
         self._active_operation = operation
+        self._bugreport_worker_terminal_seen = False
         self._pending_credential_save = operation.pending_credential_save
         completed = len(self._batch_results)
         if self._active_batch_total > 1:
@@ -1389,6 +1473,31 @@ class IndustrialSyncDialog(QDialog):
         set_status_variant(self.status_label, "neutral")
 
     def on_oznak_result(self, result: dict[str, Any]) -> None:
+        active = self._active_operation
+        if active is not None:
+            self._bugreport_worker_terminal_seen = True
+            if not active.test_only:
+                self._observe_bugreport_sync_status(result.get("status"))
+        else:
+            snapshot = getattr(self, "_bugreport_stopped_worker_snapshot", None)
+            if snapshot is not None:
+                snapshot["terminal_seen"] = True
+                if snapshot["sync"]:
+                    self._observe_bugreport_sync_status(result.get("status"))
+                elif snapshot["sql_preview"]:
+                    snapshot["sql_status"] = self._closed_bugreport_status(result.get("status"))
+        if self._active_batch_total <= 1 and active is not None and not active.test_only:
+            outcome = result.get("status")
+            if (
+                getattr(self, "_bugreport_sync_batch_truncated", False)
+                and type(outcome) is str
+                and outcome in {"succeeded", "completed_with_warnings"}
+            ):
+                outcome = "cancelled"
+            if not getattr(self, "_bugreport_sync_batch_mode", False):
+                self._record_bugreport_sync_outcome(outcome)
+        elif self._active_batch_total <= 1 and active is not None and self._pending_sql_preview:
+            self._record_bugreport_sql_preview_outcome(result.get("status"))
         self._present_result_stage(result)
         self._save_pending_credentials_after_success(result)
         active_operation = self._active_operation
@@ -1406,6 +1515,7 @@ class IndustrialSyncDialog(QDialog):
                 )
                 set_status_variant(self.status_label, "neutral")
                 return
+            self._record_bugreport_sync_outcome(self._batch_bugreport_outcome())
             self._show_batch_result_status()
             self._finish_batch_fetch_after_optional_link_refresh()
             return
@@ -1506,7 +1616,8 @@ class IndustrialSyncDialog(QDialog):
         failed = [
             result
             for result in results
-            if result.get("status") not in {"succeeded", "completed_with_warnings"}
+            if type(result.get("status")) is not str
+            or result.get("status") not in {"succeeded", "completed_with_warnings"}
         ]
         warnings = [result for result in results if result.get("status") == "completed_with_warnings"]
         processed = 0
@@ -1600,6 +1711,25 @@ class IndustrialSyncDialog(QDialog):
             self.sql_editor_window.set_preview_records(records)
 
     def on_oznak_error(self, message: str) -> None:
+        if self._active_operation is not None:
+            self._bugreport_worker_terminal_seen = True
+        else:
+            snapshot = getattr(self, "_bugreport_stopped_worker_snapshot", None)
+            if snapshot is not None:
+                snapshot["terminal_seen"] = True
+                if snapshot["sync"]:
+                    self._observe_bugreport_sync_status("failed")
+                elif snapshot["sql_preview"]:
+                    snapshot["sql_status"] = "failed"
+        if self._active_operation is not None and not self._active_operation.test_only:
+            self._observe_bugreport_sync_status("failed")
+            self._record_bugreport_sync_outcome(
+                self._batch_bugreport_outcome()
+                if getattr(self, "_bugreport_sync_batch_mode", False)
+                else "failed"
+            )
+        elif self._active_operation is not None and self._pending_sql_preview:
+            self._record_bugreport_sql_preview_outcome("failed")
         if self.access_only or (self._active_operation is not None and self._active_operation.test_only):
             self._present_result_stage({"status": "failed", "test_only": True})
         else:
@@ -1622,7 +1752,156 @@ class IndustrialSyncDialog(QDialog):
         if parent is not None and hasattr(parent, "refresh_status"):
             parent.refresh_status()
 
+    def _record_bugreport_sync_outcome(self, status: object) -> None:
+        if getattr(self, "_bugreport_sync_reported", False):
+            return
+        if type(status) is not str:
+            action = BugReportAction.INDUSTRIAL_SYNC_RESULT_UNKNOWN
+        elif status == "cancelled":
+            action = BugReportAction.INDUSTRIAL_SYNC_CANCELLED
+        elif status == "failed_with_unknown":
+            action = BugReportAction.INDUSTRIAL_SYNC_FAILED_WITH_UNKNOWN
+        elif status == "unknown":
+            action = BugReportAction.INDUSTRIAL_SYNC_RESULT_UNKNOWN
+        elif status in {"succeeded", "completed_with_warnings"}:
+            action = BugReportAction.INDUSTRIAL_SYNC_FINISHED
+        elif status == "failed":
+            action = BugReportAction.INDUSTRIAL_SYNC_FAILED
+        else:
+            action = BugReportAction.INDUSTRIAL_SYNC_RESULT_UNKNOWN
+        _bugreport_recorder.record(action)
+        self._bugreport_sync_reported = True
+
+    def _batch_bugreport_outcome(self) -> str:
+        snapshot = getattr(self, "_bugreport_stopped_worker_snapshot", None)
+        state = snapshot if snapshot is not None else self
+        statuses = [] if snapshot is not None else [item.get("status") for item in self._batch_results]
+        has_known_failure = self._bugreport_state_flag(state, "known_failure") or any(
+            type(status) is str and status == "failed" for status in statuses
+        )
+        has_unknown = self._bugreport_state_flag(state, "unknown_seen") or any(
+            type(status) is not str
+            or status not in {"succeeded", "completed_with_warnings", "cancelled", "failed"}
+            for status in statuses
+        )
+        if has_known_failure and has_unknown:
+            return "failed_with_unknown"
+        if has_known_failure:
+            return "failed"
+        if has_unknown:
+            return "unknown"
+        if (
+            self._bugreport_state_flag(state, "batch_truncated")
+            or self._bugreport_state_flag(state, "known_cancelled")
+            or "cancelled" in statuses
+        ):
+            return "cancelled"
+        if self._bugreport_state_flag(state, "known_warning") or "completed_with_warnings" in statuses:
+            return "completed_with_warnings"
+        if self._bugreport_state_flag(state, "known_success") or "succeeded" in statuses:
+            return "succeeded"
+        return "unknown"
+
+    def _observe_bugreport_sync_status(self, status: object) -> None:
+        state = getattr(self, "_bugreport_stopped_worker_snapshot", None) or self
+        if type(status) is not str:
+            self._set_bugreport_state_flag(state, "unknown_seen")
+        elif status == "failed":
+            self._set_bugreport_state_flag(state, "known_failure")
+        elif status == "cancelled":
+            self._set_bugreport_state_flag(state, "known_cancelled")
+        elif status == "completed_with_warnings":
+            self._set_bugreport_state_flag(state, "known_warning")
+        elif status == "succeeded":
+            self._set_bugreport_state_flag(state, "known_success")
+        else:
+            self._set_bugreport_state_flag(state, "unknown_seen")
+
+    @staticmethod
+    def _set_bugreport_state_flag(state: Any, key: str) -> None:
+        if isinstance(state, dict):
+            state[key] = True
+        else:
+            setattr(state, f"_bugreport_sync_{key}", True)
+
+    @staticmethod
+    def _bugreport_state_flag(state: Any, key: str) -> bool:
+        if isinstance(state, dict):
+            return bool(state.get(key, False))
+        return bool(getattr(state, f"_bugreport_sync_{key}", False))
+
+    @staticmethod
+    def _closed_bugreport_status(status: object) -> str:
+        if type(status) is str and status in {
+            "succeeded",
+            "completed_with_warnings",
+            "cancelled",
+            "failed",
+        }:
+            return status
+        return "unknown"
+
+    def _record_stopped_worker_bugreport_outcome(self) -> None:
+        snapshot = getattr(self, "_bugreport_stopped_worker_snapshot", None)
+        if snapshot is not None:
+            self._record_snapshot_worker_bugreport_outcome(snapshot)
+            return
+        self._record_live_worker_bugreport_outcome()
+
+    def _record_snapshot_worker_bugreport_outcome(self, snapshot: dict[str, Any]) -> None:
+        if snapshot["sync"]:
+            if not snapshot["terminal_seen"]:
+                snapshot["unknown_seen"] = True
+            self._record_bugreport_sync_outcome(self._batch_bugreport_outcome())
+        elif snapshot["sql_preview"]:
+            self._record_bugreport_sql_preview_outcome(snapshot["sql_status"] or "unknown")
+        self._bugreport_stopped_worker_snapshot = None
+
+    def _record_live_worker_bugreport_outcome(self) -> None:
+        terminal_seen = getattr(self, "_bugreport_worker_terminal_seen", False)
+        if self._active_operation is None:
+            return
+        if getattr(self, "_pending_sql_preview", False):
+            if not terminal_seen:
+                self._record_bugreport_sql_preview_outcome("unknown")
+            return
+        if self._active_operation.test_only:
+            return
+        if not terminal_seen:
+            self._observe_bugreport_sync_status("unknown")
+        if getattr(self, "_bugreport_sync_batch_mode", False):
+            if self._batch_operations:
+                return
+            if (
+                terminal_seen
+                or getattr(self, "_bugreport_sync_unknown_seen", False)
+                or getattr(self, "_bugreport_sync_batch_truncated", False)
+            ):
+                self._record_bugreport_sync_outcome(self._batch_bugreport_outcome())
+            return
+        if not terminal_seen:
+            self._record_bugreport_sync_outcome("unknown")
+
+    def _record_bugreport_sql_preview_outcome(self, status: object) -> None:
+        if getattr(self, "_bugreport_sql_preview_reported", False):
+            return
+        if type(status) is not str:
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_RESULT_UNKNOWN
+        elif status == "cancelled":
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_CANCELLED
+        elif status == "unknown":
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_RESULT_UNKNOWN
+        elif status in {"succeeded", "completed_with_warnings"}:
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_FINISHED
+        elif status == "failed":
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_FAILED
+        else:
+            action = BugReportAction.INDUSTRIAL_SQL_PREVIEW_RESULT_UNKNOWN
+        _bugreport_recorder.record(action)
+        self._bugreport_sql_preview_reported = True
+
     def on_oznak_thread_stopped(self) -> None:
+        self._record_stopped_worker_bugreport_outcome()
         self._pending_credential_save = None
         self._pending_sql_preview = False
         self.oznak_sync_thread = None
@@ -1636,7 +1915,8 @@ class IndustrialSyncDialog(QDialog):
 
     def _save_pending_credentials_after_success(self, result: dict[str, Any]) -> None:
         pending = self._pending_credential_save
-        if result.get("status") not in {"succeeded", "completed_with_warnings"}:
+        status = result.get("status")
+        if type(status) is not str or status not in {"succeeded", "completed_with_warnings"}:
             self._pending_credential_save = None
             return
         self._pending_credential_save = None

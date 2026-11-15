@@ -37,6 +37,16 @@ from metroliza.reports.report_metadata_review import (
 )
 from metroliza.ui import report_planner_metadata as meta
 from metroliza.ui import ui_theme_tokens as tokens
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
+
+
+def _record_planner_action(action: BugReportAction, *, enabled: bool | None = None) -> None:
+    """Observe explicit planner operations without rows, field values or IDs."""
+    try:
+        _bugreport_recorder.record(action, enabled=enabled)
+    except Exception:
+        # Diagnostic history must not change selection or metadata edits.
+        return
 
 
 # Parser identifiers use the same bounded wire format as parser registration.
@@ -443,6 +453,7 @@ class ReportPlannerModel(QAbstractTableModel):
             return 0
         count = row.reset_user_edits()
         self._row_changed(occurrence_id)
+        _record_planner_action(BugReportAction.REPORT_PLAN_RESET)
         return count
 
     def copy_scope_counts(self, field_name, visible_ids, text):
@@ -482,6 +493,7 @@ class ReportPlannerModel(QAbstractTableModel):
             restored += 1
             self._row_changed(occurrence_id, notify=False)
         self.metadata_changed.emit()
+        _record_planner_action(BugReportAction.REPORT_PLAN_UNDO)
         return restored
 
     def copy_value_to_checked(self, field_name: str, text: str, *, occurrence_ids=None) -> tuple[int, str | None]:
@@ -508,6 +520,7 @@ class ReportPlannerModel(QAbstractTableModel):
             for row in rows:
                 self._row_changed(row.occurrence_id, notify=False)
             self.metadata_changed.emit()
+            _record_planner_action(BugReportAction.REPORT_PLAN_COPY_CHECKED)
         return changed, error
 
     def _row_changed(self, occurrence_id: str, *, notify: bool = True) -> None:
@@ -824,6 +837,7 @@ class ReportPlannerModel(QAbstractTableModel):
             self.edit_rejected.emit(f"{FIELD_LABELS[field_name]}: {error or 'The value was not accepted.'}")
             return False
         self._row_changed(item.stable_occurrence_id)
+        _record_planner_action(BugReportAction.REPORT_PLAN_EDIT)
         return True
 
     # -- metadata cell presentation ----------------------------------------
@@ -893,6 +907,7 @@ class ReportPlannerModel(QAbstractTableModel):
         self._selected_occurrence_ids = selected
         self._emit_checkbox_changes_for_ids(changed_ids)
         self.selection_changed.emit()
+        _record_planner_action(BugReportAction.REPORT_PLAN_SELECTION, enabled=bool(selected))
 
     def _set_selected(self, occurrence_id: str, checked: bool, row: int) -> None:
         """Toggle one known selectable ID in place and repaint its exact row."""
@@ -906,6 +921,7 @@ class ReportPlannerModel(QAbstractTableModel):
             self._selected_occurrence_ids.remove(occurrence_id)
         self._emit_checkbox_ranges(((row, row),))
         self.selection_changed.emit()
+        _record_planner_action(BugReportAction.REPORT_PLAN_SELECTION, enabled=checked)
 
     def _emit_checkbox_changes_for_ids(self, changed_ids: set[str]) -> None:
         if not changed_ids or not self.valid:

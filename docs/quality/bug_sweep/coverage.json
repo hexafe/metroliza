@@ -2470,7 +2470,8 @@
         "scripts/windows_owned_process_probe.py",
         "scripts/windows_candidate_exit_evidence.py",
         "scripts/windows_fault_events.py",
-        "scripts/release_identity.py"
+        "scripts/release_identity.py",
+        "scripts/reproduce_safe_bugreport.py"
       ],
       "exclude": [],
       "class": "script/tooling",

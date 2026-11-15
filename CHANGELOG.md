@@ -1,6 +1,24 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.1 — current version
+## 0.8.0-dev.5 — current version
+- Preserve detailed local bug reports and output-publication checks from dev.4.
+- Qualification update; no intentional change to analysis or export results.
+
+## 0.8.0-dev.4 — previous source version
+- Copy detailed local bug reports with request options, operation timing, technical build facts and safe failure stages.
+- Check published XLSX/HTML outputs for missing or empty files; analytics keeps the last complete output if a new temporary file is invalid.
+- Preview a frozen report before copying it. Input files, names, paths, measurements and exception text remain excluded.
+- These checks do not prove numerical correctness or guarantee reproduction of an incident.
+
+## 0.8.0-dev.3 — previous source version
+- Extend local-only bug reports to selected, predefined application actions across modules, with a bounded history and boolean options.
+- Exclude confidential input data and free text. Coverage is selective and does not guarantee incident reconstruction or user acceptance.
+
+## 0.8.0-dev.2 — previous source version
+- Generate a local bug report with a bounded activity history and selected options; input data, paths, names and configuration values are excluded.
+- Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident.
+
+## 0.8.0-dev.1 — previous source version
 - Adopt development package versions `dev.N`, frozen candidates `rc.N` and accepted stable scope `0.8.0`; the actual build date is recorded separately.
 - Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history; this naming transition does not rename or requalify their bytes.
 - Reserve `1.0.0` for both a complete external-LLM parser authoring package and fully unified, complete reports, with the existing issue contracts and release gates retained.

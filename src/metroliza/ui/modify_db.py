@@ -20,6 +20,8 @@ import PyQt6.QtWidgets as QtWidgets
 import logging
 import sqlite3
 from metroliza.shared.custom_logger import CustomLogger, LOG_ONLY
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
+from metroliza.shared.safe_bugreport_context import ContextOperationOutcome, OptionSnapshotKind
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
@@ -64,6 +66,43 @@ from metroliza.ui.worker_progress_dialog import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _record_database_edit_action(action: BugReportAction) -> None:
+    try:
+        _bugreport_recorder.record(action)
+    except Exception:
+        # Diagnostic history is best effort; an edit must keep its real outcome.
+        return
+
+
+def _record_database_edit_options(payload):
+    """Observe only which fixed categories are present in the accepted edit."""
+    try:
+        normalization = payload["normalization_changes"]
+        return _bugreport_recorder.record_option_snapshot(
+            OptionSnapshotKind.DATABASE_EDIT,
+            {
+                "normalization_reference": bool(normalization.get("reference")),
+                "normalization_sample_number": bool(normalization.get("sample_number")),
+                "normalization_header": bool(normalization.get("header")),
+                "report_updates_present": bool(payload["report_updates"]),
+                "measurement_updates_present": bool(payload["measurement_updates"]),
+            },
+        )
+    except Exception:
+        # Edit values stay in the existing persistence payload only.
+        return None
+
+
+def _record_database_edit_outcome(token, outcome: ContextOperationOutcome) -> None:
+    try:
+        if token is not None:
+            _bugreport_recorder.record_option_outcome(token, outcome)
+    except Exception:
+        return
+
+
 QItemSelection = getattr(QtCore, "QItemSelection", None)
 QItemSelectionModel = getattr(QtCore, "QItemSelectionModel", None)
 
@@ -162,6 +201,7 @@ class ModifyDB(QDialog):
         self._storage_flavor = "current"
         self._changes_committed = False
         self._discard_confirmed = False
+        self._safe_report_open_recorded = False
 
         self.setup_ui()
 
@@ -209,6 +249,12 @@ class ModifyDB(QDialog):
                 ModifyDB._refresh_tables_for_view(self)
         except Exception as e:
             self.log_and_exit(e)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._safe_report_open_recorded:
+            self._safe_report_open_recorded = True
+            _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_OPENED)
 
     def create_widgets(self):
         try:
@@ -1172,6 +1218,7 @@ class ModifyDB(QDialog):
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
+            _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_STARTED)
             completed = self._apply_edit_payload(dict(
                 storage_flavor=self._storage_flavor,
                 normalization_changes=normalization_changes,
@@ -1184,16 +1231,18 @@ class ModifyDB(QDialog):
             self._report_save_error(e)
 
     def _edit_succeeded(self):
+        _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_COMPLETED)
         QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
         if "_changes_committed" not in vars(self) or not sip.isdeleted(self):
             self._changes_committed = True
             self.close()
 
     def _report_save_error(self, error):
+        _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_FAILED)
         if getattr(self.log_and_exit, "__func__", None) is not ModifyDB.log_and_exit:
             self.log_and_exit(error)
             return
-        CustomLogger(error, reraise=False, behavior=LOG_ONLY)
+        CustomLogger(error, reraise=False, behavior=LOG_ONLY, logger_name=__name__)
         QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
 
     def _apply_edit_payload(self, payload):
@@ -1205,7 +1254,14 @@ class ModifyDB(QDialog):
                   and all(name not in vars(self) and getattr(type(self), name) is method
                           for name, method in _DEFAULT_EDIT_METHODS.items()))
         if not native:
-            self._create_report_edit_service().apply_changes(**payload)
+            service = self._create_report_edit_service()
+            token = _record_database_edit_options(payload)
+            try:
+                service.apply_changes(**payload)
+            except BaseException:
+                _record_database_edit_outcome(token, ContextOperationOutcome.FAILED)
+                raise
+            _record_database_edit_outcome(token, ContextOperationOutcome.COMPLETED)
             return True
         self._save_in_progress = True
         self._edit_thread, self._edit_progress = None, None
@@ -1226,9 +1282,13 @@ class ModifyDB(QDialog):
             detached_threads.register(thread, defer_quit=True, owner=self, on_finished=ModifyDB._finish_edit)
             detached_threads.run_when_finished((thread,), partial(_release_edit, weakref.ref(self), weakref.ref(thread)))
             progress.show()
+            thread._bugreport_option_token = _record_database_edit_options(payload)
             thread.start()
         except Exception:
             if thread is not None:
+                _record_database_edit_outcome(
+                    getattr(thread, "_bugreport_option_token", None), ContextOperationOutcome.FAILED,
+                )
                 detached_threads.discard(thread)
             if self._save_in_progress:
                 _release_edit(weakref.ref(self), weakref.ref(thread) if thread is not None else lambda: None)
@@ -1240,6 +1300,10 @@ class ModifyDB(QDialog):
             return
         self._save_in_progress = False
         error, thread.error = thread.error, None
+        _record_database_edit_outcome(
+            getattr(thread, "_bugreport_option_token", None),
+            ContextOperationOutcome.FAILED if error is not None else ContextOperationOutcome.COMPLETED,
+        )
         progress = self._edit_progress
         dismiss_worker_progress_dialog(progress, rejected=error is not None)
         self._edit_progress = None
@@ -1462,7 +1526,7 @@ class ModifyDB(QDialog):
         super().closeEvent(event)
 
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        CustomLogger(exception, reraise=False, logger_name=__name__)
 
 
 _DEFAULT_EDIT_APPLY = ReportEditService.apply_changes
