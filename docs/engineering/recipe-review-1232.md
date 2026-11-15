@@ -79,3 +79,9 @@ Actual packaged Windows identity, screenshots at three scales and owned-process
 cleanup are checked by the qualification driver. User keyboard/AltGr judgement
 and separate PO acceptance remain distinct from machine qualification. Merge into
 `dev` was expressly requested by PO; release/tag and epic acceptance remain separate.
+
+Final identity correction: the complete remote/package inventory found the prior
+diagnostics dev.3 package from run43642505930. The recipe dev.3 source and all
+its passing receipts remain unchanged historical evidence. Current delivery uses
+`0.8.0-dev.4`, with an identity-only independent delta and fresh exact-head CI /
+Windows qualification. No runtime or QA algorithm is changed by this correction.

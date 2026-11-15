@@ -85,6 +85,16 @@ capture-timing defect #1241, and increments the new artifact version to
 identity slice; runtime recipe algorithms and prior safety corrections remain
 unchanged. Require the full combined CI/package gate again on the new head.
 
+The final repository-wide inventory then identified a real version collision:
+`build/0.8.0-dev.3-bugreport` at `eacfce9351fb9fbda92cfd6ad8cd6cae311752bb`
+already produced a qualified ZIP in run `43642505930` on 2026-11-14. The recipe
+candidate `e6f2976e` passed full CI (11,002 tests, 84.06% coverage) and native
+qualification, but its dev.3 bytes remain separately retained evidence, not
+renamed. Allocate `0.8.0-dev.4` after checking all current remote refs, release
+metadata and prior package artifacts. Admit one finite identity-only independent
+delta (at most eight purposeful reads); all runtime/QA reviews remain applicable.
+Require the full combined exact-head CI and fresh Windows bytes for dev.4.
+
 For the corrected stable candidate, use one authoritative full
 `workflow_dispatch` with both Windows package inputs enabled. The selected CI
 policy runs every blocking source job on dispatch. Retire a duplicate automatic

@@ -1,6 +1,11 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.3 — current version
+## 0.8.0-dev.4 — current version
+
+- Allocate a fresh package identity after the global inventory found an earlier diagnostics package already using `0.8.0-dev.3`.
+- Keep the qualified recipe implementation unchanged and retain earlier EXE/ZIP bytes and receipts with their original source identities.
+
+## 0.8.0-dev.3 — previous recipe qualification candidate
 
 - Wait for visible recipe controls before qualification form captures and Start.
 - Keep the existing Home command-center checks aligned with the added recipe launchers.

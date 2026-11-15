@@ -10,7 +10,7 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 
 The accepted [versioning policy](docs/project/versioning_policy.md) uses development packages
 `0.8.0-dev.N`, frozen candidates `0.8.0-rc.N` and the accepted current-scope release `0.8.0`.
-Actual build dates and qualification receipts are separate. The development candidate identity is `0.8.0-dev.3`;
+Actual build dates and qualification receipts are separate. The development candidate identity is `0.8.0-dev.4`;
 version assignment does not claim a new package passed or was delivered. See
 [release status](docs/release_checks/release_status.md) for exact evidence and the separate `1.0.0` targets.
 Normal work targets `dev`; `main` remains the production/history default. Historical June RC2
@@ -329,7 +329,7 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`0.8.0-dev.3`): Local recipe flows launch Reports to Excel Main or HTML, with private saved configurations, one run view, reusable filters and groups, and CSV/XLSX or Industrial cache adapters.
+Current release highlight (`0.8.0-dev.4`): Local recipe flows launch Reports to Excel Main or HTML, with private saved configurations, one run view, reusable filters and groups, and CSV/XLSX or Industrial cache adapters.
 
 Build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
@@ -342,7 +342,7 @@ version label does not change those historical receipts. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `0.8.0-dev.3`)
+### Changelog highlights (release `0.8.0-dev.4`)
 
 - Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
 - Main HTML dashboards retain full measurement labels with compact image and asset-directory names.
