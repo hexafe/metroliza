@@ -19,7 +19,7 @@ from metroliza.industrial.industrial_analytics_workflow import (
     AnalyticsCancelled, run_production_cache_analytics, run_tabular_file_analytics,
 )
 from metroliza.recipes.contracts import (
-    DataKind, LocalBinding, ParameterKey, ParameterMode, ParameterSpec, ParameterType,
+    AnalyticsOutputPaths, DataKind, LocalBinding, ParameterKey, ParameterMode, ParameterSpec, ParameterType,
     RecipeDefinition, RecipeError, StepKind, StepSpec,
 )
 from metroliza.recipes.ports import PreflightResult, ResultCode, StepResult, StepStatus
@@ -164,6 +164,22 @@ def _request_payload(plan):
     return payload
 
 
+def _analytics_output_paths(output, payload):
+    if output is None or output.suffix.lower() != ".html":
+        raise RecipeError("invalid_output")
+    workbook_marker = payload["request"]["output_workbook_file"]
+    if workbook_marker not in ("", "derived"):
+        raise RecipeError("invalid_analytics_request")
+    from metroliza.industrial.industrial_analytics_dashboard import resolve_production_dashboard_assets_dir
+    return AnalyticsOutputPaths(output, output.with_suffix(".xlsx") if workbook_marker else None,
+                                resolve_production_dashboard_assets_dir(output))
+
+
+def analytics_output_family(binding, output):
+    """Resolve every native output from the same captured method configuration."""
+    return _analytics_output_paths(output, _request_payload(binding))
+
+
 def _resolve_source(plan, request, payload):
     kind = plan.value(ParameterKey.SOURCE_KIND)
     if kind != request.source_kind or kind not in ("tabular_file", "production_cache"):
@@ -172,12 +188,11 @@ def _resolve_source(plan, request, payload):
     source = str(plan.value(source_key) or "")
     if payload["grouping_source"] is not None and payload["grouping_source"] != _source_signature(source):
         raise RecipeError("stale_manual_grouping")
-    if plan.output_file is None or plan.output_file.suffix.lower() != ".html":
-        raise RecipeError("invalid_output")
-    workbook = str(plan.output_file.with_suffix(".xlsx")) if payload["request"]["output_workbook_file"] else ""
+    outputs = _analytics_output_paths(plan.output_file, payload)
+    workbook = str(outputs.workbook) if outputs.workbook is not None else ""
     return replace(request, input_file=source if kind == "tabular_file" else "",
                    db_file=source if kind == "production_cache" else "",
-                   output_dashboard_file=str(plan.output_file), output_workbook_file=workbook)
+                   output_dashboard_file=str(outputs.dashboard), output_workbook_file=workbook)
 
 
 def _column_remapping(plan):
@@ -244,7 +259,7 @@ class AnalyticsRecipePorts:
     def preflight(self, plan, context):
         self._cancel.clear()
         try:
-            request = resolve(plan)
+            request = self._validated_request(plan)
             source = request.input_file or request.db_file
             signature = _source_signature(source)
             previous = self._signatures.get(plan.run_id)
@@ -275,9 +290,21 @@ class AnalyticsRecipePorts:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             return {"industrial_records", "industrial_record_values"}.issubset(tables)
 
+    @staticmethod
+    def _validated_request(plan):
+        from metroliza.recipes.bindings import validate_plan_paths
+        request = resolve(plan)
+        validate_plan_paths(plan)
+        return request
+
     def approve(self, plan, decision):
-        request = self._requests.get(plan.run_id)
-        if request is None or decision != "continue":
+        if decision != "continue":
+            return False
+        try:
+            request = self._validated_request(plan)
+        except (RecipeError, OSError, ValueError):
+            return False
+        if request != self._requests.get(plan.run_id):
             return False
         targets = [request.output_dashboard_file, request.output_workbook_file]
         self._consents[plan.run_id] = ExportRecipeService.replacement_consents(p for p in targets if p)
@@ -294,9 +321,14 @@ class AnalyticsRecipePorts:
         if cancelled():
             return StepResult(StepStatus.CANCELLED, ResultCode.CANCELLED)
         try:
+            if self._validated_request(plan) != request:
+                return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
             if _source_signature(request.input_file or request.db_file) != self._signatures[plan.run_id]:
                 return StepResult(StepStatus.FAILED, ResultCode.SOURCE_CHANGED)
             return self._execute_current(step, plan, request, context, cancelled)
+        except RecipeError:
+            cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
+            return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
         except (AnalyticsCancelled, TabularLoadCancelled, OutputPublicationCanceled):
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
             return StepResult(StepStatus.CANCELLED, ResultCode.CANCELLED)

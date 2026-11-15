@@ -152,3 +152,163 @@ def test_native_option_codec_preserves_palette_lists_and_typed_tuples():
     assert type(decoded["palette"]) is list
     assert type(decoded["filters"]) is tuple
     assert type(decoded["filters"][0]) is ProductionMetricSelection
+
+
+def xlsx_source(path):
+    from xlsxwriter import Workbook
+    with Workbook(str(path)) as workbook:
+        sheet = workbook.add_worksheet("Measurements")
+        sheet.write_row(0, 0, ("timestamp", "reference", "length_mm"))
+        for index, value in enumerate((1.0, 1.1, 1.2, 1.3), start=1):
+            sheet.write_row(index, 0, (f"2026-11-15 10:0{index}:00", "R1", value))
+
+
+def test_analytics_derived_workbook_cannot_replace_xlsx_input_even_with_consent(tmp_path, monkeypatch):
+    from metroliza.exporting.output_publication import OutputConsent
+    from metroliza.recipes.ports import ResultCode
+    from metroliza.recipes.tabular_adapter import analytics_output_family
+    path = tmp_path / "measurements.xlsx"
+    xlsx_source(path)
+    before = path.read_bytes()
+    entry = capture(request_for(path, tmp_path / "measurements.html"))
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(entry.definition, entry.binding)
+
+    safe = bind_source(entry, path, tmp_path / "different.html")
+    ports = AnalyticsRecipePorts()
+    assert ports.preflight(safe, ctx(safe)).ready
+    # A stale/forged caller must not bypass the same boundary by retaining run_id
+    # and supplying a real identity-bound consent for the input workbook.
+    values = dict(safe.binding.values)
+    values[ParameterKey.OUTPUT_FILE] = str(tmp_path / "measurements.html")
+    binding = replace(safe.binding, values=tuple(values.items()))
+    family = analytics_output_family(binding, tmp_path / "measurements.html")
+    unsafe = replace(safe, binding=binding, output_file=family.dashboard, assets_dir=family.assets)
+    ports._consents[safe.run_id] = (OutputConsent.for_path(path),)
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("source alias must stop before rendering or publication")
+
+    monkeypatch.setattr(ports, "_run", must_not_run)
+    rejected = ports.preflight(unsafe, ctx(unsafe))
+    assert not rejected.ready and not rejected.requires_decision
+    assert rejected.code is ResultCode.INVALID_PLAN
+    assert not ports.approve(unsafe, "continue")
+    result = ports.execute(unsafe.definition.steps[1], unsafe, ctx(unsafe))
+    assert result.status is StepStatus.FAILED and result.code is ResultCode.INVALID_PLAN
+    assert path.read_bytes() == before
+    assert not family.dashboard.exists() and not family.assets.exists()
+    ports.finish(safe)
+
+
+def test_real_xlsx_source_uses_distinct_complete_output_family_and_is_preserved(tmp_path):
+    from metroliza.recipes.bindings import _target_paths
+    from metroliza.recipes.tabular_adapter import analytics_output_family
+    path = tmp_path / "measurements.xlsx"
+    xlsx_source(path)
+    before = path.read_bytes()
+    entry = capture(request_for(path, tmp_path / "result.html"))
+    plan = resolve_plan(entry.definition, entry.binding)
+    outputs = analytics_output_family(plan.binding, plan.output_file)
+    effective = resolve(plan)
+    assert outputs.dashboard == tmp_path / "result.html"
+    assert outputs.workbook == tmp_path / "result.xlsx"
+    assert outputs.assets == plan.assets_dir
+    assert set(_target_paths(plan)) == {outputs.dashboard, outputs.workbook, outputs.assets}
+    assert effective.output_dashboard_file == str(outputs.dashboard)
+    assert effective.output_workbook_file == str(outputs.workbook)
+    ports = AnalyticsRecipePorts()
+    assert ports.preflight(plan, ctx(plan)).ready
+    assert ports.execute(plan.definition.steps[0], plan, ctx(plan)).status is StepStatus.COMPLETED
+    assert ports.execute(plan.definition.steps[1], plan, ctx(plan)).status in (StepStatus.COMPLETED, StepStatus.PARTIAL)
+    assert ports.execute(plan.definition.steps[2], plan, ctx(plan)).artifact_verified
+    assert path.read_bytes() == before
+    assert outputs.dashboard.is_file() and outputs.workbook.is_file()
+    ports.finish(plan)
+
+
+def test_disabled_analytics_workbook_is_not_a_target_or_source_collision(tmp_path):
+    from metroliza.recipes.bindings import _target_paths
+    from metroliza.recipes.tabular_adapter import analytics_output_family
+    path = tmp_path / "measurements.xlsx"
+    xlsx_source(path)
+    before = path.read_bytes()
+    request = replace(request_for(path, tmp_path / "measurements.html"), output_workbook_file="")
+    entry = capture(request)
+    plan = resolve_plan(entry.definition, entry.binding)
+    outputs = analytics_output_family(plan.binding, plan.output_file)
+    assert outputs.workbook is None
+    assert path not in _target_paths(plan)
+    assert resolve(plan).output_workbook_file == ""
+    ports = AnalyticsRecipePorts()
+    assert ports.preflight(plan, ctx(plan)).ready
+    assert path.read_bytes() == before
+    ports.finish(plan)
+
+
+def test_analytics_new_copy_reserves_optional_workbook_and_repeat_rechecks_full_family(tmp_path):
+    from metroliza.recipes.bindings import new_output_copy
+    path = tmp_path / "measurements.xlsx"
+    xlsx_source(path)
+    entry = capture(request_for(path, tmp_path / "result.html"))
+    plan = resolve_plan(entry.definition, entry.binding)
+    occupied_workbook = tmp_path / "result (1).xlsx"
+    occupied_workbook.write_bytes(b"previous complete workbook")
+    copied = new_output_copy(plan)
+    assert copied.output_file == tmp_path / "result (2).html"
+    assert resolve(copied).output_workbook_file == str(tmp_path / "result (2).xlsx")
+    assert copied.run_id != plan.run_id
+    ports = AnalyticsRecipePorts()
+    plan.output_file.with_suffix(".xlsx").write_bytes(b"previous final workbook")
+    decision = ports.preflight(plan, ctx(plan))
+    assert decision.requires_decision and not decision.ready
+    assert ports.approve(plan, "continue")
+    assert ports._consents[plan.run_id][0].path == plan.output_file.with_suffix(".xlsx")
+    assert occupied_workbook.read_bytes() == b"previous complete workbook"
+    ports.finish(plan)
+    without_workbook = capture(replace(request_for(path, tmp_path / "result.html"), output_workbook_file=""))
+    no_workbook_plan = resolve_plan(without_workbook.definition, without_workbook.binding)
+    assert new_output_copy(no_workbook_plan).output_file == tmp_path / "result (1).html"
+
+
+def test_industrial_cache_named_xlsx_cannot_be_replaced_by_derived_workbook(tmp_path, monkeypatch):
+    from tests.industrial_analytics_fixtures import seed_production_analytics_cache
+    from metroliza.exporting.output_publication import OutputConsent
+    from metroliza.recipes.ports import ResultCode
+    from metroliza.recipes.tabular_adapter import analytics_output_family
+    database = tmp_path / "measurements.xlsx"  # SQLite source suffix is not an authorization boundary.
+    seed_production_analytics_cache(str(database))
+    before = database.read_bytes()
+    native = IndustrialAnalyticsRequest(source_kind="production_cache", db_file=str(database),
+        output_dashboard_file=str(tmp_path / "measurements.html"),
+        output_workbook_file=str(database), metric_selection=(ProductionMetricSelection("cycle_time_s"),))
+    entry = capture(native)
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(entry.definition, entry.binding)
+    values = dict(entry.binding.values)
+    values[ParameterKey.OUTPUT_FILE] = str(tmp_path / "safe.html")
+    safe = resolve_plan(entry.definition, replace(entry.binding, values=tuple(values.items())))
+    ports = AnalyticsRecipePorts()
+    assert ports.preflight(safe, ctx(safe)).ready
+    values[ParameterKey.OUTPUT_FILE] = str(tmp_path / "measurements.html")
+    binding = replace(safe.binding, values=tuple(values.items()))
+    outputs = analytics_output_family(binding, tmp_path / "measurements.html")
+    unsafe = replace(safe, binding=binding, output_file=outputs.dashboard, assets_dir=outputs.assets)
+    ports._consents[safe.run_id] = (OutputConsent.for_path(database),)
+
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("read-only Industrial source cannot become a publication target")
+
+    monkeypatch.setattr(ports, "_run", must_not_run)
+    assert ports.preflight(unsafe, ctx(unsafe)).code is ResultCode.INVALID_PLAN
+    assert not ports.approve(unsafe, "continue")
+    result = ports.execute(unsafe.definition.steps[1], unsafe, ctx(unsafe))
+    assert result.status is StepStatus.FAILED and result.code is ResultCode.INVALID_PLAN
+    assert database.read_bytes() == before
+    assert not outputs.dashboard.exists() and not outputs.assets.exists()
+    ports.finish(safe)
+    disabled = capture(replace(native, output_workbook_file=""))
+    html_only = resolve_plan(disabled.definition, disabled.binding)
+    assert ports.preflight(html_only, ctx(html_only)).ready
+    assert database.read_bytes() == before
+    ports.finish(html_only)

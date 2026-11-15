@@ -120,3 +120,63 @@ def test_normalized_case_alias_to_source_file_is_rejected_before_execution(tmp_p
         (ParameterKey.SOURCE_FILE, str(tmp_path / "result.xlsx"))))
     with pytest.raises(RecipeError, match="source_alias"):
         resolve_plan(definition, private)
+
+
+@pytest.mark.parametrize("alias", ["case", "symlink", "hardlink"])
+def test_analytics_secondary_workbook_alias_is_rejected_in_resolved_family(tmp_path, alias):
+    import os
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.recipes.tabular_adapter import capture
+    source = tmp_path / "measurements.xlsx"
+    source.write_bytes(b"source workbook must survive planning")
+    output = tmp_path / "MEASUREMENTS.html" if alias == "case" else tmp_path / "result.html"
+    if alias != "case":
+        secondary = output.with_suffix(".xlsx")
+        try:
+            secondary.symlink_to(source) if alias == "symlink" else os.link(source, secondary)
+        except (OSError, NotImplementedError):
+            pytest.skip("filesystem alias creation unavailable")
+    entry = capture(IndustrialAnalyticsRequest(source_kind="tabular_file", input_file=str(source),
+        output_dashboard_file=str(output), output_workbook_file=str(output.with_suffix(".xlsx"))))
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(entry.definition, entry.binding)
+    assert source.read_bytes() == b"source workbook must survive planning"
+
+
+def test_analytics_native_asset_alias_is_rejected_from_same_output_family(tmp_path):
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.recipes.tabular_adapter import capture
+    source = tmp_path / "source.xlsx"
+    source.write_bytes(b"source workbook must survive asset planning")
+    output = tmp_path / "result.html"
+    try:
+        (tmp_path / "result_assets").symlink_to(source)
+    except (OSError, NotImplementedError):
+        pytest.skip("filesystem symlink creation unavailable")
+    entry = capture(IndustrialAnalyticsRequest(source_kind="tabular_file", input_file=str(source),
+        output_dashboard_file=str(output)))
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(entry.definition, entry.binding)
+    assert source.read_bytes() == b"source workbook must survive asset planning"
+
+
+def test_analytics_read_cache_remains_source_when_reserving_new_output_family(tmp_path):
+    from metroliza.industrial.contracts import IndustrialAnalyticsRequest
+    from metroliza.recipes.bindings import _target_paths
+    from metroliza.recipes.tabular_adapter import capture, resolve
+    source = tmp_path / "measurements.xlsx"
+    source.write_bytes(b"synthetic read-only cache")
+    native = IndustrialAnalyticsRequest(source_kind="production_cache", db_file=str(source),
+        output_dashboard_file=str(tmp_path / "result.html"),
+        output_workbook_file=str(tmp_path / "result.xlsx"))
+    entry = capture(native)
+    original = resolve_plan(entry.definition, entry.binding)
+    assert original.database_file == source
+    assert source not in _target_paths(original)
+    assert set(_target_paths(original)) == {tmp_path / "result.html", tmp_path / "result.xlsx",
+                                           original.assets_dir}
+    copied = new_output_copy(original)
+    assert copied.database_file == source
+    assert resolve(copied).db_file == str(source)
+    assert resolve(copied).output_workbook_file == str(tmp_path / "result (1).xlsx")
+    assert source.read_bytes() == b"synthetic read-only cache"

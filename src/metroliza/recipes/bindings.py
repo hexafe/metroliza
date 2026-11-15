@@ -41,9 +41,12 @@ def _normalized_output(definition: RecipeDefinition, values: dict) -> Path | Non
     return output
 
 
-def _assets_path(definition: RecipeDefinition, output: Path | None) -> Path | None:
+def _assets_path(definition: RecipeDefinition, output: Path | None, binding: LocalBinding) -> Path | None:
     if output is None:
         return None
+    if any(step.kind is StepKind.ANALYZE_TABULAR for step in definition.steps):
+        from .tabular_adapter import analytics_output_family
+        return analytics_output_family(binding, output).assets
     if any(step.kind is StepKind.EXPORT_HTML for step in definition.steps):
         from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
         return resolve_html_dashboard_assets_dir(output.with_suffix(".html"))
@@ -70,7 +73,7 @@ def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> Resolve
     source_raw = values.get(ParameterKey.INPUT_FOLDER)
     source = Path(str(source_raw)) if source_raw else None
     snapshot = replace(binding, values=tuple(values.items()))
-    plan = ResolvedRunPlan(definition, snapshot, source, output, database, _assets_path(definition, output))
+    plan = ResolvedRunPlan(definition, snapshot, source, output, database, _assets_path(definition, output, snapshot))
     validate_plan_paths(plan)
     return plan
 
@@ -81,7 +84,13 @@ def _writes_database(plan: ResolvedRunPlan) -> bool:
 
 
 def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
-    targets = [p for p in (plan.database_file, plan.output_file, plan.assets_dir) if p is not None]
+    targets = [p for p in (plan.output_file, plan.assets_dir) if p is not None]
+    if _writes_database(plan) and plan.database_file is not None:
+        targets.append(plan.database_file)
+    if any(step.kind is StepKind.ANALYZE_TABULAR for step in plan.definition.steps):
+        from .tabular_adapter import analytics_output_family
+        outputs = analytics_output_family(plan.binding, plan.output_file)
+        targets.extend(p for p in (outputs.dashboard, outputs.workbook, outputs.assets) if p is not None)
     if plan.output_file is not None and any(s.kind is StepKind.EXPORT_HTML for s in plan.definition.steps):
         html = plan.output_file.with_suffix(".html")
         targets.extend((html, html.with_name(html.stem + "_assets")))
@@ -89,8 +98,10 @@ def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
 
 
 def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
-    source = plan.value(ParameterKey.SOURCE_FILE)
-    if source and paths_alias(path, Path(str(source))):
+    sources = [plan.value(ParameterKey.SOURCE_FILE)]
+    if not _writes_database(plan):
+        sources.extend((plan.value(ParameterKey.EXISTING_DATABASE), plan.database_file))
+    if any(source and paths_alias(path, Path(str(source))) for source in sources):
         raise RecipeError("source_alias")
     if plan.input_folder is None:
         return

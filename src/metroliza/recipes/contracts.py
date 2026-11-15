@@ -130,6 +130,13 @@ class LocalBinding:
 
 
 @dataclass(frozen=True, repr=False)
+class AnalyticsOutputPaths:
+    dashboard: Path
+    workbook: Path | None
+    assets: Path
+
+
+@dataclass(frozen=True, repr=False)
 class ResolvedRunPlan:
     definition: RecipeDefinition
     binding: LocalBinding

@@ -49,6 +49,12 @@ the full trusted policy inline in a fresh read-only reviewer context, inspect on
 the final narrow delta, and preserve both earlier reports. This is a finite
 extension to repair policy provenance, not another full audit or verdict retry.
 
+Hosted validation then identified a concrete P1: the optional tabular analytics
+workbook was absent from the resolved output family, permitting a source alias.
+The coordinator admits one further bounded independent delta for that data-safety
+fix and the CI-discovered stale documentation pin. Preserve previous findings;
+do not repeat the full audit or reset the CI/package evidence.
+
 Write meaningful tests alongside implementation; run them only after all
 implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.

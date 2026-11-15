@@ -11,6 +11,13 @@ the bounded policy rebind described in the delivery packet. Final follow-up also
 guards output paths when the input is a filesystem root and narrows retained
 Windows artifacts to receipts, screenshots and synthetic business outputs.
 
+Hosted validation found two further concrete blockers: an optional tabular XLSX
+was absent from the output family and could alias its source; the new Help manual
+was absent from the old immutable documentation commit. The final correction
+uses one effective analytics output-family resolver before consent/effects and
+repins documentation to a retained commit containing all linked manuals. These
+changes require their own bounded delta and exact-head CI before merge.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an
