@@ -42,6 +42,13 @@ publication boundaries. One full independent review and at most one fresh
 changed-source delta are admitted. Mandatory project CI/GitHub review, real
 Windows package and separate PO acceptance remain distinct gates.
 
+The first delta closed all four required corrections with no new P0–P2, but its
+receipt did not confirm loading the trusted policy files. The coordinator admits
+one additional bounded policy/source rebind for this named gate defect. Supply
+the full trusted policy inline in a fresh read-only reviewer context, inspect only
+the final narrow delta, and preserve both earlier reports. This is a finite
+extension to repair policy provenance, not another full audit or verdict retry.
+
 Write meaningful tests alongside implementation; run them only after all
 implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.

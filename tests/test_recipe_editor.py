@@ -153,3 +153,26 @@ def test_capture_explicit_options_survive_unrelated_editor_change(tmp_path):
     editor.configure_reports(dates=True, grouping_columns=(), additional_html=False)
     effective = build_export_request(editor.preview(), StepKind.EXPORT_MAIN)
     assert effective.options == native.options
+
+
+@pytest.mark.parametrize("additional_html", [False, True])
+def test_removing_group_rule_clears_analysis_preserves_native_options_and_requested_html(tmp_path, additional_html):
+    native = manual_request(tmp_path)
+    captured = capture_export_configuration(native)
+    original_options = json.loads(captured.binding.value(ParameterKey.EXPORT_OPTIONS))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    assert json.loads(editor.current.binding.value(ParameterKey.EXPORT_OPTIONS))["group_analysis_level"] == "standard"
+    editor.configure_reports(dates=False, grouping_columns=(), additional_html=additional_html)
+    stored = editor.save(RecipeStore(tmp_path / "private"))
+    reopened = RecipeStore(tmp_path / "private").load(stored.definition.recipe_id)
+    kinds = {step.kind for step in reopened.definition.steps}
+    assert StepKind.GROUP not in kinds
+    assert (StepKind.EXPORT_HTML in kinds) is additional_html
+    assert reopened.binding.value(ParameterKey.GROUPING_RULES) is None
+    configured = json.loads(reopened.binding.value(ParameterKey.EXPORT_OPTIONS))
+    assert configured == {**original_options, "group_analysis_level": "off",
+                          "group_analysis_scope": "auto", "generate_html_dashboard": additional_html}
+    effective = build_export_request(resolve_plan(reopened.definition, reopened.binding), StepKind.EXPORT_MAIN)
+    assert effective.grouping_df is None
+    assert effective.options == native.options  # HTML remains an explicit separate step.

@@ -258,7 +258,15 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-recipe-qualification
-          path: ${{ runner.temp }}/recipe-qualification/**
+          path: |
+            ${{ runner.temp }}/recipe-qualification/*/qualification.json
+            ${{ runner.temp }}/recipe-qualification/*/runtime/recipe-qualification.json
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.png
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.db
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.xlsx
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.html
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*_assets*/**
+            ${{ runner.temp }}/recipe-qualification/*/startup.jsonl
           if-no-files-found: error
 
       - name: Qualify frozen compute workers against serial synthetic outputs (#1134)

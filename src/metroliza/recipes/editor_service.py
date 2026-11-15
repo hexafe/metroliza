@@ -97,8 +97,7 @@ class RecipeEditorService:
             prefix.append(StepSpec(StepKind.GROUP, current, DataKind.SELECTION))
             current = DataKind.SELECTION
         else:
-            params.pop(ParameterKey.GROUPING_RULES, None)
-            values.pop(ParameterKey.GROUPING_RULES, None)
+            self._clear_report_grouping(params, values, additional_html, kinds)
         main = StepKind.EXPORT_MAIN in kinds
         if main:
             prefix.append(StepSpec(StepKind.EXPORT_MAIN, current, DataKind.ARTIFACT))
@@ -108,6 +107,17 @@ class RecipeEditorService:
         prefix.append(StepSpec(StepKind.VERIFY_OUTPUT, DataKind.ARTIFACT, DataKind.ARTIFACT))
         return self._replace(definition=replace(self.current.definition, steps=tuple(prefix),
             parameters=tuple(params.values())), binding=replace(self.current.binding, values=tuple(values.items())))
+
+    def _clear_report_grouping(self, params, values, additional_html, kinds):
+        from metroliza.recipes.report_configuration_adapter import ungrouped_export_configuration
+        params.pop(ParameterKey.GROUPING_RULES, None)
+        removed = values.pop(ParameterKey.GROUPING_RULES, None)
+        if removed:
+            params[ParameterKey.EXPORT_OPTIONS] = ParameterSpec(
+                ParameterKey.EXPORT_OPTIONS, ParameterType.TEXT, ParameterMode.FIXED)
+            values[ParameterKey.EXPORT_OPTIONS] = ungrouped_export_configuration(
+                replace(self.current.binding, values=tuple(values.items())),
+                additional_html=additional_html or StepKind.EXPORT_MAIN not in kinds)
 
     def preview(self):
         return resolve_plan(self.current.definition, self.current.binding)

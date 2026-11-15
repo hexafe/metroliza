@@ -75,6 +75,12 @@ def test_targets_inside_input_and_case_aliases_rejected(tmp_path):
     assert copied.run_id != resolved.run_id
 
 
+def test_targets_inside_filesystem_root_are_rejected(tmp_path):
+    with pytest.raises(RecipeError, match="target_inside_input"):
+        resolve_plan(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
+            tmp_path.anchor, str(tmp_path / "result.xlsx")))
+
+
 def test_unknown_keys_and_mutable_values_rejected():
     binding = LocalBinding("reports_excel_main", "Private", values=((ParameterKey.COLUMNS, ["a"]),))
     with pytest.raises(RecipeError):

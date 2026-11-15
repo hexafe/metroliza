@@ -120,6 +120,13 @@ def grouped_export_configuration(binding):
     return json.dumps(asdict(options), sort_keys=True)
 
 
+def ungrouped_export_configuration(binding, *, additional_html):
+    """Mirror manual Clear grouping; retain unrelated captured export settings."""
+    options = replace(_options(binding), group_analysis_level="off", group_analysis_scope="auto",
+                      generate_html_dashboard=additional_html)
+    return json.dumps(asdict(options), sort_keys=True)
+
+
 def validate_report_configuration(plan: ResolvedRunPlan) -> None:
     _filter_state(plan)
     _options(plan)

@@ -5,6 +5,12 @@ no P0/P1 or demonstrated data-loss/privacy defect. The source review did not
 execute tests, Windows, CI or packaged journeys. The final delta and machine
 receipts are separate evidence.
 
+The first delta on `0310983e` closed F1–F4 and found no new P0/P1/P2. Its trusted
+policy loading was not confirmed, so the source gate remains incomplete until
+the bounded policy rebind described in the delivery packet. Final follow-up also
+guards output paths when the input is a filesystem root and narrows retained
+Windows artifacts to receipts, screenshots and synthetic business outputs.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an

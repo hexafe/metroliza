@@ -97,7 +97,7 @@ def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
     if paths_alias(path, plan.input_folder):
         raise RecipeError("source_alias")
     source_identity = path_identity(plan.input_folder)
-    if path_identity(path).startswith(source_identity + "\\"):
+    if path_identity(path).startswith(source_identity.rstrip("\\") + "\\"):
         raise RecipeError("target_inside_input")
 
 
