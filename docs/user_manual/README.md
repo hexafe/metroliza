@@ -60,6 +60,7 @@ production-line data, read these pages first:
 These pages follow the main app workflows.
 
 - [Main window](main_window.md)
+- [Recipes](recipes.md)
 - [Parsing](parsing.md)
 - [Modify Database](modify_database.md)
 - [Export overview](export_overview.md)

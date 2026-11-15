@@ -241,12 +241,14 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
     host = window.reports_workspace
     assert window.parsing_dialog is host
     assert window.window_coordinator.get("parsing") is None
-    assert [button for button in window.home_page.findChildren(QPushButton) if not button.isHidden()] == [
+    assert [button for button in window.home_page.findChildren(QPushButton)
+            if not button.isHidden() and not window.recipe_home.isAncestorOf(button)] == [
         window.home_next_action,
         *(window._module_launch_buttons[page][0][0] for page in (
             "reports", "csv_summary", "industrial_data", "realtime_monitor", "parser_profiles", "tools"
         )),
     ]
+    assert len(window.recipe_home.findChildren(QPushButton)) == 3
     for button in (window.modifydb_button, window.export_button, window.map_characteristics_button):
         assert window.reports_page.isAncestorOf(button)
         assert not window.home_page.isAncestorOf(button)

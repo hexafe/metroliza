@@ -1,6 +1,25 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.1 — current version
+## 0.8.0-dev.4 — current version
+
+- Allocate a fresh package identity after the global inventory found an earlier diagnostics package already using `0.8.0-dev.3`.
+- Keep the qualified recipe implementation unchanged and retain earlier EXE/ZIP bytes and receipts with their original source identities.
+
+## 0.8.0-dev.3 — previous recipe qualification candidate
+
+- Wait for visible recipe controls before qualification form captures and Start.
+- Keep the existing Home command-center checks aligned with the added recipe launchers.
+- Preserve the earlier `0.8.0-dev.2` EXE/ZIP bytes and qualification receipts under their original identity.
+
+## 0.8.0-dev.2 — previous development candidate
+
+- Add local report recipe quick flows, private revision-safe storage and a shared execution view.
+- Capture supported analysis settings and configure larger typed flows with dates, groups and outputs.
+- Add CSV/XLSX and Industrial cache adapters using the existing computation services.
+- Preserve previous outputs, cooperative cancellation and runtime-only diagnostic correlation.
+- Source validation, CI, Windows package qualification and PO acceptance remain separate gates.
+
+## 0.8.0-dev.1 — previous development version
 - Adopt development package versions `dev.N`, frozen candidates `rc.N` and accepted stable scope `0.8.0`; the actual build date is recorded separately.
 - Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history; this naming transition does not rename or requalify their bytes.
 - Reserve `1.0.0` for both a complete external-LLM parser authoring package and fully unified, complete reports, with the existing issue contracts and release gates retained.

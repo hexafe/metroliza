@@ -76,6 +76,7 @@ Approved production sources / CSV / Excel
 | `metroliza.cmm` | CMM-specific parsing and domain helpers where separated from generic parsing | a generic persistence or UI package |
 | `metroliza.reports` | report schema, repositories, transactions, query scopes, report services | direct dependency on PyQt widgets |
 | `metroliza.storage` | reusable local storage/lifecycle primitives | a duplicate report/industrial domain layer |
+| `metroliza.recipes` | immutable local flow plans, private bindings, revision-safe storage and single-owner execution through explicit ports | a statistical engine, arbitrary scripts/SQL or a second source-data store |
 | `metroliza.tabular` | normalized CSV/Excel row store, filtering, grouping, tabular analysis services | a UI-specific workflow implementation |
 | `metroliza.industrial` | source configuration, cache, production analytics, realtime stream, anomaly domain | a direct report-UI dependency or unbounded live-query client |
 | `metroliza.analytics` | statistical adapters and reusable analytical contracts | exporter/UI orchestration |

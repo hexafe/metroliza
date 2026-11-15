@@ -240,6 +240,35 @@ jobs:
           $sha = (Get-FileHash -LiteralPath $launcher[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Launcher EXE: $($launcher[0].Name) SHA-256 $sha"
 
+      - name: Qualify packaged recipe journeys at three scales
+        shell: pwsh
+        run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical recipe artifact identity failed' }
+          $launcher = Join-Path $PWD (Join-Path 'dist' $artifactNames.launcher)
+          foreach ($scale in @('1', '1.25', '1.5')) {
+            $receipt = Join-Path $env:RUNNER_TEMP ("recipe-qualification/scale-" + $scale)
+            & .\.venv-build\Scripts\python.exe scripts/qualify_recipe_package.py --exe $launcher --output $receipt --expected-sha '${{ github.sha }}' --scale $scale
+            if ($LASTEXITCODE -ne 0) { throw "Packaged recipe journeys failed at scale $scale" }
+          }
+
+      - name: Retain packaged recipe journey evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-recipe-qualification
+          path: |
+            ${{ runner.temp }}/recipe-qualification/*/qualification.json
+            ${{ runner.temp }}/recipe-qualification/*/runtime/recipe-qualification.json
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.png
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.db
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.xlsx
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*.html
+            ${{ runner.temp }}/recipe-qualification/*/runtime/*_assets*/**
+            ${{ runner.temp }}/recipe-qualification/*/startup.jsonl
+          if-no-files-found: error
+
       - name: Qualify frozen compute workers against serial synthetic outputs (#1134)
         shell: pwsh
         run: |
@@ -1782,6 +1811,22 @@ jobs:
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py tests/test_report_execution_results.py
+
+      - name: Run native Windows recipe flow contracts
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+        run: >-
+          python -m pytest -vv
+          tests/test_recipe_contracts.py tests/test_recipe_storage.py
+          tests/test_recipe_runner.py tests/test_recipe_ports.py
+          tests/test_recipe_editor.py tests/test_recipe_adapters.py
+          tests/test_recipe_analytics_publication.py
+          tests/test_recipe_ui.py tests/test_recipe_workspace.py
+          tests/test_recipe_real_flows.py tests/test_recipe_diagnostic_correlation.py
+          tests/test_recipe_flow_diagnostics.py
+          tests/test_recipe_qualification.py
 
       - name: Run native Windows report workspace tests
         if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}

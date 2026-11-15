@@ -811,6 +811,10 @@ class MainWindow(QMainWindow):
         home_layout = QVBoxLayout(home_content)
         home_layout.setContentsMargins(4, 4, 4, 4)
         home_layout.setSpacing(8)
+        from metroliza.ui.recipe_workspace import RecipeHome
+        self.recipe_home = RecipeHome(self)
+        self.recipe_home.launch_requested.connect(self._launch_recipe)
+        home_layout.addWidget(self.recipe_home)
         for widget in (
             section_label("Home"), self.context_label, self.source_status_label,
             self.source_path_field, self.database_status_label, self.database_path_field, self.workflow_hint_label,
@@ -862,6 +866,9 @@ class MainWindow(QMainWindow):
             self._add_workspace_page(title, self._build_workspace_landing_page(
                 title, description, ((action, callback),),
             ))
+        self.recipe_page = QWidget()
+        self.recipe_page.setLayout(QVBoxLayout())
+        self._add_workspace_page("Receptury", self.recipe_page)
         self.navigation_list.installEventFilter(self)
         self.navigation_list.viewport().installEventFilter(self)
         self.navigation_list.itemClicked.connect(
@@ -901,6 +908,19 @@ class MainWindow(QMainWindow):
         self._sync_module_launchers()
         self._update_navigation_layout()
 
+    def _ensure_recipe_workspace(self):
+        workspace = getattr(self, "recipe_workspace", None)
+        if workspace is None:
+            from metroliza.ui.recipe_workspace import RecipeWorkspace
+            workspace = RecipeWorkspace(self)
+            self.recipe_workspace = workspace
+            self.recipe_page.layout().addWidget(workspace)
+        return workspace
+
+    def _launch_recipe(self, identity=""):
+        self._show_workspace_page("receptury")
+        self._ensure_recipe_workspace().launch(identity)
+
     def _add_workspace_page(self, label: str, page: QWidget) -> None:
         page_id = label.lower().replace(" ", "_")
         sequence = WORKSPACE_SHORTCUTS.get(page_id, "")
@@ -929,6 +949,8 @@ class MainWindow(QMainWindow):
         return callback() if callback else None
 
     def _on_navigation_changed(self, index):
+        if self.navigation_combo.itemData(index) == "receptury":
+            self._ensure_recipe_workspace()
         if self._reports_first_paint and self.navigation_combo.itemData(index) == "reports":
             self._ensure_reports_workspace()
         self.workspace_stack.setCurrentIndex(index)
@@ -1370,6 +1392,10 @@ class MainWindow(QMainWindow):
         set_status_variant(self.metadata_enrichment_status_label, variant)
 
     def closeEvent(self, event):
+        recipes = getattr(self, "recipe_workspace", None)
+        if recipes is not None and not recipes.request_close():
+            event.ignore()
+            return
         if not self._background_shutdown_allows_close():
             event.ignore()
             return
@@ -2070,7 +2096,7 @@ class MainWindow(QMainWindow):
 
     def set_db_file(self, db_file):
         try:
-            if not self._report_selection_change_allowed(db_file, self.db_file):
+            if not self._report_selection_change_allowed(db_file, self.db_file, database=True):
                 return False
             readiness = self._inspect_database(db_file)
             if readiness is None:
@@ -2203,7 +2229,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
-    def _report_selection_change_allowed(self, selected, current):
+    def _report_selection_change_allowed(self, selected, current, *, database=False):
+        if database and not self._recipe_database_change_allowed(selected):
+            return False
         if not self._report_context_change_allowed():
             return False
         host = self._reports_workspace
@@ -2217,6 +2245,17 @@ class MainWindow(QMainWindow):
             )
             return answer == QMessageBox.StandardButton.Yes and self._report_context_change_allowed()
         return True
+
+    def _recipe_database_change_allowed(self, database_file):
+        workspace = getattr(self, "recipe_workspace", None)
+        if workspace is None or workspace.database_change_allowed(database_file):
+            return True
+        self.workspace_notice_label.setText(
+            "This database overlaps an active recipe's outputs. Finish or cancel the recipe first."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
 
     def _report_context_change_allowed(self):
         if self._reports_workspace is None or self._reports_workspace.can_change_workspace():

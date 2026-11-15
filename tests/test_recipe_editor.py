@@ -1,0 +1,220 @@
+"""Typed capture and editor roundtrip controls, independent of widget history."""
+from dataclasses import asdict, replace
+import json
+import sqlite3
+
+import pytest
+
+from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest, validate_export_request
+from metroliza.recipes.bindings import resolve_plan
+from metroliza.recipes.builtin_recipes import REPORTS_EXCEL_MAIN, builtin_binding
+from metroliza.recipes.contracts import ParameterKey, ParameterMode, RecipeError, StepKind
+from metroliza.recipes.editor_service import RecipeEditorService
+from metroliza.recipes.storage import RecipeStore, copy_recipe
+from metroliza.recipes.report_configuration_adapter import (
+    build_export_request, capture_export_configuration,
+)
+from metroliza.reports.report_query_service import build_measurement_filter_query
+from metroliza.shared.filter_state import FilterState
+from metroliza.tabular.contracts import GroupingAssignment
+
+
+def manual_request(tmp_path, *, state=None, grouping=None):
+    options = ExportOptions(preset="full_report", violin_plot_min_samplesize=12,
+                            generate_summary_sheet=True, chart_worker_count=2)
+    request = ExportRequest(AppPaths(str(tmp_path / "source.db"), str(tmp_path / "result.xlsx")),
+        options, build_measurement_filter_query(**asdict(state)) if state else None, grouping)
+    return validate_export_request(request)
+
+
+def test_capture_reopen_keeps_all_actual_export_options_and_filter_semantics(tmp_path):
+    state = FilterState(reference_values=("PRIVATE_REFERENCE",), date_from="2020-01-01",
+                        date_to="2020-12-31", has_nok_only=True)
+    manual = manual_request(tmp_path, state=state)
+    captured = capture_export_configuration(manual, filter_state=state)
+    store = RecipeStore(tmp_path / "private")
+    saved = store.save(captured.definition, captured.binding, expected_revision=None)
+    reopened = store.load(saved.definition.recipe_id)
+    plan = resolve_plan(reopened.definition, reopened.binding)
+    actual = build_export_request(plan, StepKind.EXPORT_MAIN)
+    assert actual.options == manual.options
+    assert actual.filter_query == manual.filter_query
+    assert actual.replace_outputs == ()
+    assert "PRIVATE_REFERENCE" not in repr(captured.definition)
+
+
+def test_raw_sql_and_manual_membership_never_silently_dropped(tmp_path):
+    with pytest.raises(RecipeError, match="filter_capture_requires_typed_state"):
+        capture_export_configuration(replace(manual_request(tmp_path), filter_query="SELECT 1"))
+    with pytest.raises(RecipeError, match="manual_membership_not_portable"):
+        capture_export_configuration(manual_request(tmp_path,
+            grouping=(GroupingAssignment("Private", report_id=3),)))
+
+
+def test_builtin_copy_extended_flow_and_runtime_modes_survive_save(tmp_path):
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
+        str(tmp_path / "input"), str(tmp_path / "result.xlsx")), name="Local")
+    editor = RecipeEditorService(copied)
+    editor.configure_reports(dates=True, grouping_columns=("REFERENCE",), additional_html=True)
+    editor.set_value(ParameterKey.DATE_FROM, "2020-01-01")
+    editor.set_value(ParameterKey.DATE_TO, "2020-12-31")
+    editor.set_mode(ParameterKey.DATE_FROM, ParameterMode.PROMPT)
+    snapshot = editor.preview()
+    editor.rename("Changed during execution")
+    editor.set_value(ParameterKey.DATE_FROM, "2021-01-01")
+    assert snapshot.value(ParameterKey.DATE_FROM) == "2020-01-01"
+    assert snapshot.binding.name == "Local"
+    store = RecipeStore(tmp_path / "private")
+    saved = editor.save(store)
+    reopened = RecipeEditorService(store.load(saved.definition.recipe_id))
+    assert reopened.current == saved
+    assert [s.kind for s in saved.definition.steps] == [StepKind.PREPARE_DATABASE,
+        StepKind.IMPORT_REPORTS, StepKind.FILTER, StepKind.GROUP, StepKind.EXPORT_MAIN,
+        StepKind.EXPORT_HTML, StepKind.VERIFY_OUTPUT]
+    assert REPORTS_EXCEL_MAIN.steps[-2].kind is StepKind.EXPORT_MAIN
+
+
+def test_unknown_group_column_blocks_without_partial_editor_mutation(tmp_path):
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN), name="Local")
+    editor = RecipeEditorService(copied)
+    previous = editor.current
+    with pytest.raises(RecipeError, match="unsupported_grouping_rule"):
+        editor.configure_reports(dates=True, grouping_columns=("RAW_REPORT_ID",), additional_html=True)
+    assert editor.current == previous
+
+
+def test_configured_filter_matches_independent_sql_oracle(tmp_path):
+    state = FilterState(reference_values=("A",), date_from="2020-01-01", date_to="2020-12-31")
+    captured = capture_export_configuration(manual_request(tmp_path, state=state), filter_state=state)
+    actual = build_export_request(resolve_plan(captured.definition, captured.binding), StepKind.EXPORT_MAIN)
+    # Inspect the shared query's WHERE against independent row-wise truth, rather
+    # than comparing capture and execution via the same helper as sole oracle.
+    connection = sqlite3.connect(":memory:")
+    try:
+        connection.execute("CREATE TABLE candidate(reference TEXT, report_date TEXT)")
+        fixtures = [("A", "2020-06-01"), ("B", "2020-06-01"), ("A", "2021-01-01")]
+        connection.executemany("INSERT INTO candidate VALUES (?, ?)", fixtures)
+        where = actual.filter_query.split(" WHERE ", 1)[1]
+        result = connection.execute("SELECT reference, report_date FROM candidate WHERE " + where).fetchall()
+        expected = [row for row in fixtures if row[0] == "A" and "2020-01-01" <= row[1] <= "2020-12-31"]
+        assert result == expected
+    finally:
+        connection.close()
+
+
+def test_configuration_json_unknown_field_is_rejected(tmp_path):
+    captured = capture_export_configuration(manual_request(tmp_path))
+    plan = resolve_plan(captured.definition, captured.binding)
+    values = dict(plan.binding.values)
+    raw = json.loads(values[ParameterKey.EXPORT_OPTIONS])
+    raw["arbitrary_sql"] = "SELECT 1"
+    values[ParameterKey.EXPORT_OPTIONS] = json.dumps(raw)
+    malformed = replace(plan, binding=replace(plan.binding, values=tuple(values.items())))
+    with pytest.raises(RecipeError, match="unsupported_configuration_fields"):
+        build_export_request(malformed, StepKind.EXPORT_MAIN)
+
+
+def test_editor_dirty_close_cancel_then_discard_emits_finished(qapplication_session, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+    from metroliza.ui.recipe_editor import RecipeEditor
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN), name="Private")
+    dialog = RecipeEditor(copied, RecipeStore(tmp_path / "private"))
+    finished = []
+    dialog.finished.connect(finished.append)
+    dialog.show()
+    dialog.name.setText("Unsaved")
+    dialog._mark_modified()
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Cancel)
+    assert not dialog.close()
+    assert dialog.isVisible() and not finished
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Discard)
+    assert dialog.close()
+    assert not dialog.isVisible() and len(finished) == 1
+    assert not dialog._widgets_dirty and not dialog.service.modified
+
+
+def test_group_rule_enables_native_standard_analysis_and_html_without_resetting_options(tmp_path):
+    captured = capture_export_configuration(manual_request(tmp_path))
+    original = json.loads(captured.binding.value(ParameterKey.EXPORT_OPTIONS))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    configured = json.loads(editor.current.binding.value(ParameterKey.EXPORT_OPTIONS))
+    assert configured == {**original, "group_analysis_level": "standard", "generate_html_dashboard": True}
+    assert StepKind.EXPORT_HTML in {step.kind for step in editor.current.definition.steps}
+    assert configured["violin_plot_min_samplesize"] == 12
+    assert configured["chart_worker_count"] == 2
+    assert configured["generate_summary_sheet"] is True
+
+
+def test_capture_explicit_options_survive_unrelated_editor_change(tmp_path):
+    native = replace(manual_request(tmp_path), options=replace(manual_request(tmp_path).options,
+        group_analysis_level="light", group_analysis_scope="single_reference"))
+    editor = RecipeEditorService(capture_export_configuration(native))
+    editor.configure_reports(dates=True, grouping_columns=(), additional_html=False)
+    effective = build_export_request(editor.preview(), StepKind.EXPORT_MAIN)
+    assert effective.options == native.options
+
+
+@pytest.mark.parametrize("additional_html", [False, True])
+def test_removing_group_rule_clears_analysis_preserves_native_options_and_requested_html(tmp_path, additional_html):
+    native = manual_request(tmp_path)
+    captured = capture_export_configuration(native)
+    original_options = json.loads(captured.binding.value(ParameterKey.EXPORT_OPTIONS))
+    editor = RecipeEditorService(captured)
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    assert json.loads(editor.current.binding.value(ParameterKey.EXPORT_OPTIONS))["group_analysis_level"] == "standard"
+    editor.configure_reports(dates=False, grouping_columns=(), additional_html=additional_html)
+    stored = editor.save(RecipeStore(tmp_path / "private"))
+    reopened = RecipeStore(tmp_path / "private").load(stored.definition.recipe_id)
+    kinds = {step.kind for step in reopened.definition.steps}
+    assert StepKind.GROUP not in kinds
+    assert (StepKind.EXPORT_HTML in kinds) is additional_html
+    assert reopened.binding.value(ParameterKey.GROUPING_RULES) is None
+    configured = json.loads(reopened.binding.value(ParameterKey.EXPORT_OPTIONS))
+    assert configured == {**original_options, "group_analysis_level": "off",
+                          "group_analysis_scope": "auto", "generate_html_dashboard": additional_html}
+    effective = build_export_request(resolve_plan(reopened.definition, reopened.binding), StepKind.EXPORT_MAIN)
+    assert effective.grouping_df is None
+    assert effective.options == native.options  # HTML remains an explicit separate step.
+
+
+def test_multi_column_group_labels_are_unambiguous_deterministic_and_preserve_blank_semantics(tmp_path):
+    from contextlib import closing
+    from metroliza.recipes.report_configuration_adapter import _grouping
+
+    database = tmp_path / "source.db"
+    special = 'quotation " and comma, pipe | slash \\ newline\nżółć'
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE candidate(id INTEGER, revision TEXT, part_name TEXT)")
+        connection.executemany("INSERT INTO candidate VALUES (?, ?, ?)", [
+            (1, "A | B", "C"), (2, "A", "B | C"), (3, None, special), (4, "", special)])
+        connection.commit()
+    editor = RecipeEditorService(capture_export_configuration(manual_request(tmp_path)))
+    editor.configure_reports(dates=False, grouping_columns=("REVISION", "PART_NAME"), additional_html=False)
+    # Literal selected-source projection, not a reconstruction of the label code.
+    query = ("SELECT id AS REPORT_ID, revision AS REVISION, part_name AS PART_NAME, "
+             "'REF' AS REFERENCE, '2024-01-01' AS DATE, '' AS SAMPLE_NUMBER, "
+             "'' AS TEMPLATE_VARIANT, 0 AS HAS_NOK, 0 AS NOK_COUNT, '' AS FILENAME FROM candidate")
+    plan = editor.preview()
+    labels = {item.report_id: item.group for item in _grouping(plan, query)}
+    repeated = {item.report_id: item.group for item in _grouping(plan, query)}
+    assert labels == repeated
+    assert labels[1] == '["A | B", "C"]'
+    assert labels[2] == '["A", "B | C"]'
+    assert labels[1] != labels[2]
+    assert labels[3] == labels[4]  # Existing normalization combines None and blank.
+    assert json.loads(labels[3]) == ["(blank)", special]
+    editor.configure_reports(dates=False, grouping_columns=("REVISION",), additional_html=False)
+    single = {item.report_id: item.group for item in _grouping(editor.preview(), query)}
+    assert single == {1: "A | B", 2: "A", 3: "(blank)", 4: "(blank)"}
+
+
+@pytest.mark.parametrize("key", [
+    ("A | B", "C"), ("A", "B | C"), ("", "comma,inside"),
+    ('quote"inside', "back\\slash"), ("line\nbreak", "[bracket]"), ("żółć", "雪"),
+])
+def test_multi_column_label_roundtrips_normalized_tuple_without_delimiter_ambiguity(key):
+    from metroliza.recipes.report_configuration_adapter import _group_label
+    label = _group_label(key)
+    assert json.loads(label) == list(key)
+    assert _group_label(key) == label
