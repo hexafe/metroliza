@@ -14,8 +14,9 @@ import struct
 import sys
 import time
 import zipfile
-import xml.etree.ElementTree as ET
 from urllib.parse import unquote, urlsplit
+
+from defusedxml import ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]

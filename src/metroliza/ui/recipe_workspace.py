@@ -188,10 +188,14 @@ class RecipeWorkspace(QWidget):
         from metroliza.ui.recipe_editor import RecipeEditor
         editor = RecipeEditor(stored, self.store, self)
         self._editors.append(editor)
-        editor.saved.connect(lambda _stored: self.library.refresh())
-        editor.finished.connect(lambda _result: self.library.refresh())
+        editor.saved.connect(self._refresh_catalog)
+        editor.finished.connect(self._refresh_catalog)
         editor.finished.connect(lambda _result: self._editors.remove(editor))
         editor.open()
+
+    def _refresh_catalog(self, *_args):
+        self.library.refresh()
+        self.quick.set_favorites(self.library.favorites)
 
     def capture(self, module, request, **configuration):
         try:

@@ -158,9 +158,17 @@ class RecipeQuickFlows(QWidget):
         for entry in entries:
             if entry.definition.recipe_id in self.favorites:
                 button = QPushButton(entry.binding.name)
-                button.clicked.connect(lambda _checked=False, item=entry:
-                                       self.controller.launch(item.definition, item.binding))
+                button.clicked.connect(lambda _checked=False, identity=entry.definition.recipe_id:
+                                       self._launch_favorite(identity))
                 self.favorite_buttons.addWidget(button)
+
+    def _launch_favorite(self, identity):
+        try:
+            # The controller checks ownership before resolving the current saved
+            # revision. Buttons retain only identity, never private stale settings.
+            self.controller.launch(identity)
+        except (ValueError, OSError):
+            self.controller.failed.emit("recipe_not_found")
 
     def _changed(self, record):
         from metroliza.ui.recipe_runner_page import _STATE_LABELS

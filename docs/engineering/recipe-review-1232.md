@@ -18,6 +18,11 @@ uses one effective analytics output-family resolver before consent/effects and
 repins documentation to a retained commit containing all linked manuals. These
 changes require their own bounded delta and exact-head CI before merge.
 
+Subsequent hosted checks require safe XML parsing of qualification workbooks and
+current-revision favorite launches. The grouped correction uses pinned
+`defusedxml` (including hostile-entity controls for every parsed workbook part)
+and removes captured saved snapshots from favorite launch callbacks.
+
 ## Required corrections
 
 - **Group-analysis parity:** portable grouping resolves Standard analysis and an

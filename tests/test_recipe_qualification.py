@@ -199,6 +199,23 @@ def test_larger_xlsx_literal_scope_and_group_statistics_include_formula_strings(
     assert driver.workbook_cells(path, "Group Analysis")["Z99"] == "Go to metric"
 
 
+@pytest.mark.parametrize("part", ["xl/workbook.xml", "xl/_rels/workbook.xml.rels",
+    "xl/sharedStrings.xml", "xl/worksheets/sheet1.xml"])
+def test_workbook_oracle_rejects_xml_entities_in_every_parsed_part(tmp_path, part):
+    from defusedxml.common import DefusedXmlException
+    path = tmp_path / "untrusted.xlsx"
+    _literal_workbook(path)
+    with zipfile.ZipFile(path) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    entries[part] = (b'<!DOCTYPE root [<!ENTITY expanded "PRIVATE_XML_SENTINEL">]>'
+                     b'<root>&expanded;</root>')
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    with pytest.raises(DefusedXmlException):
+        driver.workbook_cells(path, "MEASUREMENTS")
+
+
 @pytest.mark.parametrize("fault,reason", [("date", "larger_export_scope"),
     ("extra", "larger_export_scope"), ("value", "larger_export_scope"),
     ("count", "larger_group_statistics"), ("mean", "larger_group_statistics")])

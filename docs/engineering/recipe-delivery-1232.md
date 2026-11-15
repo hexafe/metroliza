@@ -55,6 +55,12 @@ The coordinator admits one further bounded independent delta for that data-safet
 fix and the CI-discovered stale documentation pin. Preserve previous findings;
 do not repeat the full audit or reset the CI/package evidence.
 
+The next hosted gate identified unsafe XML parsing in the qualification oracle
+and a service-review P2 for a favorite retaining an old saved revision. Admit one
+bounded delta for these named blockers together. Use the already pinned safe XML
+parser, verify entity rejection, and resolve favorites from the current catalog.
+No security baseline or required check is relaxed.
+
 Write meaningful tests alongside implementation; run them only after all
 implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.

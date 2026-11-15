@@ -214,3 +214,79 @@ def test_active_database_refresh_precedes_resolver_and_start_admission(qapplicat
     current[0] = tmp_path / "result.db"
     assert not controller.start()
     assert errors == ["active_database_alias"]
+
+
+def test_existing_favorite_resolves_saved_fixed_filter_and_output_revision(qapplication_session, tmp_path):
+    from metroliza.recipes.contracts import ParameterMode
+    from metroliza.recipes.editor_service import RecipeEditorService
+    from metroliza.recipes.storage import RecipeStore, copy_recipe
+    from metroliza.ui.recipe_library_page import RecipeQuickFlows
+
+    store = RecipeStore(tmp_path / "private")
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
+        str(tmp_path / "input"), str(tmp_path / "first.xlsx")), name="Saved favorite")
+    editor = RecipeEditorService(copied)
+    editor.configure_reports(dates=True, grouping_columns=(), additional_html=False)
+    for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO, ParameterKey.OUTPUT_FILE):
+        editor.set_mode(key, ParameterMode.FIXED)
+    editor.set_value(ParameterKey.DATE_FROM, "2024-01-01")
+    editor.set_value(ParameterKey.DATE_TO, "2024-01-31")
+    first = editor.save(store)
+    controller = RecipeController(Runner(), resolver=store.load)
+    quick = RecipeQuickFlows(controller, store.list)
+    quick.set_favorites({first.definition.recipe_id})
+    original_button = quick.favorite_buttons.itemAt(0).widget()
+    editor.set_value(ParameterKey.DATE_FROM, "2024-01-02")
+    editor.set_value(ParameterKey.OUTPUT_FILE, str(tmp_path / "latest.xlsx"))
+    latest = editor.save(store)
+    original_button.click()  # No shortcut reconstruction or process restart.
+    assert latest.binding.revision == first.binding.revision + 1
+    assert controller.binding == latest.binding
+    assert controller.binding.value(ParameterKey.DATE_FROM) == "2024-01-02"
+    assert controller.binding.value(ParameterKey.OUTPUT_FILE) == str(tmp_path / "latest.xlsx")
+    assert next(p for p in controller.definition.parameters
+                if p.key is ParameterKey.DATE_FROM).mode is ParameterMode.FIXED
+    quick.close()
+
+
+def test_deleted_favorite_reports_closed_error_without_launching_stale_snapshot(qapplication_session, tmp_path):
+    from metroliza.recipes.storage import RecipeStore, copy_recipe
+    from metroliza.ui.recipe_library_page import RecipeQuickFlows
+
+    store = RecipeStore(tmp_path / "private")
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN), name="Private")
+    saved = store.save(copied.definition, copied.binding, expected_revision=None)
+    controller = RecipeController(Runner(), resolver=store.load)
+    controller.launch("reports_excel_main")
+    previous = controller.binding
+    quick = RecipeQuickFlows(controller, store.list)
+    quick.set_favorites({saved.definition.recipe_id})
+    errors = []
+    controller.failed.connect(errors.append)
+    (store.root / f"{saved.definition.recipe_id}.json").unlink()
+    quick.favorite_buttons.itemAt(0).widget().click()
+    assert errors == ["recipe_not_found"]
+    assert controller.binding is previous
+    quick.close()
+
+
+def test_busy_favorite_raises_current_flow_before_any_saved_revision_read(qapplication_session):
+    from metroliza.ui.recipe_library_page import RecipeQuickFlows
+    from metroliza.recipes.storage import copy_recipe
+
+    def resolver(_identity):
+        raise AssertionError("busy controller must retain its current owner")
+    controller = RecipeController(Runner(), resolver=resolver)
+    controller.launch("reports_excel_main")
+    previous = controller.binding
+    favorite = copy_recipe(REPORTS_EXCEL_MAIN, previous, name="Private favorite")
+    quick = RecipeQuickFlows(controller, (favorite,))
+    quick.set_favorites({favorite.definition.recipe_id})
+    controller.last_record = RunRecord("flow", "run", RunState.RUNNING, ownership=True)
+    raised = []
+    controller.view_requested.connect(lambda: raised.append(True))
+    quick.favorite_buttons.itemAt(0).widget().click()
+    assert raised == [True] and controller.binding is previous
+    assert controller.busy
+    controller.last_record = None
+    quick.close()
