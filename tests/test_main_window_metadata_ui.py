@@ -659,9 +659,14 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     "Realtime Monitor",
                     "Parser Profiles",
                     "Tools",
+                    "Receptury",
                 ],
             )
             self.assertEqual(window.workspace_stack.count(), len(navigation))
+            self.assertIsNone(getattr(window, "recipe_workspace", None))
+            quick_buttons = [button.text() for button in window.recipe_home.findChildren(QPushButton)]
+            self.assertIn("Raporty → Excel Main", quick_buttons)
+            self.assertIn("Raporty → Dashboard HTML", quick_buttons)
             window.navigation_list.setCurrentRow(3)
             self.assertEqual(window.workspace_stack.currentIndex(), 3)
             self.assertEqual(

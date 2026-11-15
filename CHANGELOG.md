@@ -1,6 +1,14 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.1 — current version
+## 0.8.0-dev.2 — current version
+
+- Add local report recipe quick flows, private revision-safe storage and a shared execution view.
+- Capture supported analysis settings and configure larger typed flows with dates, groups and outputs.
+- Add CSV/XLSX and Industrial cache adapters using the existing computation services.
+- Preserve previous outputs, cooperative cancellation and runtime-only diagnostic correlation.
+- Source validation, CI, Windows package qualification and PO acceptance remain separate gates.
+
+## 0.8.0-dev.1 — previous development version
 - Adopt development package versions `dev.N`, frozen candidates `rc.N` and accepted stable scope `0.8.0`; the actual build date is recorded separately.
 - Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history; this naming transition does not rename or requalify their bytes.
 - Reserve `1.0.0` for both a complete external-LLM parser authoring package and fully unified, complete reports, with the existing issue contracts and release gates retained.

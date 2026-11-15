@@ -615,6 +615,9 @@ class WorkflowDiagnosticEvent:
     published_artifact_count: int | None = None
     duration_ms: int | None = None
     export_failure: ExportFailureDiagnostic | None = None
+    flow_id: uuid.UUID | None = None
+    run_id: uuid.UUID | None = None
+    step_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         _workflow_payload(self)
@@ -1109,10 +1112,22 @@ def _workflow_identity(event: WorkflowDiagnosticEvent) -> dict[str, object]:
         raise DiagnosticEventValidationError("workflow identifiers must be distinct")
     if not _bounded_integer(event.sequence, 65535) or event.sequence == 0:
         raise DiagnosticEventValidationError("invalid workflow sequence")
+    correlation = {}
+    identifiers = (event.flow_id, event.run_id, event.step_id)
+    if any(value is not None for value in identifiers):
+        if any(value is None for value in identifiers):
+            raise DiagnosticEventValidationError("incomplete flow correlation")
+        encoded = tuple(_uuid_hex(value) for value in identifiers)
+        if len(set(encoded)) != 3 or any(
+            value[12] != "4" or value[16] not in "89ab" for value in encoded
+        ):
+            raise DiagnosticEventValidationError("invalid flow correlation")
+        correlation = dict(zip(("flow_id", "run_id", "step_id"), encoded))
     return {
         "invocation_id": invocation_id,
         "operation_id": operation_id,
         "sequence": event.sequence,
+        **correlation,
     }
 
 

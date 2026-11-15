@@ -712,6 +712,7 @@ def test_windows_core_collects_independent_ui_evidence_after_failure_but_stays_b
     ]
     assert 'if' not in install
     independent = {
+        'Run native Windows recipe flow contracts',
         'Run native Windows report workspace tests',
         'Run native Windows specialist geometry tests',
         'Run native Windows grouping-preview lifecycle tests',

@@ -1107,6 +1107,9 @@ class IndustrialAnalyticsDialog(QDialog):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
         actions.addStretch(1)
+        self.save_recipe_button = QPushButton("Zapisz jako recepturę")
+        self.save_recipe_button.clicked.connect(self._save_as_recipe)
+        actions.addWidget(self.save_recipe_button)
         actions.addWidget(self.close_button)
         actions.addWidget(self.start_button)
         layout.addLayout(actions)
@@ -2759,6 +2762,15 @@ class IndustrialAnalyticsDialog(QDialog):
         ):
             if getattr(self, name, None) is widget:
                 delattr(self, name)
+
+    def _save_as_recipe(self):
+        from metroliza.ui.recipe_workspace import open_capture_editor
+        try:
+            request = self._build_analytics_request(require_runnable=True)
+            module = "industrial" if self.is_production_source else "tabular"
+            open_capture_editor(self, module, request)
+        except ValueError:
+            QMessageBox.warning(self, "Recipe", "Review the configuration before saving it as a recipe.")
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
         snapshot = self._pending_grouping_snapshot

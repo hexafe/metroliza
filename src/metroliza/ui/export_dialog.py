@@ -770,6 +770,9 @@ class ExportDialog(QDialog):
 
             footer_layout = QHBoxLayout()
             footer_layout.setContentsMargins(0, 0, 0, 0)
+            self.save_recipe_button = QPushButton("Zapisz jako recepturę")
+            self.save_recipe_button.clicked.connect(self._save_as_recipe)
+            footer_layout.addWidget(self.save_recipe_button)
             footer_layout.addStretch(1)
             footer_layout.addWidget(self.close_button)
             footer_layout.addWidget(self.export_button)
@@ -1395,42 +1398,53 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _build_recipe_export_request(self):
+        """Capture the exact request used by manual export and saved flows."""
+        violin_input = self.violin_plot_min_samplesize.text() or "6"
+        summary_scale_input = self.summary_plot_scale.text() or "0"
+        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+        return build_validated_export_request(
+            db_file=self.db_file,
+            excel_file=self.excel_file,
+            selected_preset=selected_preset,
+            export_type=self.export_type_combobox.currentText(),
+            export_target=self._selected_export_target(),
+            sorting_parameter=self.sort_measurements_combobox.currentText(),
+            violin_input=violin_input,
+            summary_scale_input=summary_scale_input,
+            hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
+            generate_html_dashboard=(
+                self.generate_html_dashboard_checkbox.isChecked()
+                or self._is_html_dashboard_only()
+                or self._grouping_is_applied()
+            ),
+            include_industrial_context=(
+                self.include_industrial_context_checkbox.isChecked()
+                if hasattr(self, "include_industrial_context_checkbox")
+                else False
+            ),
+            filter_query=self.filter_query,
+            grouping_df=self.df_for_grouping,
+            group_analysis_level=self._selected_group_analysis_level(),
+            group_analysis_scope=self._selected_group_analysis_scope(),
+            dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
+        )
+
+    def _save_as_recipe(self):
+        from metroliza.ui.recipe_workspace import open_capture_editor
+        try:
+            request = self._build_recipe_export_request()
+            open_capture_editor(self, "reports", request, filter_state=self.filter_state)
+        except ValueError:
+            QMessageBox.warning(self, "Recipe", "Review the configuration before saving it as a recipe.")
+
     def show_loading_screen(self):
         """Validate inputs, persist options, and hand work to the export thread."""
         action_started_at = monotonic()
         try:
             self._refresh_metadata_enrichment_notice()
-            violin_input = self.violin_plot_min_samplesize.text() or "6"
-            summary_scale_input = self.summary_plot_scale.text() or "0"
-
-            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             try:
-                export_request = build_validated_export_request(
-                    db_file=self.db_file,
-                    excel_file=self.excel_file,
-                    selected_preset=selected_preset,
-                    export_type=self.export_type_combobox.currentText(),
-                    export_target=self._selected_export_target(),
-                    sorting_parameter=self.sort_measurements_combobox.currentText(),
-                    violin_input=violin_input,
-                    summary_scale_input=summary_scale_input,
-                    hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                    generate_html_dashboard=(
-                        self.generate_html_dashboard_checkbox.isChecked()
-                        or self._is_html_dashboard_only()
-                        or self._grouping_is_applied()
-                    ),
-                    include_industrial_context=(
-                        self.include_industrial_context_checkbox.isChecked()
-                        if hasattr(self, "include_industrial_context_checkbox")
-                        else False
-                    ),
-                    filter_query=self.filter_query,
-                    grouping_df=self.df_for_grouping,
-                    group_analysis_level=self._selected_group_analysis_level(),
-                    group_analysis_scope=self._selected_group_analysis_scope(),
-                    dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
-                )
+                export_request = self._build_recipe_export_request()
             except ValueError as validation_error:
                 QMessageBox.warning(self, "Export validation failed", str(validation_error))
                 return
@@ -1456,7 +1470,7 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
             self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
-            self.config['selected_preset'] = selected_preset
+            self.config['selected_preset'] = export_request.options.preset
             save_export_dialog_config(self.config_path, self.config)
 
             self.last_result_row.clear()

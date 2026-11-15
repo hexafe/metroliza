@@ -107,6 +107,12 @@ For docs-only changes the Tier-0 result and explicit heavy-job skips described a
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
+The additive `Run native Windows recipe flow contracts` step in `windows-core-smoke`
+runs the recipe model, private storage, runner, Reports ports, editor, source
+adapters, shared UI, diagnostic correlation and real synthetic PDF-to-output
+tests with the Windows Qt plugin. These are native source contracts; separate
+packaged recipe journeys and PO acceptance remain required by #1239.
+
 The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
 checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite
 subset import across navigation, accepted/rejected context changes, cancellation and

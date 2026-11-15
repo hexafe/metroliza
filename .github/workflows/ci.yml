@@ -1783,6 +1783,19 @@ jobs:
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
           python -m pytest -vv tests/test_report_planner_model.py tests/test_report_planner_integration.py tests/test_report_planner_geometry.py tests/test_parsing_dialog_parent_none.py tests/test_report_execution_results.py
 
+      - name: Run native Windows recipe flow contracts
+        if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
+        env:
+          PYTHONPATH: src;.
+          QT_QPA_PLATFORM: windows
+        run: >-
+          python -m pytest -vv
+          tests/test_recipe_contracts.py tests/test_recipe_storage.py
+          tests/test_recipe_runner.py tests/test_recipe_ports.py
+          tests/test_recipe_editor.py tests/test_recipe_adapters.py
+          tests/test_recipe_ui.py tests/test_recipe_workspace.py
+          tests/test_recipe_real_flows.py tests/test_recipe_diagnostic_correlation.py
+
       - name: Run native Windows report workspace tests
         if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}
         env:

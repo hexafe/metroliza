@@ -37,6 +37,7 @@ USER_MANUAL_ROOT = REPO_ROOT / 'docs' / 'user_manual'
 MANUAL_RELATIVE_PATHS = {
     'main_window': 'docs/user_manual/main_window.md',
     'parsing': 'docs/user_manual/parsing.md',
+    'recipes': 'docs/user_manual/recipes.md',
     'help_startup_and_license': 'docs/user_manual/help_startup_and_license.md',
     'modify_database': 'docs/user_manual/modify_database.md',
     'export_overview': 'docs/user_manual/export_overview.md',
