@@ -463,7 +463,14 @@ def launch_ui(
     main_window.show()
     _startup_event(StartupCallsite.MAIN_WINDOW_SHOW_RETURNED)
     record_event("main_window_show_called")
-    if config.startup_ui_smoke_mode:
+    recipe_qualification_root = os.environ.get("METROLIZA_RECIPE_QUALIFICATION_ROOT")
+    if recipe_qualification_root:
+        from pathlib import Path
+        from metroliza.app.recipe_qualification import install_recipe_qualification
+
+        splash.finish(main_window)
+        install_recipe_qualification(main_window, Path(recipe_qualification_root))
+    elif config.startup_ui_smoke_mode:
         splash.finish(main_window)
         _schedule_startup_ui_smoke_exit(app)
     else:

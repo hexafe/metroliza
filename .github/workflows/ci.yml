@@ -240,6 +240,26 @@ jobs:
           $sha = (Get-FileHash -LiteralPath $launcher[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Launcher EXE: $($launcher[0].Name) SHA-256 $sha"
 
+      - name: Qualify packaged recipe journeys at three scales
+        shell: pwsh
+        run: |
+          $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Canonical recipe artifact identity failed' }
+          $launcher = Join-Path $PWD (Join-Path 'dist' $artifactNames.launcher)
+          foreach ($scale in @('1', '1.25', '1.5')) {
+            $receipt = Join-Path $env:RUNNER_TEMP ("recipe-qualification/scale-" + $scale)
+            & .\.venv-build\Scripts\python.exe scripts/qualify_recipe_package.py --exe $launcher --output $receipt --expected-sha '${{ github.sha }}' --scale $scale
+            if ($LASTEXITCODE -ne 0) { throw "Packaged recipe journeys failed at scale $scale" }
+          }
+
+      - name: Retain packaged recipe journey evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-recipe-qualification
+          path: ${{ runner.temp }}/recipe-qualification/**
+          if-no-files-found: error
+
       - name: Qualify frozen compute workers against serial synthetic outputs (#1134)
         shell: pwsh
         run: |

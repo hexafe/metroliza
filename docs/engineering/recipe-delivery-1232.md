@@ -47,6 +47,11 @@ implementation slices and integration are complete. Use synthetic fixtures,
 the verified dev virtual environment and one retained QApplication offscreen.
 Preserve exact source bindings, actual statuses and adverse evidence.
 
-No author merge, release, tag, deployment or live-data migration is authorized.
+PO subsequently requested a version increment, merge into `dev` and repository
+cleanup at completion. This explicitly authorizes the coordinator to perform the
+final merge after the required exact-source review, CI and package checks, and
+to retire this task's execution ref using verified recovery and guarded deletion.
+Separate user acceptance and issue closure remain distinct. Release, tag,
+deployment and live-data migration are not authorized.
 Rollback removes the new entry points while preserving user files and private
 bindings. This document records execution authority, not acceptance.

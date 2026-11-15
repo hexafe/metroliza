@@ -113,6 +113,14 @@ adapters, shared UI, diagnostic correlation and real synthetic PDF-to-output
 tests with the Windows Qt plugin. These are native source contracts; separate
 packaged recipe journeys and PO acceptance remain required by #1239.
 
+The opt-in portable/launcher job also runs `scripts/qualify_recipe_package.py`
+against the built launcher at scales 1, 1.25 and 1.5. It records the actual
+frozen Windows source identity, EXE hash, GUI journey receipts and screenshots.
+It exercises both report quick flows plus a larger saved/reopened flow, using
+synthetic input and independent SQLite/output checks. Source-only or non-Windows
+execution does not satisfy that packaged gate. The evidence is retained in
+`windows-recipe-qualification`; separate PO acceptance remains required.
+
 The additive `Run native Windows report workspace tests` step in `windows-core-smoke`
 checks the main Home/Reports/Tools composition: one real report owner, scratch-SQLite
 subset import across navigation, accepted/rejected context changes, cancellation and
