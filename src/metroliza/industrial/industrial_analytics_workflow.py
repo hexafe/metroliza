@@ -1037,7 +1037,7 @@ def _write_dashboard(
             **cancel_kwargs,
         )
         _raise_if_cancelled(cancel_check)
-        require_nonempty_output_file(dashboard["html_dashboard_path"])
+        require_nonempty_output_file(dashboard["html_dashboard_path"], OutputVerificationKind.ANALYTICS_DASHBOARD_STAGING)
         Path(dashboard["html_dashboard_path"]).replace(target_path)
         verify_published_output(target_path, OutputVerificationKind.ANALYTICS_DASHBOARD)
     except DashboardCancelled as exc:
@@ -1082,7 +1082,7 @@ def _export_production_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
-        require_nonempty_output_file(workbook.output_file)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
         Path(workbook.output_file).replace(target_path)
         verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:
@@ -1119,7 +1119,7 @@ def _export_tabular_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
-        require_nonempty_output_file(workbook.output_file)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
         Path(workbook.output_file).replace(target_path)
         verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:

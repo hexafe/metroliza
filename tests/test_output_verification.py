@@ -147,7 +147,9 @@ def test_invalid_staged_analytics_preserves_last_complete_output(tmp_path, monke
         publish()
     assert target.read_bytes() == b"previous complete output"
     assert not list(tmp_path.glob(".metroliza-analytics-*"))
-    assert receipts == []
+    kind = (OutputVerificationKind.ANALYTICS_DASHBOARD_STAGING if boundary == "dashboard"
+            else OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
+    assert receipts == [((kind, False), {"operation_id": None})]
 
 
 @pytest.mark.parametrize("boundary", ["dashboard", "production", "tabular"])

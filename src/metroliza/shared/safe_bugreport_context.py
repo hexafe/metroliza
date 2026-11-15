@@ -152,6 +152,8 @@ class OutputVerificationKind(str, Enum):
     REPORT_WORKBOOK = "report_workbook"
     ANALYTICS_WORKBOOK = "analytics_workbook"
     ANALYTICS_DASHBOARD = "analytics_dashboard"
+    ANALYTICS_WORKBOOK_STAGING = "analytics_workbook_staging"
+    ANALYTICS_DASHBOARD_STAGING = "analytics_dashboard_staging"
 
 
 def exception_category(exception: object) -> ExceptionCategory:

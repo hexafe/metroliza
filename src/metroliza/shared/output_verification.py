@@ -20,9 +20,10 @@ def _is_nonempty_file(output_file: str | Path) -> bool:
         return False
 
 
-def require_nonempty_output_file(output_file: str | Path) -> None:
+def require_nonempty_output_file(output_file: str | Path, kind: OutputVerificationKind) -> None:
     """Guard staged output before replacing a previously completed file."""
     if not _is_nonempty_file(output_file):
+        _record_verdict(kind, False, None)
         raise OutputVerificationError("Output file is missing or empty.")
 
 
@@ -34,6 +35,12 @@ def verify_published_output(
 ) -> None:
     """Require a nonempty final file and record only a closed kind and verdict."""
     passed = _is_nonempty_file(output_file)
+    _record_verdict(kind, passed, operation_id)
+    if not passed:
+        raise OutputVerificationError("Published output file is missing or empty.")
+
+
+def _record_verdict(kind, passed, operation_id) -> None:
     try:
         from metroliza.shared.safe_bugreport import recorder
 
@@ -44,5 +51,3 @@ def verify_published_output(
     except Exception:
         # Observation must not turn a valid output into a workflow failure.
         pass
-    if not passed:
-        raise OutputVerificationError("Published output file is missing or empty.")

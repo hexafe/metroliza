@@ -35,6 +35,9 @@ they do not reopen workbooks or inspect measurements. The report retains only a
 closed check kind, pass/fail and an explicitly supplied operation token, if any.
 A passing check proves publication at that instant, not numerical correctness,
 chart completeness, or that the file remained available afterwards.
+Rejected temporary outputs emit a separate failed staging check, so they cannot
+be confused with failures after publication. Successful staging is not retained
+as a separate event.
 
 Export failures additionally retain the validated stage, failure code, backend,
 cause category and bounded operating-system error numbers from the existing
