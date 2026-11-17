@@ -1,6 +1,11 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.6 — current version
+## 0.8.0-dev.7 — current version
+
+- Fix explicit sample selection in the parser profile validation, install and repair commands.
+- Keep the Home recipe shortcuts, review layout and progress reset from the previous development build.
+
+## 0.8.0-dev.6 — previous development version
 
 - Pin built-in and saved recipes directly on Home and choose their order.
 - Open recipe forms before loading execution services.

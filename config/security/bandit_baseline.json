@@ -1359,7 +1359,7 @@
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "STEP3 coordinator (#1151)",
       "rationale": "prepare_snapshot_partition_source: table_name is quoted by quote_identifier in the explicit TEMP schema. checks is composed only from the fixed REFERENCE/REPORT_ID candidates and literal text/integer storage labels, with quoted fixed column names; no report/file/key value enters this SQL. The sole product caller supplies an owner-generated TEMP snapshot name. Synthetic quoted-identifier and SQL-shaped bound-value controls preserve the main catalog. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
-      "expires_on": "2026-11-23"
+      "expires_on": "2027-01-24"
     },
     {
       "repository": "metroliza",
@@ -1368,7 +1368,7 @@
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "STEP3 coordinator (#1151)",
       "rationale": "_snapshot_partition_query canonical scope: source.table_name is quote_identifier-escaped and TEMP-qualified. The descriptor is created from the immutable owner-managed snapshot and checked against its actual connection, live lifetime token and exact canonical scope before fast execution; noncanonical scopes and unsupported string subclasses use the existing general loader. No raw report/file/key data is interpolated. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
-      "expires_on": "2026-11-23"
+      "expires_on": "2027-01-24"
     },
     {
       "repository": "metroliza",
@@ -1377,7 +1377,7 @@
       "path": "src/metroliza/exporting/export_query_service.py",
       "owner": "STEP3 coordinator (#1151)",
       "rationale": "_snapshot_partition_query indexed SELECT: table_name and the proven unshadowed rowid alias are quote_identifier-escaped under TEMP; analytical columns and predicate are fixed source-code fragments. REFERENCE and canonical signed-int64 REPORT_ID values are passed separately as bound parameters. Actual owning connection, live generation and exact canonical scope are required; all unsupported inputs retain the original query. SQL-shaped parameter/identifier controls preserve literal rows and the main catalog. Reviewed in STEP3 #1151 by the coordinator; independent wave review remains required before push.",
-      "expires_on": "2026-11-23"
+      "expires_on": "2027-01-24"
     },
     {
       "repository": "metroliza",

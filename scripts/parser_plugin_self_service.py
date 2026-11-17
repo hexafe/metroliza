@@ -81,7 +81,6 @@ def _add_validation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sample",
         action="append",
-        default=(),
         help="Sample report path; may be passed more than once",
     )
     parser.add_argument("--expected-results", help="Expected-results CSV for semantic validation")

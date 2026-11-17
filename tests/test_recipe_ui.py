@@ -92,6 +92,9 @@ def test_append_form_uses_home_context_and_stage_is_bound_to_current_run(qapplic
         controller.event_received.emit(RunEvent(done))
         controller._returned(done)
         assert page.progress.value() == 100 and page.repeat_button.isEnabled()
+        assert controller.repeat()
+        assert page.progress.value() == 0 and not page.progress_percent.text() and not page.stage.text()
+        assert controller.last_record == done
         assert controller.launch("reports_dashboard_html")
         assert page.progress.value() == 0 and not page.stage.text()
         assert not page.repeat_button.isEnabled() and page.mode_row.isHidden()

@@ -1,8 +1,8 @@
-RELEASE_VERSION = "0.8.0-dev.6"
+RELEASE_VERSION = "0.8.0-dev.7"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Pin and reorder recipes on Home, reopen recent results, and resolve report metadata in a larger review table.'
+CURRENT_RELEASE_HIGHLIGHT = 'Pinned recipes, clearer report review, and working explicit sample selection in the parser tools.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
@@ -12,6 +12,7 @@ release_notes = f"""
     - Return to a running recipe or open its finished Excel workbook, dashboard and folder from Home<br>
     - Open a recipe with Enter and see which input needs attention before you can start<br>
     - Append reports to an existing database and export the chosen folder to Excel<br>
+    - Pass one or more sample reports to the parser validation, install and repair commands<br>
     - Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>
     - Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>
     - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>
