@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout, QWidget,
 )
 
-from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
+from metroliza.recipes.builtin_recipes import BUILTIN_LABELS, QUICK_REPORT_RECIPES
 from metroliza.recipes.contracts import StepKind
 
 
@@ -103,7 +103,10 @@ class RecipeLibraryPage(QWidget):
     def _run(self):
         entry = self.selected()
         if entry and self.available(entry.definition):
-            self.controller.launch(entry.definition, entry.binding)
+            if entry.definition.builtin:
+                self.controller.launch(entry.definition.recipe_id)
+            else:
+                self.controller.launch(entry.definition, entry.binding)
 
     def _emit(self, signal):
         entry = self.selected()
@@ -134,8 +137,9 @@ class RecipeQuickFlows(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Szybkie flow"))
         cards = QHBoxLayout()
-        for identity, label in BUILTIN_LABELS.items():
-            button = QPushButton(label)
+        for definition in QUICK_REPORT_RECIPES:
+            identity = definition.recipe_id
+            button = QPushButton(BUILTIN_LABELS[identity])
             button.clicked.connect(lambda _checked=False, recipe_id=identity: controller.launch(recipe_id))
             cards.addWidget(button)
         layout.addLayout(cards)

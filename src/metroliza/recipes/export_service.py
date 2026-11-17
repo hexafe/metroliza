@@ -15,12 +15,14 @@ class ExportRecipeService:
     def __init__(self, executor: Callable):
         self.executor = executor
 
-    def execute(self, plan: ResolvedRunPlan, context: StepContext, *, consents=(), step_kind=StepKind.EXPORT_MAIN) -> StepResult:
+    def execute(self, plan: ResolvedRunPlan, context: StepContext, *, consents=(),
+                step_kind=StepKind.EXPORT_MAIN, source_digests=(), existing_identity=None) -> StepResult:
         from metroliza.recipes.report_configuration_adapter import build_export_request
 
         if plan.database_file is None or plan.output_file is None:
             return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
-        request = build_export_request(plan, step_kind, consents=consents)
+        request = build_export_request(plan, step_kind, consents=consents, source_digests=source_digests,
+                                       existing_identity=existing_identity)
         result = self.executor(request, context)
         if result.status is ExportRunStatus.CANCELLED:
             return StepResult(StepStatus.CANCELLED, ResultCode.CANCELLED)

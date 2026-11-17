@@ -1984,7 +1984,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 plan,
             )
             reports_to_parse = list(filter_result.approved_reports)
-            if self.parsing_canceled or not reports_to_parse:
+            append_identity = plan.existing_database_identity
+            if self.parsing_canceled or not reports_to_parse or (append_identity and filter_result.changed_files):
                 self.last_parse_result = ParseBatchResult(
                     parsed_files=0,
                     total_files=self._preflight_reviewed_total,
@@ -2024,7 +2025,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             # Keep one owner-thread connection alive across per-report commits.
             # Closing the last WAL connection after each report forces repeated
             # checkpoint/sidecar cleanup. Preparation workers never borrow it.
-            with lazy_sqlite_connection_scope(self.db_file) as connection:
+            scope_options = {"existing_identity": append_identity} if append_identity is not None else {}
+            with lazy_sqlite_connection_scope(self.db_file, **scope_options) as connection:
                 report_fingerprints = set()
                 self._emit_stage_progress('load_existing_reports', 1.0)
 
@@ -2138,6 +2140,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 metadata_overrides = {
                     override.occurrence_id: override for override in plan.metadata_overrides
                 }
+                reviewed_headers = {entry.identity.occurrence_id: entry.header for entry in plan.reviewed_ocr}
 
                 def _parser_factory(
                     report,
@@ -2155,9 +2158,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         expected_plugin_id=expected_plugin_id,
                         expected_registry_generation_id=(expected_registry_generation_id),
                     )
-                    review_override = metadata_overrides.get(
-                        self._occurrence_id_for_report(Path(report))
-                    )
+                    occurrence_id = self._occurrence_id_for_report(Path(report))
+                    if type(parser) is CMMReportParser and reviewed_headers:
+                        parser.reviewed_header_ocr = reviewed_headers.get(occurrence_id)
+                    review_override = metadata_overrides.get(occurrence_id)
                     if review_override is not None:
                         if not getattr(parser, "supports_metadata_review_override", False):
                             raise ValueError(
@@ -2168,6 +2172,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         metadata_parsing_mode=self.metadata_parsing_mode,
                         refreshable_parser_id=_CURRENT_CMM_METADATA_PARSER_ID,
                         refreshable_parser_version=_CURRENT_CMM_PARSER_VERSION,
+                        preserve_existing=append_identity is not None,
                     )
                     if (
                         isinstance(parser, BaseReportParserPlugin)

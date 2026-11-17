@@ -3659,6 +3659,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             include_industrial_context=self.include_industrial_context
         )
         selected_filter_query = validated_request.filter_query or default_filter_query
+        self._existing_database_identity = validated_request.existing_database_identity
+        self._approved_source_digests = validated_request.approved_source_digests
         self.filter_query = (
             build_industrial_measurement_export_query(selected_filter_query)
             if self.include_industrial_context and validated_request.filter_query
@@ -5083,9 +5085,17 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
 
             self._ensure_chart_executor()
-            with sqlite_connection_scope(self.db_file) as connection:
+            identity = getattr(self, "_existing_database_identity", None)
+            if identity is None:
+                database_scope = sqlite_connection_scope(self.db_file)
+            else:
+                from metroliza.reports.report_query_service import sqlite_approved_report_export_scope
+
+                database_scope = sqlite_approved_report_export_scope(self.db_file, identity, self._approved_source_digests)
+            with database_scope as connection:
                 self._db_connection = connection
-                ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
+                if identity is None:
+                    ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
                 self._prepare_export_snapshot()
 
                 self._emit_stage_progress('preparing_query', 0.0)

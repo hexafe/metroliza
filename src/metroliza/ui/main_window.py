@@ -1643,7 +1643,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("modifydb_dialog", self.modifydb_dialog)
                 self.modifydb_dialog.show()
 
-            self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
+            self.modifydb_dialog.database_change_allowed = self._report_database_action_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
         except Exception as e:
@@ -1667,7 +1667,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("export_dialog", self.export_dialog)
                 self.export_dialog.show()
 
-            self.export_dialog.database_change_allowed = self._report_context_change_allowed
+            self.export_dialog.database_change_allowed = self._report_database_action_allowed
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:
@@ -1733,7 +1733,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("industrial_data_dialog", self.industrial_data_dialog)
                 self.industrial_data_dialog.show()
 
-            self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
+            self.industrial_data_dialog.database_change_allowed = self._report_database_action_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
@@ -2090,7 +2090,7 @@ class MainWindow(QMainWindow):
                 context_policy=WindowContextPolicy.KEEP,
                 context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
             )
-            self.characteristic_mapping_dialog.database_change_allowed = self._report_context_change_allowed
+            self.characteristic_mapping_dialog.database_change_allowed = self._report_database_action_allowed
         except Exception as e:
             self.log_and_exit(e)
 
@@ -2266,6 +2266,8 @@ class MainWindow(QMainWindow):
         return False
 
     def _report_database_action_allowed(self):
+        if not self._recipe_allows_report_work():
+            return False
         if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
             return True
         self.workspace_notice_label.setText("Finish or cancel the report operation before starting another database workflow.")
@@ -2275,6 +2277,8 @@ class MainWindow(QMainWindow):
 
     def _report_start_allowed(self):
         """Keep existing same-database windows safe without closing their work."""
+        if not self._recipe_allows_report_work():
+            return False
         if getattr(self.export_dialog, "database_context_transition_active", False):
             self.statusBar().showMessage(
                 "Report start was blocked during Export database selection.", 5000
@@ -2294,8 +2298,29 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.show()
         return False
 
-    def _same_database_workflow_labels(self):
+    def _recipe_allows_report_work(self):
+        workspace = getattr(self, "recipe_workspace", None)
+        if workspace is None or not workspace.controller.append_in_progress:
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the recipe that is appending reports first.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _recipe_append_allowed(self, database):
+        return self._pdf_execution_available() and not self._same_database_workflow_labels(database)
+
+    def _on_recipe_database_appended(self, database):
+        from metroliza.recipes.bindings import paths_alias
+
+        if self._reports_workspace is not None and self.db_file and paths_alias(database, Path(self.db_file)):
+            self._reports_workspace.refresh_review_after_append()
+
+    def _same_database_workflow_labels(self, database=None):
         """Collect visible workflow owners of this report database or an unknown one."""
+        from metroliza.recipes.bindings import paths_alias
+
+        database = database or self.db_file
         blockers = []
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
@@ -2313,7 +2338,7 @@ class MainWindow(QMainWindow):
             databases = tuple(path for path in (
                 getattr(dialog, "db_file", None), getattr(dialog, "report_db_file", None),
             ) if path)
-            if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
+            if not databases or (database and any(paths_alias(Path(path), Path(database)) for path in databases)):
                 blockers.append(label)
         return blockers
 

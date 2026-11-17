@@ -16,14 +16,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from contextlib import ExitStack, closing, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 import os
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 
 from metroliza.parsing import report_parser_factory
-from metroliza.parsing.cmm_report_parser import CMMReportParser
+from metroliza.parsing.cmm_report_parser import CMMReportParser, ReviewedCmmHeaderOcr
 from metroliza.parsing.header_ocr_backend import (
     DEFAULT_HEADER_OCR_BACKEND,
     default_rapidocr_latin_model_paths,
@@ -67,6 +67,7 @@ class MetadataReading:
     selection: MetadataSelectionResult | None = None
     note: str = ""
     ocr_note: str = ""
+    header_ocr: ReviewedCmmHeaderOcr | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -353,6 +354,7 @@ def read_metadata_one(
         mode,
         selection=selection,
         ocr_note=_safe_ocr_note(selection.metadata.metadata_json) if mode == MODE_OCR else "",
+        header_ocr=parser.captured_header_ocr() if mode == MODE_OCR and type(parser) is CMMReportParser else None,
     )
 
 

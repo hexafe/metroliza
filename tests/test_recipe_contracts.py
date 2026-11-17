@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError, replace
 import pytest
 
 from metroliza.recipes.bindings import new_output_copy, resolve_plan
-from metroliza.recipes.builtin_recipes import REPORTS_EXCEL_MAIN, builtin_binding
+from metroliza.recipes.builtin_recipes import REPORTS_APPEND_EXCEL_MAIN, REPORTS_EXCEL_MAIN, builtin_binding
 from metroliza.recipes.contracts import (
     DataKind, LocalBinding, ParameterKey, ParameterMode, ParameterSpec, ParameterType,
     RecipeError, StepKind, StepSpec,
@@ -17,6 +17,25 @@ from metroliza.recipes.validation import validate_binding, validate_definition
 def plan(tmp_path):
     return resolve_plan(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
         str(tmp_path / "input"), str(tmp_path / "output" / "Sentinel.xlsx")))
+
+
+def test_append_output_copy_preserves_selected_database_and_rejects_alias(tmp_path):
+    database = tmp_path / "existing.db"
+    database.write_bytes(b"selected database")
+    output = tmp_path / "result.xlsx"
+    output.write_bytes(b"previous workbook")
+    binding = builtin_binding(
+        REPORTS_APPEND_EXCEL_MAIN, str(tmp_path / "incoming"), str(output), existing_database=str(database),
+    )
+    plan = resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding)
+    copy = new_output_copy(plan)
+    assert copy.output_file == tmp_path / "result (1).xlsx"
+    assert copy.database_file == plan.database_file == database
+    assert copy.run_id != plan.run_id
+    output.unlink()
+    output.hardlink_to(database)
+    with pytest.raises(RecipeError, match="source_alias"):
+        resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding)
 
 
 def test_snapshot_is_deeply_immutable_and_private(tmp_path):

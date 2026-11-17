@@ -10,8 +10,19 @@ folder and destination file, check the database path shown below them, then
 press Start. `Wyniki/Pomiar.xlsx` and `Wyniki/Pomiar.html` both derive
 `Wyniki/Pomiar.db`. The HTML flow does not require a workbook.
 
-An existing database or output requires a decision. Choose a fresh output family
-to retain previous results. Ambiguous reports, changed sources and partial
+Excel Main starts with the same quick metadata mode as Reports. Select the
+complete mode under **Tryb importu** when the report metadata needs OCR.
+The run view names the current step and shows its elapsed time.
+
+In **Receptury**, choose **Dopisz do bazy → Excel Main** to add reports to a
+selected Reports database. Choose the folder, database and workbook. The flow skips reports
+already in that database and exports the reviewed reports from the selected
+folder, including those already present. With zero new reports, it can
+regenerate the workbook from the same selection. If the workbook exists,
+the run asks whether to replace it or save a copy.
+
+In a flow that creates a database, a collision requires a decision. Choose a
+fresh output family to retain previous results. Ambiguous reports, changed sources and partial
 imports also stop for review. Cancellation stops subsequent steps; an import
 already committed remains available. Navigation keeps the active task alive.
 

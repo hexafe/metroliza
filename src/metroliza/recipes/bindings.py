@@ -78,14 +78,9 @@ def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> Resolve
     return plan
 
 
-def _writes_database(plan: ResolvedRunPlan) -> bool:
-    return any(s.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS}
-               for s in plan.definition.steps)
-
-
 def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
     targets = [p for p in (plan.output_file, plan.assets_dir) if p is not None]
-    if _writes_database(plan) and plan.database_file is not None:
+    if plan.creates_database and plan.database_file is not None:
         targets.append(plan.database_file)
     if any(step.kind is StepKind.ANALYZE_TABULAR for step in plan.definition.steps):
         from .tabular_adapter import analytics_output_family
@@ -107,7 +102,7 @@ def _source_overlaps_target(source: Path, target: Path) -> bool:
 
 def _source_paths(plan):
     sources = [plan.value(ParameterKey.SOURCE_FILE), plan.input_folder]
-    if not _writes_database(plan):
+    if not plan.creates_database:
         sources.extend((plan.value(ParameterKey.EXISTING_DATABASE), plan.database_file))
     return tuple(Path(str(source)) for source in sources if source)
 
@@ -144,7 +139,7 @@ def _validate_asset_sources(plan, active_database=None):
     protected = list(_source_paths(plan))
     # A writable DB is an owned durable result, not a generic read source. It
     # must survive asset retirement without becoming a self-alias in target checks.
-    if _writes_database(plan) and plan.database_file is not None:
+    if plan.creates_database and plan.database_file is not None:
         protected.append(plan.database_file)
     if active_database is not None:
         protected.append(active_database)
@@ -172,7 +167,7 @@ def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = No
         if any(paths_alias(path, other) for other in targets[index + 1:]):
             raise RecipeError("target_alias")
         if active_database is not None and paths_alias(path, active_database) and (
-                path != plan.database_file or _writes_database(plan)):
+                path != plan.database_file or plan.creates_database):
             raise RecipeError("active_database_alias")
         _validate_source_target(plan, path)
 
@@ -180,7 +175,7 @@ def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = No
 def _copy_is_free(plan: ResolvedRunPlan) -> bool:
     from metroliza.exporting.output_publication import conflicting_outputs
     targets = [p for p in _target_paths(plan) if p != plan.database_file]
-    if _writes_database(plan) and plan.database_file is not None:
+    if plan.creates_database and plan.database_file is not None:
         database = plan.database_file
         targets.extend((database, Path(str(database) + "-wal"), Path(str(database) + "-shm")))
     return not conflicting_outputs(targets)
@@ -194,7 +189,7 @@ def new_output_copy(plan: ResolvedRunPlan) -> ResolvedRunPlan:
         output = original.with_name(f"{original.stem} ({index}){original.suffix}")
         values = dict(plan.binding.values)
         values[ParameterKey.OUTPUT_FILE] = str(output)
-        if _writes_database(plan):
+        if plan.creates_database:
             values[ParameterKey.DATABASE_FILE] = str(output.with_suffix(".db"))
         binding = replace(plan.binding, values=tuple(values.items()))
         candidate = replace(resolve_plan(plan.definition, binding), flow_id=plan.flow_id)

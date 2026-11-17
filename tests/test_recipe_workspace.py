@@ -24,11 +24,63 @@ def test_home_and_catalog_share_one_controller_and_keep_context(tmp_path, monkey
         assert window.recipe_workspace is workspace
         assert workspace.controller is controller
         assert controller.definition.recipe_id == "reports_dashboard_html"
+        assert any(entry.definition.recipe_id == "reports_append_excel_main" for entry in workspace.entries())
         assert window.db_file == original_context
         assert WORKSPACE_SHORTCUTS["home"] == "Ctrl+1"
         assert WORKSPACE_SHORTCUTS["reports"] == "Ctrl+2"
         assert window.navigation_combo.findData("receptury") >= 0
         assert app is QApplication.instance()
+    finally:
+        window.close()
+
+
+def test_append_via_qt_controller_owns_reports_and_refreshes_current_database(
+        tmp_path, qapplication_session, monkeypatch):
+    from PyQt6.QtCore import QEventLoop, QTimer
+
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.recipes.run_state import RunState
+    from metroliza.reports.report_schema import ensure_report_schema
+    from tests.test_recipe_real_flows import _write_complete_reports
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    preferences = UiPreferences(QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat))
+    window = MainWindow("test", None, ui_preferences=preferences)
+    source = tmp_path / "input"
+    output, database = tmp_path / "result.xlsx", tmp_path / "existing.db"
+    _write_complete_reports(source)
+    ensure_report_schema(str(database))
+    try:
+        assert window.set_directory(str(source))
+        assert window.set_db_file(str(database))
+        refreshed = []
+        monkeypatch.setattr(window.reports_workspace, "refresh_review_after_append", lambda: refreshed.append(True))
+        window._launch_recipe()
+        workspace = window.recipe_workspace
+        row = next(i for i, entry in enumerate(workspace.entries())
+                   if entry.definition.recipe_id == "reports_append_excel_main")
+        workspace.library.list.setCurrentRow(row)
+        workspace.library.run_button.click()
+        controller = workspace.controller
+        assert workspace.run_page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert workspace.run_page.fields[ParameterKey.EXISTING_DATABASE][0].text() == str(database)
+        assert controller.prepare({ParameterKey.OUTPUT_FILE: str(output)})
+
+        loop = QEventLoop()
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+        timeout.timeout.connect(loop.quit)
+        controller.idle.connect(loop.quit)
+
+        assert controller.start()
+        assert controller.append_in_progress and not window._report_start_allowed()
+        timeout.start(15_000)
+        loop.exec()
+        assert timeout.isActive(), "The native append task did not retire."
+        timeout.stop()
+        assert controller.last_record.state is RunState.COMPLETED
+        assert not controller.busy and output.is_file()
+        assert refreshed == [True] and window._report_start_allowed()
     finally:
         window.close()
 

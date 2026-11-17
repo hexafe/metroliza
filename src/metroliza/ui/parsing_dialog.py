@@ -32,7 +32,7 @@ import logging
 from functools import partial
 import weakref
 from dataclasses import dataclass
-from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
+from metroliza.shared.parse_contracts import DEFAULT_REPORTS_METADATA_MODE, ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
         create_delayed_worker_progress_dialog,
@@ -90,8 +90,8 @@ _METADATA_MODE_FAST = "fast"
 _METADATA_MODE_FAST_THEN_ENRICH = "fast_then_enrich"
 _METADATA_MODE_COMPLETE = "complete"
 _METADATA_MODE_REQUEST_FIELDS = {
-    _METADATA_MODE_FAST: ("light", False),
-    _METADATA_MODE_FAST_THEN_ENRICH: ("light", False),
+    _METADATA_MODE_FAST: (DEFAULT_REPORTS_METADATA_MODE, False),
+    _METADATA_MODE_FAST_THEN_ENRICH: (DEFAULT_REPORTS_METADATA_MODE, False),
     _METADATA_MODE_COMPLETE: ("complete", False),
 }
 _MISSING_RESULT_FIELD = object()
@@ -795,7 +795,8 @@ class _ReportOperations:
         self.import_succeeded = False
         carried = (
             self.report_planner.model.metadata_rows
-            if keep_metadata and self._preflight_result is not None else {}
+            if keep_metadata and self._preflight_result is not None
+            else self._metadata_carryover if keep_metadata else {}
         )
         self._retire_metadata_worker()
         self._drop_pending_starts()
@@ -805,6 +806,11 @@ class _ReportOperations:
         self._preflight_error_detail = ""
         self._review_status = reason
         self.report_planner.invalidate()
+
+    def refresh_review_after_append(self):
+        if self._preflight_result is not None:
+            self._invalidate_preflight("The recipe updated this database. Review the reports again.", keep_metadata=True)
+            self._sync_readiness_state()
 
     @pyqtSlot()
     def _on_parse_inputs_changed(self, *_args):

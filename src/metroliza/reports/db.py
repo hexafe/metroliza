@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import stat
 import time
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
@@ -145,6 +146,45 @@ def connect_sqlite(
     return connection
 
 
+def sqlite_file_identity(db_path: str | Path) -> tuple[int, int] | None:
+    """Identity of an existing regular database entry, without following a new alias."""
+    try:
+        info = Path(db_path).lstat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+        return None
+    return info.st_dev, info.st_ino
+
+
+def _require_database_identity(db_path, identity) -> None:
+    if sqlite_file_identity(db_path) != identity:
+        raise sqlite3.OperationalError("The selected database was replaced or removed.")
+
+
+def _require_existing_report_schema(connection) -> None:
+    from metroliza.reports.report_schema import is_report_schema_ready_cached
+
+    if not is_report_schema_ready_cached(connection):
+        raise sqlite3.OperationalError("The selected database does not have the current Reports schema.")
+
+
+def _connect_existing_report_database(db_path, identity):
+    _require_database_identity(db_path, identity)
+    database_uri = f"file:{quote(str(Path(db_path).absolute()))}?mode=rw"
+    with measure_persist_stage("connection_open"):
+        connection = sqlite3.connect(database_uri, uri=True, timeout=5.0, **persist_sqlite_options())
+        try:
+            _require_database_identity(db_path, identity)
+            _require_existing_report_schema(connection)
+            _apply_sqlite_pragmas(connection, DEFAULT_PRAGMA_CONFIG)
+        except BaseException:
+            connection.close()
+            raise
+    observe_persist_connection(connection)
+    return connection
+
+
 @contextmanager
 def sqlite_connection_scope(
     db_path: str,
@@ -180,8 +220,9 @@ IMPORT_CHECKPOINT_COMMITS = 25
 class _LazySQLiteConnection:
     """Owner-thread connection handle that creates no DB before first SQL use."""
 
-    def __init__(self, db_path, *, clock=time.monotonic):
+    def __init__(self, db_path, *, clock=time.monotonic, existing_identity=None):
         self._db_path = db_path
+        self._existing_identity = existing_identity
         self._connection = None
         self._clock = clock
         self._last_checkpoint = clock()
@@ -189,8 +230,11 @@ class _LazySQLiteConnection:
         self._uncheckpointed = False
 
     def __getattr__(self, name):
+        if self._existing_identity is not None and name == "cursor":
+            _require_database_identity(self._db_path, self._existing_identity)
         if self._connection is None:
-            self._connection = connect_sqlite(self._db_path)
+            self._connection = (connect_sqlite(self._db_path) if self._existing_identity is None
+                                else _connect_existing_report_database(self._db_path, self._existing_identity))
         return getattr(self._connection, name)
 
     def close(self):
@@ -241,9 +285,9 @@ class _LazySQLiteConnection:
 
 
 @contextmanager
-def lazy_sqlite_connection_scope(db_path: str):
+def lazy_sqlite_connection_scope(db_path: str, *, existing_identity: tuple[int, int] | None = None):
     """Reuse one connection without creating a database for rejected imports."""
-    connection = _LazySQLiteConnection(db_path)
+    connection = _LazySQLiteConnection(db_path, existing_identity=existing_identity)
     try:
         yield connection
     finally:
@@ -263,7 +307,8 @@ def checkpoint_pending_import_commits(connection):
 
 @contextmanager
 def sqlite_readonly_connection_scope(
-    db_path: str, *, immutable: bool = False, timeout_s: float = 5.0
+    db_path: str, *, immutable: bool = False, timeout_s: float = 5.0,
+    existing_identity: tuple[int, int] | None = None,
 ) -> Iterator[sqlite3.Connection]:
     """Yield a managed read-only connection with a timeout and unchanged PRAGMAs.
 
@@ -272,11 +317,16 @@ def sqlite_readonly_connection_scope(
     sidecar access; live databases must retain the default.
     """
 
+    if existing_identity is not None:
+        _require_database_identity(db_path, existing_identity)
     resolved_path = Path(db_path).resolve(strict=False)
     database_uri = f"file:{quote(str(resolved_path))}?mode=ro"
     if immutable:
         database_uri += "&immutable=1"
     with closing(sqlite3.connect(database_uri, uri=True, timeout=timeout_s, **persist_sqlite_options())) as connection:
+        if existing_identity is not None:
+            _require_database_identity(db_path, existing_identity)
+            _require_existing_report_schema(connection)
         yield connection
 
 

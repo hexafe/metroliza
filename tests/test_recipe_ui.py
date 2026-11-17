@@ -53,8 +53,50 @@ def test_micro_form_has_two_prompted_fields_and_preserves_private_plan(qapplicat
     page.fields[ParameterKey.OUTPUT_FILE][0].setText(str(tmp_path / "result.xlsx"))
     assert controller.prepare(page._values())
     assert controller.plan.database_file == tmp_path / "result.db"
+    assert controller.plan.value(ParameterKey.METADATA_MODE) == "light"
     assert "result.db" in page.database.text()
     page.close()
+
+
+def test_append_form_uses_home_context_and_stage_is_bound_to_current_run(qapplication_session, tmp_path):
+    from dataclasses import replace
+
+    from metroliza.recipes.ports import PreparationPhase
+    from metroliza.recipes.run_state import RunEvent
+
+    source = tmp_path / "reports"
+    source.mkdir()
+    database = tmp_path / "selected.db"
+    runner = Runner()
+    controller = RecipeController(runner, active_database=lambda: database, source_directory=lambda: source)
+    page = RecipeRunnerPage(controller)
+    try:
+        assert controller.launch("reports_append_excel_main")
+        assert page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert page.fields[ParameterKey.EXISTING_DATABASE][0].text() == str(database)
+        assert "wybranego folderu" in page.database.text()
+        assert not page.repeat_button.isEnabled()
+        page.fields[ParameterKey.OUTPUT_FILE][0].setText(str(tmp_path / "result.xlsx"))
+        page.mode_combo.setCurrentIndex(page.mode_combo.findData("complete"))
+        assert controller.prepare(page._values())
+        runner.plan = controller.plan
+        assert runner.plan.value(ParameterKey.METADATA_MODE) == "complete"
+        record = RunRecord(runner.plan.flow_id, runner.plan.run_id, RunState.RUNNING, ownership=True)
+        controller.event_received.emit(RunEvent(record, "scan", completed=2, total=4,
+                                                phase=PreparationPhase.SCAN))
+        assert "Skanowanie folderu" in page.stage.text() and "2/4" in page.stage.text()
+        assert page.progress.value() == 50 and not page.repeat_button.isEnabled()
+        controller.event_received.emit(RunEvent(record, "scan", phase=PreparationPhase.OCR))
+        assert "OCR" in page.stage.text() and page.progress.maximum() == 0
+        done = replace(record, state=RunState.COMPLETED, ownership=False)
+        controller.event_received.emit(RunEvent(done))
+        controller._returned(done)
+        assert page.progress.value() == 100 and page.repeat_button.isEnabled()
+        assert controller.launch("reports_dashboard_html")
+        assert page.progress.value() == 0 and not page.stage.text()
+        assert not page.repeat_button.isEnabled() and page.mode_row.isHidden()
+    finally:
+        page.close()
 
 
 def test_library_and_quick_flow_raise_existing_run_without_duplicate(qapplication_session):

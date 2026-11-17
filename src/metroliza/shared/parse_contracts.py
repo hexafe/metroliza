@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+DEFAULT_REPORTS_METADATA_MODE = "light"
+
 
 @dataclass(frozen=True)
 class ParseRequest:

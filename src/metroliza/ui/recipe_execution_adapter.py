@@ -73,6 +73,8 @@ class RecipeExecutionAdapter:
                     cancelled=worker.parsing_canceled,
                     enrichment_complete=complete,
                     cleanup_complete=worker._prepare_pool is None,
+                    accepted_occurrences=tuple(receipt.occurrence_id for receipt in worker.last_report_outcomes
+                                               if receipt.state in {"saved", "already_present"}),
                 )
             return worker.export_run_result or derive_export_run_result(
                 excel_file=worker.excel_file, export_target=worker.export_target,

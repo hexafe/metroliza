@@ -23,16 +23,21 @@ class RecipeHome(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS, QUICK_REPORT_RECIPES
+
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.addWidget(QLabel("Szybkie flow"))
         row = QHBoxLayout()
-        for identity, label in (("reports_excel_main", "Raporty → Excel Main"),
-                                ("reports_dashboard_html", "Raporty → Dashboard HTML"),
-                                ("", "Wszystkie receptury")):
+        for definition in QUICK_REPORT_RECIPES:
+            identity = definition.recipe_id
+            label = BUILTIN_LABELS[identity]
             button = QPushButton(label)
             button.clicked.connect(lambda _checked=False, selected=identity: self.launch_requested.emit(selected))
             row.addWidget(button)
+        library = QPushButton("Wszystkie receptury")
+        library.clicked.connect(lambda _checked=False: self.launch_requested.emit(""))
+        row.addWidget(library)
         self.layout.addLayout(row)
         favorites = parent.ui_preferences.get("presentation/recipes/favorites", [], expected_type=list)
         if favorites:
@@ -102,7 +107,10 @@ class RecipeWorkspace(QWidget):
             create_adapter_ports(),
         )
         self.controller = RecipeController(RecipeRunner(ports), self, resolver=self.store.load,
-            active_database=lambda: self.main_window.db_file)
+            active_database=lambda: self.main_window.db_file,
+            source_directory=lambda: self.main_window.directory,
+            append_allowed=main_window._recipe_append_allowed)
+        self.controller.database_appended.connect(main_window._on_recipe_database_appended)
         self._close_requested = False
         self._editors = []
         layout = QVBoxLayout(self)

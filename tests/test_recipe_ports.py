@@ -86,6 +86,30 @@ def test_headless_ready_preflight_does_not_write_and_orders_import_before_export
     assert result.artifact_verified
 
 
+def test_recipe_saved_before_mode_option_keeps_complete_import(tmp_path):
+    from dataclasses import replace
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.recipes.storage import RecipeStore, copy_recipe
+
+    plan = make_plan(tmp_path)
+    old_definition = replace(plan.definition, parameters=tuple(
+        spec for spec in plan.definition.parameters if spec.key is not ParameterKey.METADATA_MODE
+    ))
+    old_binding = replace(plan.binding, values=tuple(
+        (key, value) for key, value in plan.binding.values
+        if key not in {ParameterKey.METADATA_MODE, ParameterKey.DATABASE_FILE}
+    ))
+    copied = copy_recipe(old_definition, old_binding, name="Saved with previous release")
+    store = RecipeStore(tmp_path / "settings")
+    store.save(copied.definition, copied.binding, expected_revision=None)
+    loaded = store.load(copied.definition.recipe_id)
+    plan = resolve_plan(loaded.definition, loaded.binding)
+    service = ReportsRecipeService(lambda *_: None, lambda *_: None, scanner=Scanner(), metadata_reader=MetadataReader)
+    result = service.preflight(plan, context(plan))
+    assert result.ready
+    assert result.review.import_plan.metadata_parsing_mode == "complete"
+
+
 def test_missing_metadata_requires_explicit_review_and_changed_source_blocks_write(tmp_path):
     plan = make_plan(tmp_path)
     scanner = Scanner()
