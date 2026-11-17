@@ -10,7 +10,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertEqual(metadata.release_version, "0.8.0-dev.4")
+        self.assertEqual(metadata.release_version, "0.8.0-dev.6")
         self.assertEqual(metadata.build, "")
         self.assertEqual(metadata.version_label, metadata.release_version)
         self.assertEqual(metadata.public_version_label, metadata.release_version)
@@ -50,9 +50,11 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
-                '- Start local report flows from Home with a source folder and output file<br>',
-                '- Copy and edit private recipes; reuse supported analysis settings with explicit compatibility checks<br>',
-                '- One persistent run view retains progress, decisions and cooperative cancellation across navigation<br>',
+                '- Pin and reorder recipes on Home and open them directly when the app starts on Home<br>',
+                '- Open recipe forms immediately and review missing report metadata in a larger table<br>',
+                '- Return to a running recipe or open its finished Excel workbook, dashboard and folder from Home<br>',
+                '- Open a recipe with Enter and see which input needs attention before you can start<br>',
+                '- Append reports to an existing database and export the chosen folder to Excel<br>',
                 '- Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>',
                 '- Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>',
                 '- Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>',
@@ -101,7 +103,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("0.8.0-dev.4", updated)
+            self.assertIn("0.8.0-dev.6", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

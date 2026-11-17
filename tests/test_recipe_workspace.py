@@ -80,6 +80,8 @@ def test_append_via_qt_controller_owns_reports_and_refreshes_current_database(
         timeout.stop()
         assert controller.last_record.state is RunState.COMPLETED
         assert not controller.busy and output.is_file()
+        assert [workspace.quick.result_actions.itemAt(i).widget().text()
+                for i in range(workspace.quick.result_actions.count())] == ["Otwórz Excel", "Pokaż w folderze"]
         assert refreshed == [True] and window._report_start_allowed()
     finally:
         window.close()
@@ -100,18 +102,17 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
             str(tmp_path / "input"), str(tmp_path / "first.xlsx")), name="Original favorite")
         first = workspace.store.save(copied.definition, copied.binding, expected_revision=None)
-        workspace.library.favorites = {first.definition.recipe_id}
-        workspace._favorites(workspace.library.favorites)
-        assert workspace.quick.favorite_buttons.itemAt(0).widget().text() == "Original favorite"
+        assert workspace.quick.favorite_buttons.itemAt(0).widget().text() != "Original favorite"
         workspace.edit(first)
         editor = workspace._editors[0]
+        editor.pin_on_save.setChecked(True)
         editor.name.setText("Renamed favorite")
         editor.controls[ParameterKey.OUTPUT_FILE][2].setText(str(tmp_path / "updated.xlsx"))
         next(button for button in editor.findChildren(QPushButton)
              if button.text() == "Save revision").click()
         current = workspace.store.load(first.definition.recipe_id)
         assert current.binding.revision == first.binding.revision + 1
-        favorite = workspace.quick.favorite_buttons.itemAt(0).widget()
+        favorite = workspace.quick.favorite_buttons.itemAt(2).widget()
         assert favorite.text() == "Renamed favorite"
         favorite.click()
         assert workspace.controller.binding == current.binding
@@ -119,6 +120,37 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         assert app is QApplication.instance()
     finally:
         window.close()
+
+
+def test_builtin_pins_keep_order_after_reopening_and_launch_with_enter(qapplication_session, tmp_path):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    preferences = UiPreferences(QSettings(str(tmp_path / "home-ui.ini"), QSettings.Format.IniFormat))
+    preferences.set("presentation/navigation/restore_last_page", False)
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        window._launch_recipe()
+        library = window.recipe_workspace.library
+        library.list.setCurrentRow(1)
+        library.move_up_button.click()
+        QTest.keyClick(library.list, Qt.Key.Key_Return)
+        assert window.recipe_workspace.stack.currentWidget() is window.recipe_workspace.run_page
+    finally:
+        window.close()
+
+    reopened = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert not hasattr(reopened, "recipe_workspace")
+        buttons = reopened.recipe_home.favorite_buttons
+        assert [buttons.itemAt(i).widget().text() for i in range(buttons.count())] == [
+            "Raporty → Dashboard HTML", "Raporty → Excel Main",
+        ]
+        first_view = reopened.recipe_home
+        buttons.itemAt(0).widget().click()
+        assert reopened.recipe_workspace.quick is first_view
+    finally:
+        reopened.close()
 
 
 @pytest.mark.parametrize("namespace", ["base", "generation"])

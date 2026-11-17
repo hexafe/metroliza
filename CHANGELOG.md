@@ -1,6 +1,16 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.4 — current version
+## 0.8.0-dev.6 — current version
+
+- Pin built-in and saved recipes directly on Home and choose their order.
+- Open recipe forms before loading execution services.
+- Review report metadata in a larger, filterable table that highlights items requiring attention.
+- Use Enter to open the selected recipe and get pointed to missing inputs before starting.
+- Return to the active recipe from Home and open its verified result files or containing folder.
+- Save CSV recipes once their settings are ready and start Realtime Monitor setup from a single primary action.
+- Append to an existing database and export reports from the chosen folder to Excel.
+
+## 0.8.0-dev.4 — previous recipe version
 
 - Allocate a fresh package identity after the global inventory found an earlier diagnostics package already using `0.8.0-dev.3`.
 - Keep the qualified recipe implementation unchanged and retain earlier EXE/ZIP bytes and receipts with their original source identities.

@@ -1107,7 +1107,7 @@ class IndustrialAnalyticsDialog(QDialog):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
         actions.addStretch(1)
-        self.save_recipe_button = QPushButton("Zapisz jako recepturę")
+        self.save_recipe_button = QPushButton("Save as recipe")
         self.save_recipe_button.clicked.connect(self._save_as_recipe)
         actions.addWidget(self.save_recipe_button)
         actions.addWidget(self.close_button)
@@ -2624,6 +2624,11 @@ class IndustrialAnalyticsDialog(QDialog):
         else:
             self.readiness_label.setText("Select output paths before creating analytics.")
             set_status_variant(self.readiness_label, "warning")
+        can_save_recipe = ready and self.analytics_thread is None
+        self.save_recipe_button.setEnabled(can_save_recipe)
+        self.save_recipe_button.setToolTip(
+            "Save these analysis settings for reuse." if can_save_recipe else self.readiness_label.text()
+        )
         self.start_button.setToolTip(self.readiness_label.text() + " Ctrl+S generates; Ctrl+Shift+S stops.")
         if self.analytics_thread is None:
             set_output_summary(self.request_summary_label, output_summary(
@@ -2770,7 +2775,13 @@ class IndustrialAnalyticsDialog(QDialog):
             module = "industrial" if self.is_production_source else "tabular"
             open_capture_editor(self, module, request)
         except ValueError:
-            QMessageBox.warning(self, "Recipe", "Review the configuration before saving it as a recipe.")
+            self.readiness_label.setText("Review the data source, metrics and output paths before saving the recipe.")
+            set_status_variant(self.readiness_label, "warning")
+            if not self._selected_metrics():
+                target = self.choose_metrics_button if self.metric_candidates else self.load_metrics_button
+            else:
+                target = self.dashboard_button
+            target.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _build_analytics_request(self, *, require_runnable: bool = False) -> IndustrialAnalyticsRequest:
         snapshot = self._pending_grouping_snapshot

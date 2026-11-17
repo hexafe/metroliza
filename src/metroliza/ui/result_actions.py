@@ -66,10 +66,10 @@ def _reveal(path):
     reveal_file_in_explorer(path)
 
 
-def add_result_actions(parent, paths, add_button):
+def add_result_actions(parent, paths, add_button, *, labels=("Open workbook", "Open dashboard", "Show in folder")):
     """Use the same labels, URLs and safety checks in messages and retained rows."""
     paths = existing_result_files(paths)
-    for suffixes, label in (({".xlsx"}, "Open workbook"), ({".html", ".htm"}, "Open dashboard")):
+    for suffixes, label in (({".xlsx"}, labels[0]), ({".html", ".htm"}, labels[1])):
         for path in paths:
             if path.suffix.lower() in suffixes:
                 button = add_button(label)
@@ -77,8 +77,8 @@ def add_result_actions(parent, paths, add_button):
                 button.setToolTip(str(path))
                 button.clicked.connect(partial(activate_result_file, parent, path))
     if paths:
-        button = add_button("Show in folder")
-        button.setAccessibleName("Show in folder")
+        button = add_button(labels[2])
+        button.setAccessibleName(labels[2])
         button.setToolTip(str(paths[0]))
         button.clicked.connect(partial(activate_result_file, parent, paths[0], reveal=_reveal))
 

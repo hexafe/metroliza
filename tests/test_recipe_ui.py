@@ -217,7 +217,6 @@ def test_admitted_controller_cancel_before_worker_start_is_not_lost(qapplication
 
 def test_all_catalog_home_and_favorite_launches_refresh_active_database(qapplication_session, tmp_path):
     from metroliza.ui.recipe_library_page import RecipeQuickFlows
-    from PyQt6.QtWidgets import QPushButton
 
     current = [tmp_path / "first.db"]
     runner = Runner()
@@ -229,7 +228,7 @@ def test_all_catalog_home_and_favorite_launches_refresh_active_database(qapplica
     assert runner.active_database == current[0]
     quick = RecipeQuickFlows(controller, (entry,))
     current[0] = tmp_path / "second.db"
-    quick.findChildren(QPushButton)[0].click()
+    quick.favorite_buttons.itemAt(0).widget().click()
     assert runner.active_database == current[0]
     quick.set_favorites({REPORTS_EXCEL_MAIN.recipe_id})
     current[0] = tmp_path / "third.db"

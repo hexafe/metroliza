@@ -18,6 +18,8 @@ from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
 _LABELS = {"input_folder": "Folder raportów", "output_file": "Plik wynikowy",
            "database_file": "Baza danych", "existing_database": "Istniejąca baza",
            "export_preset": "Profil eksportu", "source_file": "Plik źródłowy"}
+_BROWSE_LABELS = {ParameterKey.INPUT_FOLDER: "Wybierz folder…", ParameterKey.OUTPUT_FILE: "Wybierz wynik…",
+                  ParameterKey.EXISTING_DATABASE: "Wybierz bazę…", ParameterKey.SOURCE_FILE: "Wybierz źródło…"}
 _STATE_LABELS = {
     RunState.READY: "Gotowe", RunState.RUNNING: "Trwa wykonywanie",
     RunState.REQUIRES_DECISION: "Wymagana decyzja", RunState.COMPLETED: "Zakończono",
@@ -53,6 +55,8 @@ class RecipeRunnerPage(QWidget):
         self.controller = controller
         self.fields = {}
         self._review_rows = ()
+        self._presented_review = None
+        self._attention_rows = set()
         self._stage_key = None
         self._stage_title = ""
         self._stage_started = 0.0
@@ -89,13 +93,26 @@ class RecipeRunnerPage(QWidget):
         self.stage = QLabel()
         layout.addWidget(self.stage)
         self.progress = QProgressBar()
-        layout.addWidget(self.progress)
+        self.progress.setTextVisible(False)
+        self.progress.setAccessibleName("Postęp receptury")
+        progress_row = QHBoxLayout()
+        progress_row.addWidget(self.progress, 1)
+        self.progress_percent = QLabel()
+        self.progress_percent.setAlignment(Qt.AlignmentFlag.AlignRight)
+        progress_row.addWidget(self.progress_percent)
+        layout.addLayout(progress_row)
         self.scope = QLabel()
         self.scope.setWordWrap(True)
         layout.addWidget(self.scope)
+        self.only_attention = QCheckBox("Tylko raporty wymagające uwagi")
+        self.only_attention.toggled.connect(self._filter_review)
+        self.only_attention.hide()
+        layout.addWidget(self.only_attention)
         self.review_table = QTableWidget()
+        self.review_table.setAccessibleName("Metadane raportów do przeglądu")
+        self.review_table.setMinimumHeight(120)
         self.review_table.setVisible(False)
-        layout.addWidget(self.review_table)
+        layout.addWidget(self.review_table, 1)
         actions = QHBoxLayout()
         self.start_button = QPushButton("Start")
         self.continue_button = QPushButton("Kontynuuj zatwierdzony zakres")
@@ -127,8 +144,11 @@ class RecipeRunnerPage(QWidget):
             self.form.removeRow(0)
         self.fields.clear()
         self._review_rows = ()
+        self._presented_review = None
+        self.only_attention.hide()
         self.review_table.hide()
         self.scope.clear()
+        self.scope.setToolTip("")
         self.status.setText("Sprawdź parametry uruchomienia.")
         self.title.setText(self.controller.binding.name)
         self.mode_row.setVisible(any(
@@ -157,7 +177,9 @@ class RecipeRunnerPage(QWidget):
                 box = QHBoxLayout(row)
                 box.setContentsMargins(0, 0, 0, 0)
                 box.addWidget(editor)
-                browse = QPushButton("Wybierz…")
+                browse = QPushButton(_BROWSE_LABELS.get(spec.key, "Wybierz plik…"))
+                browse.setAccessibleName(browse.text().rstrip("…"))
+                browse.setToolTip(browse.accessibleName())
                 browse.clicked.connect(lambda _checked=False, key=spec.key: self._browse(key))
                 box.addWidget(browse)
                 self.form.addRow(label, row)
@@ -260,6 +282,10 @@ class RecipeRunnerPage(QWidget):
             editor.setText(path)
 
     def _start(self):
+        for key, (editor, spec) in self.fields.items():
+            if spec.type is not ParameterType.BOOLEAN and spec.required and not editor.text().strip():
+                self._invalid_parameter(key)
+                return
         try:
             prepared = self.controller.prepare(self._values())
         except (ValueError, TypeError):
@@ -272,10 +298,14 @@ class RecipeRunnerPage(QWidget):
     def _continue(self):
         for index, row in enumerate(self._review_rows):
             for column, field in enumerate(REVIEW_FIELDS, start=1):
-                value = self.review_table.item(index, column).text()
+                item = self.review_table.item(index, column)
+                value = item.text()
                 if value != (row.value(field) or ""):
                     valid, _error = row.set_user_value(field, value)
                     if not valid:
+                        self.only_attention.setChecked(False)
+                        self.review_table.setCurrentItem(item)
+                        self.review_table.setFocus()
                         self._failed("invalid_metadata")
                         return
         record = self.controller.last_record
@@ -294,12 +324,19 @@ class RecipeRunnerPage(QWidget):
             self._show_decision(record)
         else:
             self.review_table.hide()
+            self.only_attention.hide()
+            self._presented_review = None
+            self.scope.setToolTip("")
             if not record.ownership:
                 self.scope.setText(self._import_counts(record))
         self._buttons()
 
     def _show_decision(self, record):
-        self._review_rows = ()
+        if record.decision != "review":
+            self._review_rows = ()
+            self._presented_review = None
+            self.only_attention.hide()
+            self.scope.setToolTip("")
         if record.decision == "copy_ready":
             self.scope.setText("Sprawdź ścieżki nowej kopii. Wybierz Kontynuuj, aby uruchomić ten plan.")
         elif record.decision == "collision":
@@ -314,10 +351,23 @@ class RecipeRunnerPage(QWidget):
     def _show_review(self, result):
         review = result.review
         self._review_rows = getattr(review, "rows", ())
-        files = getattr(getattr(review, "preflight", None), "files", ())
-        self.scope.setText("\n".join((*result.summary, *(f"{item.display_name}: {item.status.value}" for item in files))))
         if getattr(review, "conflicts", ()):
             self.continue_button.setText("Zastąp wynik i kontynuuj")
+        if self._presented_review is result:
+            return
+        self._presented_review = result
+        self._attention_rows = {index for index, row in enumerate(self._review_rows)
+                                if row.needs_attention or row.conflict_fields or row.warnings}
+        files = getattr(getattr(review, "preflight", None), "files", ())
+        excluded = tuple(item.display_name for item in files if item.status.value not in {"ready", "duplicate"})
+        missing = sum(len(row.missing_fields) for row in self._review_rows)
+        summary = [*result.summary]
+        if self._review_rows:
+            summary.append(f"Uwaga: {len(self._attention_rows)} raportów · Brakujące pola: {missing}")
+        if excluded:
+            summary.append(f"Pliki poza importem: {len(excluded)}")
+        self.scope.setText("\n".join(summary))
+        self.scope.setToolTip("\n".join(excluded[:20]))
         self.review_table.setColumnCount(1 + len(REVIEW_FIELDS))
         self.review_table.setHorizontalHeaderLabels(["Raport", *(FIELD_LABELS[f] for f in REVIEW_FIELDS)])
         self.review_table.setRowCount(len(self._review_rows))
@@ -326,7 +376,35 @@ class RecipeRunnerPage(QWidget):
             name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.review_table.setItem(index, 0, name_item)
             for column, field in enumerate(REVIEW_FIELDS, start=1):
-                self.review_table.setItem(index, column, QTableWidgetItem(row.value(field) or ""))
+                item = QTableWidgetItem(row.value(field) or "")
+                if not row.editable:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                note = self._review_field_note(row, field)
+                if note:
+                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, note)
+                    item.setToolTip(note)
+                    item.setBackground(self.palette().alternateBase())
+                    font = self.review_table.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                self.review_table.setItem(index, column, item)
+        self.only_attention.setVisible(0 < len(self._attention_rows) < len(self._review_rows))
+        self.only_attention.setChecked(bool(self._attention_rows))
+        self._filter_review(self.only_attention.isChecked())
+
+    @staticmethod
+    def _review_field_note(row, field):
+        if field in row.missing_fields:
+            return "Brakująca wartość."
+        if field in row.conflict_fields:
+            return "Sprzeczne wartości metadanych."
+        if field in row.low_confidence_fields:
+            return "Sprawdź odczytaną wartość."
+        return ""
+
+    def _filter_review(self, checked):
+        for index in range(len(self._review_rows)):
+            self.review_table.setRowHidden(index, checked and index not in self._attention_rows)
 
     @staticmethod
     def _import_counts(record):
@@ -346,6 +424,9 @@ class RecipeRunnerPage(QWidget):
                 self.progress.setRange(0, 100)
             if event.record.state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}:
                 self.progress.setValue(100)
+                self.progress_percent.setText("100%")
+            else:
+                self.progress_percent.clear()
             return
         title = _STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
         key = (event.record.run_id, event.step_id, title)
@@ -355,11 +436,13 @@ class RecipeRunnerPage(QWidget):
             self._stage_started = monotonic()
             self._stage_count = ""
             self.progress.setRange(0, 0)
+            self.progress_percent.setText("W toku")
         if not self._stage_timer.isActive():
             self._stage_timer.start()
         if event.total:
             self.progress.setRange(0, 100)
             self.progress.setValue(round(100 * event.completed / event.total))
+            self.progress_percent.setText(f"{self.progress.value()}%")
             if event.step_kind is None:
                 self._stage_count = f" · {event.completed}/{event.total}"
         self._update_stage_label()
@@ -374,13 +457,29 @@ class RecipeRunnerPage(QWidget):
         self.stage.clear()
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
+        self.progress_percent.clear()
 
     def _failed(self, code):
-        if code == "append_busy":
-            self.status.setText("Zakończ bieżącą pracę w Reports lub zamknij okno korzystające z tej bazy.")
-        else:
-            self.status.setText(f"Nie można kontynuować: {code}")
+        messages = {
+            "append_busy": "Zakończ pracę w Reports lub zamknij okno korzystające z tej bazy.",
+            "invalid_metadata": "Sprawdź wartość wskazanego pola metadanych.",
+            "missing_parameter": "Uzupełnij wymagane pola lub popraw zapisane ustawienia receptury.",
+            "invalid_path": "Sprawdź podane ścieżki.",
+            "invalid_parameter": "Sprawdź format wartości w formularzu.",
+            "recipe_not_found": "Sprawdź, czy zapisana receptura jest dostępna w bibliotece.",
+            "target_inside_input": "Zapisz wynik poza folderem źródłowym.",
+        }
+        self.status.setText(messages.get(code, "Sprawdź wartości i ścieżki lub wybierz inną recepturę."))
         self._buttons()
+
+    def _invalid_parameter(self, key):
+        if key is not None and key in self.fields:
+            editor, _spec = self.fields[key]
+            label = _LABELS.get(key.value, key.value.replace("_", " ").capitalize())
+            self.status.setText(f"Wybierz lub wpisz: {label}.")
+            editor.setFocus()
+            return
+        self._failed("invalid_parameter")
 
     def _idle(self):
         self._buttons()

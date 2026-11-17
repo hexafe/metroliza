@@ -57,6 +57,8 @@ class RecipeEditor(QDialog):
         self.preview_label = QLabel()
         self.preview_label.setWordWrap(True)
         layout.addWidget(self.preview_label)
+        self.pin_on_save = QCheckBox("Przypnij do Home po zapisaniu")
+        layout.addWidget(self.pin_on_save)
         actions = QHBoxLayout()
         preview = QPushButton("Preview plan")
         preview.clicked.connect(self._preview)

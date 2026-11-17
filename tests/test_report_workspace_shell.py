@@ -248,7 +248,7 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
             "reports", "csv_summary", "industrial_data", "realtime_monitor", "parser_profiles", "tools"
         )),
     ]
-    assert len(window.recipe_home.findChildren(QPushButton)) == 3
+    assert len([button for button in window.recipe_home.findChildren(QPushButton) if not button.isHidden()]) == 3
     for button in (window.modifydb_button, window.export_button, window.map_characteristics_button):
         assert window.reports_page.isAncestorOf(button)
         assert not window.home_page.isAncestorOf(button)

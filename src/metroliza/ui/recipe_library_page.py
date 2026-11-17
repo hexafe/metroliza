@@ -1,9 +1,9 @@
 """Compact recipe catalogue and Home shortcuts, sharing one run controller."""
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QListWidget, QPushButton, QVBoxLayout, QWidget,
 )
 
 from metroliza.recipes.builtin_recipes import BUILTIN_LABELS, QUICK_REPORT_RECIPES
@@ -35,6 +35,7 @@ class RecipeLibraryPage(QWidget):
                 return False
         self.available = available or supported
         self.favorites = set()
+        self.favorite_order = []
         self._shown = []
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Receptury"))
@@ -55,22 +56,35 @@ class RecipeLibraryPage(QWidget):
         self.copy_button = QPushButton("Utwórz kopię")
         self.edit_button = QPushButton("Edytuj")
         self.favorite_button = QPushButton("Ulubione ☆")
-        for button in (self.run_button, self.copy_button, self.edit_button, self.favorite_button):
+        self.move_up_button = QPushButton("Przenieś wyżej")
+        self.move_down_button = QPushButton("Przenieś niżej")
+        self.move_up_button.setAccessibleName("Przenieś ulubioną recepturę wyżej na Home")
+        self.move_down_button.setAccessibleName("Przenieś ulubioną recepturę niżej na Home")
+        for button in (self.run_button, self.copy_button, self.edit_button, self.favorite_button,
+                       self.move_up_button, self.move_down_button):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.search.textChanged.connect(self.refresh)
         self.module.currentIndexChanged.connect(self.refresh)
         self.list.currentRowChanged.connect(self._selection)
         self.list.itemDoubleClicked.connect(lambda _item: self._run())
+        self.list.installEventFilter(self)
         self.run_button.clicked.connect(self._run)
         self.copy_button.clicked.connect(lambda: self._emit(self.copy_requested))
         self.edit_button.clicked.connect(lambda: self._emit(self.edit_requested))
         self.favorite_button.clicked.connect(self._favorite)
+        self.move_up_button.clicked.connect(lambda: self._move_favorite(-1))
+        self.move_down_button.clicked.connect(lambda: self._move_favorite(1))
         self.refresh()
 
     def set_entries(self, entries):
         self.entries = entries
         self.refresh()
+
+    def set_favorites(self, identities):
+        self.favorite_order = list(identities)
+        self.favorites = set(identities)
+        self._selection()
 
     def refresh(self, *_):
         self.list.clear()
@@ -99,6 +113,35 @@ class RecipeLibraryPage(QWidget):
         self.edit_button.setEnabled(entry is not None and not entry.definition.builtin)
         self.favorite_button.setEnabled(entry is not None)
         self.favorite_button.setText("Ulubione ★" if entry and entry.definition.recipe_id in self.favorites else "Ulubione ☆")
+        ordered = self.favorite_order
+        position = ordered.index(entry.definition.recipe_id) if entry and entry.definition.recipe_id in ordered else -1
+        self.move_up_button.setEnabled(position > 0)
+        self.move_down_button.setEnabled(position >= 0 and position < len(ordered) - 1)
+
+    def _move_favorite(self, delta):
+        entry = self.selected()
+        if entry is None:
+            return
+        identity = entry.definition.recipe_id
+        ordered = list(self.favorite_order)
+        if identity not in ordered:
+            return
+        position = ordered.index(identity)
+        target = position + delta
+        if not 0 <= target < len(ordered):
+            return
+        ordered[position], ordered[target] = ordered[target], ordered[position]
+        self.favorites = set(ordered)
+        self.favorite_order = ordered
+        self.favorites_changed.emit(tuple(ordered))
+        self._selection()
+
+    def eventFilter(self, watched, event):
+        if (watched is self.list and event.type() == QEvent.Type.KeyPress
+                and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)):
+            self._run()
+            return True
+        return super().eventFilter(watched, event)
 
     def _run(self):
         entry = self.selected()
@@ -120,61 +163,132 @@ class RecipeLibraryPage(QWidget):
         identity = entry.definition.recipe_id
         if identity in self.favorites:
             self.favorites.remove(identity)
+            self.favorite_order.remove(identity)
         else:
             self.favorites.add(identity)
-        self.favorites_changed.emit(frozenset(self.favorites))
+            self.favorite_order.append(identity)
+        self.favorites_changed.emit(tuple(self.favorite_order))
         self._selection()
 
 
 class RecipeQuickFlows(QWidget):
+    """The same Home controls before and after the recipe workspace is created."""
     library_requested = pyqtSignal()
+    launch_requested = pyqtSignal(str)
+    return_requested = pyqtSignal()
 
-    def __init__(self, controller, entries, parent=None):
+    def __init__(self, controller=None, entries=(), parent=None):
         super().__init__(parent)
         self.controller = controller
         self.entries = entries
-        self.favorites = set()
+        self._result_run_id = None
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Szybkie flow"))
-        cards = QHBoxLayout()
-        for definition in QUICK_REPORT_RECIPES:
-            identity = definition.recipe_id
-            button = QPushButton(BUILTIN_LABELS[identity])
-            button.clicked.connect(lambda _checked=False, recipe_id=identity: controller.launch(recipe_id))
-            cards.addWidget(button)
-        layout.addLayout(cards)
-        self.favorite_buttons = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("Przypięte receptury"))
+        self.favorite_buttons = QGridLayout()
         layout.addLayout(self.favorite_buttons)
+        self.empty_hint = QLabel("Przypnij recepturę w bibliotece, aby otwierać ją z Home.")
+        self.empty_hint.setWordWrap(True)
+        layout.addWidget(self.empty_hint)
         all_recipes = QPushButton("Wszystkie receptury")
         all_recipes.clicked.connect(self.library_requested)
         layout.addWidget(all_recipes)
-        self.active = QPushButton("Brak aktywnego zadania")
-        self.active.clicked.connect(controller.view_requested)
-        self.active.setEnabled(False)
+
+        self.active_label = QLabel()
+        self.active_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.active_label.setWordWrap(True)
+        self.active = QPushButton("Wróć do zadania")
+        self.active.clicked.connect(self.return_requested)
+        layout.addWidget(self.active_label)
         layout.addWidget(self.active)
-        controller.changed.connect(self._changed)
+        self.active_label.hide()
+        self.active.hide()
+
+        self.result = QLabel()
+        self.result.setTextFormat(Qt.TextFormat.PlainText)
+        self.result.setWordWrap(True)
+        self.result.hide()
+        layout.addWidget(self.result)
+        self.result_actions = QHBoxLayout()
+        layout.addLayout(self.result_actions)
+        self.set_favorites(definition.recipe_id for definition in QUICK_REPORT_RECIPES)
 
     def set_favorites(self, identities):
-        self.favorites = set(identities)
+        ids = tuple(dict.fromkeys(identity for identity in identities if isinstance(identity, str)))
         while self.favorite_buttons.count():
-            self.favorite_buttons.takeAt(0).widget().deleteLater()
-        entries = self.entries() if callable(self.entries) else self.entries
-        for entry in entries:
-            if entry.definition.recipe_id in self.favorites:
-                button = QPushButton(entry.binding.name)
-                button.clicked.connect(lambda _checked=False, identity=entry.definition.recipe_id:
-                                       self._launch_favorite(identity))
-                self.favorite_buttons.addWidget(button)
+            button = self.favorite_buttons.takeAt(0).widget()
+            button.hide()
+            button.deleteLater()
+        labels = dict(BUILTIN_LABELS)
+        if any(identity not in labels for identity in ids):
+            entries = self.entries() if callable(self.entries) else self.entries
+            labels.update({entry.definition.recipe_id: entry.binding.name for entry in entries})
+        for position, identity in enumerate(identity for identity in ids if identity in labels):
+            button = QPushButton(labels[identity])
+            button.clicked.connect(lambda _checked=False, selected=identity: self._launch_favorite(selected))
+            self.favorite_buttons.addWidget(button, position // 2, position % 2)
+        self.empty_hint.setVisible(not self.favorite_buttons.count())
 
     def _launch_favorite(self, identity):
+        if self.controller is None:
+            self.launch_requested.emit(identity)
+            return
         try:
-            # The controller checks ownership before resolving the current saved
-            # revision. Buttons retain only identity, never private stale settings.
             self.controller.launch(identity)
         except (ValueError, OSError):
             self.controller.failed.emit("recipe_not_found")
 
-    def _changed(self, record):
-        from metroliza.ui.recipe_runner_page import _STATE_LABELS
-        self.active.setText("Zadanie: " + _STATE_LABELS.get(record.state, record.state.value))
-        self.active.setEnabled(True)
+    def set_active(self, name="", stage=""):
+        if name and stage:
+            self.active_label.setText(f"{name} · {stage}")
+        self.active_label.setVisible(bool(name and stage))
+        self.active.setVisible(bool(name and stage))
+
+    def set_result(self, plan, record):
+        from metroliza.recipes.run_state import RunState
+        from metroliza.ui.result_actions import add_result_actions, existing_result_files
+
+        if (plan is None or plan.run_id != record.run_id or self._result_run_id == record.run_id
+                or record.state not in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS, RunState.PARTIAL}):
+            return
+        verified = {step.kind for step in record.steps if step.result.artifact_verified}
+        paths = existing_result_files(self._result_paths(plan, verified))
+        if not paths:
+            return
+        self._result_run_id = record.run_id
+        while self.result_actions.count():
+            button = self.result_actions.takeAt(0).widget()
+            button.hide()
+            button.deleteLater()
+        self.result.setText(f"Ostatni wynik · {plan.binding.name}")
+        self.result.show()
+
+        def add_button(label):
+            button = QPushButton(label)
+            self.result_actions.addWidget(button)
+            return button
+
+        add_result_actions(self.window(), paths, add_button,
+                           labels=("Otwórz Excel", "Otwórz HTML", "Pokaż w folderze"))
+
+    @staticmethod
+    def _result_paths(plan, verified):
+        output = plan.output_file
+        if output is None:
+            return ()
+        if StepKind.ANALYZE_TABULAR in verified or (
+                StepKind.VERIFY_OUTPUT in verified
+                and any(step.kind is StepKind.ANALYZE_TABULAR for step in plan.definition.steps)):
+            from metroliza.recipes.tabular_adapter import analytics_output_family
+
+            outputs = analytics_output_family(plan.binding, output)
+            return (outputs.dashboard, outputs.workbook) if outputs.workbook else (outputs.dashboard,)
+        paths = []
+        for step in plan.definition.steps:
+            if step.kind not in verified and StepKind.VERIFY_OUTPUT not in verified:
+                continue
+            if step.kind is StepKind.EXPORT_MAIN:
+                paths.append(output)
+            elif step.kind is StepKind.EXPORT_HTML:
+                paths.append(output.with_suffix(".html"))
+        return tuple(paths)

@@ -249,7 +249,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         # Mirror the original visible control's Enter eligibility. A hidden Stop
         # must not become the default while typing in Setup or Event Review.
         set_button_role(self.next_button, "primary",
-                        default=selected is not None and selected.isVisibleTo(self))
+                        default=selected is not None and (
+                            selected is self.configure_source_button or selected.isVisibleTo(self)))
 
     def _show_setup(self) -> None:
         self.workflow_tabs.setCurrentIndex(1)
@@ -344,6 +345,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             control = self.configure_source_button
             message = self._unready_guidance()
         self._next_control = control
+        first_setup = tab == 0 and not self.profiles and not running
+        self.monitor_content.setVisible(not first_setup)
+        self.configure_source_button.setVisible(control is not self.configure_source_button)
         self.next_button.setText(control.text())
         self.next_button.setEnabled(control.isEnabled())
         self.next_action_label.setText(message)
@@ -365,7 +369,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def _unready_guidance(self) -> str:
         if not self.profiles:
-            return "No sources configured. Configure source opens the existing Setup workflow."
+            return "Configure a source to start monitoring."
         if not any(profile.is_enabled for profile in self.profiles):
             return "Sources are disabled. Configure source to review them in Production Sources."
         if not self.selected_profiles():
@@ -377,7 +381,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-        layout.addLayout(self._build_monitor_action_row())
+        self.monitor_content = QWidget()
+        content_layout = QVBoxLayout(self.monitor_content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addLayout(self._build_monitor_action_row())
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -387,7 +394,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         body_layout.addWidget(self._build_status_panel(), 2)
         body_layout.addWidget(self._build_diagnostics_panel(), 1)
         scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+        content_layout.addWidget(scroll, 1)
+        layout.addWidget(self.monitor_content, 1)
         return page
 
     def _build_setup_page(self) -> QWidget:

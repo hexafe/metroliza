@@ -552,6 +552,11 @@ class MainWindow(QMainWindow):
         self.tools_menu.addAction(self.realtime_monitoring_action)
         self.tools_menu.addAction(self.parser_profiles_action)
         self.view_menu = self.menuBar().addMenu("&View")
+        self.restore_last_page_action = self.view_menu.addAction("Open last workspace on startup")
+        self.restore_last_page_action.setCheckable(True)
+        self.restore_last_page_action.triggered.connect(
+            lambda checked: self.ui_preferences.set("presentation/navigation/restore_last_page", checked)
+        )
         self.theme_menu = self.view_menu.addMenu("Theme")
         self.theme_action_group = QActionGroup(self)
         self.theme_action_group.setExclusive(True)
@@ -1115,14 +1120,17 @@ class MainWindow(QMainWindow):
             theme_mode = "system"
         self._set_theme_mode(theme_mode, persist=False)
 
-        page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
-        if page_id:
-            self._show_workspace_page("csv_summary" if page_id == "csv_analytics" else page_id)
-        else:
-            # Existing six-page integer preferences retain their original meaning.
-            navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
-            if 0 <= navigation_index < 6:
-                self.navigation_list.setCurrentRow(navigation_index)
+        restore_last = self.ui_preferences.get("presentation/navigation/restore_last_page", True, expected_type=bool)
+        self.restore_last_page_action.setChecked(restore_last)
+        if restore_last:
+            page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
+            if page_id:
+                self._show_workspace_page("csv_summary" if page_id == "csv_analytics" else page_id)
+            else:
+                # Existing six-page integer preferences retain their original meaning.
+                navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
+                if 0 <= navigation_index < 6:
+                    self.navigation_list.setCurrentRow(navigation_index)
 
         geometry = self.ui_preferences.get(
             "windows/main/geometry",
