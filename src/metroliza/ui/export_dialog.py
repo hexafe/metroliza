@@ -30,6 +30,7 @@ from metroliza.exporting.output_publication import (
 )
 from metroliza.exporting.export_preset_utils import (
     build_export_options_for_preset,
+    get_export_preset_description,
     get_export_preset_id_for_label,
     get_export_preset_ids,
     get_export_preset_label,
@@ -413,9 +414,7 @@ class ExportDialog(QDialog):
     def _save_dialog_config(self):
         """Persist currently selected preset to the user config file."""
         try:
-            selected_label = self.preset_combobox.currentText()
-            selected_preset = get_export_preset_id_for_label(selected_label)
-            self.config['selected_preset'] = selected_preset
+            self.config['selected_preset'] = self._active_preset_id()
             save_export_dialog_config(self.config_path, self.config)
         except Exception as e:
             self.log_and_exit(e)
@@ -434,6 +433,7 @@ class ExportDialog(QDialog):
                 return
 
             selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+            self._applied_preset_id = selected_preset
             preset_options = build_export_options_for_preset(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
@@ -445,6 +445,7 @@ class ExportDialog(QDialog):
             self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
             self._sync_html_dashboard_only_state()
+            self._preview_selected_preset()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
@@ -527,7 +528,13 @@ class ExportDialog(QDialog):
                 self.preset_combobox.addItem(get_export_preset_label(preset_id))
             selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
-            self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
+            self.apply_preset_button = QPushButton("Apply preset")
+            self.apply_preset_button.setAutoDefault(False)
+            self.apply_preset_button.clicked.connect(self.apply_selected_preset)
+            self.preset_preview_label = status_chip("", "info")
+            self.preset_preview_label.setWordWrap(True)
+            self.preset_preview_label.hide()
+            self.preset_combobox.currentTextChanged.connect(self._preview_selected_preset)
             self.preset_label.setToolTip(
                 "Main plots: exports core charts only.\n"
                 "Extended plots: includes additional summary plots and statistics sheets.\n"
@@ -707,7 +714,10 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.preset_output_section_label, row, 0, 1, 4)
             row += 1
             content_layout.addWidget(self.preset_label, row, 0)
-            content_layout.addWidget(self.preset_combobox, row, 1, 1, 3)
+            content_layout.addWidget(self.preset_combobox, row, 1, 1, 2)
+            content_layout.addWidget(self.apply_preset_button, row, 3)
+            row += 1
+            content_layout.addWidget(self.preset_preview_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.select_db_label, row, 0)
@@ -857,7 +867,8 @@ class ExportDialog(QDialog):
                 ),
             )
 
-            self.setTabOrder(self.preset_combobox, self.select_db_button)
+            self.setTabOrder(self.preset_combobox, self.apply_preset_button)
+            self.setTabOrder(self.apply_preset_button, self.select_db_button)
             self.setTabOrder(self.select_db_button, self.scope_combobox)
             self.setTabOrder(self.scope_combobox, self.select_excel_button)
             self.setTabOrder(self.select_excel_button, self.filter_button)
@@ -888,8 +899,9 @@ class ExportDialog(QDialog):
 
     def _configure_accessibility(self):
         configure_accessibility(self.preset_combobox, name="Export preset")
+        configure_accessibility(self.preset_preview_label, name="Proposed export preset changes")
         configure_accessibility(self.select_db_button, name="Select export database")
-        configure_accessibility(self.select_excel_button, name="Select output workbook")
+        configure_accessibility(self.select_excel_button, name=self._output_picker_name())
         configure_accessibility(self.database_text_label, name="Export source database")
         configure_accessibility(self.excel_file_text_label, name="Export output path")
         configure_accessibility(self.filter_button, name="Edit export filters")
@@ -993,18 +1005,51 @@ class ExportDialog(QDialog):
         if hasattr(self, "export_button"):
             self.export_button.setEnabled(
                 has_database and has_output and not self._settings_locked() and self._scope_mode() != _STALE_IMPORT
+                and not self._preset_pending()
             )
         self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
         self._refresh_deliverables_summary(has_database=has_database, has_output=has_output)
 
-    def _selected_preset_options(self):
+    def _requested_preset_id(self):
         combobox = getattr(self, "preset_combobox", None)
-        selected_label = combobox.currentText() if combobox is not None else ""
-        selected_preset = get_export_preset_id_for_label(selected_label)
-        return build_export_options_for_preset(selected_preset)
+        return get_export_preset_id_for_label(combobox.currentText() if combobox is not None else "")
+
+    def _active_preset_id(self):
+        return getattr(self, "_applied_preset_id", self._requested_preset_id())
+
+    def _preset_pending(self):
+        return self._requested_preset_id() != self._active_preset_id()
+
+    def _selected_preset_options(self):
+        return build_export_options_for_preset(self._active_preset_id())
+
+    def _preview_selected_preset(self, _label=None):
+        preview = getattr(self, "preset_preview_label", None)
+        if preview is None:
+            return
+        requested = self._requested_preset_id()
+        pending = self._preset_pending()
+        if pending:
+            options = build_export_options_for_preset(requested)
+            description = get_export_preset_description(requested)
+            sort = "Date" if options["sorting_parameter"] == "date" else "Sample number"
+            hide_ok = "On" if options["hide_ok_results"] else "Off"
+            preview.setText(
+                f"Active preset: {get_export_preset_label(self._active_preset_id())}. {description}\n"
+                f"Chart type: {options['export_type'].title()}. Sort by: {sort}. "
+                f"Hide OK-only columns: {hide_ok}. Violin min n: {options['violin_plot_min_samplesize']}. "
+                f"Y-limit x: {options['summary_plot_scale']}."
+            )
+            preview.setAccessibleDescription(preview.text())
+        preview.setVisible(pending)
+        self.apply_preset_button.setEnabled(pending)
+        self._update_export_button_enabled_state()
 
     def _is_html_dashboard_only(self):
         return self._selected_preset_options().get("export_target") == "html_dashboard"
+
+    def _output_picker_name(self):
+        return "Select standalone HTML dashboard" if self._is_html_dashboard_only() else "Select output workbook"
 
     def _grouping_is_applied(self):
         if self._scope_mode() != _WHOLE_DATABASE:
@@ -1080,6 +1125,7 @@ class ExportDialog(QDialog):
             )
         if hasattr(self, "select_excel_button"):
             self.select_excel_button.setToolTip(self.select_excel_label.toolTip())
+            configure_accessibility(self.select_excel_button, name=self._output_picker_name())
         self._coerce_output_path_for_mode()
         self._sync_dashboard_visual_controls()
         self._update_export_button_enabled_state()
@@ -1153,8 +1199,7 @@ class ExportDialog(QDialog):
         output_kind = "Dashboard" if html_only else "Output workbook"
         db_summary = self._summary_path_name(db_file, missing_label="not selected")
         output_summary = self._summary_path_name(output_file, missing_label="not selected")
-        preset_combobox = getattr(self, "preset_combobox", None)
-        preset_summary = preset_combobox.currentText() if preset_combobox is not None else "unknown"
+        preset_summary = get_export_preset_label(self._active_preset_id())
 
         if html_only:
             html_summary = "standalone"
@@ -1331,7 +1376,7 @@ class ExportDialog(QDialog):
     def _validate_chart_integer(field, error_label, minimum):
         text = field.text().strip()
         try:
-            valid = re.fullmatch(r"\+?[0-9]+", text) is not None and int(text) >= minimum
+            valid = re.fullmatch(r"[+-]?[0-9]+", text) is not None and int(text) >= minimum
         except ValueError:
             valid = False
         message = "" if valid else f"Enter a whole number of {minimum} or more."
@@ -1577,6 +1622,8 @@ class ExportDialog(QDialog):
 
     def _build_export_request(self):
         """Freeze the selected report scope and all output settings."""
+        if self._preset_pending():
+            raise ValueError("Apply the selected preset or return to the active preset before exporting.")
         invalid_field = self._first_chart_error_field()
         if invalid_field is not None:
             raise ValueError(invalid_field.accessibleDescription())
@@ -1589,7 +1636,7 @@ class ExportDialog(QDialog):
             raise ValueError("The last import selection expired. Choose the report scope again.")
         violin_input = self.violin_plot_min_samplesize.text()
         summary_scale_input = self.summary_plot_scale.text()
-        selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+        selected_preset = self._active_preset_id()
         request = build_validated_export_request(
             db_file=str(batch.database) if batch is not None else self.db_file,
             excel_file=self.excel_file,

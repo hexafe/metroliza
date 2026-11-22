@@ -100,6 +100,50 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
         dialog.close()
 
 
+def test_named_filter_roundtrip_retains_unavailable_values_until_explicit_apply(monkeypatch, tmp_path):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    class Owner(QDialog):
+        def set_filter_query(self, query):
+            self.query = query
+
+        def set_filter_state(self, state):
+            self.state = state
+
+    app = _app()
+    path = tmp_path / "presets.ini"
+    store = ReportFilterPresets(path)
+    expected = FilterState(header_values=("WIDTH",), status_code_values=("nok",),
+                           date_from="2024-01-01", date_to="2024-01-31")
+    store.save("January NOK", expected)
+    settings = store._settings()
+    settings.setValue("invalid-entry", "not valid JSON")
+    settings.sync()
+    presets, unavailable = ReportFilterPresets(path).load()
+    assert presets == [("January NOK", expected)] and unavailable == 1
+
+    owner = Owner()
+    prior_query = "previous query"
+    owner.query = prior_query
+    dialog = _build_dialog(monkeypatch, parent=owner)
+    dialog.show()
+    try:
+        dialog._load_saved_filter(presets[0][1])
+        assert owner.query == prior_query
+        assert dialog._current_filter_state() == expected
+        assert dialog.measurement_nok_button.isChecked()
+        assert "Unavailable selections" in dialog.filter_summary_label.text()
+        assert dialog.header_list.accessibleName() == "Header choices"
+        app.processEvents()
+        QTest.keyClick(dialog.apply_button, Qt.Key.Key_Space)
+        assert owner.state == expected
+        assert "header IN ('WIDTH')" in owner.query and "status_code IN ('nok')" in owner.query
+    finally:
+        dialog.close()
+        owner.close()
+
+
 def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):
     from contextlib import closing
     import sqlite3

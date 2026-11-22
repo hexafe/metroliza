@@ -160,7 +160,7 @@ Use **Extended plots** when you want a deeper report with extra summary output.
 
 This is better when you want a more analysis-heavy dashboard/workbook package.
 
-Because presets update other fields in the dialog, do not be surprised if chart-related settings change when you switch presets.
+Select a preset to preview the outputs and chart settings it will use. Choose **Apply preset** to activate it.
 
 ### Google Sheets version
 
@@ -314,6 +314,9 @@ workbook charts.
 
 These settings fine-tune chart behavior. They are collapsed by default in the Export dialog, so you only open them when you need them.
 
+Enter a whole number of 2 or more for **Violin min n** and a whole number of 0 or more for **Y-limit x**.
+An invalid value stays visible with its error. **Use chart defaults** restores the current preset values.
+
 ### Min samplesize to generate violin plot instead of scatter
 
 This controls when the extended report prefers a violin plot rather than a simpler scatter style.
@@ -369,6 +372,7 @@ If the worker confirms cancellation, you get an **Export canceled** message.
 
 For workbook presets, Metroliza creates a local **.xlsx file** with the main exported
 measurement sheets and selected workbook charts.
+The **REPORT SCOPE** sheet records the source database name, filters, grouping, chart settings and warnings.
 
 For **HTML dashboard only**, Metroliza creates the dashboard file directly and does not
 create a workbook. Google Sheets conversion is not used for dashboard-only output.
@@ -379,6 +383,7 @@ When **HTML dashboard** is selected, or when grouping makes it automatic, Metrol
 the dashboard HTML file and its matching asset folder next to the workbook. Keep both
 together. If the asset folder is missing after moving files, dashboard chart snapshots,
 styles, or offline resources may not load correctly.
+The dashboard lists the report scope and warnings before the measurement charts.
 
 ### Optional Google Sheets output
 
@@ -392,8 +397,8 @@ this run produced. File links open the file they name; Google Sheet links work a
 Diagnostics and omission details remain available in the message.
 
 After you acknowledge the message, the **Last export** row keeps the outcome, local time,
-artifact names, and the same actions until the next export starts in this window. Nothing
-is saved between sessions. If a file was moved or deleted, an action warns you with its
+artifact names, and the same actions until the next export starts in this window. Use **Analysis history**
+to reopen recorded results between sessions. If a file was moved or deleted, an action warns you with its
 path; locate the file or export again. Keep dashboard HTML and its assets together.
 
 Reports without a reference can still be exported. Group Analysis omits those measurements
@@ -426,7 +431,7 @@ shortcuts. The Export window uses:
 | Alt+C | Close |
 
 In Export filtering: **Alt+A** applies filters, **Alt+S** resets the draft,
-**Alt+C** cancels, **Alt+N** toggles Has NOK only, **Alt+T** selects today, and
+**Alt+C** cancels, **Alt+N** toggles Reports with at least one NOK, **Alt+T** selects today, and
 **Alt+B** selects the beginning of time. **Alt+R** keeps its existing Date range
 command.
 

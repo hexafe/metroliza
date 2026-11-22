@@ -53,12 +53,13 @@ def _combo_labels(combo):
     return [combo.itemText(index) for index in range(combo.count())]
 
 
-def _set_combo_to_existing_label(combo, needle):
-    for label in _combo_labels(combo):
+def _select_and_apply_preset(dialog, needle):
+    for label in _combo_labels(dialog.preset_combobox):
         if needle in label:
-            combo.setCurrentText(label)
+            dialog.preset_combobox.setCurrentText(label)
+            dialog.apply_preset_button.click()
             return label
-    raise AssertionError(f"Missing combo label containing {needle!r}: {_combo_labels(combo)}")
+    raise AssertionError(f"Missing export preset containing {needle!r}")
 
 
 @pytest.mark.parametrize("html_only", [False, True])
@@ -130,11 +131,11 @@ def test_output_modes_remember_explicit_paths_and_optional_html(monkeypatch, tmp
         workbook_preset = dialog.preset_combobox.currentText()
         dialog.select_excel_file()
         dialog.generate_html_dashboard_checkbox.setChecked(True)
-        dialog.preset_combobox.setCurrentText("HTML dashboard only")
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         assert dialog.excel_file == workbook.with_suffix(".html")
         dialog.select_excel_file()
         assert dialog._build_export_request().paths.html_dashboard_file == str(standalone)
-        dialog.preset_combobox.setCurrentText(workbook_preset)
+        _select_and_apply_preset(dialog, workbook_preset)
         assert dialog.excel_file == workbook
         assert dialog.generate_html_dashboard_checkbox.isChecked()
 
@@ -164,12 +165,40 @@ def test_output_modes_remember_explicit_paths_and_optional_html(monkeypatch, tmp
         dialog.generate_html_dashboard_checkbox.setChecked(False)
         dialog.set_grouping_applied(True)
         assert dialog.generate_html_dashboard_checkbox.isChecked()
-        dialog.preset_combobox.setCurrentText("HTML dashboard only")
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         assert dialog.excel_file == standalone
         dialog.clear_grouping()
-        dialog.preset_combobox.setCurrentText(workbook_preset)
+        _select_and_apply_preset(dialog, workbook_preset)
         assert dialog.excel_file == copy_path
         assert not dialog.generate_html_dashboard_checkbox.isChecked()
+    finally:
+        dialog.close()
+
+
+def test_preview_then_apply_export_preset_with_keyboard(monkeypatch, tmp_path):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
+    path = tmp_path / "export.xlsx"
+    dialog.show()
+    try:
+        dialog._set_output_path(path, remember=True)
+        dialog.export_type_combobox.setCurrentText("Scatter")
+        dialog.preset_combobox.setFocus()
+        _app().processEvents()
+        QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_End)
+        assert dialog.preset_combobox.currentText() == "HTML dashboard only"
+        assert "no workbook" in dialog.preset_preview_label.accessibleDescription()
+        assert dialog.export_type_combobox.currentText() == "Scatter"
+        assert not dialog.export_button.isEnabled() and dialog.excel_file == path
+        QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_Tab)
+        assert dialog.apply_preset_button.hasFocus()
+        QTest.keyClick(dialog.apply_preset_button, Qt.Key.Key_Space)
+        assert dialog.export_type_combobox.currentText() == "Line"
+        assert dialog._selected_export_target() == "html_dashboard"
+        assert dialog.select_excel_button.accessibleName() == "Select standalone HTML dashboard"
+        assert dialog.export_button.isEnabled() and dialog.excel_file.suffix == ".html"
     finally:
         dialog.close()
 
@@ -336,8 +365,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert not dialog.generate_html_dashboard_checkbox.isEnabled()
         assert dialog.dashboard_visuals_button.isEnabled()
 
-        selected_label = _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
-        dialog.preset_combobox.setCurrentText(selected_label)
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         dialog._sync_html_dashboard_only_state()
 
         assert dialog._selected_export_target() == "html_dashboard"
@@ -352,7 +380,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert dialog.dashboard_visuals_button.isEnabled()
         assert "Adjust HTML dashboard" in dialog.dashboard_visuals_button.toolTip()
 
-        _set_combo_to_existing_label(dialog.preset_combobox, "Main plots")
+        _select_and_apply_preset(dialog, "Main plots")
         dialog._sync_html_dashboard_only_state()
 
         assert dialog.select_excel_label.text() == "Output workbook:"
@@ -393,7 +421,7 @@ def test_deliverables_summary_tracks_export_context(monkeypatch, tmp_path):
         assert dialog.deliverables_summary_label.property("statusVariant") == "success"
 
         dialog.set_grouping_applied(False)
-        _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         dialog._sync_html_dashboard_only_state()
 
         summary = dialog.deliverables_summary_label.text()

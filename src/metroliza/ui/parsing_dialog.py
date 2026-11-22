@@ -486,6 +486,11 @@ class _ReportOperations:
         self.mode_guidance_label = secondary_label(
             "Fast import stays light by default. OCR metadata can run after import or during complete import."
         )
+        self.mode_guidance_label.setToolTip(
+            "Start with Fast import when the embedded report text is readable. "
+            "Use OCR for missing or unclear header fields and compare suggestions with the report. "
+            "If Metroliza cannot choose a parser, open Report details before importing."
+        )
 
         if self.directory:
             self.directory_text_label = path_field(self.directory)

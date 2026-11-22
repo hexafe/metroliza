@@ -29,6 +29,8 @@ Double-clicking a reference is also a shortcut into group creation.
 ### PART #
 
 This pane lists the available parts/rows for the selected reference.
+Search by part name, sample number or file name across all reports in that reference.
+The pane shows how many matches are displayed. Refine the search to reach reports outside the preview.
 
 Rows are shown with identifying details so you can tell items apart.
 

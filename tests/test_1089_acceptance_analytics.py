@@ -106,6 +106,7 @@ def _workbook_parts(path):
 def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, monkeypatch, qapplication_session):
     from pathlib import Path
     import fitz
+    from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QFileDialog, QMessageBox
     from metroliza.ui import export_dialog
     from metroliza.ui.parsing_dialog import ParsingDialog
@@ -129,16 +130,17 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
     monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **_kwargs: None)
 
     parser = ParsingDialog(directory=str(source), db_file=str(database))
+    parser.show()
     export = None
     try:
-        parser.scan_button.click()
+        QTest.keyClick(parser.scan_button, Qt.Key.Key_Space)
         wait_until(app, parser.pdf_workers_idle)
         model = parser.report_planner.model
         assert model.rowCount() == 3
         reference_column = model.column_for_field("reference")
         for row, reference in enumerate(("REF-SHARED", "REF-SHARED", "")):
             assert model.setData(model.index(row, reference_column), reference)
-        parser.parse_button.click()
+        QTest.keyClick(parser.parse_button, Qt.Key.Key_Space)
         wait_until(app, parser.pdf_workers_idle, parse_dialog=parser)
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT count(*) FROM report_measurements").fetchone()[0] == 3
@@ -152,7 +154,7 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
         filters = export.filter_window
         wait_until(app, lambda: not filters._values_loading)
         filters.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
-        filters.apply_button.click()
+        QTest.keyClick(filters.apply_button, Qt.Key.Key_Space)
         assert export.filter_state.ax_values == ("X",)
 
         export.open_grouping_window()
@@ -163,14 +165,18 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
                                    if grouping.reference_list.item(row).data(user_role) == "REF-SHARED")
         grouping.reference_list.setCurrentRow(known_reference_row)
         assert grouping.part_list.count() == 2
+        assert grouping.part_list.accessibleName() == "Parts in selected reference"
+        grouping.part_search_input.setFocus()
+        QTest.keyClick(grouping.part_search_input, Qt.Key.Key_Tab)
+        assert grouping.part_list.hasFocus()
         for row, name in enumerate(("Batch A", "Batch B")):
             grouping.part_list.clearSelection()
             grouping.part_list.item(row).setSelected(True)
             monkeypatch.setattr(QInputDialog, "getText", lambda *_args, label=name, **_kwargs: (label, True))
             grouping.create_group()
-        grouping.use_grouping_button.click()
+        QTest.keyClick(grouping.use_grouping_button, Qt.Key.Key_Space)
 
-        export.export_button.click()
+        QTest.keyClick(export.export_button, Qt.Key.Key_Space)
         wait_until(app, lambda: export.export_thread is None)
         assert len(records) == 1
         assert records[0]["source"] == str(database)

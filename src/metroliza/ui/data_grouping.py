@@ -655,8 +655,27 @@ class DataGrouping(QDialog):
                 initial=(1240, 700),
                 screen_margin=44,
             )
+            self._configure_grouping_accessibility()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _configure_grouping_accessibility(self):
+        panes = (
+            (self.reference_search_input, self.reference_list, "Report references"),
+            (self.part_search_input, self.part_list, "Parts in selected reference"),
+            (self.group_search_input, self.groups_list, "Report groups"),
+            (self.part_group_search_input, self.part_group_list, "Parts in selected group"),
+        )
+        order = [self.scope_filter_input]
+        for search, listing, name in panes:
+            ui_foundation.configure_accessibility(search, name=f"Search {name.lower()}")
+            ui_foundation.configure_accessibility(listing, name=name)
+            order.extend((search, listing))
+        order.extend((self.create_group_button, self.rename_group_button, self.remove_from_group_button,
+                      self.delete_group_button, self.dont_use_grouping_button, self.cancel_button,
+                      self.use_grouping_button))
+        for first, second in zip(order, order[1:]):
+            self.setTabOrder(first, second)
 
     def connect_signals(self):
         """Handle `connect_signals` for `DataGrouping`.
@@ -1589,6 +1608,7 @@ class DataGrouping(QDialog):
         label = self._safe_attr(self, "part_group_label" if assigned else "part_label")
         if label is not None:
             label.setText(f"{title} ({shown:,} of {total:,} matches):")
+            list_widget.setAccessibleDescription(f"Showing {shown:,} of {total:,} matching reports.")
 
     @staticmethod
     def _group_display_label(group_name, sample_size, *, display_index=None, default_group=None):
