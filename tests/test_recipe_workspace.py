@@ -238,3 +238,35 @@ def test_pin_resumes_form_and_restart_uses_saved_defaults(qapplication_session, 
         assert page.restart_button.isHidden()
     finally:
         window.close()
+
+
+def test_home_preserves_append_form_after_start_was_blocked(qapplication_session, tmp_path):
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    source = tmp_path / "raporty"
+    source.mkdir()
+    db = tmp_path / "existing.sqlite"
+    ensure_report_schema(str(db))
+    window = MainWindow("test", None, ui_preferences=UiPreferences(
+        QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)))
+    try:
+        assert window.set_db_file(str(db))
+        window.launch_export_dialog()
+        window._launch_recipe("reports_append_excel_main")
+        workspace = window.recipe_workspace
+        page = workspace.run_page
+        page.fields[ParameterKey.INPUT_FOLDER][0].setText(str(source))
+        output = str(tmp_path / "result.xlsx")
+        page.fields[ParameterKey.OUTPUT_FILE][0].setText(output)
+        failures = []
+        workspace.controller.failed.connect(failures.append)
+        page.start_button.click()
+        assert failures == ["append_busy"] and not workspace.controller.busy
+        window._show_workspace_page("home")
+        window._launch_recipe("reports_append_excel_main")
+        assert page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == output
+        assert not page.restart_button.isHidden()
+    finally:
+        window.close()

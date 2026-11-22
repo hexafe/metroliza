@@ -150,7 +150,6 @@ class RecipeController(QObject):
             validate_plan_paths(plan, getattr(self.runner, "active_database", None))
             self.binding = binding
             self.plan = plan
-            self.draft_edited = False
         except RecipeError as exc:
             self.failed.emit(exc.code)
             return False
@@ -189,7 +188,9 @@ class RecipeController(QObject):
         except Exception:
             self.runner.withdraw_start(token)
             raise
-        if not submitted:
+        if submitted:
+            self.draft_edited = False
+        else:
             self.runner.withdraw_start(token)
         return submitted
 
