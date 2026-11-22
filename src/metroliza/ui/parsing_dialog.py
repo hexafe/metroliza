@@ -11,6 +11,7 @@ from metroliza.parsing.metadata_review import (
     ocr_unavailable_reason,
 )
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightStatus
+from metroliza.reports.db import sqlite_file_identity
 from metroliza.reports.report_metadata_review import ROW_PENDING, build_overrides
 try:
     from metroliza.ui.parser_preflight_worker import ParsePreflightThread
@@ -399,6 +400,8 @@ class _ReportOperations:
         self.metadata_thread = None
         self._metadata_threads = []
         self._metadata_carryover = {}
+        self._metadata_database_identity = None
+        self._metadata_restore_notice = ""
         self._metadata_ocr_notes = set()
         # PyMuPDF must not run in two threads at once, so a scan, an import or a new
         # metadata read queues behind any metadata worker that is still stopping.
@@ -674,15 +677,34 @@ class _ReportOperations:
     def _review_message(self, count, *, ocr_running, stopping):
         ready = self.report_planner.model.counts["ready"]
         message = f"Review complete: {ready} ready. No database changes were made."
-        if not count:
-            return message + " Select ready reports to enable import."
         if ocr_running:
             return "Reading checked reports with OCR. Import is available when it finishes or after Stop."
         if stopping:
             return "Stopping the metadata read. The requested operation starts right after."
-        if self._metadata_review_complete():
+        if not self.report_planner.model.selectable_ids:
+            guidance, _control = self._no_ready_review_guidance()
+            message += f" {guidance}"
+        elif not count:
+            message += " Select ready reports to enable import."
+        elif self._metadata_review_complete():
             message += " Metadata: " + self._metadata_summary_text() + "."
-        return message
+        return f"{message} {self._metadata_restore_notice}" if self._metadata_restore_notice else message
+
+    def _no_ready_review_guidance(self):
+        files = self._preflight_result.files
+        if not files:
+            browse = self.archive_button if self._source_is_archive() else self.directory_button
+            return "No reports were found. Choose another folder or archive.", browse
+        if all(item.status is ParsePreflightStatus.DUPLICATE for item in files):
+            action = ("Use Export Workbook to work with existing reports." if self._external_context
+                      else "Open the selected database to work with existing reports.")
+            return f"All reviewed reports are already in the database. {action}", self.report_planner.table
+        if any(item.status is ParsePreflightStatus.UNREADABLE for item in files):
+            return ("Some reports or the selected source could not be read. "
+                    "Open Report details on an unreadable row to check the reason.",
+                    self.report_planner.details_button)
+        return ("Review found no reports that can be imported. Open Report details to check the reason.",
+                self.report_planner.details_button)
 
     def apply_workspace_snapshot(self, snapshot):
         """Apply accepted context without creating an independent selection owner."""
@@ -713,6 +735,8 @@ class _ReportOperations:
             control = self.database_button
         elif self.parse_button.isEnabled():
             control = self.parse_button
+        elif self._preflight_result is not None and not self.report_planner.model.selectable_ids:
+            _guidance, control = self._no_ready_review_guidance()
         elif self.can_change_workspace():
             control = self.scan_button
         else:
@@ -782,7 +806,7 @@ class _ReportOperations:
             f"{counts[ParsePreflightStatus.UNREADABLE]} unreadable."
         )
 
-    def _invalidate_preflight(self, reason=None, *, keep_metadata=False):
+    def _invalidate_preflight(self, reason=None, *, keep_metadata=False, completed_ids=()):
         """Drop the review; ``keep_metadata`` offers its metadata rows to the next review."""
         if reason is None:
             reason = (
@@ -798,6 +822,11 @@ class _ReportOperations:
         self._retire_metadata_worker()
         self._drop_pending_starts()
         self._metadata_carryover = carried
+        for occurrence_id in completed_ids:
+            carried.pop(occurrence_id, None)
+        if not keep_metadata:
+            self._metadata_database_identity = None
+        self._metadata_restore_notice = ""
         self._preflight_result = None
         self._approval_cache_key = None
         self._preflight_error_detail = ""
@@ -811,7 +840,7 @@ class _ReportOperations:
 
     @pyqtSlot()
     def _on_parse_inputs_changed(self, *_args):
-        self._invalidate_preflight()
+        self._invalidate_preflight(keep_metadata=True)
         self._sync_readiness_state()
 
     def _set_parse_source(self, selected_source):
@@ -947,7 +976,7 @@ class _ReportOperations:
         except Exception as exc:
             self._dismiss_progress("scan_loading", rejected=True)
             self._recover_worker_start_failure("preflight_thread", "stop_scan")
-            self._invalidate_preflight("Review could not start. Review reports again to retry.")
+            self._invalidate_preflight("Review could not start. Review reports again to retry.", keep_metadata=True)
             self._sync_readiness_state()
             self.scan_button.setFocus()
             self.log_and_exit(exc)
@@ -991,11 +1020,17 @@ class _ReportOperations:
             self.preflight_thread = None
         self._sync_readiness_state()
         if not self._close_requested:
-            if self._preflight_result is not None:
-                self.report_planner.table.setFocus()
-            else:
-                self.scan_button.setFocus()
+            self._focus_review_result()
         self._complete_deferred_close_if_idle()
+
+    def _focus_review_result(self):
+        if self._preflight_result is None:
+            control = self.scan_button
+        elif self.report_planner.model.selectable_ids:
+            control = self.report_planner.table
+        else:
+            _guidance, control = self._no_ready_review_guidance()
+        control.setFocus()
 
     @pyqtSlot(object)
     def on_preflight_completed(self, result):
@@ -1019,7 +1054,7 @@ class _ReportOperations:
 
     def _apply_preflight_result(self, result):
         if result.cancelled:
-            self._invalidate_preflight("Review cancelled. No database changes were made.")
+            self._invalidate_preflight("Review cancelled. No database changes were made.", keep_metadata=True)
         elif not result.matches_request(
             source_path=self.directory, database_path=self.db_file,
             metadata_parsing_mode=self._build_parse_request_fields()[0],
@@ -1029,10 +1064,36 @@ class _ReportOperations:
             self._preflight_result = result
             self._preflight_error_detail = ""
             self._review_status = ""
-            carried, self._metadata_carryover = self._metadata_carryover, {}
-            self.report_planner.set_review(result, carry=carried)
+            self._restore_review_metadata(result)
             self._start_metadata_fast_read()
         self._sync_readiness_state()
+
+    def _restore_review_metadata(self, result):
+        carried, self._metadata_carryover = self._metadata_carryover, {}
+        database_identity = sqlite_file_identity(result.database_path)
+        same_database = database_identity == self._metadata_database_identity
+        self._metadata_database_identity = database_identity
+        self.report_planner.set_review(result, carry=carried if same_database else None)
+        kept = 0
+        requires_review = []
+        for occurrence_id, previous in carried.items():
+            edited_count = len(previous.edited_fields)
+            if not edited_count:
+                continue
+            if self.report_planner.model.metadata_row(occurrence_id) is previous:
+                kept += edited_count
+            else:
+                requires_review.append(" ".join(previous.display_name.split())[:100])
+        messages = []
+        if kept:
+            messages.append(f"Kept {kept} metadata {'edit' if kept == 1 else 'edits'}.")
+        if requires_review:
+            names = ", ".join(requires_review[:3])
+            remaining = len(requires_review) - 3
+            if remaining > 0:
+                names += f" and {remaining} more"
+            messages.append(f"Check previous metadata edits for {names}.")
+        self._metadata_restore_notice = " ".join(messages)
 
     @pyqtSlot(str)
     def on_preflight_failed(self, detail):
@@ -1040,7 +1101,7 @@ class _ReportOperations:
         self._scan_feedback = {}
         self._dismiss_progress("scan_loading", rejected=True)
         # Arbitrary exception strings can contain confidential document content.
-        self._invalidate_preflight("Review failed. Check the source and destination, then retry.")
+        self._invalidate_preflight("Review failed. Check the source and destination, then retry.", keep_metadata=True)
         self._sync_readiness_state()
 
     @pyqtSlot()
@@ -1537,14 +1598,7 @@ class _ReportOperations:
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(self.db_file)
 
-            # The destination changed, so require a fresh duplicate/content scan.
-            # Keep only the proven last-run success flag, never its import approval.
-            confirmed_success = self.import_succeeded
-            self._invalidate_preflight(
-                "Import successful. Export Workbook or refresh review before another import."
-                if self.import_succeeded else "Import finished. Refresh review before another import."
-            )
-            self.import_succeeded = confirmed_success
+            self._invalidate_after_import(worker, execution_rows)
             self.report_planner.show_execution_rows(execution_rows)
             self._sync_readiness_state()
 
@@ -1552,6 +1606,21 @@ class _ReportOperations:
                 self.metadata_enrichment_requested.emit(self.db_file)
         except Exception as e:
             self.log_and_exit(e)
+
+    def _invalidate_after_import(self, worker, execution_rows):
+        """Require a fresh duplicate/content scan and keep edits for unfinished reports."""
+        confirmed_success = self.import_succeeded
+        batch = getattr(worker, "last_import_batch", None)
+        if self._metadata_database_identity is None and batch is not None and batch.matches_database(self.db_file):
+            self._metadata_database_identity = batch.database_identity
+        self._invalidate_preflight(
+            "Import successful. Export Workbook or refresh review before another import."
+            if confirmed_success else "Import finished. Refresh review before another import.",
+            keep_metadata=True,
+            completed_ids=(row.stable_occurrence_id for row in execution_rows
+                           if row.status in (ExecutionStatus.SAVED, ExecutionStatus.ALREADY_PRESENT)),
+        )
+        self.import_succeeded = confirmed_success
 
     def _submitted_execution_rows(self, worker):
         """Join receipts to the operation actually submitted, never mutable UI approval."""

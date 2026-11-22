@@ -127,7 +127,7 @@ class TestExportDialogLayout(unittest.TestCase):
         self.assertEqual(payload["db_text"], "None selected")
         self.assertEqual(payload["excel_text"], "None selected")
         self.assertEqual(payload["pre_finished_values"], ["1", "-5"])
-        self.assertEqual(payload["post_finished_values"], ["2", "0"])
+        self.assertEqual(payload["post_finished_values"], ["1", "-5"])
         self.assertIn("OK results are hidden", payload["hide_ok_tooltip"])
         self.assertGreaterEqual(payload["info_button_size"][0], 24)
         self.assertGreaterEqual(payload["info_button_size"][1], 24)

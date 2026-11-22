@@ -16,6 +16,8 @@ from metroliza.exporting.export_dialog_service import (
     build_export_folder_link_line as build_export_folder_link_line,
     build_export_options_payload as build_export_options_payload,
     build_validated_export_request,
+    normalize_excel_export_path,
+    normalize_html_dashboard_export_path,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
 from metroliza.ui.result_actions import (
@@ -360,6 +362,11 @@ class ExportDialog(QDialog):
 
         self.db_file = db_file
         self.excel_file = ""
+        self._chosen_output_paths = {}
+        self._shown_output_path = ""
+        self._html_dashboard_preference = False
+        self._html_dashboard_forced = False
+        self._chart_profile_loaded = False
         self.filter_query = DEFAULT_FILTER_QUERY
         self.filter_state = None
         self.df_for_grouping = None
@@ -426,8 +433,12 @@ class ExportDialog(QDialog):
             preset_options = build_export_options_for_preset(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
-            self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
-            self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            initial_profile = not getattr(self, "_chart_profile_loaded", False)
+            if initial_profile or not self.validate_violin_plot_min_samplesize_input():
+                self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
+            if initial_profile or not self.validate_plot_scale_input():
+                self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
             self._sync_html_dashboard_only_state()
             self._save_dialog_config()
@@ -545,10 +556,7 @@ class ExportDialog(QDialog):
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
             self.generate_html_dashboard_checkbox.stateChanged.connect(
-                lambda _state: self._sync_dashboard_visual_controls()
-            )
-            self.generate_html_dashboard_checkbox.stateChanged.connect(
-                lambda _state: self._refresh_deliverables_summary()
+                self._on_html_dashboard_preference_changed
             )
             self.dashboard_visuals_label = QLabel("Dashboard style:")
             self.dashboard_visuals_summary_label = status_chip("", "neutral")
@@ -595,7 +603,7 @@ class ExportDialog(QDialog):
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
             # Add textbox to set min samplesize for violin plot
-            self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
+            self.violin_plot_min_samplesize_label = QLabel("Violin min n (whole ≥ 2):")
             self.violin_plot_min_samplesize = QLineEdit()
             self.violin_plot_min_samplesize.setPlaceholderText('Min: 2, Default: 6')
             self.violin_plot_min_samplesize_label.setToolTip(
@@ -607,7 +615,7 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setMaximumWidth(96)
 
             # Add textbox to set scale for y-axis
-            self.summary_plot_scale_label = QLabel("Y-limit x:")
+            self.summary_plot_scale_label = QLabel("Y-limit x (whole ≥ 0):")
             self.summary_plot_scale = QLineEdit()
             self.summary_plot_scale.setPlaceholderText('Default: 0')
             self.summary_plot_scale_label.setToolTip(
@@ -618,9 +626,15 @@ class ExportDialog(QDialog):
             )
             self.summary_plot_scale.setMaximumWidth(96)
 
-            # Normalize advanced numeric fields only when editing is finished.
-            self.violin_plot_min_samplesize.editingFinished.connect(self.validate_violin_plot_min_samplesize_input)
-            self.summary_plot_scale.editingFinished.connect(self.validate_plot_scale_input)
+            self.violin_input_error = status_chip("", "danger")
+            self.plot_scale_error = status_chip("", "danger")
+            for label in (self.violin_input_error, self.plot_scale_error):
+                label.setWordWrap(True)
+                label.hide()
+            self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
+            self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
+            self.chart_defaults_button = QPushButton("Use chart defaults")
+            self.chart_defaults_button.clicked.connect(self._use_chart_defaults)
 
             # Add a QCheckBox for "Hide OK results?"
             self.hide_ok_results_checkbox = QCheckBox("Hide OK results")
@@ -638,7 +652,10 @@ class ExportDialog(QDialog):
             advanced_options_layout.addWidget(self.violin_plot_min_samplesize, 0, 1)
             advanced_options_layout.addWidget(self.summary_plot_scale_label, 0, 2)
             advanced_options_layout.addWidget(self.summary_plot_scale, 0, 3)
-            advanced_options_layout.addWidget(self.hide_ok_results_checkbox, 1, 0, 1, 4)
+            advanced_options_layout.addWidget(self.violin_input_error, 1, 0, 1, 2)
+            advanced_options_layout.addWidget(self.plot_scale_error, 1, 2, 1, 2)
+            advanced_options_layout.addWidget(self.hide_ok_results_checkbox, 2, 0, 1, 2)
+            advanced_options_layout.addWidget(self.chart_defaults_button, 2, 2, 1, 2)
             self.advanced_options_container.setVisible(False)
 
             self.advanced_toggle_button = QPushButton("Show advanced options")
@@ -852,7 +869,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
-            self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
+            self.setTabOrder(self.summary_plot_scale, self.chart_defaults_button)
+            self.setTabOrder(self.chart_defaults_button, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
             self.setTabOrder(self.close_button, self.export_button)
             self._configure_accessibility()
@@ -997,38 +1015,49 @@ class ExportDialog(QDialog):
             label_text = str(label.value or "")
         return label_text.strip().lower() == "applied"
 
-    def _coerce_output_path_for_mode(self):
-        if not str(getattr(self, "excel_file", "") or "").strip():
-            return
-        path = Path(str(self.excel_file))
-        if self._is_html_dashboard_only():
-            if path.suffix.lower() != ".html":
-                stem = path.stem
-                if not stem.endswith("_dashboard"):
-                    stem = f"{stem}_dashboard"
-                self.excel_file = path.with_name(f"{stem}.html")
-        elif path.suffix.lower() == ".html":
-            stem = path.stem
-            if stem.endswith("_dashboard"):
-                stem = stem[: -len("_dashboard")]
-            self.excel_file = path.with_name(f"{stem or 'export'}.xlsx")
+    def _set_output_path(self, path, *, remember=False):
+        if remember:
+            self._chosen_output_paths[self._is_html_dashboard_only()] = path
+        self.excel_file = self._shown_output_path = path
         if hasattr(self, "excel_file_text_label"):
-            self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self._set_path_field_value(self.excel_file_text_label, path)
+
+    def _coerce_output_path_for_mode(self):
+        if not getattr(self, "excel_file", "") and not getattr(self, "_chosen_output_paths", {}):
+            return
+        html_only = self._is_html_dashboard_only()
+        if self.excel_file and self.excel_file != self._shown_output_path:
+            external_path = Path(self.excel_file)
+            self._chosen_output_paths[external_path.suffix.lower() == ".html"] = external_path
+        path = self._chosen_output_paths.get(html_only)
+        other = self._chosen_output_paths.get(not html_only)
+        if path is None and other is not None:
+            if html_only:
+                stem = other.stem if other.stem.endswith("_dashboard") else f"{other.stem}_dashboard"
+                path = other.with_name(f"{stem}.html")
+            else:
+                path = other.with_name(f"{other.stem.removesuffix('_dashboard') or 'export'}.xlsx")
+        self._set_output_path(path or "")
+
+    def _on_html_dashboard_preference_changed(self, _state):
+        if not self._html_dashboard_forced:
+            self._html_dashboard_preference = self.generate_html_dashboard_checkbox.isChecked()
+        self._sync_dashboard_visual_controls()
+        self._refresh_deliverables_summary()
 
     def _sync_html_dashboard_only_state(self, _checked=None):
         html_only = self._is_html_dashboard_only()
         grouped = self._grouping_is_applied()
         if hasattr(self, "generate_html_dashboard_checkbox"):
             forced = html_only or grouped
-            if forced:
-                self.generate_html_dashboard_checkbox.setChecked(True)
-            elif getattr(self, "_html_dashboard_forced", False):
-                self.generate_html_dashboard_checkbox.setChecked(False)
+            # Keep forced changes separate from the optional sidecar choice.
+            self._html_dashboard_forced = True
+            self.generate_html_dashboard_checkbox.setChecked(forced or self._html_dashboard_preference)
             self._html_dashboard_forced = forced
             if hasattr(self.generate_html_dashboard_checkbox, "setEnabled"):
-                self.generate_html_dashboard_checkbox.setEnabled(not (html_only or grouped))
+                self.generate_html_dashboard_checkbox.setEnabled(not forced)
             tooltip = (
-                "Grouped exports include Group Analysis in the HTML dashboard."
+                "Grouping requires the HTML dashboard to include Group Analysis."
                 if grouped and not html_only
                 else "Create a local HTML sidecar for browser-based chart review next to the workbook."
             )
@@ -1294,33 +1323,36 @@ class ExportDialog(QDialog):
             f"Select a database file before you {action_name}.",
         )
 
-    def validate_violin_plot_min_samplesize_input(self):
+    @staticmethod
+    def _validate_chart_integer(field, error_label, minimum):
+        text = field.text().strip()
         try:
-            user_input = self.violin_plot_min_samplesize.text()
-            try:
-                input_value = int(user_input)
-                if input_value < 2:
-                    input_value = 2
-            except ValueError:
-                input_value = 6
-            if self.violin_plot_min_samplesize.text() != str(input_value):
-                self.violin_plot_min_samplesize.setText(str(input_value))
-        except Exception as e:
-            self.log_and_exit(e)
+            valid = re.fullmatch(r"\+?[0-9]+", text) is not None and int(text) >= minimum
+        except ValueError:
+            valid = False
+        message = "" if valid else f"Enter a whole number of {minimum} or more."
+        error_label.setText(message)
+        error_label.setVisible(not valid)
+        field.setAccessibleDescription(message or field.toolTip())
+        return message
+
+    def validate_violin_plot_min_samplesize_input(self):
+        return self._validate_chart_integer(self.violin_plot_min_samplesize, self.violin_input_error, 2)
 
     def validate_plot_scale_input(self):
-        try:
-            user_input = self.summary_plot_scale.text()
-            try:
-                input_value = int(user_input)
-                if input_value <= 0:
-                    input_value = 0
-            except ValueError:
-                input_value = 0
-            if self.summary_plot_scale.text() != str(input_value):
-                self.summary_plot_scale.setText(str(input_value))
-        except Exception as e:
-            self.log_and_exit(e)
+        return self._validate_chart_integer(self.summary_plot_scale, self.plot_scale_error, 0)
+
+    def _first_chart_error_field(self):
+        if self.validate_violin_plot_min_samplesize_input():
+            return self.violin_plot_min_samplesize
+        if self.validate_plot_scale_input():
+            return self.summary_plot_scale
+        return None
+
+    def _use_chart_defaults(self):
+        preset = self._selected_preset_options()
+        self.violin_plot_min_samplesize.setText(str(preset["violin_plot_min_samplesize"]))
+        self.summary_plot_scale.setText(str(preset["summary_plot_scale"]))
 
     def select_db_file(self):
         try:
@@ -1531,17 +1563,19 @@ class ExportDialog(QDialog):
             filename, _ = QFileDialog.getSaveFileName(self, dialog_title, str(file_path), file_filter)
 
             if filename:
-                file_path = Path(filename)
+                normalize_path = normalize_html_dashboard_export_path if html_only else normalize_excel_export_path
+                file_path = Path(normalize_path(filename))
                 logger.info("Selected export output file: %s", file_path)
-                self.excel_file = file_path
-                self._coerce_output_path_for_mode()
-                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+                self._set_output_path(file_path, remember=True)
                 self._update_export_button_enabled_state()
         except Exception as e:
             self.log_and_exit(e)
 
     def _build_export_request(self):
         """Freeze the selected report scope and all output settings."""
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            raise ValueError(invalid_field.accessibleDescription())
         mode = self._scope_mode()
         batch = self._import_batch if mode == _LAST_IMPORT else None
         if mode == _LAST_IMPORT and (batch is None or not batch.matches_database(self.db_file)):
@@ -1549,8 +1583,8 @@ class ExportDialog(QDialog):
             mode = _STALE_IMPORT
         if mode == _STALE_IMPORT:
             raise ValueError("The last import selection expired. Choose the report scope again.")
-        violin_input = self.violin_plot_min_samplesize.text() or "6"
-        summary_scale_input = self.summary_plot_scale.text() or "0"
+        violin_input = self.violin_plot_min_samplesize.text()
+        summary_scale_input = self.summary_plot_scale.text()
         selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
         request = build_validated_export_request(
             db_file=str(batch.database) if batch is not None else self.db_file,
@@ -1607,6 +1641,11 @@ class ExportDialog(QDialog):
         if self.has_open_scope_editors():
             self.path_readiness_label.setText("Close the Filters or Grouping editor to start exporting.")
             return
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            self.advanced_toggle_button.setChecked(True)
+            invalid_field.setFocus()
+            return
         action_started_at = monotonic()
         self._export_starting = True
         try:
@@ -1620,9 +1659,7 @@ class ExportDialog(QDialog):
 
             # Normalize user-visible values after validation/coercion.
             output_path = export_request.paths.excel_file or export_request.paths.html_dashboard_file
-            self.excel_file = Path(output_path)
-            if hasattr(self, "excel_file_text_label"):
-                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self._set_output_path(Path(output_path))
             draft_signature = self._export_draft_signature()
             original_output = str(self.excel_file)
             export_request = self._confirm_output_publication(export_request)
@@ -1713,8 +1750,7 @@ class ExportDialog(QDialog):
             excel_file=None if html_only else str(copy_path),
             html_dashboard_file=str(copy_paths[-1]) if html_only or request.options.generate_html_dashboard else None,
         )
-        self.excel_file = copy_path
-        self._set_path_field_value(self.excel_file_text_label, copy_path)
+        self._set_output_path(copy_path, remember=True)
         return replace(request, paths=paths_contract, replace_outputs=(), copy_output_from=str(primary))
 
     def _verify_publication_scope(self, request):

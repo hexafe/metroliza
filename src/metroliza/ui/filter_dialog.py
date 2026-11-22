@@ -52,7 +52,12 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
-from metroliza.shared.filter_state import FilterState, summarize_filter_state
+from metroliza.shared.filter_state import (
+    NOK_MEASUREMENTS_LABEL,
+    REPORTS_WITH_NOK_LABEL,
+    FilterState,
+    summarize_filter_state,
+)
 from metroliza.reports.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
     build_measurement_expression_clause as _build_measurement_expression_clause,
@@ -264,7 +269,7 @@ class FilterDialog(QDialog):
             self.sample_number_kind_list = QListWidget()
             self.sample_number_kind_list.setSelectionMode(self._multi_selection_mode())
 
-            self.status_code_label = QLabel("Status code:")
+            self.status_code_label = QLabel("Measurement status:")
             self.status_code_list = QListWidget()
             self.status_code_list.setSelectionMode(self._multi_selection_mode())
 
@@ -284,11 +289,15 @@ class FilterDialog(QDialog):
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
-            self.has_nok_button = QPushButton("Has NOK only")
+            self.has_nok_button = QPushButton(REPORTS_WITH_NOK_LABEL)
             if hasattr(self.has_nok_button, "setCheckable"):
                 self.has_nok_button.setCheckable(True)
             if hasattr(self.has_nok_button, "setChecked"):
                 self.has_nok_button.setChecked(False)
+            self.has_nok_button.setToolTip("Include every matching measurement from reports that contain at least one NOK.")
+            self.measurement_nok_button = QPushButton(NOK_MEASUREMENTS_LABEL)
+            self.measurement_nok_button.setCheckable(True)
+            self.measurement_nok_button.setToolTip("Set Measurement status to NOK, even if there are no matching measurements.")
 
             self.date_range_label = QLabel("Date &range:")
             self.date_range_selector = QtWidgets.QComboBox()
@@ -508,6 +517,7 @@ class FilterDialog(QDialog):
         footer_layout.addWidget(self.date_to_label, 3, 0)
         footer_layout.addWidget(self.date_to_calendar, 3, 1)
         footer_layout.addWidget(self.select_today_button, 3, 2)
+        footer_layout.addWidget(self.measurement_nok_button, 3, 3)
         footer_layout.addWidget(self.date_error_label, 4, 0, 1, 3)
         footer_layout.addWidget(self.filter_summary_label, 5, 0, 1, 3)
         self.setTabOrder(self.date_range_selector, self.date_from_calendar)
@@ -630,6 +640,7 @@ class FilterDialog(QDialog):
             self.date_range_selector.currentTextChanged.connect(self._apply_date_preset)
             if hasattr(self.has_nok_button, "toggled"):
                 self.has_nok_button.toggled.connect(self._refresh_filter_summary)
+            self.measurement_nok_button.toggled.connect(self._select_only_nok_measurements)
             if hasattr(self.expression_input, "textChanged"):
                 self.expression_input.textChanged.connect(self._refresh_filter_summary)
         except Exception as e:
@@ -650,7 +661,8 @@ class FilterDialog(QDialog):
                 ordered.append(getattr(self, listing))
         ordered.extend((self.expression_input, self.date_range_selector, self.date_from_calendar,
                         self.date_to_calendar, self.select_beginning_button, self.select_today_button,
-                        self.has_nok_button, self.reset_button, self.cancel_button, self.apply_button))
+                        self.has_nok_button, self.measurement_nok_button,
+                        self.reset_button, self.cancel_button, self.apply_button))
         for first, second in zip(ordered, ordered[1:]):
             self.setTabOrder(first, second)
 
@@ -1072,6 +1084,7 @@ class FilterDialog(QDialog):
         self._refresh_active_filter_summary(summary_label)
 
     def _refresh_active_filter_summary(self, summary_label):
+        only_nok_measurements = self._sync_measurement_nok_button()
         selected_counts = self._selected_filter_counts()
         active_fields = sum(1 for count in selected_counts.values() if count > 0)
         selected_values = sum(selected_counts.values())
@@ -1080,8 +1093,7 @@ class FilterDialog(QDialog):
             if hasattr(self, "has_nok_button")
             else False
         )
-        if has_nok_only:
-            active_fields += 1
+        active_fields += int(has_nok_only)
         if self._has_custom_date_range():
             active_fields += 1
         expression_text = self._filter_expression_text()
@@ -1104,7 +1116,9 @@ class FilterDialog(QDialog):
         if date_summary:
             summary_text += f" | {date_summary}"
         if has_nok_only:
-            summary_text += " | NOK only"
+            summary_text += f" | {REPORTS_WITH_NOK_LABEL}"
+        if only_nok_measurements:
+            summary_text += f" | {NOK_MEASUREMENTS_LABEL}"
         if expression_text:
             summary_text += " | Advanced expression"
         unavailable_count = sum(
@@ -1115,6 +1129,24 @@ class FilterDialog(QDialog):
             summary_text += f" | Unavailable headers: {unavailable_count} (may return 0 rows)"
         summary_label.setText(summary_text)
         ui_foundation.set_status_variant(summary_label, "warning" if unavailable_count else "success")
+
+    def _select_only_nok_measurements(self, checked):
+        choices = self.status_code_list
+        if checked and not choices.findItems("nok", Qt.MatchFlag.MatchExactly):
+            choices.addItem("nok")
+        self._set_selected_values(choices, ("nok",) if checked else ())
+        self._refresh_filter_summary()
+
+    def _sync_measurement_nok_button(self):
+        button = getattr(self, "measurement_nok_button", None)
+        if button is None:
+            return False
+        values = {item.text() for item in self.status_code_list.selectedItems()}
+        checked = values == {"nok"}
+        previous = button.blockSignals(True)
+        button.setChecked(checked)
+        button.blockSignals(previous)
+        return checked
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}

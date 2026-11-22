@@ -90,6 +90,8 @@ def test_real_review_selection_imports_exactly_two_of_five(app, reports, monkeyp
         planner = dialog.report_planner
         assert len(planner.model.selected_ids) == 5
         planner.model.clear_selection()
+        reference_column = planner.model.column_for_field("reference")
+        assert planner.model.setData(planner.model.index(4, reference_column), "MANUAL-4")
         for row in (1, 3):
             planner.model.setData(
                 planner.model.index(row, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole
@@ -114,6 +116,11 @@ def test_real_review_selection_imports_exactly_two_of_five(app, reports, monkeyp
         assert not planner.model.selected_ids
         assert "Saved: 2 report files" in planner.outcome.toPlainText()
         assert messages
+        dialog.scan_button.click()
+        wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
+        assert planner.model.selected_ids == ("report-0.pdf", "report-2.pdf", "report-4.pdf")
+        assert planner.model.metadata_row("report-4.pdf").value("reference") == "MANUAL-4"
+        assert "Kept 1 metadata edit" in dialog.readiness_label.text()
     finally:
         if dialog.parse_thread is not None:
             dialog.parse_thread.stop_parsing()
@@ -277,6 +284,8 @@ def test_batch_retains_only_committed_ids_and_digests_after_early_termination(ap
 @pytest.mark.parametrize("field", ["source", "destination", "metadata"])
 def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, field):
     dialog, source, database = reviewed
+    model = dialog.report_planner.model
+    assert model.setData(model.index(0, model.column_for_field("reference")), "MANUAL")
     if field == "source":
         dialog._set_parse_source(str(source / "other"))
     elif field == "destination":
@@ -292,6 +301,43 @@ def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, fi
     assert not dialog.parse_button.isEnabled()
     assert "invalidated" in dialog.readiness_label.text()
     assert not database.exists()
+    assert bool(dialog._metadata_carryover) is (field == "metadata")
+
+
+def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, reports):
+    source, database = reports
+    nested = source / "nested"
+    nested.mkdir()
+    fixture = source / "report-0.pdf"
+    with fitz.open(fixture) as document:
+        document.set_metadata({"title": "Same name in a different folder"})
+        document.save(nested / fixture.name)
+
+    dialog = ParsingDialog(directory=str(source), db_file=str(database))
+    try:
+        dialog.scan_button.click()
+        wait_until(app, dialog.pdf_workers_idle)
+        model = dialog.report_planner.model
+        column = model.column_for_field("reference")
+        corrections = {"report-0.pdf": "OUTSIDE-EDIT", "nested/report-0.pdf": "NESTED-EDIT"}
+        for row in range(model.rowCount()):
+            occurrence = model.item_at(row).stable_occurrence_id
+            if occurrence in corrections:
+                assert model.setData(model.index(row, column), corrections[occurrence])
+        with fitz.open(fixture) as document:
+            document.set_metadata({"title": "Replacement at the original path"})
+            document.saveIncr()
+        dialog.metadata_mode_combo.setCurrentIndex(dialog.metadata_mode_combo.findData("complete"))
+        assert not dialog.parse_button.isEnabled()
+        dialog.scan_button.click()
+        wait_until(app, dialog.pdf_workers_idle)
+
+        assert model.metadata_row("report-0.pdf").value("reference") != "OUTSIDE-EDIT"
+        assert model.metadata_row("nested/report-0.pdf").value("reference") == "NESTED-EDIT"
+        assert "Check previous metadata edits for report-0.pdf" in dialog.readiness_label.text()
+        assert dialog.parse_button.isEnabled()
+    finally:
+        dialog.close()
 
 
 def test_changed_selected_source_is_blocked_by_real_worker(app, reviewed):
@@ -329,6 +375,36 @@ def test_destination_matches_cannot_be_selected_after_refresh(app, reviewed):
         assert model.data(model.index(row, 2)) == "Already imported"
         assert not model.flags(model.index(row, 0)) & Qt.ItemFlag.ItemIsUserCheckable
     assert not dialog.parse_button.isEnabled()
+    assert "All reviewed reports are already in the database" in dialog.readiness_label.text()
+    assert "Select ready reports" not in dialog.readiness_label.text()
+
+
+@pytest.mark.parametrize("archive", [False, True])
+def test_no_ready_report_guidance_matches_empty_or_unreadable_source(app, tmp_path, archive):
+    source = tmp_path / ("damaged.zip" if archive else "empty")
+    if archive:
+        source.write_bytes(b"synthetic invalid archive")
+    else:
+        source.mkdir()
+    database = tmp_path / "scratch.sqlite3"
+    dialog = ParsingDialog(directory=str(source), db_file=str(database))
+    dialog.show()
+    try:
+        dialog.scan_button.click()
+        wait_until(app, dialog.pdf_workers_idle)
+        message = dialog.readiness_label.text()
+        assert "Select ready reports" not in message
+        if archive:
+            assert "could not be read" in message and "Report details" in message
+            assert dialog.focusWidget() is dialog.report_planner.details_button
+            dialog.report_planner.details_button.click()
+            assert "synthetic invalid archive" not in dialog.report_planner.details.toPlainText()
+        else:
+            assert "No reports were found" in message and "Choose another folder or archive" in message
+            assert dialog.focusWidget() is dialog.directory_button
+        assert not database.exists()
+    finally:
+        dialog.close()
 
 
 def test_concurrent_destination_claim_keeps_exact_selected_plan(app, reviewed):

@@ -1023,6 +1023,11 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.export_thread = dialog.filter_window = dialog.grouping_window = None
         dialog._export_state_changed = Mock()
         dialog._refresh_draft_request_summary = Mock()
+        dialog.violin_input_error = Mock()
+        dialog.plot_scale_error = Mock()
+        for field in (dialog.violin_plot_min_samplesize, dialog.summary_plot_scale):
+            field.setAccessibleDescription = Mock()
+            field.toolTip = Mock(return_value="")
         dialog.log_and_exit = lambda error: self.fail(f"Unexpected export startup error: {error}")
 
     def test_show_loading_screen_starts_thread_with_validated_export_request_keyword(self):
@@ -1098,8 +1103,8 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
 
         dialog = ExportDialog.__new__(ExportDialog)
         dialog.export_button = _FakeButton()
-        dialog.violin_plot_min_samplesize = _FakeLineEdit('1')
-        dialog.summary_plot_scale = _FakeLineEdit('-5')
+        dialog.violin_plot_min_samplesize = _FakeLineEdit('2')
+        dialog.summary_plot_scale = _FakeLineEdit('0')
         dialog.preset_combobox = _FakeCombo('Main plots')
         dialog.export_type_combobox = _FakeCombo('Line')
         dialog.sort_measurements_combobox = _FakeCombo('Sample #')
@@ -1472,7 +1477,9 @@ class TestExportDialogFilterStateSummary(_ExportPresetFlowStubCase):
             )
         )
 
-        self.assertEqual(dialog.select_filter_label.value, "AX: 2 selected; Reference: REF1; NOK only")
+        self.assertEqual(
+            dialog.select_filter_label.value, "AX: 2 selected; Reference: REF1; Reports with at least one NOK"
+        )
         self.assertIn("AX: AX1, AX2", dialog.select_filter_label.tooltip)
 
     def test_grouping_disabled_infers_level_off(self):

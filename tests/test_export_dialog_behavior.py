@@ -118,6 +118,62 @@ def test_export_keeps_user_chosen_name_when_browsing_again(monkeypatch, tmp_path
         dialog.close()
 
 
+def test_output_modes_remember_explicit_paths_and_optional_html(monkeypatch, tmp_path):
+    from tests.test_1089_acceptance_analytics import _fixture_db
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(_fixture_db(tmp_path)))
+    workbook = tmp_path / "quality_dashboard.xlsx"
+    standalone = tmp_path / "independent-dashboard.html"
+    targets = iter((workbook, standalone))
+    monkeypatch.setattr(export_dialog.QFileDialog, "getSaveFileName", lambda *args: (str(next(targets)), ""))
+    try:
+        workbook_preset = dialog.preset_combobox.currentText()
+        dialog.select_excel_file()
+        dialog.generate_html_dashboard_checkbox.setChecked(True)
+        dialog.preset_combobox.setCurrentText("HTML dashboard only")
+        assert dialog.excel_file == workbook.with_suffix(".html")
+        dialog.select_excel_file()
+        assert dialog._build_export_request().paths.html_dashboard_file == str(standalone)
+        dialog.preset_combobox.setCurrentText(workbook_preset)
+        assert dialog.excel_file == workbook
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+
+        dialog.set_grouping_applied(True)
+        assert not dialog.generate_html_dashboard_checkbox.isEnabled()
+        assert "Grouping requires" in dialog.generate_html_dashboard_checkbox.toolTip()
+        dialog.clear_grouping()
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+
+        workbook.write_bytes(b"previous synthetic workbook")
+        collision = []
+
+        def save_copy(_database, paths, conflicts, copy_path):
+            collision.append((paths, conflicts, copy_path))
+            return "copy"
+
+        monkeypatch.setattr(dialog, "_choose_output_collision", save_copy)
+        request = dialog._build_export_request()
+        original_summary = dialog.request_summary_label.toolTip()
+        copied = dialog._confirm_output_publication(request)
+        paths, conflicts, copy_path = collision[0]
+        assert paths[0] == workbook and conflicts == (workbook,)
+        assert all(str(path) in original_summary for path in paths)
+        assert copied.paths.excel_file == str(copy_path) and dialog.excel_file == copy_path
+        assert workbook.read_bytes() == b"previous synthetic workbook"
+
+        dialog.generate_html_dashboard_checkbox.setChecked(False)
+        dialog.set_grouping_applied(True)
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+        dialog.preset_combobox.setCurrentText("HTML dashboard only")
+        assert dialog.excel_file == standalone
+        dialog.clear_grouping()
+        dialog.preset_combobox.setCurrentText(workbook_preset)
+        assert dialog.excel_file == copy_path
+        assert not dialog.generate_html_dashboard_checkbox.isChecked()
+    finally:
+        dialog.close()
+
+
 def test_result_dialog_sanitizes_details_before_display_or_copy(monkeypatch):
     captured = {}
 
@@ -368,8 +424,10 @@ def test_select_excel_file_and_validation_warning_branches(monkeypatch, tmp_path
         dialog.validate_violin_plot_min_samplesize_input()
         dialog.validate_plot_scale_input()
 
-        assert dialog.violin_plot_min_samplesize.text() == "2"
-        assert dialog.summary_plot_scale.text() == "0"
+        assert dialog.violin_plot_min_samplesize.text() == "1"
+        assert dialog.summary_plot_scale.text() == "bad"
+        assert "whole number of 2 or more" in dialog.violin_input_error.text()
+        assert "whole number of 0 or more" in dialog.plot_scale_error.text()
 
         warnings = []
         monkeypatch.setattr(
@@ -383,6 +441,25 @@ def test_select_excel_file_and_validation_warning_branches(monkeypatch, tmp_path
             lambda **kwargs: (_ for _ in ()).throw(ValueError("missing source rows")),
         )
 
+        dialog.show()
+        dialog.show_loading_screen()
+
+        assert not warnings
+        assert dialog.advanced_toggle_button.isChecked()
+        assert dialog.focusWidget() is dialog.violin_plot_min_samplesize
+        assert dialog.export_thread is None
+
+        dialog.violin_plot_min_samplesize.setText("2")
+        dialog.summary_plot_scale.setText("0,5")
+        dialog.show_loading_screen()
+        assert not warnings and dialog.focusWidget() is dialog.summary_plot_scale
+        assert dialog.summary_plot_scale.text() == "0,5"
+
+        dialog.chart_defaults_button.click()
+        preset = dialog._selected_preset_options()
+        assert dialog.violin_plot_min_samplesize.text() == str(preset["violin_plot_min_samplesize"])
+        assert dialog.summary_plot_scale.text() == str(preset["summary_plot_scale"])
+        assert not dialog.violin_input_error.text() and not dialog.plot_scale_error.text()
         dialog.show_loading_screen()
 
         assert warnings

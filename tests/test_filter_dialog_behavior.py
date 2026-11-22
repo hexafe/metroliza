@@ -87,7 +87,7 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
 
         assert dialog._selected_value_count(dialog.ax_list) == 1
         assert "Active filters:" in dialog.filter_summary_label.text()
-        assert "NOK only" in dialog.filter_summary_label.text()
+        assert "Reports with at least one NOK" in dialog.filter_summary_label.text()
 
         dialog.select_beginning_of_time()
         dialog.select_today_as_date_to()
@@ -98,6 +98,77 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
         )
     finally:
         dialog.close()
+
+
+def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):
+    from contextlib import closing
+    import sqlite3
+
+    from openpyxl import load_workbook
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.reports.report_query_service import build_grouping_scope_query_from_filter_state
+    from metroliza.shared.filter_state import summarize_filter_state
+    from tests.test_1089_acceptance_analytics import _fixture_db
+
+    class FilterOwner(QDialog):
+        def set_filter_query(self, value):
+            self.query = value
+
+        def set_filter_state(self, value):
+            self.state = value
+
+    database = _fixture_db(tmp_path)
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("UPDATE report_measurements SET header = 'WIDTH', status_code = 'nok', "
+                           "is_nok = 1, outtol = 0.5 WHERE report_id = 1")
+        connection.execute("UPDATE parsed_reports SET has_nok = 1, nok_count = 1, measurement_count = 2 WHERE id = 1")
+        connection.execute("""INSERT INTO report_measurements
+            (report_id, page_number, row_order, header, ax, nominal, tol_plus, tol_minus,
+             meas, dev, outtol, status_code)
+            VALUES (1, 1, 2, 'HEIGHT', 'X', 10, 0.5, -0.5, 10.1, 0.1, 0, 'ok')""")
+
+    _app()
+    owner = FilterOwner()
+    dialog = _build_dialog(monkeypatch, parent=owner, db_file=str(database))
+    try:
+        _select_list_value(dialog.header_list, "HEIGHT")
+        dialog.has_nok_button.setChecked(True)
+        dialog.apply_filters()
+        assert summarize_filter_state(owner.state)[0].endswith("Reports with at least one NOK")
+        assert owner.state.status_code_values == () and owner.state.has_nok_only
+        output = tmp_path / "report-nok.xlsx"
+        for only_measurements in (False, True):
+            if only_measurements:
+                dialog.has_nok_button.setChecked(False)
+                dialog.measurement_nok_button.setChecked(True)
+                dialog.apply_filters()
+                assert summarize_filter_state(owner.state)[0].endswith("Only NOK measurements")
+                assert owner.state.status_code_values == ("nok",) and not owner.state.has_nok_only
+                output = tmp_path / "measurement-nok.xlsx"
+
+            with closing(sqlite3.connect(database)) as connection:
+                report_preview = connection.execute(build_grouping_scope_query_from_filter_state(owner.state)).fetchall()
+            assert len(report_preview) == (0 if only_measurements else 1)
+            worker = ExportDataThread(ExportRequest(
+                paths=AppPaths(db_file=str(database), excel_file=str(output)),
+                options=ExportOptions(), filter_query=owner.query,
+            ))
+            worker.run()
+            workbook = load_workbook(output, read_only=True)
+            try:
+                columns, *measurements = workbook["MEASUREMENTS"].values
+                if only_measurements:
+                    assert measurements == []
+                else:
+                    assert len(measurements) == 1
+                    assert measurements[0][columns.index("HEADER")] == "HEIGHT"
+                    assert measurements[0][columns.index("STATUS_CODE")] == "ok"
+            finally:
+                workbook.close()
+    finally:
+        dialog.close()
+        owner.close()
 
 
 def test_filter_dialog_invalid_expression_and_native_exits_are_transactional(
