@@ -485,3 +485,16 @@ def test_event_status_update_methods_flow_through_service(tmp_path):
     assert events[seeded["event_ids"][2]].ack_by == "operator-c"
     assert open_events == []
     assert open_counts == {"info": 0, "warning": 0, "major": 0, "critical": 0}
+
+
+def test_open_event_filters_apply_before_page_limit_and_cursor(tmp_path):
+    path = str(tmp_path / "review.db")
+    _seed_dashboard_data(path)
+    service = RealtimeDashboardService(path)
+    newest = service.list_open_anomaly_events(limit=1)[0]
+    assert newest.detector_key == "rolling_zscore"
+    older = service.list_open_anomaly_events(limit=1, older_than=(newest.event_time, newest.id))
+    assert [event.detector_key for event in older] == ["mad_zscore"]
+    critical = service.list_open_anomaly_events(limit=1, severity="critical", signal_search="cycle_time")
+    assert [event.detector_key for event in critical] == ["spec_limits"]
+    assert service.list_open_anomaly_events(limit=1, severity="critical", signal_search="temperature") == []

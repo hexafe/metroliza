@@ -138,6 +138,8 @@ class RealtimeDashboardService:
         detector_key: str | None = None,
         severity: str | None = None,
         limit: int = 100,
+        signal_search: str = "",
+        older_than: tuple[str, int] | None = None,
     ) -> list[DashboardAnomalyEvent]:
         self.ensure_schema()
 
@@ -151,6 +153,13 @@ class RealtimeDashboardService:
                 detector_key=detector_key,
                 severity=severity,
             )
+            if signal_search.strip():
+                where.append("(instr(lower(signals.signal_key), lower(?)) > 0 "
+                             "OR instr(lower(samples.metric_name), lower(?)) > 0)")
+                params.extend((signal_search.strip(), signal_search.strip()))
+            if older_than is not None:
+                where.append("(events.event_time, events.id) < (?, ?)")
+                params.extend(older_than)
             params.append(_positive_limit(limit))
             cursor.execute(
                 f"""

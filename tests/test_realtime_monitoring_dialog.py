@@ -303,8 +303,8 @@ def test_realtime_event_review_requires_operator_comment_and_persists_action(
         def __init__(self, database):
             self.database = database
 
-        def list_open_anomaly_events(self, *, limit):
-            assert limit == 100
+        def list_open_anomaly_events(self, *, limit, severity, signal_search, older_than):
+            assert (limit, severity, signal_search, older_than) == (101, None, "", None)
             return [event]
 
         def acknowledge_event(self, **kwargs):
@@ -373,8 +373,8 @@ def test_realtime_event_review_refreshes_instead_of_overwriting_stale_decision(
         def __init__(self, _database):
             pass
 
-        def list_open_anomaly_events(self, *, limit):
-            assert limit == 100
+        def list_open_anomaly_events(self, *, limit, severity, signal_search, older_than):
+            assert (limit, severity, signal_search, older_than) == (101, None, "", None)
             type(self).load_count += 1
             return [event] if type(self).load_count == 1 else []
 
