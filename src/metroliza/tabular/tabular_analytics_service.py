@@ -1484,6 +1484,7 @@ class TabularAnalyticsLoadResult:
     row_count: int | None = None
     load_timings_s: dict[str, float] = field(default_factory=dict)
     row_table: RowTable | None = None
+    source_column_identities: dict[_HeaderIdentity, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -2145,6 +2146,7 @@ def _load_tabular_files_into_sqlite(
             sqlite_store=store,
             row_count=row_number,
             load_timings_s=dict(load_timings),
+            source_column_identities=identity_mapping,
         )
     except Exception:
         for candidate in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):

@@ -851,6 +851,93 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         _dispose_dialog(dialog)
 
 
+def test_reload_keeps_metric_selection_limits_and_identifies_moved_group_members(tmp_path) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    columns = "Reference ID,Line,Length mm,Width mm\n"
+    rows = ["R01,L1,10,2\n", "R02,L2,11,3\n", "R03,L1,12,4\n"]
+    source.write_text(columns + "".join(rows))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog._apply_metric_selection((ProductionMetricSelection("length_mm"),))
+        dialog.metric_spec_limits = {"length_mm": (9, 13), "width_mm": (None, 6)}
+        dialog.group_field_combo.setCurrentIndex(dialog.group_field_combo.findData("line"))
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [2], "GROUP": ["Linia L2"]}))
+        dialog.set_grouping_applied(True)
+
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert dialog.metrics_summary_label.text() == "1 of 2 metrics selected"
+        assert dialog.group_field_combo.currentData() == "line"
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [2]
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13), "width_mm": (None, 6)}
+        assert "zachowano ustawienia" in dialog.readiness_label.text()
+
+        source.write_text(columns + rows[1] + rows[0] + rows[2])
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [1]
+        assert list(dialog.df_for_grouping["GROUP"]) == ["Linia L2"]
+
+        # Drop the unused metric and grouping field. The reference and metric
+        # value still identify the assigned row even after the schema changed.
+        source.write_text("Reference ID,Length mm\nR02,11\nR01,10\nR03,12\n")
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [1]
+        assert dialog.metrics_summary_label.text() == "1 of 1 metrics selected"
+        assert "width_mm" in dialog.readiness_label.text() and "line" in dialog.readiness_label.text()
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13)}
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_role_change_names_lost_metric_and_limit_before_applying(tmp_path, monkeypatch) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    source.write_text("Reference ID,Length mm,Width mm\nR01,10,2\nR02,11,3\nR03,12,4\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    prompts = []
+
+    def answer(_parent, title, text, *_args):
+        prompts.append((title, text))
+        return answers.pop(0)
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog.metric_spec_limits = {"length_mm": (9, 13), "width_mm": (1, 6)}
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [2], "GROUP": ["Linia L2"]}))
+        dialog.set_grouping_applied(True)
+
+        def change_role():
+            combo = dialog.reference_column_combo
+            combo.setCurrentIndex(combo.findData("length_mm"))
+            assert not dialog.start_button.isEnabled()
+            dialog.handle_load_metrics_clicked()
+            _wait_for_tabular_load(dialog)
+
+        change_role()
+        assert "Length Mm" in prompts[0][1] and "Limity" in prompts[0][1]
+        assert dialog.reference_column_combo.currentData() == "reference_id"
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13), "width_mm": (1, 6)}
+
+        change_role()
+        assert dialog.reference_column_combo.currentData() == "length_mm"
+        assert dialog.metric_spec_limits == {"width_mm": (1, 6)}
+        assert [item.field_name for item in dialog._selected_metrics()] == ["width_mm"]
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [2]
+        assert not answers
+    finally:
+        _dispose_dialog(dialog)
+
+
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
     tmp_path,
     monkeypatch,
@@ -1732,14 +1819,14 @@ def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> N
 
         dialog.clear_button.click()
         assert dialog.selected_metrics() == ()
-        assert dialog.summary_label.text() == "0 of 2 metrics selected"
+        assert dialog.summary_label.text() == "Zaznaczono 0 z 2 metryk"
 
         dialog.select_all_button.click()
         assert [metric.field_name for metric in dialog.selected_metrics()] == [
             "length_mm",
             "width_mm",
         ]
-        assert dialog.summary_label.text() == "2 of 2 metrics selected"
+        assert dialog.summary_label.text() == "Zaznaczono 2 z 2 metryk"
     finally:
         _dispose_dialog(dialog)
 
@@ -1766,6 +1853,14 @@ def test_metric_selection_dialog_filters_visible_metrics_without_losing_selectio
             "length_mm",
             "cycle_time_s",
         ]
+        assert "Widoczne 1" in dialog.summary_label.text()
+        assert "poza wynikami 1" in dialog.summary_label.text()
+        dialog.clear_button.click()
+        assert [metric.field_name for metric in dialog.selected_metrics()] == ["length_mm"]
+        dialog.select_all_button.click()
+        assert [metric.field_name for metric in dialog.selected_metrics()] == ["length_mm", "cycle_time_s"]
+        dialog.search_field.clear()
+        assert dialog.summary_label.text() == "Zaznaczono 2 z 3 metryk"
     finally:
         _dispose_dialog(dialog)
 

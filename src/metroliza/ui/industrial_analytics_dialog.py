@@ -5,11 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from time import monotonic
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import inspect
 
 from metroliza.ui.result_actions import LastResultRow, existing_result_files
-from PyQt6.QtCore import QThread, Qt
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -76,6 +76,9 @@ from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
 from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
+from metroliza.tabular.reload_scope import (
+    compatible_columns, compatible_filters, reconcile_reload_grouping, same_tabular_source,
+)
 from metroliza.analytics.row_table import RowTable
 from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
@@ -406,8 +409,8 @@ class MetricSelectionDialog(QDialog):
         self.metrics_list = QListWidget()
         self.metrics_list.setMinimumHeight(320)
 
-        self.select_all_button = QPushButton("Select all")
-        self.clear_button = QPushButton("Clear")
+        self.select_all_button = QPushButton("Zaznacz widoczne")
+        self.clear_button = QPushButton("Odznacz widoczne")
         self.cancel_button = QPushButton("Cancel")
         self.apply_button = QPushButton("Use metrics")
         self.apply_button.setDefault(True)
@@ -483,21 +486,30 @@ class MetricSelectionDialog(QDialog):
             item.setCheckState(Qt.CheckState.Checked if is_checked else Qt.CheckState.Unchecked)
             self.metrics_list.addItem(item)
         self.metrics_list.blockSignals(False)
-        self._sync_summary()
         self._filter_metrics()
 
     def _set_metric_checks(self, checked: bool) -> None:
         state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
         self.metrics_list.blockSignals(True)
         for index in range(self.metrics_list.count()):
-            self.metrics_list.item(index).setCheckState(state)
+            item = self.metrics_list.item(index)
+            if not item.isHidden():
+                item.setCheckState(state)
         self.metrics_list.blockSignals(False)
         self._sync_summary()
 
     def _sync_summary(self) -> None:
         selected_count = len(self.selected_metrics())
         total_count = len(self.metrics)
-        self.summary_label.setText(f"{selected_count} of {total_count} metrics selected")
+        summary = f"Zaznaczono {selected_count} z {total_count} metryk"
+        items = [self.metrics_list.item(index) for index in range(self.metrics_list.count())]
+        visible = sum(not item.isHidden() for item in items)
+        if self.search_field.text().strip():
+            hidden_selected = sum(item.isHidden() and item.checkState() == Qt.CheckState.Checked for item in items)
+            summary += f" · Widoczne {visible} · Zaznaczone poza wynikami {hidden_selected}"
+        self.summary_label.setText(summary)
+        self.select_all_button.setEnabled(bool(visible))
+        self.clear_button.setEnabled(bool(visible))
         set_status_variant(self.summary_label, "success" if selected_count else "warning")
         self.apply_button.setEnabled(bool(selected_count))
 
@@ -510,6 +522,7 @@ class MetricSelectionDialog(QDialog):
             field_name = metric.field_name if isinstance(metric, ProductionMetricSelection) else ""
             visible = not search or search in label.casefold() or search in field_name.casefold()
             item.setHidden(not visible)
+        self._sync_summary()
 
     def selected_metrics(self) -> tuple[ProductionMetricSelection, ...]:
         metrics = []
@@ -659,7 +672,19 @@ class MetricLimitsDialog(QDialog):
             return "invalid"
 
 
+@dataclass(frozen=True)
+class _TabularChoices:
+    selected: tuple[ProductionMetricSelection, ...]
+    limits: dict[str, tuple[float | None, float | None]]
+    group_field: str
+    grouping: object
+    groupstats: bool
+    filters: tuple
+
+
 class IndustrialAnalyticsDialog(QDialog):
+    analysis_completed = pyqtSignal(object)
+
     """Configure and run production or CSV/Excel analytics."""
 
     def __init__(
@@ -716,6 +741,9 @@ class IndustrialAnalyticsDialog(QDialog):
         self._pending_grouping_snapshot: _ValidatedGroupingSnapshot | None = None
         self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
+        self._tabular_refresh_result = ""
+        self._tabular_refresh_lost = False
+        self._pending_role_reload = None
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
 
         self.setWindowTitle(self._window_title_for_source())
@@ -763,6 +791,8 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.dashboard_visuals_button.clicked.connect(self.open_dashboard_visual_options)
         self.readiness_label = status_chip("Load metrics and choose an output path.", "warning")
+        self.readiness_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.readiness_label.setWordWrap(True)
         self.request_summary_label = status_chip("", "info")
         self.request_summary_label.setWordWrap(True)
         configure_accessibility(self.request_summary_label, name="Analytics request scope and outputs")
@@ -1534,6 +1564,7 @@ class IndustrialAnalyticsDialog(QDialog):
         # The terminal handler releases ownership after all worker signals finish.
         return not self.is_production_source and (
             self.tabular_load_thread is not None or self.analytics_thread is not None
+            or getattr(self, "_scope_query_running", False)
         )
 
     def _tabular_reload_busy(self) -> bool:
@@ -1545,6 +1576,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.input_file and (self.tabular_load_result is not None or self.metric_candidates):
             self._tabular_reload_notice = "Reload CSV/Excel data after changing the selected sheet."
         self.metric_candidates = ()
+        self._discard_role_reload()
         self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
         self._clear_tabular_filter()
@@ -1557,9 +1589,13 @@ class IndustrialAnalyticsDialog(QDialog):
     def _handle_tabular_column_changed(self, _text: str = "") -> None:
         if self.is_production_source or self._tabular_source_busy():
             return
-        if not self.metric_candidates:
+        if self.tabular_load_result is None or self.is_preloaded_tabular_source:
             return
-        self._tabular_reload_notice = "Reload CSV/Excel data after changing the time column or part / ID column."
+        self._pending_role_reload = (self.tabular_load_result, self._tabular_choices())
+        self.tabular_load_result = None  # Keep the previous store until the proposed reload is accepted.
+        self._tabular_reload_notice = (
+            "Odśwież dane po zmianie roli kolumny. Przed zastosowaniem zobaczysz, które ustawienia wymagają poprawy."
+        )
         self.metric_candidates = ()
         self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
@@ -1568,6 +1604,11 @@ class IndustrialAnalyticsDialog(QDialog):
         self.metrics_list.clear()
         self._reset_group_options(())
         self._sync_ui_state()
+
+    def _discard_role_reload(self):
+        if self._pending_role_reload is not None:
+            cleanup_tabular_load_result(self._pending_role_reload[0])
+            self._pending_role_reload = None
 
     def _clear_tabular_grouping(self) -> None:
         self._grouping_snapshot_owner.invalidate()
@@ -1587,6 +1628,8 @@ class IndustrialAnalyticsDialog(QDialog):
             cleanup_tabular_load_result(current)
         self.tabular_load_result = loaded
         self._tabular_row_count_cache = None
+        self._tabular_refresh_result = ""
+        self._tabular_refresh_lost = False
 
     def _selected_input_files(self) -> tuple[str, ...]:
         if self.input_files:
@@ -1801,6 +1844,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.output_workbook_file = _explicit_output_path(default_workbook_path(output_seed))
         self._tabular_reload_notice = ""
         self.metric_candidates = ()
+        self._discard_role_reload()
         self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
         self._clear_tabular_filter()
@@ -2006,15 +2050,88 @@ class IndustrialAnalyticsDialog(QDialog):
         self._populate_metrics()
         self._sync_ui_state()
 
+    def _tabular_choices(self):
+        return _TabularChoices(self._selected_metrics(), dict(self.metric_spec_limits),
+                               self.group_field_combo.currentData() or "",
+                               self.df_for_grouping if self.grouping_applied else None,
+                               self.groupstats_checkbox.isChecked(), self._tabular_filter_state_key())
+
+    def _reloaded_tabular_choices(self, previous, choices, loaded):
+        fields = compatible_columns(previous, loaded)
+        candidates = {metric.field_name for metric in loaded.metric_candidates}
+        selected = tuple(replace(metric, field_name=fields[metric.field_name]) for metric in choices.selected
+                         if fields.get(metric.field_name) in candidates)
+        limits = {fields[name]: limit for name, limit in choices.limits.items() if fields.get(name) in candidates}
+        group_field = fields.get(choices.group_field, "")
+        if group_field not in _tabular_load_columns(loaded) or group_field in candidates:
+            group_field = ""
+        filters, lost_filters = compatible_filters(choices.filters, previous, loaded, fields)
+        groups = (choices.grouping, ())
+        if choices.grouping is not None and previous.source_snapshots != loaded.source_snapshots:
+            groups = _run_csv_scope_query(
+                self, lambda: reconcile_reload_grouping(previous, loaded, choices.grouping,
+                    cancel_check=QThread.currentThread().isInterruptionRequested),
+                "Sprawdzanie przypisań grup po odświeżeniu",
+            )
+        if groups is None:
+            return None
+        lost = self._tabular_reload_losses(choices, fields, selected, limits, group_field, groups[1], lost_filters)
+        return _TabularChoices(selected, limits, group_field, groups[0], choices.groupstats, filters), lost
+
+    @staticmethod
+    def _tabular_reload_losses(choices, fields, selected, limits, group_field, lost_groups, lost_filters):
+        labels = {metric.field_name: metric.display_label for metric in choices.selected}
+        selected_names = {metric.field_name for metric in selected}
+        lost = [("Niedostępne metryki", [label for name, label in labels.items()
+                                         if fields.get(name) not in selected_names]),
+                ("Limity wymagające ponownego ustawienia", [labels.get(name, name) for name in choices.limits
+                                                          if fields.get(name) not in limits]),
+                ("Niedostępna kolumna grupowania", [choices.group_field] if choices.group_field and not group_field else []),
+                ("Niepotwierdzone przypisania w grupach", lost_groups),
+                ("Filtry wymagające poprawy", lost_filters)]
+        return tuple(f"{label}: {', '.join(names)}" for label, names in lost if names)
+
+    def _accept_role_reload(self, lost):
+        if not lost:
+            return True
+        return QMessageBox.question(
+            self, "Zastosować zmianę roli kolumny?",
+            "Zgodne ustawienia zostaną zachowane. Sprawdź zakres przed zastosowaniem.\n\n" + "\n".join(lost),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
+
     def _apply_tabular_load_result(self, loaded, *, populate_metrics: bool = True) -> None:
+        pending = self._pending_role_reload
+        previous = pending[0] if pending else self.tabular_load_result
+        choices = None
+        lost = ()
+        if isinstance(previous, TabularAnalyticsLoadResult) and same_tabular_source(previous, loaded):
+            original = pending[1] if pending else self._tabular_choices()
+            try:
+                result = self._reloaded_tabular_choices(previous, original, loaded)
+            except (RuntimeError, ValueError) as exc:
+                QMessageBox.warning(self, self.windowTitle(), f"Nie udało się sprawdzić ustawień po odświeżeniu. {exc}")
+                result = None
+            if result is None or (pending and not self._accept_role_reload(result[1])):
+                cleanup_tabular_load_result(loaded)
+                if pending:
+                    self._pending_role_reload = None
+                    self._replace_tabular_snapshot(previous, original, populate_metrics)
+                return
+            choices, lost = result
+        self._discard_role_reload()
+        self._replace_tabular_snapshot(loaded, choices, populate_metrics)
+        if choices is not None:
+            self._tabular_refresh_result = "\n".join(lost) if lost else "Odświeżono dane i zachowano ustawienia analizy."
+            self._tabular_refresh_lost = bool(lost)
+        if populate_metrics:
+            self._sync_ui_state()
+
+    def _replace_tabular_snapshot(self, loaded, choices, populate_metrics):
         self._tabular_reload_notice = ""
         self._set_tabular_load_result(loaded)
         self.metric_candidates = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
-        self.metric_spec_limits = {
-            field_name: limits
-            for field_name, limits in self.metric_spec_limits.items()
-            if field_name in {metric.field_name for metric in self.metric_candidates}
-        }
+        self.metric_spec_limits = choices.limits if choices else {}
         self._reset_group_options(
             tuple(
                 (column.replace("_", " ").title(), column)
@@ -2028,10 +2145,21 @@ class IndustrialAnalyticsDialog(QDialog):
             timestamp_column=loaded.timestamp_column,
             reference_column=loaded.reference_column,
         )
-        self._apply_auto_file_grouping(loaded)
+        if choices is None:
+            self._apply_auto_file_grouping(loaded)
+        else:
+            self._apply_tabular_choices(choices)
         if populate_metrics:
-            self._populate_metrics()
-            self._sync_ui_state()
+            self._populate_metrics(None if choices is None else {metric.field_name for metric in choices.selected})
+
+    def _apply_tabular_choices(self, choices):
+        self.group_field_combo.setCurrentIndex(self.group_field_combo.findData(choices.group_field))
+        (self.tabular_filter_columns, self.tabular_filter_keys,
+         self.tabular_column_filters, self.tabular_filter_expression) = choices.filters
+        self._grouping_snapshot_owner.invalidate()
+        self.df_for_grouping = choices.grouping
+        self.grouping_applied = choices.grouping is not None and not choices.grouping.empty
+        self._set_groupstats_output_checked(choices.groupstats and self._tabular_groupstats_available())
 
     def _apply_auto_file_grouping(self, loaded) -> None:
         if self.is_production_source or not self._auto_group_selected_files:
@@ -2588,6 +2716,7 @@ class IndustrialAnalyticsDialog(QDialog):
         ready = bool(
             source_stable
             and source_ready
+            and not self._tabular_reload_notice
             and metrics
             and self.output_dashboard_file
             and charts_ready
@@ -2595,7 +2724,10 @@ class IndustrialAnalyticsDialog(QDialog):
             and tabular_rows_ready
         )
         self.start_button.setEnabled(ready)
-        if ready:
+        if source_stable and self._tabular_refresh_result:
+            self.readiness_label.setText(self._tabular_refresh_result)
+            set_status_variant(self.readiness_label, "warning" if self._tabular_refresh_lost else "info")
+        elif ready:
             self.readiness_label.setText(
                 f"Ready: {len(metrics)} metric(s), dashboard"
                 + (", workbook." if self.workbook_checkbox.isChecked() else ".")
@@ -2720,13 +2852,15 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        try:
-            self._apply_tabular_load_result(loaded)
-        finally:
-            self._close_worker_progress()
+        # Reconciliation can run a nested event loop that retires this signal's
+        # originating thread. Resolve its progress owner before that can happen.
+        self._close_worker_progress()
+        self._apply_tabular_load_result(loaded)
 
     def on_tabular_load_error(self, message: str) -> None:
         self._close_worker_progress()
+        self._tabular_reload_notice = "Odświeżenie nie powiodło się. Wczytaj źródło ponownie przed analizą."
+        self._tabular_refresh_result = ""
         QMessageBox.warning(self, self.windowTitle(), f"Could not load metrics: {message}")
         self._sync_ui_state()
 
@@ -3018,12 +3152,28 @@ class IndustrialAnalyticsDialog(QDialog):
             "completed with warnings" if _analytics_has_warnings(result) else "completed", paths,
             counts=f"Rows analyzed: {result.row_count} · Metrics: {getattr(result, 'metric_count', 0)} · Charts: {result.html_dashboard_chart_count}",
         )
+        if paths:
+            self._emit_analysis_completion(paths)
         try:
             from metroliza.ui.export_dialog import show_export_result_message
 
             show_export_result_message(self, level, title, message, excel_file=reveal_path, artifacts=paths)
         except Exception:
             QMessageBox.information(self, title, message)
+
+    def _emit_analysis_completion(self, paths):
+        request = getattr(self.analytics_thread, "request", None)
+        if request is None:
+            return
+        loaded = request.tabular_load_result
+        source_files = getattr(loaded, "source_files", ()) or ((request.input_file,) if request.input_file else ())
+        industrial = request.source_kind == SOURCE_PRODUCTION_CACHE or self.is_industrial_cache_presentation
+        source = request.db_file if industrial else source_files[0] if len(source_files) == 1 else None
+        settings = {"sheet": request.sheet_name, "metrics": [metric.field_name for metric in request.metric_selection],
+                    "groups": list(request.aggregation_state.group_fields), "source_count": len(source_files)}
+        self.analysis_completed.emit({"kind": "industrial" if industrial else "csv",
+                                      "artifacts": [str(path) for path in paths], "source": source or None,
+                                      "settings": settings})
 
     def on_analytics_error(self, message: str) -> None:
         self._close_worker_progress()
@@ -3058,6 +3208,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if thread is not None and thread.isRunning():
             QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
             return
+        self._discard_role_reload()
         self._set_tabular_load_result(None)
         self._grouping_snapshot_owner.invalidate()
         super().reject()
@@ -3076,6 +3227,7 @@ class IndustrialAnalyticsDialog(QDialog):
             QMessageBox.information(self, self.windowTitle(), "Wait for analytics generation to finish.")
             event.ignore()
             return
+        self._discard_role_reload()
         self._set_tabular_load_result(None)
         self._grouping_snapshot_owner.invalidate()
         super().closeEvent(event)
