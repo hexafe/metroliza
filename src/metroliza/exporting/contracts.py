@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from metroliza.charts.dashboard_visual_options import normalize_dashboard_visual_settings
-from metroliza.exporting.output_publication import OutputConsent
+from metroliza.exporting.output_publication import OutputConsent, output_paths, validate_sources_outside_outputs
 from metroliza.tabular.contracts import (
     GroupingAssignments,
     validate_grouping_df,
@@ -113,11 +113,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         raise ValueError("Application version must be text.")
     _validate_approved_source_scope(request)
 
-    if validated_options.export_target == "html_dashboard":
-        if not validated_paths.html_dashboard_file:
-            raise ValueError("HTML dashboard output path is required for HTML-only export.")
-    elif not validated_paths.excel_file:
-        raise ValueError("Excel file path is required for workbook export.")
+    _validate_output_namespace(validated_paths, validated_options)
 
     return ExportRequest(
         paths=validated_paths,
@@ -132,6 +128,20 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         filter_description=request.filter_description.strip()[:2000],
         application_version=request.application_version.strip()[:64],
     )
+
+
+def _validate_output_namespace(paths, options):
+    if options.export_target == "html_dashboard":
+        if not paths.html_dashboard_file:
+            raise ValueError("HTML dashboard output path is required for HTML-only export.")
+        outputs = (Path(paths.html_dashboard_file),)
+    else:
+        if not paths.excel_file:
+            raise ValueError("Excel file path is required for workbook export.")
+        outputs = output_paths(paths.excel_file, dashboard=options.generate_html_dashboard)
+        if options.generate_html_dashboard and paths.html_dashboard_file:
+            outputs = (outputs[0], Path(paths.html_dashboard_file))
+    validate_sources_outside_outputs(outputs, paths.db_file)
 
 
 def _validate_approved_source_scope(request: ExportRequest) -> None:

@@ -66,6 +66,19 @@ def conflicting_outputs(paths):
     return tuple(conflicts)
 
 
+def validate_sources_outside_outputs(paths, source):
+    """Protect the input database from both output replacement and HTML asset retirement."""
+    try:
+        database = Path(source)
+        source_locations = (_entry_path(database), database.resolve())
+        for destination in (*paths, *conflicting_outputs(paths)):
+            output_locations = (_entry_path(destination), destination.resolve())
+            if any(location.is_relative_to(output) for location in source_locations for output in output_locations):
+                raise ValueError("The export path overlaps the source database. Choose a different output name or folder.")
+    except (OSError, RuntimeError) as exc:
+        raise ValueError("Could not verify that the export destination is separate from the database.") from exc
+
+
 def free_copy_path(primary, *, html_only=False, dashboard=False):
     from metroliza.charts.export_html_dashboard import _bounded_dashboard_output_component
 
