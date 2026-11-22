@@ -1173,7 +1173,7 @@ class ExportDialog(QDialog):
         if not getattr(self, "excel_file", "") and not getattr(self, "_chosen_output_paths", {}):
             return
         html_only = self._is_html_dashboard_only()
-        if self.excel_file and self.excel_file != self._shown_output_path:
+        if self.excel_file and (self.excel_file != self._shown_output_path or not self._chosen_output_paths):
             external_path = Path(self.excel_file)
             self._chosen_output_paths[external_path.suffix.lower() == ".html"] = external_path
         path = self._chosen_output_paths.get(html_only)

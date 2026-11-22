@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,6 +141,16 @@ def test_environment_runs_the_smoke_without_dialogs_or_inherited_python(tmp_path
         tmp_path / "state", tmp_path / "temp", tmp_path / "p.jsonl", offscreen=True, base=base
     )
     assert offscreen["QT_QPA_PLATFORM"] == "offscreen"
+
+
+def test_windows_environment_preserves_system_paths_with_uppercase_parent_keys(tmp_path, monkeypatch):
+    monkeypatch.setattr(routes, "os", SimpleNamespace(name="nt"))
+    base = {"SYSTEMROOT": r"D:\Windows", "PROGRAMDATA": r"D:\ProgramData", "PYTHONPATH": r"C:\unrelated"}
+    env = routes.build_environment(tmp_path, tmp_path / "temp", tmp_path / "events", offscreen=False, base=base)
+    assert env["SystemRoot"] == base["SYSTEMROOT"]
+    assert env["ProgramData"] == base["PROGRAMDATA"]
+    assert env["PATH"].endswith(";" + base["SYSTEMROOT"])
+    assert "PYTHONPATH" not in env
 
 
 @needs_posix_exec
