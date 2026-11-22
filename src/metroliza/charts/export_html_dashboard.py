@@ -522,6 +522,8 @@ def write_export_html_dashboard(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    report_scope: dict[str, Any] | None = None,
+    report_warnings: tuple[str, ...] = (),
     diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Publish one serialized dashboard generation without mixing writer assets."""
@@ -556,6 +558,8 @@ def write_export_html_dashboard(
                 plotly_serialized_json_bytes_budget=plotly_serialized_json_bytes_budget,
                 plotly_visual_settings=plotly_visual_settings,
                 dashboard_visual_settings=dashboard_visual_settings,
+                report_scope=report_scope,
+                report_warnings=report_warnings,
                 diagnostic_stage=diagnostic_stage,
             )
             observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_PUBLICATION)
@@ -596,6 +600,8 @@ def _write_export_html_dashboard_generation(
     plotly_serialized_json_bytes_budget: int | None = _DEFAULT_PLOTLY_SERIALIZED_JSON_BYTES_BUDGET,
     plotly_visual_settings: dict[str, Any] | None = None,
     dashboard_visual_settings: dict[str, Any] | None = None,
+    report_scope: dict[str, Any] | None = None,
+    report_warnings: tuple[str, ...] = (),
     diagnostic_stage=None,
 ) -> dict[str, Any]:
     """Build one isolated HTML dashboard generation."""
@@ -781,6 +787,7 @@ def _write_export_html_dashboard_generation(
         "chart_observability_summary": chart_observability_summary or {},
         "backend_diagnostics_lines": [str(line) for line in (backend_diagnostics_lines or []) if str(line).strip()],
     }
+    manifest.update(_report_scope_manifest(report_scope, report_warnings))
     observe_export_stage(diagnostic_stage, ExportFailureStage.HTML_RENDER)
     render_start = perf_counter()
     html_text = _render_dashboard_html(
@@ -3168,6 +3175,7 @@ def _render_dashboard_html(
             '<p>Enable Extended plots or HTML dashboard export for chart-backed dashboard content.</p></section>'
         )
     group_analysis_block = _render_group_analysis(group_analysis)
+    report_scope_markup = _render_report_scope(manifest)
     overview_cards = _render_overview_cards(manifest)
     nav_markup = render_section_nav(nav_items)
     plotly_js_path = str(manifest.get("plotly_js_path") or "").strip()
@@ -3907,6 +3915,11 @@ def _render_dashboard_html(
       line-height: 1.55;
     }}
 {render_dashboard_compact_hero_css()}
+    .report-scope h2 {{ margin: 0 0 8px; font-size: 1.15rem; }}
+    .report-scope dl {{ display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; }}
+    .report-scope dt {{ font-weight: 600; }}
+    .report-scope dd {{ margin: 0; white-space: pre-line; overflow-wrap: anywhere; }}
+    .report-scope summary {{ cursor: pointer; }}
     @media (max-width: 780px) {{
       .shell {{ width: min(100vw - 18px, 1480px); padding-top: 12px; }}
       .hero, .measurement-section, .empty-state {{ padding: 18px; border-radius: 8px; }}
@@ -3922,6 +3935,7 @@ def _render_dashboard_html(
   <div class="shell">
     {hero_markup}
     <main id="dashboard-content" tabindex="-1">
+      {report_scope_markup}
       {section_blocks}
       {group_analysis_block}
     </main>
@@ -4437,6 +4451,36 @@ def _render_dashboard_html(
 </body>
 </html>
 """
+
+
+def _report_scope_manifest(report_scope, warnings):
+    return {"report_scope": report_scope, "report_warnings": warnings} if report_scope else {}
+
+
+def _render_report_scope(manifest: dict[str, Any]) -> str:
+    scope = manifest.get("report_scope")
+    if not scope:
+        return ""
+    main_labels = ("Source database", "Report scope", "Filters", "Grouping")
+
+    def field(label, value):
+        display = ("Yes" if value else "No") if isinstance(value, bool) else str(value)
+        return f"<dt>{html.escape(label)}</dt><dd>{html.escape(display)}</dd>"
+
+    overview = "".join(field(label, scope[label]) for label in main_labels if label in scope)
+    settings = "".join(field(label, value) for label, value in scope.items() if label not in main_labels)
+    warnings = list(manifest.get("report_warnings") or ())
+    if not manifest.get("chart_count"):
+        warnings.append("No charts were generated for the selected scope.")
+    warning_markup = ""
+    if warnings:
+        warning_items = "".join(f"<li>{html.escape(str(warning))}</li>" for warning in warnings)
+        warning_markup = f'<p class="runtime-note"><strong>Warnings</strong></p><ul>{warning_items}</ul>'
+    return (
+        '<section class="measurement-section report-scope" aria-labelledby="report-scope-title">'
+        f'<h2 id="report-scope-title">Report scope</h2><dl>{overview}</dl>{warning_markup}'
+        f'<details><summary>Analysis settings</summary><dl>{settings}</dl></details></section>'
+    )
 
 
 def _render_overview_cards(manifest: dict[str, Any]) -> str:

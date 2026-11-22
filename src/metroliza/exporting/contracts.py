@@ -59,6 +59,8 @@ class ExportRequest:
     existing_database_identity: tuple[int, int] | None = field(default=None, repr=False)
     approved_source_digests: tuple[str, ...] = field(default=(), repr=False)
     approved_report_ids: tuple[int, ...] = field(default=(), repr=False)
+    filter_description: str = field(default="", repr=False)
+    application_version: str = ""
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -105,6 +107,10 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 
     if request.filter_query is not None and not isinstance(request.filter_query, str):
         raise ValueError("Filter query must be a string when provided.")
+    if not isinstance(request.filter_description, str):
+        raise ValueError("Filter description must be text.")
+    if not isinstance(request.application_version, str):
+        raise ValueError("Application version must be text.")
     _validate_approved_source_scope(request)
 
     if validated_options.export_target == "html_dashboard":
@@ -123,6 +129,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         existing_database_identity=request.existing_database_identity,
         approved_source_digests=request.approved_source_digests,
         approved_report_ids=request.approved_report_ids,
+        filter_description=request.filter_description.strip()[:2000],
+        application_version=request.application_version.strip()[:64],
     )
 
 

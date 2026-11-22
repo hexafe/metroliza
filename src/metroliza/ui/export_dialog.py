@@ -4,6 +4,7 @@ from time import monotonic
 from dataclasses import replace
 from datetime import date
 
+from metroliza.app.version import VERSION_LABEL
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
 from metroliza.ui.filter_dialog import FilterDialog
@@ -20,6 +21,7 @@ from metroliza.exporting.export_dialog_service import (
     normalize_html_dashboard_export_path,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
+from metroliza.exporting.report_export_context import export_settings
 from metroliza.ui.result_actions import (
     LastResultRow, add_result_actions, export_result_files, open_local_link,
 )
@@ -348,6 +350,7 @@ class ExportDialog(QDialog):
 
     close_deferral_cancelled = pyqtSignal()
     operation_state_changed = pyqtSignal()
+    analysis_completed = pyqtSignal(object)
     database_change_allowed = None
     operation_start_allowed = None
     database_context_transition_active = False
@@ -374,6 +377,7 @@ class ExportDialog(QDialog):
         self.filter_window = None
         self.grouping_window = None
         self.export_thread = None
+        self._submitted_export_request = None
         self.export_error_message = None
         self._cancel_requested = False
         self._close_requested = False
@@ -1612,7 +1616,11 @@ class ExportDialog(QDialog):
             group_analysis_scope=self._selected_group_analysis_scope(),
             dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
         )
+        request = replace(request, application_version=VERSION_LABEL)
         if batch is None:
+            description = self._scope_for_query(request.filter_query)
+            if description not in {"all rows", "custom applied filter (review Filters)"}:
+                request = replace(request, filter_description=description.strip()[:2000])
             return request
         return replace(
             request,
@@ -1711,6 +1719,7 @@ class ExportDialog(QDialog):
         self._cancel_requested = False
         self._export_terminal_handled = False
         self.export_thread = create_export_data_thread(request)
+        self._submitted_export_request = request
         self.export_thread.update_label.connect(self.loading_label.setText)
         self.export_thread.update_progress.connect(self.loading_bar.setValue)
         self.export_thread.error_occurred.connect(self.on_export_error)
@@ -1880,15 +1889,37 @@ class ExportDialog(QDialog):
         )
         paths = export_result_files(result)
         self.last_result_row.set_result(outcome, paths)
+        request = getattr(self, "_submitted_export_request", None)
+        self._submitted_export_request = None
+        if request is not None and paths and result.status.value in {"complete", "complete_with_omissions"}:
+            self._record_completed_analysis(request, paths, outcome_kwargs.get("completion_metadata") or {})
         return paths
+
+    def _record_completed_analysis(self, request, paths, metadata):
+        published = {Path(metadata[key]) for key in ("published_output_path", "html_dashboard_path")
+                     if metadata.get(key)}
+        paths = tuple(path for path in paths if path in published)
+        if not paths:
+            return
+        artifacts = [str(path) for path in paths]
+        assets = metadata.get("html_dashboard_assets_path")
+        if assets:
+            asset_dir = Path(assets)
+            if asset_dir.is_dir() and any(path.suffix.lower() == ".html" and path.parent == asset_dir.parent
+                                          for path in paths):
+                artifacts.append(str(asset_dir))
+        self.analysis_completed.emit({
+            "kind": "reports",
+            "source": request.paths.db_file,
+            "artifacts": artifacts,
+            "settings": export_settings(request),
+        })
 
     def on_export_finished(self):
         """Finalize export flow with success/error messaging and UI reset."""
         try:
             self._export_terminal_handled = True
             self._dismiss_loading_progress()
-            if getattr(self, "_close_requested", False):
-                return
             export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
             completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
             run_result = getattr(self.export_thread, "export_run_result", None)
@@ -1910,6 +1941,8 @@ class ExportDialog(QDialog):
             diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
 
             paths = self._retain_export_result(outcome_kwargs)
+            if getattr(self, "_close_requested", False):
+                return
             try:
                 show_kwargs = {"excel_file": result_path, "artifacts": paths, "modeless": True}
                 if diagnostics:
@@ -1962,6 +1995,7 @@ class ExportDialog(QDialog):
                 if callable(delete_later):
                     delete_later()
                 self.export_thread = None
+                self._submitted_export_request = None
             self._export_state_changed()
             self._complete_deferred_close_if_idle()
 

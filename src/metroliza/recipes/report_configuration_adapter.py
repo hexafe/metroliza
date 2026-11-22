@@ -23,7 +23,7 @@ from metroliza.reports.report_query_service import (
     build_grouping_query, build_measurement_export_query, build_measurement_filter_query,
     restrict_to_approved_report_sources, sqlite_approved_report_export_scope,
 )
-from metroliza.shared.filter_state import FilterState
+from metroliza.shared.filter_state import FilterState, summarize_filter_state
 from metroliza.tabular.contracts import GroupingAssignment
 
 GROUPING_COLUMNS = frozenset({"REFERENCE", "PART_NAME", "REVISION", "TEMPLATE_VARIANT", "DATE", "SAMPLE_NUMBER"})
@@ -199,6 +199,7 @@ def build_export_request(plan: ResolvedRunPlan, step_kind: StepKind, *, consents
         tuple(consents),
         existing_database_identity=existing_identity,
         approved_source_digests=source_digests,
+        filter_description=summarize_filter_state(state)[1] if state != FilterState() else "",
     ))
 
 

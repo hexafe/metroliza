@@ -61,6 +61,11 @@ from metroliza.exporting.export_outcomes import (
     derive_export_run_result,
     export_failure_message,
 )
+from metroliza.exporting.report_export_context import (
+    REPORT_SCOPE_SHEET,
+    report_scope_entries,
+    report_scope_warnings,
+)
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
     GoogleDriveCanceledError,
@@ -3641,6 +3646,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         super().__init__()
 
         validated_request = validate_export_request(export_request)
+        self._export_scope_request = validated_request
         self.replace_outputs = validated_request.replace_outputs
         self.copy_output_from = getattr(validated_request, "copy_output_from", None)
         self._summary_render_options = validated_request.options
@@ -3962,6 +3968,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
                 plotly_visual_settings=self.dashboard_plotly_visual_settings,
                 dashboard_visual_settings=self.dashboard_visual_settings,
+                report_scope=report_scope_entries(self._export_scope_request),
+                report_warnings=report_scope_warnings(self.completion_metadata),
             )
         except OutputPublicationCanceled:
             raise
@@ -4987,10 +4995,21 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
                     self._run_group_analysis_outputs(excel_writer),
                 ),
+                lambda: self._write_report_scope_sheet(excel_writer),
             ],
             should_cancel=self._check_canceled,
         )
         return ExportStageOutcome.completed() if completed else ExportStageOutcome.canceled()
+
+    def _write_report_scope_sheet(self, excel_writer):
+        rows = []
+        for label, value in report_scope_entries(self._export_scope_request).items():
+            if label == "Filters":
+                rows.extend((label, line) for line in str(value).splitlines())
+            else:
+                rows.append((label, str(value)))
+        rows.extend(("Warning", warning) for warning in report_scope_warnings(self.completion_metadata))
+        self.write_data_to_excel(RowTable(rows=rows, columns=("Setting", "Value")), REPORT_SCOPE_SHEET, excel_writer)
 
     def run_html_dashboard_pipeline(self, dashboard_writer):
         """Build dashboard sections and group analysis without writing an XLSX file."""
@@ -5353,6 +5372,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             backend = self._active_backend or self.get_export_backend()
             workbook = backend.get_workbook(excel_writer)
             used_sheet_names = backend.list_sheet_names(excel_writer)
+            if self.export_target != "html_dashboard":
+                used_sheet_names.add(REPORT_SCOPE_SHEET)
 
             formats = create_measurement_formats(workbook)
             column_width = 12
