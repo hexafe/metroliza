@@ -156,25 +156,26 @@ class RecipeEditor(QDialog):
                     continue
                 if edit.isReadOnly() or mode.currentData() is ParameterMode.DERIVED:
                     continue
-                text = edit.text()
-                if spec.type is ParameterType.STRINGS:
-                    value = tuple(v.strip() for v in text.split(",") if v.strip())
-                elif spec.type is ParameterType.BOOLEAN:
-                    if text.lower() not in {"true", "false"}:
-                        raise ValueError("boolean_required")
-                    value = text.lower() == "true"
-                elif spec.type is ParameterType.INTEGER:
-                    value = int(text)
-                elif spec.type is ParameterType.NUMBER:
-                    value = float(text)
-                else:
-                    value = text
-                self.service.set_value(key, value)
+                self.service.set_value(key, self._field_value(spec.type, edit.text()))
             if not self.report_controls.isHidden():
                 self._collect_report_options()
         except Exception:
             self.service.current = previous
             raise
+
+    @staticmethod
+    def _field_value(kind, text):
+        if kind is ParameterType.STRINGS:
+            return tuple(value.strip() for value in text.split(",") if value.strip())
+        if kind is ParameterType.BOOLEAN:
+            if text.lower() not in {"true", "false"}:
+                raise ValueError("boolean_required")
+            return text.lower() == "true"
+        if kind is ParameterType.INTEGER:
+            return int(text)
+        if kind is ParameterType.NUMBER:
+            return float(text)
+        return text
 
     def _collect_report_options(self):
         by_name = {label.casefold(): key for key, label in _GROUP_LABELS.items()}
