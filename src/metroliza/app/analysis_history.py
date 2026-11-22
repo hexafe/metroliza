@@ -30,7 +30,8 @@ def _file_stamp(path):
     return [entry.st_dev, entry.st_ino, entry.st_size, entry.st_mtime_ns]
 
 
-def _source_stamp(source):
+def capture_source_stamp(source):
+    """Capture the input identity before reading it, including a live SQLite WAL."""
     try:
         path = Path(source)
         wal = path.with_name(path.name + "-wal")
@@ -67,6 +68,8 @@ def record_analysis(receipt, *, directory=None):
     if not files:
         return None
     source = str(Path(receipt["source"]).absolute()) if receipt.get("source") else None
+    current_stamp = capture_source_stamp(source)
+    submitted_stamp = receipt.get("source_stamp", current_stamp)
     timestamp = datetime.now(timezone.utc)
     name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}.json"
     entry = {
@@ -74,7 +77,8 @@ def record_analysis(receipt, *, directory=None):
         "at": timestamp.isoformat(),
         "kind": str(receipt["kind"]),
         "source": source,
-        "source_stamp": receipt.get("source_stamp", _source_stamp(source)),
+        "source_stamp": submitted_stamp,
+        "source_changed_during_run": bool(source and submitted_stamp and submitted_stamp != current_stamp),
         "settings": receipt.get("settings", {}),
         "files": [str(path) for path in files],
         "entries": entries,
@@ -130,7 +134,9 @@ def _readable_receipt(receipt):
 def analysis_is_stale(receipt):
     source = receipt.get("source")
     stored = receipt.get("source_stamp")
-    return bool(source and stored and stored != _source_stamp(source))
+    return bool(receipt.get("source_changed_during_run") or (
+        source and stored and stored != capture_source_stamp(source)
+    ))
 
 
 def result_still_matches(receipt, path):

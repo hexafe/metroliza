@@ -8,7 +8,8 @@ from zipfile import ZipFile
 import pytest
 
 from metroliza.app.analysis_history import (
-    analysis_is_stale, bundle_analysis, recent_analyses, record_analysis, result_still_matches,
+    analysis_is_stale, bundle_analysis, capture_source_stamp, recent_analyses,
+    record_analysis, result_still_matches,
 )
 from metroliza.app.workspace_file import read_workspace, write_workspace
 from metroliza.ui.workspace_context import WorkspaceSnapshot
@@ -87,3 +88,16 @@ def test_history_rejects_a_dashboard_missing_its_generated_script(tmp_path):
     with pytest.raises(ValueError, match="resource is missing"):
         bundle_analysis(saved, package)
     assert not package.exists()
+
+
+def test_history_marks_a_source_that_changed_during_the_run(tmp_path):
+    source = tmp_path / "input.csv"
+    source.write_text("code\n001\n", encoding="utf-8")
+    source_stamp = capture_source_stamp(source)
+    source.write_text("code\n002,updated\n", encoding="utf-8")
+    output = tmp_path / "analysis.xlsx"
+    output.touch()
+    saved = record_analysis({"kind": "csv", "artifacts": [output], "source": source,
+                             "source_stamp": source_stamp}, directory=tmp_path / "history")
+    assert saved["source_changed_during_run"] is True
+    assert analysis_is_stale(saved)
