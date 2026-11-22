@@ -1404,7 +1404,7 @@ def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) 
         cleanup_tabular_load_result(loaded)
 
 
-def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
+def test_tabular_clear_filter_keeps_groups_and_assigns_visible_rows_to_population(tmp_path) -> None:
     _app()
     input_file = tmp_path / "table.csv"
     pd.DataFrame(
@@ -1421,8 +1421,9 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
         _wait_for_tabular_load(dialog)
         grouping_df = pd.DataFrame(
             {
-                "REPORT_ID": [1, 2],
-                "GROUP": ["Fixture A", "POPULATION"],
+                "REPORT_ID": [1],
+                "GROUP": ["Fixture A"],
+                "COLOR": ["#204080"],
             }
         )
         dialog.tabular_column_filters = (TabularColumnFilter("tracecode", selected_values=("TC-001",)),)
@@ -1432,18 +1433,213 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
 
         assert dialog.clear_filter_button.isEnabled()
         assert dialog.clear_groups_button.isEnabled()
-        assert dialog.groupstats_checkbox.isChecked()
+        assert not dialog.groupstats_checkbox.isEnabled()
 
-        dialog.clear_tabular_filter_and_groups()
+        dialog.clear_filter_button.click()
 
         assert dialog.tabular_column_filters == ()
         assert dialog.tabular_filter_columns == ()
         assert dialog.tabular_filter_keys == ()
-        assert dialog.df_for_grouping is None
-        assert dialog.grouping_applied is False
+        assert dialog.tabular_filter_expression == ""
+        assert dialog.grouping_applied is True
+        assert dialog.df_for_grouping.to_dict("records") == grouping_df.to_dict("records")
         assert not dialog.clear_filter_button.isEnabled()
+        assert dialog.clear_groups_button.isEnabled()
+        assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog.filter_summary_label.text() == "All rows (2)"
+
+        from metroliza.tabular.tabular_analytics_service import TABULAR_GROUP_COLUMN, apply_tabular_grouping
+
+        grouped = apply_tabular_grouping(dialog._filtered_tabular_dataframe(), dialog.df_for_grouping)
+        assert list(grouped.dataframe[TABULAR_GROUP_COLUMN]) == ["Fixture A", "POPULATION"]
+
+        dialog.clear_groups_button.click()
+        assert dialog.df_for_grouping is None
+        assert not dialog.grouping_applied
         assert not dialog.clear_groups_button.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def _finish_analytics(dialog) -> None:
+    deadline = time.monotonic() + 15
+    while dialog.analytics_thread is not None and time.monotonic() < deadline:
+        _app().processEvents()
+        time.sleep(0.01)
+    assert dialog.analytics_thread is None
+
+
+def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=()) -> None:
+    from PyQt6.QtCore import QTimer
+
+    observed = []
+
+    def choose():
+        prompt = _app().activeModalWidget()
+        if not isinstance(prompt, QMessageBox) or prompt.parentWidget() is not dialog:
+            return
+        observed.append((prompt.defaultButton().text(), prompt.text()))
+        if choice == "default":
+            prompt.defaultButton().click()
+        elif choice == "cancel":
+            prompt.escapeButton().click()
+        else:
+            next(button for button in prompt.buttons() if button.text() == "Zastąp").click()
+
+    QTimer.singleShot(0, choose)
+    dialog.start_button.click()
+    assert len(observed) == 1
+    assert observed[0][0] == "Zapisz kopię"
+    assert all(str(path) in observed[0][1] for path in (*expected_copy, *shown_existing))
+
+
+def test_tabular_generate_again_defaults_to_copy_and_scopes_replace_to_one_run(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    from metroliza.ui import export_dialog
+
+    source = tmp_path / "measurements.csv"
+    source.write_text("id,diameter\nA,10\nB,12\nC,13\n", encoding="utf-8")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    notices, errors = [], []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *args, **kwargs: notices.append(kwargs["artifacts"]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
+    dashboard = tmp_path / "analysis.html"
+    workbook_folder = tmp_path / "Excel"
+    workbook_folder.mkdir()
+    workbook = workbook_folder / "table.xlsx"
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        dialog.start_button.click()
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (workbook, dashboard)
+        original = (dashboard.read_bytes(), workbook.read_bytes())
+        original_asset_dirs = sorted(tmp_path.glob("*assets*"))
+        assert original_asset_dirs
+        original_assets = {asset: asset.read_bytes() for directory in original_asset_dirs for asset in directory.iterdir()}
+        assert original_assets
+
+        # A workbook-only conflict makes both copied names skip the same ordinal.
+        occupied = workbook_folder / "table (2).xlsx"
+        occupied.write_bytes(b"unrelated workbook")
+        copied_dashboard = tmp_path / "analysis (3).html"
+        copied_workbook = workbook_folder / "table (3).xlsx"
+        dialog.box_checkbox.setChecked(not dialog.box_checkbox.isChecked())
+        _choose_analytics_collision(dialog, "default", (copied_dashboard, copied_workbook))
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (copied_workbook, copied_dashboard)
+        assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+        assert all(path.read_bytes() == content for path, content in original_assets.items())
+        assert occupied.read_bytes() == b"unrelated workbook"
+        copied = (copied_dashboard.read_bytes(), copied_workbook.read_bytes())
+        assert copied[0] != original[0]
+        copied_assets = next(directory for directory in tmp_path.glob("*generation-*") if directory not in original_asset_dirs)
+        assert f'{copied_assets.name}/' in copied[0].decode("utf-8")
+        readback = load_workbook(copied_workbook, read_only=True)
+        try:
+            assert readback.sheetnames
+        finally:
+            readback.close()
+
+        next_copy = (tmp_path / "analysis (4).html", workbook_folder / "table (4).xlsx")
+        _choose_analytics_collision(dialog, "cancel", next_copy)
+        assert dialog.analytics_thread is None
+        assert not any(path.exists() for path in next_copy)
+        assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+        assert len(notices) == 2
+
+        # An unrelated folder sharing the old asset name is never a retirement target.
+        legacy_assets = tmp_path / "analysis_assets"
+        legacy_assets.mkdir()
+        unrelated = legacy_assets / "keep.csv"
+        unrelated.write_bytes(b"unrelated data")
+        _choose_analytics_collision(dialog, "replace", next_copy)
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (workbook, dashboard)
+        assert dashboard.read_bytes() != original[0]
+        assert all(not path.exists() for path in original_asset_dirs)
+        assert (copied_dashboard.read_bytes(), copied_workbook.read_bytes()) == copied
+        assert copied_assets.exists()
+        assert unrelated.read_bytes() == b"unrelated data"
+
+        _choose_analytics_collision(dialog, "cancel", next_copy)
+        assert dialog.analytics_thread is None
+        assert len(notices) == 3
+        assert not list(tmp_path.glob(".mza-*"))
+        assert not list(workbook_folder.glob(".mza-*"))
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_tabular_collision_shows_all_replace_targets_before_asset_generations(tmp_path, monkeypatch):
+    from metroliza.industrial.tabular_output_publication import TabularOutputFiles
+
+    source = tmp_path / "measurements.csv"
+    source.write_text("id,diameter\nA,10\nB,12\nC,13\n", encoding="utf-8")
+    _app()
+    loaded = load_tabular_analytics_file(source)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    dashboard, workbook = tmp_path / "analysis.html", tmp_path / "analysis.xlsx"
+    dashboard.write_bytes(b"existing dashboard")
+    for number in range(12):
+        (tmp_path / f"analysis_assets.generation-{number}").mkdir()
+
+    capture = TabularOutputFiles.replacement_consents
+
+    def add_workbook_then_capture(outputs):
+        workbook.write_bytes(b"late workbook")
+        return capture(outputs)
+
+    monkeypatch.setattr(TabularOutputFiles, "replacement_consents", add_workbook_then_capture)
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        _choose_analytics_collision(dialog, "cancel", (tmp_path / "analysis (2).html", tmp_path / "analysis (2).xlsx"),
+                                    shown_existing=(dashboard, workbook))
+        assert dialog.analytics_thread is None
+        assert workbook.read_bytes() == b"late workbook"
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize("alias", ["same", "hardlink", "symlink"])
+def test_tabular_generate_rejects_workbook_alias_of_excel_input(tmp_path, monkeypatch, alias):
+    source = tmp_path / "measurements.xlsx"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_excel(source, index=False)
+    target = source if alias == "same" else tmp_path / "output.xlsx"
+    if alias != "same":
+        try:
+            (target.hardlink_to if alias == "hardlink" else target.symlink_to)(source)
+        except OSError as exc:
+            pytest.skip(f"Cannot make a {alias} on this system: {type(exc).__name__}")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    errors = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
+    before = source.read_bytes()
+    dashboard = tmp_path / "dashboard.html"
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(target)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        dialog.start_button.click()
+        assert dialog.analytics_thread is None
+        assert errors and "matches a source file" in errors[0]
+        assert before == source.read_bytes() == target.read_bytes()
+        assert not dashboard.exists()
     finally:
         _dispose_dialog(dialog)
 

@@ -240,7 +240,7 @@ def test_csv_filter_group_reopen_and_clear_update_draft_and_next_worker(qapplica
         assert first.tabular_column_filters[0].selected_values == ("East",)
         assert "East" in window.request_summary_label.text()
         window.analytics_thread.finished.emit()
-        window.clear_tabular_filter_and_groups()  # existing clear contract clears both dependent states
+        window.clear_filter_button.click()
         cleared_draft = window.request_summary_label.text()
         assert cleared_draft != filtered_draft
         assert "East" not in cleared_draft
@@ -249,7 +249,7 @@ def test_csv_filter_group_reopen_and_clear_update_draft_and_next_worker(qapplica
         assert second is not first
         assert second.tabular_column_filters == ()
         assert second.tabular_filter_expression == ""
-        assert second.grouping_df is None
+        assert [(row.report_id, row.group) for row in second.grouping_df] == [(1, "Chosen")]
         assert "East" not in window.request_summary_label.text()
         assert "Launch request" in window.request_summary_label.text()
     finally:

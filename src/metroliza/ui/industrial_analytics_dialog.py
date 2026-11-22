@@ -70,6 +70,7 @@ from metroliza.industrial.industrial_analytics_state import (
 from metroliza.industrial.industrial_analytics_workflow import default_dashboard_path, default_workbook_path
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_workers import IndustrialAnalyticsThread, TabularAnalyticsLoadThread
+from metroliza.industrial.tabular_output_publication import TabularOutputFiles, TabularOutputPublication
 from metroliza.exporting.export_dialog_service import build_export_artifact_link_line
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
@@ -710,6 +711,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.grouping_applied = False
         self._grouping_snapshot_owner = _GroupingSnapshotOwner()
         self._pending_analytics_request = None
+        self._pending_output_publication: TabularOutputPublication | None = None
+        self._choosing_output = False
         self._pending_grouping_snapshot: _ValidatedGroupingSnapshot | None = None
         self._auto_group_selected_files = False
         self._tabular_reload_notice = ""
@@ -863,7 +866,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
         self.browse_input_button.clicked.connect(self.select_input_file)
         self.filters_button.clicked.connect(self.open_filters_dialog)
-        self.clear_filter_button.clicked.connect(self.clear_tabular_filter_and_groups)
+        self.clear_filter_button.clicked.connect(self.clear_tabular_filter)
         self.load_metrics_button.clicked.connect(self.handle_load_metrics_clicked)
         self.choose_metrics_button.clicked.connect(self.open_metrics_dialog)
         self.edit_limits_button.clicked.connect(self.open_limits_dialog)
@@ -1683,13 +1686,9 @@ class IndustrialAnalyticsDialog(QDialog):
         self._tabular_row_count_cache = (loaded, (state, revision), count)
         return count
 
-    def clear_tabular_filter_and_groups(self) -> None:
-        if self.is_production_source:
-            return
-        self._auto_group_selected_files = False
-        self._clear_tabular_filter()
-        self._clear_tabular_grouping()
-        self._sync_ui_state()
+    def clear_tabular_filter(self) -> None:
+        if not self.is_production_source and self.tabular_load_result is not None:
+            self._apply_tabular_filter((), "")
 
     def clear_tabular_groups(self) -> None:
         if self.is_production_source:
@@ -1897,11 +1896,9 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        self._apply_tabular_filter_dialog(dialog)
+        self._apply_tabular_filter(dialog.get_column_filters(), dialog.get_filter_expression())
 
-    def _apply_tabular_filter_dialog(self, dialog) -> None:
-        filters = dialog.get_column_filters()
-        expression = dialog.get_filter_expression()
+    def _apply_tabular_filter(self, filters: tuple[TabularColumnFilter, ...], expression: str) -> None:
         loaded = self.tabular_load_result
         previous_grouping = self.df_for_grouping
         try:
@@ -1952,6 +1949,7 @@ class IndustrialAnalyticsDialog(QDialog):
             "Dashboard (HTML)",
             self.output_dashboard_file,
             "HTML dashboard (*.html);;All files (*)",
+            options=QFileDialog.Option(0) if self.is_production_source else QFileDialog.Option.DontConfirmOverwrite,
         )
         if filename:
             path = Path(filename)
@@ -1964,6 +1962,7 @@ class IndustrialAnalyticsDialog(QDialog):
             "Output workbook (XLSX)",
             self.output_workbook_file,
             "Excel workbook (*.xlsx);;All files (*)",
+            options=QFileDialog.Option(0) if self.is_production_source else QFileDialog.Option.DontConfirmOverwrite,
         )
         if filename:
             path = Path(filename)
@@ -2835,12 +2834,13 @@ class IndustrialAnalyticsDialog(QDialog):
     def create_analytics_thread(self) -> IndustrialAnalyticsThread:
         request = self._build_analytics_request()
         snapshot = request._grouping_snapshot
+        publication = self._pending_output_publication
         return IndustrialAnalyticsThread(
             source_kind=request.source_kind,
             db_file=request.db_file,
             input_file=request.input_file,
-            output_dashboard_file=request.output_dashboard_file,
-            output_workbook_file=request.output_workbook_file,
+            output_dashboard_file=str(publication.outputs.dashboard) if publication else request.output_dashboard_file,
+            output_workbook_file=(str(publication.outputs.workbook or "") if publication else request.output_workbook_file),
             metric_selection=request.metric_selection,
             filter_state=request.filter_state,
             aggregation_state=request.aggregation_state,
@@ -2863,17 +2863,86 @@ class IndustrialAnalyticsDialog(QDialog):
                if snapshot is not None else {}),
             dashboard_visual_settings=request.dashboard_visual_settings,
             dashboard_interactivity_options=request.dashboard_interactivity_options,
+            output_publication=publication,
         )
+
+    def _tabular_publication_scope(self) -> tuple:
+        return (self._selected_input_files(), self.output_dashboard_file,
+                self.output_workbook_file if self.workbook_checkbox.isChecked() else "",
+                self._tabular_filter_state_key(), self._grouping_snapshot_owner.revision)
+
+    def _tabular_publication_sources(self, request) -> tuple[Path, ...]:
+        loaded = request.tabular_load_result
+        sources = (*self._selected_input_files(), request.db_file, request.input_file)
+        if loaded is not None:
+            sources += (loaded.source_file, *loaded.source_files)
+            if loaded.sqlite_store is not None:
+                sources += (loaded.sqlite_store.path,)
+        return tuple(Path(value).expanduser().absolute() for value in dict.fromkeys(sources) if value)
+
+    def _confirm_tabular_publication(self, request) -> TabularOutputPublication | None:
+        outputs = TabularOutputFiles.from_paths(request.output_dashboard_file, request.output_workbook_file)
+        sources = self._tabular_publication_sources(request)
+        outputs.validate_sources(sources)
+        conflicts = outputs.conflicts()
+        if not conflicts:
+            return TabularOutputPublication(outputs, sources)
+        consents = outputs.replacement_consents()
+        if consents:
+            conflicts = tuple(dict.fromkeys((*(consent.path for consent in consents), *conflicts)))
+        copy = outputs.free_copy(sources)
+        scope = self._tabular_publication_scope()
+        self._choosing_output = True
+        try:
+            choice = self._choose_tabular_output(conflicts, copy, can_replace=consents is not None)
+        finally:
+            self._choosing_output = False
+        if choice == "cancel":
+            return None
+        if scope != self._tabular_publication_scope() or self.tabular_load_result is not request.tabular_load_result:
+            raise ValueError("Settings changed while choosing outputs. Review the scope and generate again.")
+        if choice == "replace":
+            return TabularOutputPublication(outputs, sources, replace_outputs=consents)
+        return TabularOutputPublication(copy, sources, copy_from=outputs)
+
+    def _choose_tabular_output(self, conflicts, copy, *, can_replace: bool) -> str:
+        prompt = QMessageBox(self)
+        prompt.setWindowTitle("Wynik analizy już istnieje")
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        existing = "\n".join(str(path) for path in conflicts[:10])
+        if len(conflicts) > 10:
+            existing += f"\n… i jeszcze {len(conflicts) - 10}"
+        copied = "\n".join(str(path) for path in copy.paths)
+        prompt.setText(f"Istniejące wyniki\n{existing}\n\nZapisz kopię jako\n{copied}")
+        prompt.setInformativeText(
+            "Opcja „Zastąp” dotyczy tylko tego uruchomienia."
+            if can_replace else "Zastąpienie wymaga zwykłego pliku. Wybierz kopię lub anuluj."
+        )
+        copy_button = prompt.addButton("Zapisz kopię", QMessageBox.ButtonRole.AcceptRole)
+        replace_button = prompt.addButton("Zastąp", QMessageBox.ButtonRole.DestructiveRole)
+        replace_button.setEnabled(can_replace)
+        cancel_button = prompt.addButton("Anuluj", QMessageBox.ButtonRole.RejectRole)
+        prompt.setDefaultButton(copy_button)
+        prompt.setEscapeButton(cancel_button)
+        prompt.exec()
+        if prompt.clickedButton() is copy_button:
+            return "copy"
+        if prompt.clickedButton() is replace_button and can_replace:
+            return "replace"
+        return "cancel"
 
     def show_loading_screen(self) -> None:
         action_started_at = getattr(self, "_analytics_action_started_at", None)
         action_started_at = monotonic() if action_started_at is None else action_started_at
-        if self.tabular_load_thread is not None or self.analytics_thread is not None:
+        if self._choosing_output or self.tabular_load_thread is not None or self.analytics_thread is not None:
             return
         try:
             request = self._build_analytics_request(require_runnable=True)
-        except ValueError as exc:
+            publication = None if self.is_production_source else self._confirm_tabular_publication(request)
+        except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        if not self.is_production_source and publication is None:
             return
         self.output_dashboard_file = request.output_dashboard_file
         if request.output_workbook_file:
@@ -2897,6 +2966,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.loading_bar.setRange(0, 0)
         self._pending_grouping_snapshot = request._grouping_snapshot
         self._pending_analytics_request = request
+        self._pending_output_publication = publication
         try:
             self.analytics_thread = self.create_analytics_thread()
         except ValueError as exc:
@@ -2906,6 +2976,7 @@ class IndustrialAnalyticsDialog(QDialog):
         finally:
             self._pending_grouping_snapshot = None
             self._pending_analytics_request = None
+            self._pending_output_publication = None
         set_output_summary(self.request_summary_label, analytics_summary(getattr(self.analytics_thread, "request", request)))
         self.last_result_row.clear()
         self._worker_progress[self.analytics_thread] = (

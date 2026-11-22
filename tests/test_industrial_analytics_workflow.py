@@ -1159,3 +1159,106 @@ def test_analytics_cancel_after_staged_html_preserves_existing_long_output(tmp_p
             cancel_check=lambda: bool(list(tmp_path.glob('.metroliza-analytics-*.tmp.html'))))
     assert target.read_bytes() == b'previous complete dashboard'
     assert not list(tmp_path.glob('.metroliza-analytics-*.tmp.*'))
+
+
+@pytest.mark.parametrize("choice", ["copy", "replace"])
+def test_tabular_publication_handles_late_dashboard_conflict_without_clobbering_workbook(tmp_path, monkeypatch, choice):
+    from functools import partial
+    from metroliza.industrial import tabular_output_publication as publication
+
+    source = tmp_path / "table.csv"
+    source.write_text("part,value\nA,10\nB,12\n", encoding="utf-8")
+    dashboard, workbook = tmp_path / "report.html", tmp_path / "report.xlsx"
+    dashboard.write_bytes(b"original dashboard")
+    workbook.write_bytes(b"original workbook")
+    files = publication.TabularOutputFiles(dashboard, workbook)
+    sources = (source,)
+    if choice == "copy":
+        plan = publication.TabularOutputPublication(files.free_copy(sources), sources, copy_from=files)
+    else:
+        plan = publication.TabularOutputPublication(files, sources, replace_outputs=files.replacement_consents())
+    late = plan.outputs.dashboard
+    existing_assets = tmp_path / "report_assets"
+    existing_assets.mkdir()
+    (existing_assets / "retained").write_bytes(b"assets")
+    real_publish = publication.publish_output
+    hits = []
+
+    def with_race(temporary, target, **kwargs):
+        if target == late and not hits:
+            hits.append(target)
+            # Arrive after the staged workbook was published and before the HTML commit.
+            assert plan.outputs.workbook.read_bytes().startswith(b"PK")
+            late.write_bytes(b"other writer's dashboard")
+        return real_publish(temporary, target, **kwargs)
+
+    monkeypatch.setattr(publication, "publish_output", with_race)
+    render = partial(run_tabular_file_analytics, input_file=str(source))
+    if choice == "replace":
+        with pytest.raises(FileExistsError, match="changed after confirmation"):
+            publication.publish_tabular_analysis(render, plan, should_cancel=lambda: False)
+        assert not list(tmp_path.glob("*generation-*"))
+    else:
+        result = publication.publish_tabular_analysis(render, plan, should_cancel=lambda: False)
+        assert result.html_dashboard_path == str(tmp_path / "report (3).html")
+        assert result.workbook_path == str(tmp_path / "report (3).xlsx")
+        assert Path(result.workbook_path).read_bytes().startswith(b"PK")
+        assert not plan.outputs.workbook.exists()
+        assert dashboard.read_bytes() == b"original dashboard"
+        assert list(tmp_path.glob("*generation-*")) == [Path(result.html_dashboard_assets_path)]
+    assert hits == [late]
+    assert late.read_bytes() == b"other writer's dashboard"
+    assert workbook.read_bytes() == b"original workbook"
+    assert (existing_assets / "retained").read_bytes() == b"assets"
+    assert not list(tmp_path.glob(".mza-*"))
+    assert not list(tmp_path.glob(".metroliza-previous-*"))
+
+
+def test_tabular_publication_cancel_after_render_keeps_existing_output_family(tmp_path):
+    from metroliza.industrial import tabular_output_publication as publication
+
+    source = tmp_path / "table.csv"
+    source.write_text("part,value\nA,10\nB,12\n", encoding="utf-8")
+    dashboard, workbook = tmp_path / "report.html", tmp_path / "report.xlsx"
+    dashboard.write_bytes(b"original dashboard")
+    workbook.write_bytes(b"original workbook")
+    files = publication.TabularOutputFiles(dashboard, workbook)
+    plan = publication.TabularOutputPublication(files, (source,), replace_outputs=files.replacement_consents())
+    completed = []
+
+    def render(**kwargs):
+        result = run_tabular_file_analytics(input_file=str(source), **kwargs)
+        completed.append(Path(result.workbook_path).read_bytes())
+        return result
+
+    with pytest.raises(publication.OutputPublicationCanceled):
+        publication.publish_tabular_analysis(render, plan, should_cancel=lambda: bool(completed))
+    assert completed[0].startswith(b"PK")
+    assert dashboard.read_bytes() == b"original dashboard"
+    assert workbook.read_bytes() == b"original workbook"
+    assert not list(tmp_path.glob("*generation-*"))
+    assert not list(tmp_path.glob(".mza-*"))
+
+
+def test_tabular_publication_html_copy_ignores_unrequested_workbook(tmp_path):
+    from functools import partial
+    from metroliza.industrial import tabular_output_publication as publication
+
+    source = tmp_path / "table.csv"
+    source.write_text("part,value\nA,10\nB,12\n", encoding="utf-8")
+    dashboard = tmp_path / "report.html"
+    dashboard.write_bytes(b"previous dashboard")
+    occupied_workbook = tmp_path / "report (2).xlsx"
+    occupied_workbook.write_bytes(b"existing workbook")
+    files = publication.TabularOutputFiles(dashboard)
+    sources = (source,)
+    plan = publication.TabularOutputPublication(files.free_copy(sources), sources, copy_from=files)
+
+    result = publication.publish_tabular_analysis(partial(run_tabular_file_analytics, input_file=str(source)),
+                                                  plan, should_cancel=lambda: False)
+
+    assert result.html_dashboard_path == str(tmp_path / "report (2).html")
+    assert Path(result.html_dashboard_path).is_file() and Path(result.html_dashboard_assets_path).is_dir()
+    assert result.workbook_path == ""
+    assert dashboard.read_bytes() == b"previous dashboard"
+    assert occupied_workbook.read_bytes() == b"existing workbook"
