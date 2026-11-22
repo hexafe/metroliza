@@ -6,7 +6,6 @@ images without depending directly on a specific spreadsheet engine.
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 from dataclasses import dataclass
 import math
 import os
@@ -18,7 +17,7 @@ from typing import Any, Protocol
 import xlsxwriter
 
 from metroliza.exporting.output_publication import (
-    OutputPublicationCanceled, _entry_path, output_paths, publish_output, retry_output_copy,
+    OutputPublicationCanceled, output_paths, publish_output, retry_output_copy,
 )
 
 from metroliza.exporting.xlsx_bulk_sheet import (
@@ -802,21 +801,10 @@ class ExcelExportBackend:
         return outcome
 
     def _publish_workbook(self, thread, temporary, target):
-        from metroliza.charts.export_html_dashboard import _dashboard_publication_lock
-
-        def should_cancel():
-            return getattr(thread, "export_canceled", False)
-
-        consents = getattr(thread, "replace_outputs", ())
-        entry = _entry_path(target)
-        # Fresh names publish atomically without replacing. The existing target's
-        # consent check and replacement share the filesystem lock with CSV Summary.
-        lock = (_dashboard_publication_lock(target, should_cancel=should_cancel)
-                if any(consent.path == entry for consent in consents) else nullcontext())
-        with lock:
-            if should_cancel():
-                raise OutputPublicationCanceled()
-            publish_output(temporary, target, consents=consents, replace=self.replace_workbook)
+        publish_output(
+            temporary, target, consents=getattr(thread, "replace_outputs", ()), replace=self.replace_workbook,
+            should_cancel=lambda: getattr(thread, "export_canceled", False),
+        )
 
 
 def _record_workbook_path(thread, published_path):

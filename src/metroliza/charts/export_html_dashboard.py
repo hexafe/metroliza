@@ -17,6 +17,7 @@ import shutil
 from threading import local, Lock, RLock
 from time import perf_counter, sleep
 from typing import Any, Iterator
+from unicodedata import normalize
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
@@ -193,9 +194,12 @@ def _dashboard_thread_lock(lock_path: Path) -> RLock:
 
 def _output_lock_path(output_path: Path) -> Path:
     canonical_path = _canonical_path_entry(output_path)
+    # POSIX may mount case-insensitive volumes. Fold spelling before hashing a
+    # bounded sidecar name so those aliases still lock the same directory entry.
+    name = normalize("NFC", canonical_path.name).casefold()
     return canonical_path.with_name(
         _bounded_dashboard_component(
-            f".{canonical_path.name}", suffix=".publish.lock",
+            f".{name}", suffix=".publish.lock",
             max_bytes=_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES,
         )
     )

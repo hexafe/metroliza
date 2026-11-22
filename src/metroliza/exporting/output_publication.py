@@ -117,9 +117,8 @@ def _rename_noreplace(temporary, target):
 def _rename_without_hardlink(temporary, target):
     """Publish complete content atomically where hard links are unavailable (e.g. vfat/exFAT/CIFS).
 
-    The final name never holds partial content. Without kernel no-replace support
-    an existence check precedes the atomic rename; only a writer racing inside
-    that window could still be replaced (documented limitation).
+    The caller holds the shared destination lock across the check and rename.
+    A process that ignores the lock could still create the target in this window.
     """
     if _rename_noreplace(temporary, target):
         return
@@ -142,30 +141,41 @@ def _publish_new_output(temporary, target):
     temporary.unlink()
 
 
-def publish_output(temporary, target, *, consents=(), replace=None):
-    """Publish a complete file, refusing an unapproved collision even after a race.
+def publish_output(temporary, target, *, consents=(), replace=None, should_cancel=None):
+    """Publish a complete file under the shared destination lock.
 
-    Windows rename refuses an existing destination; on POSIX a hard link provides
-    atomic no-clobber publication on the same filesystem. Explicit replacement
-    retains temp-file + os.replace publication. Filesystems without hard links use
-    an atomic no-replace rename (see ``_rename_without_hardlink``); the final name
-    never receives partial content.
+    Every cooperating writer takes the same lock because a kernel no-replace
+    writer could otherwise race a legacy check-and-rename writer. The native
+    no-replace paths also refuse collisions with uncoordinated writers.
     """
-    temporary, target = Path(temporary), Path(target)
-    consent = next((item for item in consents if item.path == _entry_path(target)), None)
+    from metroliza.charts.export_html_dashboard import _dashboard_publication_lock, _output_lock_path
+
+    temporary, target = Path(temporary), _entry_path(target)
+    consent = next((item for item in consents if item.path == target), None)
     try:
-        if consent is not None and os.path.lexists(target):
-            if _identity(target) != consent.identity:
-                raise FileExistsError(f"Output changed after confirmation: {target}. Save a copy or confirm again.")
-            (replace or os.replace)(temporary, target)
-        else:
-            try:
-                _publish_new_output(temporary, target)
-            except FileExistsError as exc:
-                raise FileExistsError(f"Output already exists: {target}. Save a copy or confirm Replace again.") from exc
+        with _dashboard_publication_lock(target, should_cancel=should_cancel):
+            if should_cancel is not None and should_cancel():
+                raise OutputPublicationCanceled()
+            _publish_locked_output(temporary, target, consent, replace)
+    except FileNotFoundError as exc:
+        if exc.filename == str(_output_lock_path(target)):
+            raise FileNotFoundError(exc.errno, exc.strerror, str(temporary), None, str(target)) from exc
+        raise
     except PermissionError as exc:
         guidance = "Close it in Excel or choose Save a copy" if consent is not None or _WINDOWS else "Check folder permissions and filesystem support"
         raise PermissionError(f"Cannot publish {target}. {guidance}; the existing file was kept.") from exc
+
+
+def _publish_locked_output(temporary, target, consent, replace):
+    if consent is not None and os.path.lexists(target):
+        if _identity(target) != consent.identity:
+            raise FileExistsError(f"Output changed after confirmation: {target}. Save a copy or confirm again.")
+        (replace or os.replace)(temporary, target)
+        return
+    try:
+        _publish_new_output(temporary, target)
+    except FileExistsError as exc:
+        raise FileExistsError(f"Output already exists: {target}. Save a copy or confirm Replace again.") from exc
 
 
 def _move_dashboard_assets(source, destination):

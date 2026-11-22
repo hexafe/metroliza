@@ -8,6 +8,7 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 import errno
+import os
 import time
 import zipfile
 
@@ -30,6 +31,7 @@ def _export_thread(target, *, cancel=False, race=False):
 
 
 def test_export_existing_target_without_consent_keeps_old_bytes(tmp_path):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
     from metroliza.exporting.export_backends import ExcelExportBackend
 
     target = tmp_path / "export.xlsx"
@@ -37,17 +39,18 @@ def test_export_existing_target_without_consent_keeps_old_bytes(tmp_path):
     with pytest.raises(FileExistsError, match="Save a copy"):
         ExcelExportBackend().run(_export_thread(target))
     assert target.read_bytes() == b"last complete workbook"
-    assert set(tmp_path.iterdir()) == {target}
+    assert set(tmp_path.iterdir()) == {target, _output_lock_path(target)}
 
 
 def test_export_race_created_after_check_does_not_replace_target(tmp_path):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
     from metroliza.exporting.export_backends import ExcelExportBackend
 
     target = tmp_path / "export.xlsx"
     with pytest.raises(FileExistsError, match="Save a copy"):
         ExcelExportBackend().run(_export_thread(target, race=True))
     assert target.read_bytes() == b"created by another operation"
-    assert set(tmp_path.iterdir()) == {target}
+    assert set(tmp_path.iterdir()) == {target, _output_lock_path(target)}
 
 
 @pytest.mark.parametrize("locked", [False, True])
@@ -90,6 +93,29 @@ def test_export_cancel_keeps_old_target(tmp_path):
     assert not ExcelExportBackend().run(_export_thread(target, cancel=True))
     assert target.read_bytes() == b"old workbook"
     assert set(tmp_path.iterdir()) == {target}
+
+
+def test_publication_missing_output_directory_reports_requested_target(tmp_path):
+    from metroliza.exporting.output_publication import publish_output
+
+    staged = tmp_path / "staged.xlsx"
+    staged.write_bytes(b"complete synthetic workbook")
+    target = tmp_path / "missing" / "output.xlsx"
+    with pytest.raises(FileNotFoundError) as caught:
+        publish_output(staged, target)
+    assert caught.value.filename == str(staged)
+    assert caught.value.filename2 == str(target)
+    assert set(tmp_path.iterdir()) == {staged}
+
+
+def test_long_case_aliases_share_the_output_lock(tmp_path):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
+
+    upper = _output_lock_path(tmp_path / ("M" * 200 + ".XLSX"))
+    lower = _output_lock_path(tmp_path / ("m" * 200 + ".xlsx"))
+    other = _output_lock_path(tmp_path / ("m" * 199 + "a.xlsx"))
+    assert upper == lower and upper != other
+    assert len(upper.name.encode("utf-8")) <= 80
 
 
 def test_report_and_analytics_workbook_commits_cannot_both_use_the_same_consent(tmp_path, monkeypatch):
@@ -145,20 +171,30 @@ class _StagedAnalyticsResult:
 
 
 def _publish_held_report_workbook(target, consent, replacing, release):
-    import os
-
+    from metroliza.exporting import output_publication
     from metroliza.exporting.export_backends import ExcelExportBackend
 
     thread = _export_thread(target)
-    thread.replace_outputs = (consent,)
     backend = ExcelExportBackend()
+    commit = os.replace if consent is not None else os.rename
 
-    def replace_when_released(source, destination):
-        replacing.set()  # consent was checked before ExcelExportBackend calls replace
-        assert release.wait(30)
-        os.replace(source, destination)
+    def commit_when_released(source, destination):
+        if Path(destination) == target:
+            replacing.set()  # consent or absence has already been checked
+            assert release.wait(30)
+        commit(source, destination)
 
-    backend.replace_workbook = replace_when_released
+    if consent is not None:
+        thread.replace_outputs = (consent,)
+        backend.replace_workbook = commit_when_released
+    else:
+        def unsupported_hardlink(*_args):
+            raise OSError(errno.EOPNOTSUPP, "synthetic filesystem without hard links")
+
+        output_publication._WINDOWS = False
+        output_publication.os.link = unsupported_hardlink
+        output_publication._rename_noreplace = lambda *_args: False
+        output_publication.os.rename = commit_when_released
     assert backend.run(thread)
 
 
@@ -205,24 +241,52 @@ def _join_publication_process(process):
         process.join(5)
 
 
-def test_report_replace_and_csv_publish_serialize_in_separate_processes(tmp_path):
+def _publish_competing_fresh_workbook(target, waiting, result):
+    from metroliza.exporting.output_publication import publish_output
+
+    stage = target.parent / "other-staged.xlsx"
+    try:
+        stage.write_bytes(b"completed standalone workbook")
+        waiting.set()
+        publish_output(stage, target)
+    except FileExistsError as error:
+        result.send(str(error))
+    else:
+        result.send("published")
+    finally:
+        stage.unlink(missing_ok=True)
+        result.close()
+
+
+@pytest.mark.parametrize("mode", [
+    "replace", pytest.param("legacy", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX rename fallback")),
+    pytest.param("mixed", marks=pytest.mark.skipif(os.name == "nt", reason="POSIX rename fallback")),
+])
+def test_report_and_competing_publication_serialize_in_separate_processes(tmp_path, mode):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
     from metroliza.exporting.output_publication import OutputConsent
 
     target, dashboard = tmp_path / "shared.xlsx", tmp_path / "csv.html"
-    target.write_bytes(b"existing workbook")
-    dashboard.write_bytes(b"existing dashboard")
-    workbook_consent = OutputConsent.for_path(target)
-    consents = (OutputConsent.for_path(dashboard), workbook_consent)
+    if mode == "replace":
+        target.write_bytes(b"existing workbook")
+        dashboard.write_bytes(b"existing dashboard")
+        workbook_consent = OutputConsent.for_path(target)
+        consents = (OutputConsent.for_path(dashboard), workbook_consent)
+    else:
+        workbook_consent = consents = None
     context = get_context("spawn")
     replacing, release, competing = (context.Event() for _ in range(3))
     receiver, sender = context.Pipe(duplex=False)
     report = context.Process(target=_publish_held_report_workbook, args=(target, workbook_consent, replacing, release))
-    csv = context.Process(target=_publish_competing_analytics_family,
-                          args=(target, dashboard, consents, competing, sender))
+    if mode == "mixed":
+        contender = context.Process(target=_publish_competing_fresh_workbook, args=(target, competing, sender))
+    else:
+        contender = context.Process(target=_publish_competing_analytics_family,
+                                    args=(target, dashboard, consents, competing, sender))
     report.start()
     try:
         assert replacing.wait(20)
-        csv.start()
+        contender.start()
         sender.close()
         assert competing.wait(20)
         # The other process must wait even with a complete staged output and valid original consent.
@@ -230,14 +294,20 @@ def test_report_replace_and_csv_publish_serialize_in_separate_processes(tmp_path
     finally:
         release.set()
         _join_publication_process(report)
-        if csv.pid is not None:
-            _join_publication_process(csv)
+        if contender.pid is not None:
+            _join_publication_process(contender)
         sender.close()
     with receiver:
-        assert report.exitcode == csv.exitcode == 0
-        assert receiver.poll(2) and "changed after confirmation" in receiver.recv()
-    assert dashboard.read_bytes() == b"existing dashboard"
-    assert not list(tmp_path.glob("*.generation-*"))
+        assert report.exitcode == contender.exitcode == 0
+        expected_error = "changed after confirmation" if mode == "replace" else "already exists"
+        assert receiver.poll(2) and expected_error in receiver.recv()
+    expected = {target, _output_lock_path(target)}
+    if mode != "mixed":
+        expected.add(_output_lock_path(dashboard))
+    if mode == "replace":
+        expected.add(dashboard)
+        assert dashboard.read_bytes() == b"existing dashboard"
+    assert set(tmp_path.iterdir()) == expected
     with zipfile.ZipFile(target) as archive:
         assert b"NOK" in archive.read("xl/sharedStrings.xml")
 

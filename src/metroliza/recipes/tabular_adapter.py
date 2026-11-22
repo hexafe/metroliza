@@ -420,7 +420,7 @@ class AnalyticsRecipePorts:
             if workbook:
                 if cancelled():
                     raise OutputPublicationCanceled()
-                publish_output(workbook, request.output_workbook_file, consents=consents)
+                publish_output(workbook, request.output_workbook_file, consents=consents, should_cancel=cancelled)
             return replace(result_holder[0], html_dashboard_path=published["html_dashboard_path"],
                            html_dashboard_assets_path=published["html_dashboard_assets_path"],
                            workbook_path=request.output_workbook_file)
