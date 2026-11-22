@@ -1,7 +1,7 @@
 """Typed recipe cards and local parameter controls; no executing editor expressions."""
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -40,7 +40,7 @@ class RecipeEditor(QDialog):
         self.dates.setChecked(any(p.key is ParameterKey.DATE_FROM
                                  for p in self.service.current.definition.parameters))
         self.html = QCheckBox("Utwórz także raport HTML")
-        self.html.setChecked(any(s.kind is StepKind.EXPORT_HTML for s in stored.definition.steps))
+        self._optional_html = any(s.kind is StepKind.EXPORT_HTML for s in stored.definition.steps)
         self.groups = QLineEdit()
         self.groups.setPlaceholderText(", ".join(GROUP_LABELS.values()))
         self.report_controls = QWidget()
@@ -54,13 +54,13 @@ class RecipeEditor(QDialog):
         group_row.addWidget(self.groups)
         group_row.addWidget(self.group_mode)
         report_layout.addRow("Grupuj według", group_row)
-        self.groups.textChanged.connect(lambda text: self.group_mode.setEnabled(bool(text.strip())))
+        self.groups.textChanged.connect(self._update_group_options)
         self.group_mode.activated.connect(self._mark_modified)
         report_layout.addRow(self.html)
         layout.addWidget(self.report_controls)
         kinds = {step.kind for step in stored.definition.steps}
         self.report_controls.setVisible(bool(kinds & {StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE}))
-        self.html.setEnabled(StepKind.EXPORT_MAIN in kinds)
+        self._has_excel = StepKind.EXPORT_MAIN in kinds
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         layout.addWidget(self.scroll)
@@ -81,7 +81,7 @@ class RecipeEditor(QDialog):
         layout.addLayout(actions)
         self.name.textEdited.connect(self._mark_modified)
         self.dates.toggled.connect(self._mark_modified)
-        self.html.toggled.connect(self._mark_modified)
+        self.html.toggled.connect(self._select_optional_html)
         self.groups.textEdited.connect(self._mark_modified)
         self._refresh()
 
@@ -89,20 +89,30 @@ class RecipeEditor(QDialog):
         self._widgets_dirty = True
         self.status.setText("Niezapisane zmiany")
 
+    def _select_optional_html(self, checked):
+        self._optional_html = checked
+        self._mark_modified()
+
+    def _update_group_options(self):
+        grouped = bool(parse_parameter_list(ParameterKey.GROUPING_RULES, self.groups.text()))
+        self.group_mode.setEnabled(grouped)
+        self.html.setEnabled(self._has_excel and not grouped)
+        self.html.setText("Raport HTML jest wymagany do grupowania" if grouped else "Utwórz także raport HTML")
+        with QSignalBlocker(self.html):
+            self.html.setChecked(grouped or not self._has_excel or self._optional_html)
+
     def _refresh(self):
         self.cards.clear()
         for step in self.service.current.definition.steps:
             self.cards.addItem(STEP_LABELS[step.kind])
         current = self.service.current
-        kinds = {step.kind for step in current.definition.steps}
         self.groups.setText(format_parameter_list(
             ParameterKey.GROUPING_RULES, current.binding.value(ParameterKey.GROUPING_RULES, ()),
         ))
         group_mode = next((p.mode for p in current.definition.parameters if p.key is ParameterKey.GROUPING_RULES),
                           ParameterMode.FIXED)
         self.group_mode.setCurrentIndex(self.group_mode.findData(group_mode))
-        self.group_mode.setEnabled(bool(self.groups.text().strip()))
-        self.html.setChecked(StepKind.EXPORT_HTML in kinds)
+        self._update_group_options()
         widget = QWidget()
         form = QFormLayout(widget)
         self.controls = {}

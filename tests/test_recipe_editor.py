@@ -235,7 +235,12 @@ def test_one_save_commits_visible_report_options_and_polish_labels(qapplication_
         assert mode.currentText() == "Pytaj przy każdym uruchomieniu"
         assert mode.currentData() is spec.mode
         editor.dates.setChecked(True)
-        editor.html.setChecked(True)
+        assert not editor.html.isChecked()
+        editor.groups.setText("Rewizja")
+        assert editor.html.isChecked() and not editor.html.isEnabled()
+        assert "wymagany do grupowania" in editor.html.text()
+        editor.groups.clear()
+        assert editor.html.isEnabled() and not editor.html.isChecked()
         editor.groups.setText("Rewizja")
         editor.group_mode.setCurrentIndex(editor.group_mode.findData(ParameterMode.PROMPT))
         next(b for b in editor.findChildren(QPushButton) if b.text() == "Zapisz recepturę").click()
