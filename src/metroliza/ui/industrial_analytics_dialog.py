@@ -799,6 +799,7 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.analytics_thread = None
         self.tabular_load_thread = None
+        self._applying_tabular_load = None
         self._worker_progress = {}
         self.metric_candidates: tuple[ProductionMetricSelection, ...] = ()
         self.metric_spec_limits: dict[str, tuple[float | None, float | None]] = {}
@@ -2994,10 +2995,18 @@ class IndustrialAnalyticsDialog(QDialog):
             )
 
     def on_tabular_load_finished(self, loaded) -> None:
-        # Reconciliation can run a nested event loop that retires this signal's
-        # originating thread. Resolve its progress owner before that can happen.
-        self._close_worker_progress()
-        self._apply_tabular_load_result(loaded)
+        # A nested reconciliation loop may retire this slot's originating
+        # thread. Keep the progress owner without asking Qt for sender again.
+        owner = self.sender()
+        self._applying_tabular_load = owner
+        try:
+            self._apply_tabular_load_result(loaded)
+        finally:
+            self._applying_tabular_load = None
+            if owner is None:
+                self._close_worker_progress()
+            else:
+                self._dispose_worker_progress(owner)
 
     def on_tabular_load_error(self, message: str) -> None:
         self._close_worker_progress()
@@ -3017,7 +3026,8 @@ class IndustrialAnalyticsDialog(QDialog):
         if thread is not None:
             thread.wait()
             thread.deleteLater()
-            self._dispose_worker_progress(thread)
+            if thread is not self._applying_tabular_load:
+                self._dispose_worker_progress(thread)
         if self.tabular_load_thread is thread:
             self.tabular_load_thread = None
         self._sync_ui_state()
