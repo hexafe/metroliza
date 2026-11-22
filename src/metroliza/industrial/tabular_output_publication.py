@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory, mkdtemp
+from unicodedata import normalize
 
 from metroliza.exporting.output_publication import (
     OutputConsent,
@@ -147,13 +148,21 @@ def _render_and_publish(render, publication, outputs, should_cancel):
                    workbook_path=str(outputs.workbook) if outputs.workbook is not None else "")
 
 
+def _output_lock_order(path: Path):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
+
+    lock = _output_lock_path(path)
+    # Order the shared locks themselves, including when output spellings differ.
+    return lock.name, normalize("NFC", str(lock.parent).casefold()), lock.parent
+
+
 def _publish_staged(result, staged_assets, staged_workbook, publication, outputs, should_cancel):
     from metroliza.charts.export_html_dashboard import _dashboard_publication_lock
 
     destination_assets = outputs.dashboard.parent / staged_assets.name
     consents = publication.replace_outputs or ()
     with ExitStack() as stack:
-        for path in sorted(outputs.paths):
+        for path in sorted(outputs.paths, key=_output_lock_order):
             stack.enter_context(_dashboard_publication_lock(path, should_cancel=should_cancel))
         _check_cancelled(should_cancel)
         publication.check(outputs)

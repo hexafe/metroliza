@@ -1214,6 +1214,37 @@ def test_tabular_publication_handles_late_dashboard_conflict_without_clobbering_
     assert not list(tmp_path.glob(".metroliza-previous-*"))
 
 
+def test_tabular_publication_acquires_case_alias_sidecars_in_the_same_order(tmp_path, monkeypatch):
+    from functools import partial
+
+    from metroliza.charts import export_html_dashboard
+    from metroliza.industrial import tabular_output_publication as publication
+
+    source = tmp_path / "table.csv"
+    source.write_text("part,value\nA,10\nB,12\n", encoding="utf-8")
+    render = partial(run_tabular_file_analytics, input_file=str(source))
+    expected = tuple(tmp_path.resolve() / name for name in (".a.html.publish.lock", ".b.xlsx.publish.lock"))
+    acquired = []
+    lock = export_html_dashboard._lock_dashboard_publication_file
+
+    def observe_lock(handle, should_cancel):
+        lock(handle, should_cancel)
+        path = Path(handle.name)
+        if path in expected:
+            acquired.append(path)
+
+    monkeypatch.setattr(export_html_dashboard, "_lock_dashboard_publication_file", observe_lock)
+    for names in (("A.html", "b.xlsx"), ("a.html", "B.xlsx")):
+        outputs = publication.TabularOutputFiles(*(tmp_path / name for name in names))
+        plan = publication.TabularOutputPublication(outputs, (source,))
+        acquired.clear()
+        with pytest.raises(publication.OutputPublicationCanceled):
+            # Stop after the acquisition sequence, before either family changes a final name.
+            publication.publish_tabular_analysis(render, plan, should_cancel=lambda: len(acquired) == 2)
+        assert tuple(acquired) == expected
+    assert set(tmp_path.resolve().iterdir()) == {source.resolve(), *expected}
+
+
 def test_tabular_publication_cancel_after_render_keeps_existing_output_family(tmp_path):
     from metroliza.industrial import tabular_output_publication as publication
 
