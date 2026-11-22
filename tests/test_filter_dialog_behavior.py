@@ -691,8 +691,9 @@ def test_all_dates_default_and_return_include_undated_and_outside_calendar(date_
     dialog.date_range_selector.setCurrentText("All dates")
     assert dialog._draft_snapshot() == original
     assert dialog.apply_filters() is True
+    from contextlib import closing
     import sqlite3
-    with sqlite3.connect(":memory:") as connection:
+    with closing(sqlite3.connect(":memory:")) as connection:
         from metroliza.reports.report_schema import ensure_report_schema
         ensure_report_schema(":memory:", connection=connection)
         connection.execute("CREATE TEMP TABLE vw_measurement_export AS SELECT * FROM main.vw_measurement_export LIMIT 0")
