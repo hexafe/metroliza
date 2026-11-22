@@ -108,6 +108,7 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
     import fitz
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QFileDialog, QMessageBox
+    from metroliza.app.analysis_history import capture_source_stamp
     from metroliza.ui import export_dialog
     from metroliza.ui.parsing_dialog import ParsingDialog
     from tests.test_report_planner_integration import wait_until
@@ -176,10 +177,12 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
             grouping.create_group()
         QTest.keyClick(grouping.use_grouping_button, Qt.Key.Key_Space)
 
+        submitted_stamp = capture_source_stamp(database)
         QTest.keyClick(export.export_button, Qt.Key.Key_Space)
         wait_until(app, lambda: export.export_thread is None)
         assert len(records) == 1
         assert records[0]["source"] == str(database)
+        assert records[0]["source_stamp"] == submitted_stamp
         assert records[0]["kind"] == "reports"
         assert records[0]["settings"]["Filters"] == "AX: X"
         assert "Batch A" in records[0]["settings"]["Grouping"]

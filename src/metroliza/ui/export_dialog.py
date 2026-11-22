@@ -357,6 +357,8 @@ class ExportDialog(QDialog):
     database_context_transition_active = False
 
     def __init__(self, parent=None, db_file=""):
+        from metroliza.ui.export_option_profiles import ExportOptionProfiles
+
         super().__init__(parent)
 
         self.setWindowTitle("Export")
@@ -379,6 +381,7 @@ class ExportDialog(QDialog):
         self.grouping_window = None
         self.export_thread = None
         self._submitted_export_request = None
+        self._submitted_source_stamp = None
         self.export_error_message = None
         self._cancel_requested = False
         self._close_requested = False
@@ -388,6 +391,8 @@ class ExportDialog(QDialog):
         self._grouping_applied = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
+        self._export_option_profiles = ExportOptionProfiles()
+        self._saved_presets = {profile.profile_id: profile for profile in self._export_option_profiles.load()}
         self.dashboard_visual_settings = load_dashboard_visual_settings()
 
         self.init_widgets()
@@ -414,7 +419,7 @@ class ExportDialog(QDialog):
     def _save_dialog_config(self):
         """Persist currently selected preset to the user config file."""
         try:
-            self.config['selected_preset'] = self._active_preset_id()
+            self.config['selected_preset'] = self._base_preset_id(self._active_preset_id())
             save_export_dialog_config(self.config_path, self.config)
         except Exception as e:
             self.log_and_exit(e)
@@ -432,9 +437,9 @@ class ExportDialog(QDialog):
             if any(not hasattr(self, control_name) for control_name in required_controls):
                 return
 
-            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
+            selected_preset = self._requested_preset_id()
             self._applied_preset_id = selected_preset
-            preset_options = build_export_options_for_preset(selected_preset)
+            preset_options = self._preset_options(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
             initial_profile = not getattr(self, "_chart_profile_loaded", False)
@@ -444,6 +449,7 @@ class ExportDialog(QDialog):
                 self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
             self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
+            self._apply_saved_output_choices(selected_preset)
             self._sync_html_dashboard_only_state()
             self._preview_selected_preset()
             self._save_dialog_config()
@@ -525,13 +531,19 @@ class ExportDialog(QDialog):
             self.preset_label = QLabel("Preset:")
             self.preset_combobox = QComboBox()
             for preset_id in get_export_preset_ids():
-                self.preset_combobox.addItem(get_export_preset_label(preset_id))
+                self.preset_combobox.addItem(get_export_preset_label(preset_id), preset_id)
+            for profile in self._saved_presets.values():
+                self._add_saved_preset_choice(profile)
             selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
             self.apply_preset_button = QPushButton("Apply preset")
             self.apply_preset_button.setAutoDefault(False)
             self.apply_preset_button.clicked.connect(self.apply_selected_preset)
+            self.save_options_button = QPushButton("Save options as…")
+            self.save_options_button.setAutoDefault(False)
+            self.save_options_button.clicked.connect(self._save_option_profile)
             self.preset_preview_label = status_chip("", "info")
+            self.preset_preview_label.setTextFormat(Qt.TextFormat.PlainText)
             self.preset_preview_label.setWordWrap(True)
             self.preset_preview_label.hide()
             self.preset_combobox.currentTextChanged.connect(self._preview_selected_preset)
@@ -715,7 +727,10 @@ class ExportDialog(QDialog):
             row += 1
             content_layout.addWidget(self.preset_label, row, 0)
             content_layout.addWidget(self.preset_combobox, row, 1, 1, 2)
-            content_layout.addWidget(self.apply_preset_button, row, 3)
+            preset_actions = QHBoxLayout()
+            preset_actions.addWidget(self.apply_preset_button)
+            preset_actions.addWidget(self.save_options_button)
+            content_layout.addLayout(preset_actions, row, 3)
             row += 1
             content_layout.addWidget(self.preset_preview_label, row, 0, 1, 4)
 
@@ -868,7 +883,8 @@ class ExportDialog(QDialog):
             )
 
             self.setTabOrder(self.preset_combobox, self.apply_preset_button)
-            self.setTabOrder(self.apply_preset_button, self.select_db_button)
+            self.setTabOrder(self.apply_preset_button, self.save_options_button)
+            self.setTabOrder(self.save_options_button, self.select_db_button)
             self.setTabOrder(self.select_db_button, self.scope_combobox)
             self.setTabOrder(self.scope_combobox, self.select_excel_button)
             self.setTabOrder(self.select_excel_button, self.filter_button)
@@ -1012,7 +1028,8 @@ class ExportDialog(QDialog):
 
     def _requested_preset_id(self):
         combobox = getattr(self, "preset_combobox", None)
-        return get_export_preset_id_for_label(combobox.currentText() if combobox is not None else "")
+        preset_id = getattr(combobox, "currentData", lambda: None)()
+        return preset_id or get_export_preset_id_for_label(combobox.currentText() if combobox is not None else "")
 
     def _active_preset_id(self):
         return getattr(self, "_applied_preset_id", self._requested_preset_id())
@@ -1021,7 +1038,40 @@ class ExportDialog(QDialog):
         return self._requested_preset_id() != self._active_preset_id()
 
     def _selected_preset_options(self):
-        return build_export_options_for_preset(self._active_preset_id())
+        return self._preset_options(self._active_preset_id())
+
+    def _custom_profile(self, preset_id):
+        return getattr(self, "_saved_presets", {}).get(preset_id)
+
+    def _base_preset_id(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        return profile.base_preset if profile else preset_id
+
+    def _preset_name(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        return profile.name if profile else get_export_preset_label(preset_id)
+
+    def _preset_options(self, preset_id):
+        options = build_export_options_for_preset(self._base_preset_id(preset_id))
+        profile = self._custom_profile(preset_id)
+        if profile:
+            options.update(profile.chart_options())
+        return options
+
+    def _add_saved_preset_choice(self, profile):
+        label = f"{profile.name} (saved)"
+        index = self.preset_combobox.findData(profile.profile_id)
+        if index == -1:
+            self.preset_combobox.addItem(label, profile.profile_id)
+        else:
+            self.preset_combobox.setItemText(index, label)
+
+    def _apply_saved_output_choices(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        if profile:
+            self._html_dashboard_preference = profile.local_html
+            self.include_google_sheets_checkbox.setChecked(profile.google_sheets)
+            self.include_industrial_context_checkbox.setChecked(profile.industrial_context)
 
     def _preview_selected_preset(self, _label=None):
         preview = getattr(self, "preset_preview_label", None)
@@ -1030,20 +1080,67 @@ class ExportDialog(QDialog):
         requested = self._requested_preset_id()
         pending = self._preset_pending()
         if pending:
-            options = build_export_options_for_preset(requested)
-            description = get_export_preset_description(requested)
+            options = self._preset_options(requested)
+            description = get_export_preset_description(self._base_preset_id(requested))
             sort = "Date" if options["sorting_parameter"] == "date" else "Sample number"
             hide_ok = "On" if options["hide_ok_results"] else "Off"
             preview.setText(
-                f"Active preset: {get_export_preset_label(self._active_preset_id())}. {description}\n"
+                f"Active preset: {self._preset_name(self._active_preset_id())}. {description}\n"
                 f"Chart type: {options['export_type'].title()}. Sort by: {sort}. "
                 f"Hide OK-only columns: {hide_ok}. Violin min n: {options['violin_plot_min_samplesize']}. "
                 f"Y-limit x: {options['summary_plot_scale']}."
+                + self._saved_output_description(requested)
             )
             preview.setAccessibleDescription(preview.text())
         preview.setVisible(pending)
         self.apply_preset_button.setEnabled(pending)
+        self.save_options_button.setEnabled(not pending)
         self._update_export_button_enabled_state()
+
+    def _saved_output_description(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        if profile is None:
+            return ""
+        return (
+            f"\nOptional HTML: {'On' if profile.local_html else 'Off'}. "
+            f"Google Sheets: {'On' if profile.google_sheets else 'Off'}. "
+            f"Industrial context: {'On' if profile.industrial_context else 'Off'}."
+        )
+
+    def _save_option_profile(self):
+        from PyQt6.QtWidgets import QInputDialog
+        from metroliza.ui.export_option_profiles import ExportOptionProfile
+
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            self.advanced_toggle_button.setChecked(True)
+            invalid_field.setFocus()
+            return
+        name, accepted = QInputDialog.getText(self, "Save export options", "Profile name")
+        if not accepted:
+            return
+        profile = ExportOptionProfile(
+            name.strip(), self._base_preset_id(self._active_preset_id()),
+            self.export_type_combobox.currentText().lower(),
+            self.sort_measurements_combobox.currentText().lower(),
+            int(self.violin_plot_min_samplesize.text()), int(self.summary_plot_scale.text()),
+            self.hide_ok_results_checkbox.isChecked(), self._html_dashboard_preference,
+            self.include_google_sheets_checkbox.isChecked(), self.include_industrial_context_checkbox.isChecked(),
+        )
+        if self._custom_profile(profile.profile_id) and QMessageBox.question(
+            self, "Replace profile?", "Replace the settings of the existing profile with this name?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._export_option_profiles.save(profile)
+        except (OSError, ValueError):
+            QMessageBox.warning(self, "Save export options", "Could not save this profile. Check its name and settings.")
+            return
+        self._saved_presets[profile.profile_id] = profile
+        self._add_saved_preset_choice(profile)
+        self.preset_preview_label.setText(f"Saved profile: {profile.name}.")
+        self.preset_preview_label.setVisible(True)
 
     def _is_html_dashboard_only(self):
         return self._selected_preset_options().get("export_target") == "html_dashboard"
@@ -1199,7 +1296,7 @@ class ExportDialog(QDialog):
         output_kind = "Dashboard" if html_only else "Output workbook"
         db_summary = self._summary_path_name(db_file, missing_label="not selected")
         output_summary = self._summary_path_name(output_file, missing_label="not selected")
-        preset_summary = get_export_preset_label(self._active_preset_id())
+        preset_summary = self._preset_name(self._active_preset_id())
 
         if html_only:
             html_summary = "standalone"
@@ -1636,7 +1733,7 @@ class ExportDialog(QDialog):
             raise ValueError("The last import selection expired. Choose the report scope again.")
         violin_input = self.violin_plot_min_samplesize.text()
         summary_scale_input = self.summary_plot_scale.text()
-        selected_preset = self._active_preset_id()
+        selected_preset = self._base_preset_id(self._active_preset_id())
         request = build_validated_export_request(
             db_file=str(batch.database) if batch is not None else self.db_file,
             excel_file=self.excel_file,
@@ -1751,6 +1848,8 @@ class ExportDialog(QDialog):
         return self.operation_start_allowed is None or self.operation_start_allowed(self.db_file)
 
     def _start_export_worker(self, request, action_started_at):
+        from metroliza.app.analysis_history import capture_source_stamp
+
         self.last_result_row.clear()
         self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
             self,
@@ -1765,6 +1864,7 @@ class ExportDialog(QDialog):
             self.loading_dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self._cancel_requested = False
         self._export_terminal_handled = False
+        self._submitted_source_stamp = capture_source_stamp(request.paths.db_file)
         self.export_thread = create_export_data_thread(request)
         self._submitted_export_request = request
         self.export_thread.update_label.connect(self.loading_label.setText)
@@ -1937,12 +2037,16 @@ class ExportDialog(QDialog):
         paths = export_result_files(result)
         self.last_result_row.set_result(outcome, paths)
         request = getattr(self, "_submitted_export_request", None)
+        source_stamp = getattr(self, "_submitted_source_stamp", None)
         self._submitted_export_request = None
+        self._submitted_source_stamp = None
         if request is not None and paths and result.status.value in {"complete", "complete_with_omissions"}:
-            self._record_completed_analysis(request, paths, outcome_kwargs.get("completion_metadata") or {})
+            self._record_completed_analysis(
+                request, paths, outcome_kwargs.get("completion_metadata") or {}, source_stamp=source_stamp,
+            )
         return paths
 
-    def _record_completed_analysis(self, request, paths, metadata):
+    def _record_completed_analysis(self, request, paths, metadata, *, source_stamp):
         published = {Path(metadata[key]) for key in ("published_output_path", "html_dashboard_path")
                      if metadata.get(key)}
         paths = tuple(path for path in paths if path in published)
@@ -1958,6 +2062,7 @@ class ExportDialog(QDialog):
         self.analysis_completed.emit({
             "kind": "reports",
             "source": request.paths.db_file,
+            "source_stamp": source_stamp,
             "artifacts": artifacts,
             "settings": export_settings(request),
         })
@@ -2043,6 +2148,7 @@ class ExportDialog(QDialog):
                     delete_later()
                 self.export_thread = None
                 self._submitted_export_request = None
+                self._submitted_source_stamp = None
             self._export_state_changed()
             self._complete_deferred_close_if_idle()
 

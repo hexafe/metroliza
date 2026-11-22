@@ -161,6 +161,7 @@ Use **Extended plots** when you want a deeper report with extra summary output.
 This is better when you want a more analysis-heavy dashboard/workbook package.
 
 Select a preset to preview the outputs and chart settings it will use. Choose **Apply preset** to activate it.
+Use **Save options as…** to name the current chart and output options. Saved profiles appear in the preset list.
 
 ### Google Sheets version
 

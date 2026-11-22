@@ -203,6 +203,53 @@ def test_preview_then_apply_export_preset_with_keyboard(monkeypatch, tmp_path):
         dialog.close()
 
 
+def test_saved_export_options_reopen_preview_and_apply(monkeypatch, tmp_path):
+    from PyQt6.QtWidgets import QInputDialog
+    from metroliza.ui import export_option_profiles
+
+    monkeypatch.setattr(export_option_profiles, "local_metroliza_directory", lambda: tmp_path / "settings")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args: ("Night inspection", True))
+    source = tmp_path / "private-source.db"
+    output = tmp_path / "private-output.xlsx"
+    first = _build_dialog(monkeypatch, tmp_path, db_file=str(source))
+    try:
+        _select_and_apply_preset(first, "Extended plots")
+        first._set_output_path(output, remember=True)
+        first.export_type_combobox.setCurrentText("Scatter")
+        first.sort_measurements_combobox.setCurrentText("Sample #")
+        first.violin_plot_min_samplesize.setText("15")
+        first.summary_plot_scale.setText("2")
+        first.hide_ok_results_checkbox.setChecked(True)
+        first.generate_html_dashboard_checkbox.setChecked(True)
+        first.save_options_button.click()
+    finally:
+        first.close()
+
+    store = export_option_profiles.ExportOptionProfiles()
+    assert [profile.name for profile in store.load()] == ["Night inspection"]
+    payload = store.path.read_text(encoding="utf-8")
+    assert source.name not in payload and output.name not in payload
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(source))
+    try:
+        dialog._set_output_path(output, remember=True)
+        dialog.preset_combobox.setCurrentText("Night inspection (saved)")
+        assert "Scatter" in dialog.preset_preview_label.text()
+        assert "Optional HTML: On" in dialog.preset_preview_label.text()
+        assert dialog.export_type_combobox.currentText() == "Line"
+        assert not dialog.generate_html_dashboard_checkbox.isChecked()
+        assert not dialog.export_button.isEnabled()
+        dialog.apply_preset_button.click()
+        result = dialog._build_export_request()
+        assert result.paths.db_file == str(source) and result.paths.excel_file == str(output)
+        assert result.options.preset == "full_report" and result.options.generate_summary_sheet
+        assert result.options.export_type == "scatter" and result.options.sorting_parameter == "sample #"
+        assert result.options.violin_plot_min_samplesize == 15 and result.options.summary_plot_scale == 2
+        assert result.options.hide_ok_results and result.options.generate_html_dashboard
+    finally:
+        dialog.close()
+
+
 def test_result_dialog_sanitizes_details_before_display_or_copy(monkeypatch):
     captured = {}
 
