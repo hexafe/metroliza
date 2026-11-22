@@ -1301,3 +1301,22 @@ assert not observed['running_at_cancel_return'] and observed['wait_calls'][0]==(
     completed = subprocess.run([sys.executable, "-c", code, str(source_root), str(tmp_path / "live.sqlite")],
                                cwd=tmp_path, env={**environment, "PYTHONFAULTHANDLER": "1"}, capture_output=True, text=True, timeout=10)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_show_selected_report_measurements_preserves_edits_when_scope_changes(current_dialog):
+    dialog = current_dialog
+    dialog.tab_widget.setCurrentWidget(dialog.report_records_tab)
+    assert _pump(lambda: dialog._record_slots[0].state == "loaded")
+    report_model = dialog.report_records_table.model()
+    dialog.report_records_table.setCurrentIndex(report_model.index(0, 0))
+    selected_id = report_model.original_value(0, 0)
+    assert dialog.show_measurements_button.isEnabled()
+    dialog.show_measurements_button.click()
+    assert _pump(lambda: dialog._record_slots[1].state == "loaded")
+    model = dialog.measurement_records_table.model()
+    assert 0 < model.rowCount() < 10
+    assert all(model.original_value(model.source_row(i), 1) == selected_id for i in range(model.rowCount()))
+    assert model.setData(model.index(0, 2), "Pending scoped edit")
+    dialog.show_all_measurements_button.click()
+    assert model.rowCount() == 10
+    assert model.pending_cell_count == 1
