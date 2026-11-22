@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 import xlsxwriter
 
-from metroliza.exporting.output_publication import output_paths, publish_output, retry_output_copy
+from metroliza.exporting.output_publication import OutputPublicationCanceled, output_paths, publish_output, retry_output_copy
 
 from metroliza.exporting.xlsx_bulk_sheet import (
     BulkPlanBuilder,
@@ -784,18 +784,29 @@ class ExcelExportBackend:
 
         try:
             published_path, _result = retry_output_copy(
-                lambda path: publish_output(
-                    temp_path, path, consents=getattr(thread, "replace_outputs", ()), replace=self.replace_workbook,
-                ),
+                lambda path: self._publish_workbook(thread, temp_path, path),
                 target_path, copy_from=getattr(thread, "copy_output_from", None),
                 dashboard=bool(getattr(thread, "html_dashboard_file", None)),
             )
+        except OutputPublicationCanceled:
+            self.remove_temporary_workbook(temp_path)
+            return ExportStageOutcome.canceled()
         except BaseException as error:
             _cleanup_step(lambda: self.remove_temporary_workbook(temp_path), error)
             raise
 
         _record_workbook_path(thread, published_path)
         return outcome
+
+    def _publish_workbook(self, thread, temporary, target):
+        from metroliza.charts.export_html_dashboard import _output_publication_thread_lock
+
+        with _output_publication_thread_lock(target):
+            if getattr(thread, "export_canceled", False):
+                raise OutputPublicationCanceled()
+            publish_output(
+                temporary, target, consents=getattr(thread, "replace_outputs", ()), replace=self.replace_workbook,
+            )
 
 
 def _record_workbook_path(thread, published_path):

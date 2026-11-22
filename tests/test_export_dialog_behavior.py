@@ -659,7 +659,8 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         assert not dialog.last_result_row.findChildren(export_dialog.QPushButton)
         assert progress_dialog.rejected_as_terminal
         assert events[-2:] == ["progress_rejected", "rich_message"]
-        assert dialog.export_button.isEnabled()
+        assert not dialog.export_button.isEnabled()
+        assert dialog.is_export_active()
         assert dialog._cancel_requested is False
         assert progress_dialog.cancel_button.isEnabled()
 
@@ -716,7 +717,7 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
         dialog.stop_exporting()
 
-        assert notices[-1][1] == "Export canceled"
+        assert not notices
     finally:
         dialog.close()
 

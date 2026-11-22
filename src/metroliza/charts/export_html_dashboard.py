@@ -174,17 +174,26 @@ def _dashboard_thread_lock(lock_path: Path) -> RLock:
         return thread_lock
 
 
+def _output_lock_path(output_path: Path) -> Path:
+    canonical_path = _canonical_path_entry(output_path)
+    return canonical_path.with_name(
+        _bounded_dashboard_component(
+            f".{canonical_path.name}", suffix=".publish.lock",
+            max_bytes=_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES,
+        )
+    )
+
+
+def _output_publication_thread_lock(output_path: Path) -> RLock:
+    """Share one commit lock with analytics publication in the same process."""
+    return _dashboard_thread_lock(_output_lock_path(output_path))
+
+
 @contextmanager
 def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
     """Serialize one output's complete generation lifecycle across writers."""
 
-    canonical_dashboard_path = _canonical_path_entry(dashboard_path)
-    lock_path = canonical_dashboard_path.with_name(
-        _bounded_dashboard_component(
-            f".{canonical_dashboard_path.name}", suffix=".publish.lock",
-            max_bytes=_DASHBOARD_INTERNAL_COMPONENT_MAX_BYTES,
-        )
-    )
+    lock_path = _output_lock_path(dashboard_path)
     thread_lock = _dashboard_thread_lock(lock_path)
 
     with thread_lock:

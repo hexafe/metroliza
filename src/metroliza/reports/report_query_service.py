@@ -351,8 +351,11 @@ _APPROVED_REPORT_IDS = """
     FROM temp.recipe_source_digests approved
     JOIN source_files sf ON sf.sha256 = approved.sha256
     JOIN parsed_reports pr ON pr.source_file_id = sf.id
-    WHERE sf.is_active = 1 AND pr.measurement_count > 0
-      AND EXISTS (SELECT 1 FROM report_measurements m WHERE m.report_id = pr.id)
+    WHERE sf.is_active = 1 AND (
+        (approved.report_id IS NOT NULL AND pr.id = approved.report_id)
+        OR (approved.report_id IS NULL AND pr.measurement_count > 0
+            AND EXISTS (SELECT 1 FROM report_measurements m WHERE m.report_id = pr.id))
+    )
 """
 
 
@@ -362,11 +365,12 @@ def restrict_to_approved_report_sources(query: str) -> str:
 
 
 @contextmanager
-def sqlite_approved_report_export_scope(db_path, identity, digests):
+def sqlite_approved_report_export_scope(db_path, identity, digests, report_ids=()):
     """Attach one run's content membership to its read-only export connection."""
     with sqlite_readonly_connection_scope(db_path, existing_identity=identity) as connection:
-        connection.execute("CREATE TEMP TABLE recipe_source_digests (sha256 TEXT PRIMARY KEY) WITHOUT ROWID")
-        connection.executemany("INSERT INTO temp.recipe_source_digests VALUES (?)", ((digest,) for digest in digests))
+        connection.execute("CREATE TEMP TABLE recipe_source_digests (sha256 TEXT PRIMARY KEY, report_id INTEGER) WITHOUT ROWID")
+        pairs = zip(digests, report_ids, strict=True) if report_ids else ((digest, None) for digest in digests)
+        connection.executemany("INSERT INTO temp.recipe_source_digests VALUES (?, ?)", pairs)
         if sum(1 for _ in connection.execute(_APPROVED_REPORT_IDS)) != len(digests):
             raise sqlite3.OperationalError("The approved report selection changed in the database.")
         yield connection

@@ -82,6 +82,14 @@ from time import monotonic
 
 logger = logging.getLogger(__name__)
 
+
+def choose_report_archive(parent):
+    patterns = sorted({f"*{ext}" for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions})
+    all_files = "All Files (*)"
+    file_filter = f"Supported archives ({' '.join(patterns)});;{all_files}" if patterns else all_files
+    filename, _ = QFileDialog.getOpenFileName(parent, "Select archive", "", file_filter)
+    return filename
+
 # Worker progress and metadata readings reach the table at most this often (about 20 Hz),
 # so a burst from the review pool is applied in one pass instead of one restyle per file.
 _UI_UPDATE_INTERVAL_S = 0.05
@@ -569,17 +577,6 @@ class _ReportOperations:
     def _archive_extension_set():
         return {ext.lower() for _, extensions, _ in shutil.get_unpack_formats() for ext in extensions}
 
-    @staticmethod
-    def _archive_file_filter():
-        archive_patterns = sorted({
-            f"*{ext}"
-            for _, extensions, _ in shutil.get_unpack_formats()
-            for ext in extensions
-        })
-        if not archive_patterns:
-            return "All Files (*)"
-        return "Supported archives (" + " ".join(archive_patterns) + ")"
-
     def _selected_metadata_mode(self):
         return self.metadata_mode_combo.currentData() or _METADATA_MODE_FAST
 
@@ -834,29 +831,9 @@ class _ReportOperations:
 
     @pyqtSlot()
     def select_directory(self):
-        """Choose a parse source, with a fallback path for archive selection."""
+        """Choose a report folder without changing input when the picker is dismissed."""
         try:
-            # Open a dialog to select a directory first.
-            selected_source = QFileDialog.getExistingDirectory(self, "Select directory")
-            if not selected_source:
-                choose_archive = QMessageBox.question(
-                    self,
-                    "No directory selected",
-                    "No directory was selected. Do you want to choose an archive file instead?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.Yes,
-                )
-                if choose_archive != QMessageBox.StandardButton.Yes:
-                    return
-
-                selected_source, _ = QFileDialog.getOpenFileName(
-                    self,
-                    "Select archive",
-                    "",
-                    f"{self._archive_file_filter()};;All Files (*)",
-                )
-
-            self._set_parse_source(selected_source)
+            self._set_parse_source(QFileDialog.getExistingDirectory(self, "Choose report folder"))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -864,13 +841,7 @@ class _ReportOperations:
     def select_archive(self):
         """Choose an archive parse source directly without first opening folder selection."""
         try:
-            selected_source, _ = QFileDialog.getOpenFileName(
-                self,
-                "Select archive",
-                "",
-                f"{self._archive_file_filter()};;All Files (*)",
-            )
-            self._set_parse_source(selected_source)
+            self._set_parse_source(choose_report_archive(self))
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1468,6 +1439,7 @@ class _ReportOperations:
             operation.terminal = True
         if stopped_thread is self.parse_thread:
             self.parse_thread = None
+            self.import_batch_finished.emit(getattr(stopped_thread, "last_import_batch", None))
         self._sync_readiness_state()
         if not self._close_requested:
             self.scan_button.setFocus()
@@ -1690,6 +1662,7 @@ class ReportsWorkspace(_ReportOperations, QWidget):
     source_change_requested = pyqtSignal(str)
     database_change_requested = pyqtSignal(str)
     state_changed = pyqtSignal()
+    import_batch_finished = pyqtSignal(object)
     shutdown_ready = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -1705,6 +1678,7 @@ class ParsingDialog(_ReportOperations, QDialog):
     source_change_requested = pyqtSignal(str)
     database_change_requested = pyqtSignal(str)
     state_changed = pyqtSignal()
+    import_batch_finished = pyqtSignal(object)
     shutdown_ready = pyqtSignal()
 
     def __init__(self, parent=None, directory=None, db_file=None):

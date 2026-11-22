@@ -227,6 +227,53 @@ def test_persistent_outcome_never_invents_success_without_result(reviewed, termi
     assert not database.exists()
 
 
+@pytest.mark.parametrize("termination", ["cancel", "error"])
+def test_batch_retains_only_committed_ids_and_digests_after_early_termination(app, reviewed, monkeypatch, termination):
+    from metroliza.parsing import parse_reports_thread
+    from metroliza.reports.report_repository import ReportRepository
+
+    dialog, _source, database = reviewed
+    entered, release = Event(), Event()
+    records = []
+    dialog.import_batch_finished.connect(records.append)
+    if termination == "cancel":
+        persist = ReportRepository.import_report_if_absent
+
+        def pause_after_commit(self, **kwargs):
+            outcome = persist(self, **kwargs)
+            entered.set()
+            assert release.wait(10)
+            return outcome
+
+        monkeypatch.setattr(ReportRepository, "import_report_if_absent", pause_after_commit)
+    else:
+        parse = parse_reports_thread.parse_new_reports
+
+        def fail_after_commit(*args, **kwargs):
+            def interrupt(*_args):
+                raise RuntimeError("synthetic post-commit error")
+
+            kwargs["on_file_accepted"] = interrupt
+            return parse(*args, **kwargs)
+
+        monkeypatch.setattr(parse_reports_thread, "parse_new_reports", fail_after_commit)
+    dialog.parse_button.click()
+    try:
+        if termination == "cancel":
+            wait_until(app, entered.is_set)
+            dialog.stop_parsing()
+    finally:
+        release.set()
+    wait_until(app, lambda: dialog.parse_thread is None, parse_dialog=dialog)
+    assert len(records) == 1 and records[0].matches_database(database)
+    with closing(sqlite3.connect(database)) as connection:
+        saved = connection.execute(
+            "SELECT pr.id, sf.sha256 FROM parsed_reports pr JOIN source_files sf ON sf.id = pr.source_file_id"
+        ).fetchall()
+    assert len(saved) == 1
+    assert records[0].reports == tuple(saved)
+
+
 @pytest.mark.parametrize("field", ["source", "destination", "metadata"])
 def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, field):
     dialog, source, database = reviewed

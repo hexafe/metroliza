@@ -820,10 +820,12 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
             dialog.on_export_finished()
 
         build_mock.assert_called_once()
-        show_mock.assert_called_once_with(dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx', artifacts=())
+        show_mock.assert_called_once_with(
+            dialog, 'info', 'Export successful', 'ok', excel_file='out.xlsx', artifacts=(), modeless=True,
+        )
         self.assertEqual(dialog.loading_dialog.accept_calls, 1)
         self.assertFalse(dialog.accept_called)
-        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertEqual(dialog.export_button.enabled_states, [])
         self.assertIsNone(dialog.export_error_message)
 
     def test_on_export_finished_falls_back_to_plain_message_when_rich_message_fails(self):
@@ -875,7 +877,7 @@ class TestExportDialogCompletionFlow(_ExportPresetFlowStubCase):
         self.assertEqual(_InfoMessageBox.information_calls, [(dialog, 'Export successful', 'ok')])
         self.assertEqual(dialog.loading_dialog.accept_calls, 1)
         self.assertFalse(dialog.accept_called)
-        self.assertEqual(dialog.export_button.enabled_states, [True])
+        self.assertEqual(dialog.export_button.enabled_states, [])
         self.assertIsNone(dialog.export_error_message)
 
 
@@ -1016,6 +1018,11 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.dashboard_visual_settings = {}
         dialog.request_summary_label = Mock()
         dialog.path_readiness_label = Mock()
+        dialog._export_starting = dialog._close_requested = dialog._report_workspace_busy = False
+        dialog._import_batch = None
+        dialog.export_thread = dialog.filter_window = dialog.grouping_window = None
+        dialog._export_state_changed = Mock()
+        dialog._refresh_draft_request_summary = Mock()
         dialog.log_and_exit = lambda error: self.fail(f"Unexpected export startup error: {error}")
 
     def test_show_loading_screen_starts_thread_with_validated_export_request_keyword(self):
@@ -1192,6 +1199,7 @@ class TestExportDialogThreadStartupContract(_ExportPresetFlowStubCase):
         dialog.last_result_row = Mock()
         dialog.config_path = Path('/tmp/nonexistent-export-config.json')
 
+        self._complete_startup_presentation(dialog, _FakeCheckbox)
         with patch('modules.export_dialog.QMessageBox', _FakeMessageBox), \
              patch('modules.export_dialog.create_worker_progress_dialog') as progress_mock, \
              patch('modules.export_dialog.save_export_dialog_config') as save_mock, \
@@ -1365,6 +1373,10 @@ class TestExportDialogDatabaseSwitchContext(_ExportPresetFlowStubCase):
         dialog.df_for_grouping = object()
         dialog.filter_window = _FakeChildDialog()
         dialog.grouping_window = _FakeChildDialog()
+        dialog._export_starting = dialog._report_workspace_busy = False
+        dialog.export_thread = None
+        dialog.scope_combobox = Mock()
+        dialog.set_import_batch = Mock()
         dialog.set_grouping_applied = lambda applied: setattr(dialog, '_grouping_applied', applied)
 
         fake_file_dialog = type('FakeFileDialog', (), {'getOpenFileName': staticmethod(lambda *_args, **_kwargs: ('/tmp/next.db', 'SQLite database (*.db)'))})

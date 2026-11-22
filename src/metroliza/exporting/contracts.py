@@ -58,6 +58,7 @@ class ExportRequest:
     copy_output_from: str | None = None
     existing_database_identity: tuple[int, int] | None = field(default=None, repr=False)
     approved_source_digests: tuple[str, ...] = field(default=(), repr=False)
+    approved_report_ids: tuple[int, ...] = field(default=(), repr=False)
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -121,6 +122,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         copy_output_from=request.copy_output_from,
         existing_database_identity=request.existing_database_identity,
         approved_source_digests=request.approved_source_digests,
+        approved_report_ids=request.approved_report_ids,
     )
 
 
@@ -128,6 +130,13 @@ def _validate_approved_source_scope(request: ExportRequest) -> None:
     identity, digests = request.existing_database_identity, request.approved_source_digests
     if type(digests) is not tuple or bool(digests) != (identity is not None):
         raise ValueError("An approved source scope requires its existing database identity.")
+    report_ids = request.approved_report_ids
+    if type(report_ids) is not tuple or (report_ids and (
+        len(report_ids) != len(digests) or any(type(value) is not int or value < 1 for value in report_ids)
+        or len(set(report_ids)) != len(report_ids)
+        or request.filter_query is not None or request.grouping_df is not None
+    )):
+        raise ValueError("A last-import export requires complete report membership and its own scope.")
     if identity is None:
         return
     if type(identity) is not tuple or len(identity) != 2 or any(type(n) is not int or n < 0 for n in identity):

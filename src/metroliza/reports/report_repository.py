@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -181,6 +181,7 @@ class ReportImportPolicy:
     refreshable_parser_id: str | None = None
     refreshable_parser_version: str | None = None
     preserve_existing: bool = False
+    on_import_committed: Callable[[int, str], None] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.metadata_parsing_mode not in {"light", "complete"}:
@@ -1760,7 +1761,7 @@ class ReportRepository:
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 
-        def _import(cursor) -> ReportImportDisposition:
+        def _import(cursor) -> tuple[int, str] | None:
             cursor.execute("BEGIN IMMEDIATE")
             verified_digest = self._verify_import_source_digest(
                 source_path,
@@ -1768,7 +1769,7 @@ class ReportRepository:
                 source_digest_verifier=source_digest_verifier,
             )
             if self._accepted_report_id(cursor, verified_digest, policy) is not None:
-                return ReportImportDisposition.ALREADY_PRESENT
+                return None
 
             source_record = self._upsert_source_file_observation(
                 cursor,
@@ -1807,9 +1808,14 @@ class ReportRepository:
                 identity_hash=identity_hash,
                 now=now,
             )
-            return ReportImportDisposition.IMPORTED
+            return report_id, verified_digest
 
-        return run_transaction_with_retry(self.database, _import, connection=self.connection)
+        committed = run_transaction_with_retry(self.database, _import, connection=self.connection)
+        if committed is None:
+            return ReportImportDisposition.ALREADY_PRESENT
+        if policy.on_import_committed is not None:
+            policy.on_import_committed(*committed)
+        return ReportImportDisposition.IMPORTED
 
     def replace_existing_report(self, **report_values: Any) -> int:
         """Deliberately replace a report graph through the compatibility persistence contract."""

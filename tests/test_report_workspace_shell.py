@@ -244,6 +244,7 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
     assert [button for button in window.home_page.findChildren(QPushButton)
             if not button.isHidden() and not window.recipe_home.isAncestorOf(button)] == [
         window.home_next_action,
+        window.home_archive_action,
         *(window._module_launch_buttons[page][0][0] for page in (
             "reports", "csv_summary", "industrial_data", "realtime_monitor", "parser_profiles", "tools"
         )),
@@ -257,7 +258,7 @@ def test_home_has_one_recommended_action_and_reports_has_one_owner(window):
         assert window.reports_workspace is host
     assert window.launch_parsing_dialog() is host
     assert window.window_coordinator.get("parsing") is None
-    assert window.home_next_action.toolTip() == "Open Reports and focus the next available report action. (Ctrl+2)"
+    assert window.home_next_action.toolTip() == "Choose a report folder, then continue in Reports. (Ctrl+Shift+D)"
 
 
 def test_real_selected_import_survives_navigation_and_preserves_outcome(app, window, reports):
@@ -1188,9 +1189,161 @@ def test_import_success_promotes_export_and_green_status(app, window, reports):
     assert "Import successful" in host.report_planner.outcome.toPlainText()
     assert plain_text(window.home_next_action.text()) == "Export Workbook [Ctrl+E]"
     assert window.recent_locations.paths("databases")[0] == window.db_file
-    assert window.export_button.property("buttonRole") == "primary"
+    assert window.export_import_batch_button.property("buttonRole") == "primary"
+    assert window.export_import_batch_button.text() == "Eksportuj partię (5)"
+    assert plain_text(window.export_button.text()) == "Eksportuj całą bazę"
     assert host.scan_button.property("buttonRole") == "secondary"
     assert host.readiness_label.property("statusVariant") == "success"
+
+
+def test_home_source_actions_choose_independently_and_cancel_in_place(window, monkeypatch, tmp_path):
+    from metroliza.ui.main_window import QFileDialog
+
+    calls = []
+    selected_folder = ""
+
+    def choose_folder(owner, *_args):
+        calls.append((owner, "folder"))
+        return selected_folder
+
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", choose_folder)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda owner, *_a: (calls.append((owner, "archive")) or "", ""))
+    snapshot = window.workspace_context.snapshot
+    assert plain_text(window.home_next_action.text()) == "Wybierz folder raportów… [Ctrl+Shift+D]"
+    window.home_next_action.click()
+    assert calls == [(window, "folder")]
+    window.home_archive_action.click()
+    assert calls == [(window, "folder"), (window, "archive")]
+    assert window.workspace_context.snapshot is snapshot
+    assert window.navigation_combo.currentData() == "home"
+    assert window._reports_workspace is None
+
+    selected_folder = str(tmp_path)
+    window.home_next_action.click()
+    assert window.directory == str(tmp_path)
+    assert window.navigation_combo.currentData() == "reports"
+
+
+def test_new_batch_offers_exact_scope_to_open_export_without_replacing_whole_draft(app, window, reports):
+    from metroliza.reports.report_query_service import (
+        build_measurement_filter_query, restrict_to_approved_report_sources, sqlite_approved_report_export_scope,
+    )
+
+    host, _source, database = prepare_review(app, window, reports)
+    planner = host.report_planner
+    planner.model.clear_selection()
+    planner.search.setText("report-0.pdf")
+    planner.select_ready.click()
+    host.parse_button.click()
+    wait_until(app, workspace_idle(host))
+    first = window._last_report_import
+
+    window.launch_export_dialog()
+    export = window.export_dialog
+    export.excel_file = database.with_suffix(".xlsx")
+    query = build_measurement_filter_query(reference_values=("synthetic old draft",))
+    export.set_filter_query(query)
+    export.violin_plot_min_samplesize.setText("17")
+    host.scan_button.click()
+    wait_until(app, workspace_idle(host))
+    planner.model.clear_selection()
+    planner.search.setText("report-1.pdf")
+    planner.select_ready.click()
+    host.parse_button.click()
+    wait_until(app, workspace_idle(host))
+    second = window._last_report_import
+    assert second is not first and first.reports != second.reports
+    assert window.export_dialog is export
+    assert export.scope_combobox.currentText() == "Cała baza"
+    assert export.filter_query == query
+    assert export.violin_plot_min_samplesize.text() == "17"
+
+    window.export_import_batch_button.click()
+    assert window.export_dialog is export
+    assert export.scope_combobox.currentText() == "Ostatni import (1)"
+    assert not export.filter_button.isEnabled() and not export.group_button.isEnabled()
+    request = export._build_export_request()
+    assert request.existing_database_identity == second.database_identity and request.filter_query is None
+    assert tuple(zip(request.approved_report_ids, request.approved_source_digests)) == second.reports
+    exact_query = restrict_to_approved_report_sources(build_measurement_filter_query())
+    with sqlite_approved_report_export_scope(
+        request.paths.db_file, request.existing_database_identity, request.approved_source_digests,
+        request.approved_report_ids,
+    ) as connection:
+        assert {row[0] for row in connection.execute(f'SELECT DISTINCT "REPORT_ID" FROM ({exact_query})')} == {
+            request.approved_report_ids[0]
+        }
+    with pytest.raises(sqlite3.OperationalError, match="approved report selection changed"):
+        with sqlite_approved_report_export_scope(
+            request.paths.db_file, request.existing_database_identity, request.approved_source_digests,
+            (first.reports[0][0],),
+        ):
+            pytest.fail("A digest paired with an older report ID was accepted")
+
+    window._on_report_import_batch_finished(first)
+    assert export.scope_combobox.currentText() == "Wybierz zakres ponownie"
+    assert not export.export_button.isEnabled()
+    with pytest.raises(ValueError, match="expired"):
+        export._build_export_request()
+    window.export_button.click()
+    assert export.scope_combobox.currentText() == "Cała baza"
+    assert export._build_export_request().filter_query == query
+
+
+def test_running_report_export_allows_csv_and_blocks_conflicting_work(app, window, reports, monkeypatch):
+    from PyQt6.QtCore import QThread, pyqtSignal
+    from metroliza.ui import export_dialog
+
+    entered, stop_requested, release = Event(), Event(), Event()
+    requests = []
+
+    class HeldExport(QThread):
+        update_label = pyqtSignal(str)
+        update_progress = pyqtSignal(int)
+        error_occurred = pyqtSignal(str)
+        completed = pyqtSignal()
+        canceled = pyqtSignal()
+
+        def run(self):
+            entered.set()
+            release.wait(15)
+            self.canceled.emit()
+
+        def stop_exporting(self):
+            stop_requested.set()
+
+    def create_worker(request):
+        requests.append(request)
+        return HeldExport()
+
+    monkeypatch.setattr(export_dialog, "create_export_data_thread", create_worker)
+    monkeypatch.setattr(export_dialog, "save_export_dialog_config", lambda *_a: None)
+    host, _source, database = prepare_review(app, window, reports)
+    window.launch_export_dialog()
+    export = window.export_dialog
+    export.excel_file = database.with_suffix(".xlsx")
+    export.show_loading_screen()
+    try:
+        wait_until(app, lambda: entered.is_set() and export.loading_dialog.isVisible())
+        assert not export.loading_dialog.isModal() and app.activeModalWidget() is None
+        assert not export.select_db_button.isEnabled() and not export.export_button.isEnabled()
+        assert not window.set_db_file(str(database.with_name("other.sqlite3")))
+        window.launch_modifydb_dialog()
+        assert window.modifydb_dialog is None
+        host.parse_button.click()
+        assert host.parse_thread is None
+
+        csv = window.launch_csv_summary_dialog()
+        assert csv.isVisible() and not csv.isModal() and export.is_export_active()
+        export.stop_export_button.click()
+        assert stop_requested.is_set() and export.is_export_active()
+        export.show_loading_screen()
+        assert len(requests) == 1
+    finally:
+        release.set()
+        wait_until(app, lambda: not export.is_export_active())
+    assert export.export_button.isEnabled() and app.activeModalWidget() is None
+    assert "cancelled" in export.last_result_row.summary.text()
 
 
 @pytest.mark.parametrize("kind", ["databases", "folders"])
@@ -1785,7 +1938,9 @@ def test_context_database_and_source_shortcuts_invoke_actual_choosers(app, windo
     assert saved == [True, True] and opened == [True]
     key(app, host.database_button, "Ctrl+Shift+D")
     host.directory_button.click()
-    assert folders == [True, True] and archives == [True, True]
+    assert folders == [True, True] and not archives
+    host.archive_button.click()
+    assert archives == [True]
 
 
 def test_dynamic_tooltips_preserve_current_reason_and_single_key(app, window, reports):

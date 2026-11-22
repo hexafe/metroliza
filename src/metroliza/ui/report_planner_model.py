@@ -658,6 +658,14 @@ class ReportPlannerModel(QAbstractTableModel):
             return
         self._replace_selection(self._selectable_occurrence_ids)
 
+    def select_visible_ready(self, visible_ids: set[str]) -> None:
+        """Add ready occurrences from the visible rows to the existing selection."""
+
+        self._replace_selection(self._selected_occurrence_ids | (self.selectable_ids & visible_ids))
+
+    def hidden_selection_count(self, visible_ids: set[str]) -> int:
+        return len(self._selected_occurrence_ids - visible_ids)
+
     def clear_selection(self) -> None:
         """Clear selection without changing the current review result."""
 
@@ -1004,6 +1012,8 @@ class ReportPlannerModel(QAbstractTableModel):
 class ReportPlannerFilterModel(QSortFilterProxyModel):
     """A filter-only proxy; selection remains in :class:`ReportPlannerModel`."""
 
+    filter_changed = pyqtSignal()
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._text_filter = ""
@@ -1053,25 +1063,29 @@ class ReportPlannerFilterModel(QSortFilterProxyModel):
         normalized = str(value or "").casefold().strip()
         if normalized != self._text_filter:
             self._text_filter = normalized
-            self.invalidateFilter()
+            self._apply_filter()
 
     def set_status_filter(self, value: str | ParsePreflightStatus) -> None:
         normalized = value.value if isinstance(value, ParsePreflightStatus) else str(value or "")
         if normalized != self._status_filter:
             self._status_filter = normalized
-            self.invalidateFilter()
+            self._apply_filter()
 
     def set_parser_filter(self, value: str) -> None:
         normalized = str(value or "")
         if normalized != self._parser_filter:
             self._parser_filter = normalized
-            self.invalidateFilter()
+            self._apply_filter()
 
     def set_attention_only(self, value: bool) -> None:
         normalized = bool(value)
         if normalized != self._attention_only:
             self._attention_only = normalized
-            self.invalidateFilter()
+            self._apply_filter()
+
+    def _apply_filter(self) -> None:
+        self.invalidateFilter()
+        self.filter_changed.emit()
 
     def filterAcceptsRow(self, source_row, source_parent):  # noqa: N802
         source = self.sourceModel()

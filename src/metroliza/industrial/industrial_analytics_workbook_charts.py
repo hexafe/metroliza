@@ -16,7 +16,7 @@ from metroliza.charts.hexafe_plotstats_adapter import build_histogram_stats_tabl
 from metroliza.charts.hexafe_plotstats_adapter import render_chart_artifact_png
 from metroliza.charts.hexafe_plotstats_adapter import render_histogram_png as render_plotstats_histogram_png
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection
-from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib, serialize_matplotlib_render
 from metroliza.charts.summary_plot_palette import SUMMARY_PLOT_PALETTE
 from metroliza.charts.xlsx_chart_utils import (
     apply_chart_options,
@@ -404,6 +404,7 @@ def _write_histogram_stats_tables(
         current_column += 3
 
 
+@serialize_matplotlib_render
 def _insert_matplotlib_distribution_image(
     *,
     worksheet,

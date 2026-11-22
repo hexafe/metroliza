@@ -224,6 +224,7 @@ class _LazySQLiteConnection:
         self._db_path = db_path
         self._existing_identity = existing_identity
         self._connection = None
+        self.opened_database: tuple[Path, tuple[int, int]] | None = None
         self._clock = clock
         self._last_checkpoint = clock()
         self._commits_since_checkpoint = 0
@@ -233,9 +234,20 @@ class _LazySQLiteConnection:
         if self._existing_identity is not None and name == "cursor":
             _require_database_identity(self._db_path, self._existing_identity)
         if self._connection is None:
-            self._connection = (connect_sqlite(self._db_path) if self._existing_identity is None
-                                else _connect_existing_report_database(self._db_path, self._existing_identity))
+            self._open()
         return getattr(self._connection, name)
+
+    def _open(self):
+        if self._existing_identity is not None:
+            self._connection = _connect_existing_report_database(self._db_path, self._existing_identity)
+            self.opened_database = Path(self._db_path).resolve(), self._existing_identity
+            return
+        path = Path(self._db_path).resolve()
+        before = sqlite_file_identity(path)
+        self._connection = connect_sqlite(self._db_path)
+        after = sqlite_file_identity(path)
+        if after is not None and (before is None or before == after) and Path(self._db_path).resolve() == path:
+            self.opened_database = path, after
 
     def close(self):
         if self._connection is not None:

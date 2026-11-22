@@ -49,6 +49,7 @@ from metroliza.charts.dashboard_shell import (
 )
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.dashboard_visual_options import dashboard_visual_preview_labels
+from metroliza.charts.matplotlib_runtime import serialize_matplotlib_render
 from metroliza.exporting.export_summary_utils import resolve_histogram_bin_count
 from metroliza.charts.hexafe_plotstats_adapter import (
     build_dashboard_plotly_spec,
@@ -2885,6 +2886,7 @@ def _render_distribution_image(
         return None
 
 
+@serialize_matplotlib_render
 def _render_matplotlib_distribution_image(
     metric: ProductionMetricSelection,
     groups: list[tuple[str, pd.DataFrame]],
@@ -3461,6 +3463,7 @@ def _stable_seed(*parts: str) -> int:
     return int(digest[:8], 16)
 
 
+@serialize_matplotlib_render
 def _render_time_series_raw_layer_png(
     x_values: np.ndarray,
     y_values: np.ndarray,
