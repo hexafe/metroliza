@@ -209,6 +209,44 @@ def test_recipe_keeps_explicit_column_types_and_rejects_a_missing_override(tmp_p
     ports.finish(plan)
 
 
+def test_reusable_grouping_rule_recounts_new_rows_and_requires_explicit_header_mapping(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+    import openpyxl
+
+    first, next_week, renamed = (tmp_path / f"{name}.csv" for name in ("first", "next", "renamed"))
+    first.write_text("Line name,Length mm\nA,1\nB,2\nA,3\n")
+    next_week.write_text("Line name,Length mm\nB,6\nC,10\nB,2\nC,8\n")
+    renamed.write_text("Line-name,Length mm\nB,6\nC,10\nB,2\nC,8\n")
+    loaded = load_tabular_analytics_file(first)
+    try:
+        request = replace(request_for(first, tmp_path / "initial.html"), tabular_load_result=loaded,
+                          aggregation_state=ProductionAggregationState(group_fields=("line_name",)))
+        item = capture(request)
+    finally:
+        cleanup_tabular_load_result(loaded)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    output = tmp_path / "next.html"
+    record = runner.start(bind_source(item, next_week, output))
+    assert record.state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}
+    workbook = openpyxl.load_workbook(output.with_suffix(".xlsx"), read_only=True)
+    try:
+        header, *rows = list(workbook["Aggregates"].values)
+        by_group = {row[header.index("line_name")]:
+                    (row[header.index("raw_row_count")], row[header.index("length_mm__mean")]) for row in rows}
+        assert by_group == {"B": (2, 4), "C": (2, 9)}
+    finally:
+        workbook.close()
+
+    invalid = tmp_path / "invalid.html"
+    unavailable = runner.start(bind_source(item, renamed, invalid))
+    assert unavailable.state is RunState.FAILED and unavailable.code is ResultCode.GROUPING_RULE_UNAVAILABLE
+    assert not invalid.exists()
+    remapped = runner.start(bind_source(item, renamed, invalid, remapping=("line_name=line_name",)))
+    assert remapped.state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}
+    assert invalid.exists()
+
+
 def test_industrial_uses_only_existing_local_cache_and_preserves_filters(tmp_path):
     from tests.industrial_analytics_fixtures import seed_production_analytics_cache
     from metroliza.recipes.industrial_adapter import capture as capture_industrial

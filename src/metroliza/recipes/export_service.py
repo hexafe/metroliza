@@ -1,14 +1,20 @@
 """Request construction and artifact verification for recipe exports, without Qt."""
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from zipfile import BadZipFile
 from typing import Callable
 
-from metroliza.exporting.export_outcomes import ExportRunStatus
+from metroliza.exporting.export_outcomes import ExportRunResult, ExportRunStatus
 from metroliza.exporting.output_publication import OutputConsent
 from metroliza.recipes.contracts import ResolvedRunPlan, StepKind
 from metroliza.recipes.ports import ResultCode, StepContext, StepResult, StepStatus
+
+
+@dataclass(frozen=True)
+class RecipeExportResult(ExportRunResult):
+    dashboard_assets_path: str = field(default="", repr=False, compare=False)
 
 
 class ExportRecipeService:
@@ -35,6 +41,7 @@ class ExportRecipeService:
             StepStatus.PARTIAL if partial else StepStatus.COMPLETED,
             ResultCode.EXPORT_FAILED if partial else ResultCode.SUCCESS,
             artifact_verified=True,
+            dashboard_assets_path=getattr(result, "dashboard_assets_path", "") if step_kind is StepKind.EXPORT_HTML else "",
         )
 
     @staticmethod

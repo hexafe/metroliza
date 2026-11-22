@@ -261,6 +261,16 @@ class RecipeRunnerPage(QWidget):
         return f"Liczba plików źródłowych: {count}"
 
     @staticmethod
+    def _grouping_rule_lines(binding):
+        from metroliza.recipes.tabular_adapter import analytics_grouping_labels
+
+        try:
+            labels = analytics_grouping_labels(binding)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return []
+        return ["Reguła grupowania — " + " · ".join(labels)] if labels else []
+
+    @staticmethod
     def _output_lines(kinds, binding, output, assets=None):
         if not output:
             return []
@@ -294,6 +304,7 @@ class RecipeRunnerPage(QWidget):
         lines = self._describe_import(kinds, mode)
         if StepKind.LOAD_TABULAR in kinds:
             lines.append(self._source_count_line(self.controller.binding))
+            lines.extend(self._grouping_rule_lines(self.controller.binding))
         output = self._path_value(ParameterKey.OUTPUT_FILE)
         derived = any(p.key is ParameterKey.DATABASE_FILE and p.mode is ParameterMode.DERIVED
                       for p in self.controller.definition.parameters)
@@ -312,6 +323,7 @@ class RecipeRunnerPage(QWidget):
         lines = self._describe_import(kinds, plan.value(ParameterKey.METADATA_MODE, "complete"))
         if StepKind.LOAD_TABULAR in kinds:
             lines.append(self._source_count_line(plan.binding))
+            lines.extend(self._grouping_rule_lines(plan.binding))
         if plan.database_file is not None:
             if plan.appends_to_database:
                 label = "Baza do uzupełnienia"
@@ -392,6 +404,9 @@ class RecipeRunnerPage(QWidget):
             ResultCode.EXPORT_FAILED: "Nie udało się zapisać wyniku. Sprawdź plik docelowy i jego uprawnienia.",
             ResultCode.OUTPUT_MISSING: "Nie udało się potwierdzić zapisu oczekiwanego pliku wynikowego.",
             ResultCode.WORKBOOK_NOT_PUBLISHED: "Wynik częściowy. Zapisano HTML. Brakuje nowego pliku Excel.",
+            ResultCode.GROUPING_RULE_UNAVAILABLE: (
+                "W źródle brakuje kolumny wymaganej przez regułę grupowania. Sprawdź mapowanie kolumn lub wybierz inne źródło."
+            ),
         }
         self.status.setText(messages.get(record.code, _STATE_LABELS.get(record.state, record.state.value)))
         self.continue_button.setText("Kontynuuj zatwierdzony zakres")

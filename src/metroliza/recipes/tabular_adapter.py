@@ -29,7 +29,8 @@ from metroliza.shared.dashboard_interactivity import DashboardInteractivityOptio
 from metroliza.tabular.column_types import normalize_column_types
 from metroliza.tabular.contracts import GroupingAssignment
 from metroliza.tabular.tabular_analytics_service import (
-    TabularColumnFilter, TabularLoadCancelled, cleanup_tabular_load_result, load_tabular_analytics_files,
+    TABULAR_DEFAULT_GROUP, TABULAR_GROUP_COLUMN, TabularColumnFilter, TabularLoadCancelled, cleanup_tabular_load_result,
+    load_tabular_analytics_files,
 )
 
 _TYPES = {cls.__name__: cls for cls in (
@@ -119,6 +120,12 @@ def _capture_tabular_sources(request):
     return sources, signatures
 
 
+def _capture_grouping_identities(request):
+    identities = getattr(request.tabular_load_result, "source_column_identities", {})
+    fields = set(request.aggregation_state.group_fields)
+    return [[field, label, occurrence] for (label, occurrence), field in identities.items() if field in fields]
+
+
 def validate(request):
     request = validate_industrial_analytics_request(request, require_runnable=True)
     if request.source_kind == "production_cache":
@@ -150,8 +157,10 @@ def capture(request: IndustrialAnalyticsRequest, *, name="Analiza CSV/XLSX") -> 
     for key in ("input_file", "db_file", "output_dashboard_file", "output_workbook_file"):
         payload[key] = ""
     payload["output_workbook_file"] = "derived" if request.output_workbook_file else ""
-    raw = json.dumps({"version": 1, "request": payload, "grouping_source": signature},
-                     separators=(",", ":"), allow_nan=False)
+    envelope = {"version": 1, "request": payload, "grouping_source": signature}
+    if tabular and (identities := _capture_grouping_identities(request)):
+        envelope["grouping_identities"] = identities
+    raw = json.dumps(envelope, separators=(",", ":"), allow_nan=False)
     identity = str(uuid4())
     source_key, source_type, source = ParameterKey.EXISTING_DATABASE, ParameterType.PATH, sources[0]
     if len(sources) > 1:
@@ -200,7 +209,8 @@ def _request_payload(plan):
     if not isinstance(raw, str) or len(raw) > 8192:
         raise RecipeError("invalid_analytics_request")
     payload = json.loads(raw, object_pairs_hook=_unique_object)
-    if type(payload) is not dict or set(payload) != {"version", "request", "grouping_source"}:
+    required = {"version", "request", "grouping_source"}
+    if type(payload) is not dict or set(payload) not in (required, required | {"grouping_identities"}):
         raise RecipeError("invalid_analytics_request")
     if payload["version"] != 1:
         raise RecipeError("unsupported_method_version")
@@ -209,6 +219,30 @@ def _request_payload(plan):
     if type(values) is not dict or set(values) != expected:
         raise RecipeError("invalid_analytics_request")
     return payload
+
+
+def _grouping_identities(payload):
+    rows = payload.get("grouping_identities", [])
+    if not isinstance(rows, list):
+        raise RecipeError("invalid_grouping_rule")
+    identities = {}
+    for entry in rows:
+        if not isinstance(entry, list) or len(entry) != 3:
+            raise RecipeError("invalid_grouping_rule")
+        field, label, occurrence = entry
+        if (not isinstance(field, str) or not isinstance(label, str) or type(occurrence) is not int
+                or occurrence < 1 or field in identities):
+            raise RecipeError("invalid_grouping_rule")
+        identities[field] = (label, occurrence)
+    return identities
+
+
+def analytics_grouping_labels(binding):
+    payload = _request_payload(binding)
+    aggregation = _decode(payload["request"]["aggregation_state"])
+    identities = _grouping_identities(payload)
+    return tuple(identities.get(field, (field, 1))[0] for field in aggregation.group_fields
+                 if field != TABULAR_GROUP_COLUMN)
 
 
 def _analytics_output_paths(output, payload):
@@ -236,6 +270,8 @@ def _resolve_source(plan, request, payload):
             ParameterKey.SOURCE_FILES, ParameterKey.SOURCE_FILE, ParameterKey.EXISTING_DATABASE)) != 1:
         raise RecipeError("invalid_analytics_source")
     if kind == "production_cache" and sources != (plan.value(ParameterKey.EXISTING_DATABASE),):
+        raise RecipeError("invalid_analytics_source")
+    if kind == "tabular_file" and plan.value(ParameterKey.EXISTING_DATABASE):
         raise RecipeError("invalid_analytics_source")
     if payload["grouping_source"] is not None and payload["grouping_source"] != _grouping_signature(
             _source_signatures(sources)):
@@ -433,11 +469,32 @@ class AnalyticsRecipePorts:
             cancel_check=cancelled, column_types=overrides,
         )
         self._loaded[plan.run_id] = loaded
+        if not self._grouping_rule_supported(plan, request, loaded):
+            cleanup_tabular_load_result(self._loaded.pop(plan.run_id))
+            return StepResult(StepStatus.FAILED, ResultCode.GROUPING_RULE_UNAVAILABLE)
         names = {c.field_name for c in loaded.metric_candidates}
         if loaded.unavailable_column_types or any(metric.field_name not in names for metric in request.metric_selection):
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id))
             return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
         return StepResult(StepStatus.COMPLETED)
+
+    @staticmethod
+    def _grouping_rule_supported(plan, request, loaded):
+        fields = set(request.aggregation_state.group_fields)
+        if TABULAR_GROUP_COLUMN in fields and not (
+                request.grouping_df or request.grouping_default_group_label != TABULAR_DEFAULT_GROUP):
+            return False
+        columns = loaded.sqlite_store.columns if loaded.sqlite_store else loaded.dataframe.columns
+        if not (fields - {TABULAR_GROUP_COLUMN}).issubset(columns):
+            return False
+        identities = _grouping_identities(_request_payload(plan))
+        remapping = _column_remapping(plan)
+        for field, identity in identities.items():
+            if field in remapping:
+                continue
+            if loaded.source_column_identities.get(identity) != field:
+                return False
+        return True
 
     @staticmethod
     def _verify_outputs(request):
@@ -454,11 +511,14 @@ class AnalyticsRecipePorts:
             self._results[plan.run_id] = result
             if not ExportRecipeService.verify(Path(result.html_dashboard_path)):
                 return StepResult(StepStatus.FAILED, ResultCode.OUTPUT_MISSING)
+            assets = result.html_dashboard_assets_path
             if request.output_workbook_file and not result.workbook_path:
-                return StepResult(StepStatus.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED, artifact_verified=True)
+                return StepResult(StepStatus.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED, artifact_verified=True,
+                                  dashboard_assets_path=assets)
             warnings = (ResultCode.ANALYTICS_WARNINGS,) if any(
                 note.severity in {"warning", "error"} for note in result.diagnostics) else ()
-            return StepResult(StepStatus.COMPLETED, warnings=warnings, artifact_verified=True)
+            return StepResult(StepStatus.COMPLETED, warnings=warnings, artifact_verified=True,
+                              dashboard_assets_path=assets)
         finally:
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
 

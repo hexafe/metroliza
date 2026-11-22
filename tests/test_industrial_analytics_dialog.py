@@ -975,6 +975,30 @@ def test_column_type_dialog_keyboard_preview_applies_native_conversion(tmp_path,
         _dispose_dialog(dialog)
 
 
+def test_tabular_group_rule_is_visible_and_in_the_recipe_request(tmp_path) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    source.write_text("Line,Reading\nA,2\nB,3\nB,4\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert not dialog.group_field_combo.isHidden()
+        index = dialog.group_field_combo.findData("line")
+        assert index > 0 and dialog.group_field_combo.isEnabled()
+        dialog.group_field_combo.setCurrentIndex(index)
+        dialog.group_field_combo.activated.emit(index)
+        assert dialog.grouping_summary_label.text() == "Grupy według kolumny Line"
+        assert not dialog.edit_groups_button.isEnabled()
+        request = dialog._build_analytics_request(require_runnable=True)
+        assert request.aggregation_state.group_fields == ("line",)
+        assert request.grouping_df is None
+        assert dialog.groupstats_checkbox.isEnabled()
+    finally:
+        _dispose_dialog(dialog)
+
+
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
     tmp_path,
     monkeypatch,

@@ -156,8 +156,12 @@ class RecipeWorkspace(QWidget):
             settings = {"recipe": plan.binding.name}
             settings.update((key.value, plan.value(key)) for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
                             if plan.value(key))
+            assets = []
+            if any(path.suffix.lower() in {".html", ".htm"} for path in paths):
+                assets = list(dict.fromkeys(step.result.dashboard_assets_path for step in record.steps
+                              if step.result.artifact_verified and step.result.dashboard_assets_path))
             self.analysis_completed.emit({"kind": "recipe", "artifacts": [str(path) for path in paths],
-                                          "source": str(source) if source else None, "settings": settings})
+                                          "source": str(source) if source else None, "settings": settings, "assets": assets})
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)

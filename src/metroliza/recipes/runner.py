@@ -322,6 +322,7 @@ class RecipeRunner:
     def _valid_result(cls, result: StepResult) -> bool:
         return (isinstance(result, StepResult) and isinstance(result.status, StepStatus) and
                 isinstance(result.code, ResultCode) and type(result.artifact_verified) is bool and
+                type(result.dashboard_assets_path) is str and
                 cls._valid_result_values(result))
 
     def _apply_result(self, kind: StepKind, result: StepResult) -> RunRecord | None:

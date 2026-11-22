@@ -24,7 +24,9 @@ _ERRORS = {
     ResultCode.PARTIAL_IMPORT: WorkflowError.PROCESSING_FAILED,
     ResultCode.EXPORT_FAILED: WorkflowError.OUTPUT_FAILED,
     ResultCode.OUTPUT_MISSING: WorkflowError.OUTPUT_FAILED,
+    ResultCode.WORKBOOK_NOT_PUBLISHED: WorkflowError.OUTPUT_FAILED,
     ResultCode.INVALID_PLAN: WorkflowError.INPUT_REJECTED,
+    ResultCode.GROUPING_RULE_UNAVAILABLE: WorkflowError.INPUT_REJECTED,
     ResultCode.SOURCE_CHANGED: WorkflowError.INPUT_REJECTED,
     ResultCode.REVIEW_REQUIRED: WorkflowError.INPUT_REJECTED,
     ResultCode.UNSUPPORTED: WorkflowError.INPUT_REJECTED,
@@ -71,7 +73,7 @@ class RecipeFlowTrace:
         if record.state is RunState.FAILED:
             error = _ERRORS.get(record.code, WorkflowError.UNKNOWN)
         elif record.state is RunState.PARTIAL:
-            error = WorkflowError.PROCESSING_FAILED
+            error = _ERRORS.get(record.code, WorkflowError.PROCESSING_FAILED)
         self.sequence += 1
         step_id = event.step_id or (record.steps[-1].step_id if record.steps else str(self.boundary_id))
         encoded = WorkflowDiagnosticEvent(

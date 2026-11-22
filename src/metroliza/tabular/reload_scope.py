@@ -6,7 +6,7 @@ from dataclasses import replace
 
 from metroliza.analytics.row_table import RowTable
 from metroliza.exporting.export_grouping_utils import get_default_group_label, set_default_group_label
-from metroliza.reports.db import chunked_values, quote_identifier, sqlite_readonly_connection_scope
+from metroliza.reports.db import chunked_values, sqlite_readonly_connection_scope
 from metroliza.shared.grouping_filter_core import parse_filter_expression
 
 
@@ -78,8 +78,8 @@ def compatible_filters(state, previous, loaded, mapping):
 
 
 def _row_query(store, columns):
-    projection = ", ".join(quote_identifier(column) for column in ("source_row_number", *columns))
-    return f"SELECT {projection} FROM {quote_identifier(store.table_name)} WHERE source_row_number"
+    raw_store = replace(store, metric_columns=())
+    return raw_store.query_scope(columns=("source_row_number", *columns)).sql
 
 
 def _unique_rows(rows, tokens, cancel_check):
@@ -103,9 +103,12 @@ def _match_source_rows(old_store, new_store, columns, ids, old_range, new_range,
             if cancel_check():
                 raise InterruptedError("Porównywanie przypisań zostało anulowane.")
             placeholders = ", ".join("?" for _ in chunk)
-            tokens.update(tuple(row[1:]) for row in old.execute(f"{old_query} IN ({placeholders})", chunk))
-        old_matches = _unique_rows(old.execute(f"{old_query} BETWEEN ? AND ?", old_range), tokens, cancel_check)
-        new_matches = _unique_rows(new.execute(f"{new_query} BETWEEN ? AND ?", new_range), tokens, cancel_check)
+            rows = old.execute(f"{old_query} WHERE source_row_number IN ({placeholders})", chunk)
+            tokens.update(tuple(row[1:]) for row in rows)
+        old_matches = _unique_rows(old.execute(old_query + " WHERE source_row_number BETWEEN ? AND ?", old_range),
+                                  tokens, cancel_check)
+        new_matches = _unique_rows(new.execute(new_query + " WHERE source_row_number BETWEEN ? AND ?", new_range),
+                                  tokens, cancel_check)
     return {old_id: new_matches[token] for token, old_id in old_matches.items()
             if old_id is not None and new_matches.get(token) is not None}
 

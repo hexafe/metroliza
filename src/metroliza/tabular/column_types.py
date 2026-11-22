@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Literal, TypeAlias, cast
 
-from metroliza.reports.db import quote_identifier, sqlite_readonly_connection_scope
+from metroliza.reports.db import sqlite_readonly_connection_scope
 
 ColumnIdentity: TypeAlias = tuple[str, int]
 ColumnType: TypeAlias = Literal["text", "number"]
@@ -29,8 +30,10 @@ def column_conversion_examples(loaded, identity: ColumnIdentity, kind: str):
     numeric = kind == "number" or (kind == "auto" and field in loaded.inferred_metric_columns)
     if store is None:
         return ()
-    raw_column = quote_identifier(field)
-    converted = quote_identifier(store.numeric_filter_columns[field]) if numeric else raw_column
-    table = quote_identifier(store.table_name)
+    shadow = store.numeric_filter_columns[field] if numeric else None
+    columns = (field, shadow) if shadow else (field,)
+    preview = replace(store, columns=(*store.columns, shadow) if shadow else store.columns, metric_columns=())
+    scope = preview.query_scope(columns=columns, limit=5)
     with sqlite_readonly_connection_scope(store.path) as connection:
-        return tuple(connection.execute(f"SELECT {raw_column}, {converted} FROM {table} LIMIT 5"))
+        rows = tuple(connection.execute(scope.sql, scope.params))
+    return rows if numeric else tuple((row[0], row[0]) for row in rows)

@@ -879,6 +879,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filter_summary_label = status_chip(self.filter_state.summary(), "neutral")
         self.metrics_summary_label = status_chip("No metrics loaded", "warning")
         self.grouping_row_label = section_label("Group by")
+        self.group_rule_label = section_label("Reguła grupowania")
         self.grouping_summary_label = status_chip("Groups: not applied", "neutral")
         self.advanced_section_label = section_label("Advanced")
         self.advanced_toggle_button = QPushButton("Show advanced options")
@@ -905,6 +906,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.metrics_list.itemChanged.connect(lambda _item: self._sync_ui_state())
 
         self.group_field_combo = QComboBox()
+        self.group_rule_label.setBuddy(self.group_field_combo)
+        self.group_field_combo.activated.connect(self._apply_grouping_rule)
         self.time_bucket_combo = QComboBox()
         for value, label in (
             ("none", "Raw rows"),
@@ -1167,9 +1170,15 @@ class IndustrialAnalyticsDialog(QDialog):
         grouping_actions.addWidget(self.clear_groups_button)
         grouping_actions.addStretch(1)
         grid.addWidget(self.grouping_row_label, row, 0)
-        grid.addWidget(self.group_field_combo, row, 1, 1, 2)
+        if self.is_production_source:
+            grid.addWidget(self.group_field_combo, row, 1, 1, 2)
         grid.addWidget(self.grouping_summary_label, row, 1)
         grid.addLayout(grouping_actions, row, 2)
+
+        if not self.is_production_source:
+            row += 1
+            grid.addWidget(self.group_rule_label, row, 0)
+            grid.addWidget(self.group_field_combo, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(section_label("Time bucket"), row, 0)
@@ -1341,7 +1350,9 @@ class IndustrialAnalyticsDialog(QDialog):
         configure_accessibility(self.edit_limits_button, name="Edit metric limits")
         configure_accessibility(self.edit_groups_button, name="Edit CSV analytics groups")
         configure_accessibility(self.clear_groups_button, name="Clear CSV analytics groups")
-        configure_accessibility(self.group_field_combo, name="Production grouping field")
+        configure_accessibility(self.group_field_combo, name=(
+            "Production grouping field" if self.is_production_source else "Kolumna reguły grupowania"
+        ))
         configure_accessibility(self.grouping_summary_label, name="CSV grouping summary")
         configure_accessibility(self.time_bucket_combo, name="Analytics time bucket")
         configure_accessibility(self.aggregation_combo, name="Analytics aggregation")
@@ -1440,7 +1451,9 @@ class IndustrialAnalyticsDialog(QDialog):
         self.database_row_label.setVisible(show_database)
         self.database_field.setVisible(show_database)
         self.grouping_row_label.setText("Group by" if self.is_production_source else "Groups")
-        self.group_field_combo.setVisible(self.is_production_source)
+        show_rules = show_tabular and not self.is_preloaded_tabular_source
+        self.group_rule_label.setVisible(show_rules)
+        self.group_field_combo.setVisible(self.is_production_source or show_rules)
         self.grouping_summary_label.setVisible(show_tabular)
         self.edit_groups_button.setVisible(show_tabular)
         self.clear_groups_button.setVisible(show_tabular)
@@ -1823,6 +1836,10 @@ class IndustrialAnalyticsDialog(QDialog):
         self._clear_tabular_grouping()
         self._sync_ui_state()
 
+    def _apply_grouping_rule(self, _index):
+        if not self.is_production_source:
+            self._sync_ui_state()
+
     def _reset_tabular_column_options(self) -> None:
         for combo in (self.timestamp_column_combo, self.reference_column_combo):
             combo.blockSignals(True)
@@ -2201,6 +2218,10 @@ class IndustrialAnalyticsDialog(QDialog):
                 if pending:
                     self._pending_role_reload = None
                     self._replace_tabular_snapshot(previous, original, populate_metrics)
+                if previous.source_snapshots != loaded.source_snapshots:
+                    self._tabular_reload_notice = "Źródło zmieniło się. Odśwież dane przed analizą."
+                    self._tabular_refresh_result = ""
+                self._sync_ui_state()
                 return
             choices, lost = result
         self._discard_role_reload()
@@ -2435,9 +2456,10 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.is_production_source:
             return
         if not self.grouping_applied or self.df_for_grouping is None or self.df_for_grouping.empty:
-            self.grouping_summary_label.setText("Groups: not applied")
+            rule = self.group_field_combo.currentText() if self.group_field_combo.currentData() else ""
+            self.grouping_summary_label.setText(f"Grupy według kolumny {rule}" if rule else "Groups: not applied")
             self._grouping_summary_names = ()
-            set_status_variant(self.grouping_summary_label, "neutral")
+            set_status_variant(self.grouping_summary_label, "info" if rule else "neutral")
             return
         group_values = IndustrialAnalyticsDialog._tabular_group_values(self)
         self._grouping_summary_names = tuple(group_values[:3])
@@ -2619,7 +2641,7 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _reset_group_options(self, options: tuple[tuple[str, str], ...]) -> None:
         self.group_field_combo.clear()
-        self.group_field_combo.addItem("None", "")
+        self.group_field_combo.addItem("None" if self.is_production_source else "Brak reguły", "")
         seen = {""}
         for label, value in options:
             if not value or value in seen:
@@ -2674,6 +2696,8 @@ class IndustrialAnalyticsDialog(QDialog):
             return None
         if self.grouping_applied:
             return "Groupstats requires at least 2 non-empty manual groups."
+        if self.group_field_combo.currentData():
+            return None
         return "Groupstats requires manual CSV/Excel groups."
 
     def _selected_sheet_name(self) -> str | None:
@@ -2753,7 +2777,18 @@ class IndustrialAnalyticsDialog(QDialog):
             filtered_row_count = self._tabular_filtered_row_count()
         self.choose_metrics_button.setEnabled(bool(candidate_count) and source_stable)
         self.edit_limits_button.setEnabled(bool(candidate_count and metrics) and source_stable)
-        self.edit_groups_button.setEnabled(bool(candidate_count and not self.is_production_source) and source_stable)
+        rule_active = not self.is_production_source and bool(self.group_field_combo.currentData())
+        self.edit_groups_button.setEnabled(
+            bool(candidate_count and not self.is_production_source) and source_stable and not rule_active
+        )
+        self.edit_groups_button.setToolTip("Wybierz „Brak reguły”, aby ustawić grupy ręczne." if rule_active else "")
+        if not self.is_production_source:
+            self.group_field_combo.setEnabled(source_stable and not self.grouping_applied
+                                              and self.group_field_combo.count() > 1)
+            self.group_field_combo.setToolTip(
+                "Usuń grupy ręczne, aby wybrać regułę." if self.grouping_applied
+                else "Podziel analizę według wartości kolumny. Receptura zapisze wybraną regułę."
+            )
         self.clear_filter_button.setEnabled(
             bool(
                 not self.is_production_source
@@ -3260,7 +3295,8 @@ class IndustrialAnalyticsDialog(QDialog):
             counts=f"Rows analyzed: {result.row_count} · Metrics: {getattr(result, 'metric_count', 0)} · Charts: {result.html_dashboard_chart_count}",
         )
         if paths:
-            self._emit_analysis_completion(paths)
+            assets = getattr(result, "html_dashboard_assets_path", "")
+            self._emit_analysis_completion(paths, assets)
         try:
             from metroliza.ui.export_dialog import show_export_result_message
 
@@ -3268,7 +3304,7 @@ class IndustrialAnalyticsDialog(QDialog):
         except Exception:
             QMessageBox.information(self, title, message)
 
-    def _emit_analysis_completion(self, paths):
+    def _emit_analysis_completion(self, paths, assets):
         request = getattr(self.analytics_thread, "request", None)
         if request is None:
             return
@@ -3278,9 +3314,10 @@ class IndustrialAnalyticsDialog(QDialog):
         source = request.db_file if industrial else source_files[0] if len(source_files) == 1 else None
         settings = {"sheet": request.sheet_name, "metrics": [metric.field_name for metric in request.metric_selection],
                     "groups": list(request.aggregation_state.group_fields), "source_count": len(source_files)}
+        html_published = any(path.suffix.lower() in {".html", ".htm"} for path in paths)
         self.analysis_completed.emit({"kind": "industrial" if industrial else "csv",
                                       "artifacts": [str(path) for path in paths], "source": source or None,
-                                      "settings": settings})
+                                      "settings": settings, "assets": [str(assets)] if assets and html_published else []})
 
     def on_analytics_error(self, message: str) -> None:
         self._close_worker_progress()

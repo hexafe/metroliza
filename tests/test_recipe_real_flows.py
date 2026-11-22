@@ -40,7 +40,10 @@ def _write_complete_reports(source):
 @pytest.mark.parametrize("definition,suffix", [
     (REPORTS_EXCEL_MAIN, ".xlsx"), (REPORTS_DASHBOARD_HTML, ".html"),
 ])
-def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix):
+def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix, qapplication_session):
+    from metroliza.recipes.contracts import StepKind
+    from metroliza.recipes.diagnostics import safe_run_projection
+
     app = QApplication.instance() or QApplication([])
     source = tmp_path / "reports"
     _write_complete_reports(source)
@@ -68,6 +71,11 @@ def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix
             document = output.read_text(encoding="utf-8")
             assert "<html" in document.lower()
             assert "plotly" in document.lower()
+            html = next(step.result for step in record.steps if step.kind is StepKind.EXPORT_HTML)
+            assets = Path(html.dashboard_assets_path)
+            assert assets.is_dir() and assets.parent == output.parent
+            assert assets.name + "/" in document
+            assert assets.name not in str(safe_run_projection(record))
             assert not output.with_suffix(".xlsx").exists()
         assert app is QApplication.instance()
     finally:

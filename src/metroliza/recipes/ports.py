@@ -25,6 +25,7 @@ class ResultCode(str, Enum):
     OUTPUT_MISSING = "output_missing"
     WORKBOOK_NOT_PUBLISHED = "workbook_not_published"
     ANALYTICS_WARNINGS = "analytics_warnings"
+    GROUPING_RULE_UNAVAILABLE = "grouping_rule_unavailable"
     UNSUPPORTED = "unsupported"
     INVALID_PLAN = "invalid_plan"
     DATABASE_UNAVAILABLE = "database_unavailable"
@@ -62,6 +63,7 @@ class StepResult:
     warnings: tuple[ResultCode, ...] = ()
     artifact_verified: bool = False
     duplicate_count: int = 0
+    dashboard_assets_path: str = field(default="", repr=False, compare=False)
 
 
 @dataclass(frozen=True)

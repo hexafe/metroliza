@@ -105,6 +105,7 @@ def test_native_replacement_commits_unique_assets_then_retires_previous_generati
         assert result.status in (StepStatus.COMPLETED, StepStatus.PARTIAL)
         native = ports._results[plan.run_id]
         previous_assets = Path(native.html_dashboard_assets_path)
+        assert result.dashboard_assets_path == str(previous_assets)
         assert previous_assets.name.startswith(plan.assets_dir.name + ".generation-")
         assert previous_assets != old_assets and _asset_bytes(previous_assets)
         assert previous_assets.name.encode() in target.read_bytes()
