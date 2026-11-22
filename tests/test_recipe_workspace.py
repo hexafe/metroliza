@@ -109,7 +109,7 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         editor.name.setText("Renamed favorite")
         editor.controls[ParameterKey.OUTPUT_FILE][2].setText(str(tmp_path / "updated.xlsx"))
         next(button for button in editor.findChildren(QPushButton)
-             if button.text() == "Save revision").click()
+             if button.text() == "Zapisz recepturę").click()
         current = workspace.store.load(first.definition.recipe_id)
         assert current.binding.revision == first.binding.revision + 1
         favorite = workspace.quick.favorite_buttons.itemAt(2).widget()
@@ -211,4 +211,30 @@ def test_owned_recipe_vetoes_dangerous_database_rebind_before_inspection_but_all
     finally:
         if runner is not None:
             runner.cancel()
+        window.close()
+
+
+def test_pin_resumes_form_and_restart_uses_saved_defaults(qapplication_session, tmp_path):
+    from metroliza.recipes.contracts import ParameterKey
+    preferences = UiPreferences(QSettings(str(tmp_path / "draft.ini"), QSettings.Format.IniFormat))
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        favorite = window.recipe_home.favorite_buttons.itemAt(0).widget()
+        favorite.click()
+        page = window.recipe_workspace.run_page
+        field = page.fields[ParameterKey.OUTPUT_FILE][0]
+        default = field.text()
+        field.setText(str(tmp_path / "draft.xlsx"))
+        page.mode_combo.setCurrentIndex(1 - page.mode_combo.currentIndex())
+        mode = page.mode_combo.currentData()
+        window._show_workspace_page("home")
+        favorite.click()
+        assert window.recipe_workspace.stack.currentWidget() is page
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == str(tmp_path / "draft.xlsx")
+        assert page.mode_combo.currentData() == mode
+        assert not page.restart_button.isHidden()
+        page.restart_button.click()
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == default
+        assert page.restart_button.isHidden()
+    finally:
         window.close()

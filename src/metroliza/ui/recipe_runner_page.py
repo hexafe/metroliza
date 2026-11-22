@@ -14,10 +14,8 @@ from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterTy
 from metroliza.recipes.run_state import RunState
 from metroliza.recipes.ports import PreparationPhase, ResultCode
 from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
+from metroliza.ui.recipe_labels import CHOICE_LABELS, PARAMETER_LABELS, STEP_LABELS, choice_editor
 
-_LABELS = {"input_folder": "Folder raportów", "output_file": "Plik wynikowy",
-           "database_file": "Baza danych", "existing_database": "Istniejąca baza",
-           "export_preset": "Profil eksportu", "source_file": "Plik źródłowy"}
 _BROWSE_LABELS = {ParameterKey.INPUT_FOLDER: "Wybierz folder…", ParameterKey.OUTPUT_FILE: "Wybierz wynik…",
                   ParameterKey.EXISTING_DATABASE: "Wybierz bazę…", ParameterKey.SOURCE_FILE: "Wybierz źródło…"}
 _STATE_LABELS = {
@@ -27,25 +25,11 @@ _STATE_LABELS = {
     RunState.PARTIAL: "Wynik częściowy", RunState.FAILED: "Niepowodzenie",
     RunState.CANCELLING: "Anulowanie", RunState.CANCELLED: "Anulowano",
 }
-_MODE_LABELS = {"light": "Szybki, bez OCR", "complete": "Pełny, z OCR w razie potrzeby"}
+_MODE_LABELS = CHOICE_LABELS[ParameterKey.METADATA_MODE]
 _PHASE_LABELS = {
     PreparationPhase.SCAN: "Skanowanie folderu",
     PreparationPhase.METADATA: "Odczyt metadanych",
     PreparationPhase.OCR: "Odczyt metadanych i OCR",
-}
-_STEP_LABELS = {
-    StepKind.PREPARE_DATABASE: "Sprawdzanie źródła przed importem",
-    StepKind.PREPARE_EXISTING_DATABASE: "Sprawdzanie bazy i źródła przed importem",
-    StepKind.OPEN_DATABASE: "Sprawdzanie bazy",
-    StepKind.IMPORT_REPORTS: "Import raportów",
-    StepKind.FILTER: "Filtrowanie raportów",
-    StepKind.GROUP: "Grupowanie raportów",
-    StepKind.EXPORT_MAIN: "Tworzenie Excela",
-    StepKind.EXPORT_HTML: "Tworzenie dashboardu",
-    StepKind.VERIFY_OUTPUT: "Sprawdzanie wyniku",
-    StepKind.LOAD_INDUSTRIAL: "Odczyt danych przemysłowych",
-    StepKind.LOAD_TABULAR: "Odczyt danych tabelarycznych",
-    StepKind.ANALYZE_TABULAR: "Analiza i eksport",
 }
 
 
@@ -81,7 +65,7 @@ class RecipeRunnerPage(QWidget):
         mode_layout = QFormLayout(self.mode_row)
         mode_layout.setContentsMargins(0, 0, 0, 0)
         mode_layout.addRow("Tryb importu", self.mode_combo)
-        self.mode_combo.currentIndexChanged.connect(self._preview)
+        self.mode_combo.currentIndexChanged.connect(self._form_edited)
         self.mode_row.hide()
         layout.addWidget(self.mode_row)
         self.database = QLabel()
@@ -120,8 +104,9 @@ class RecipeRunnerPage(QWidget):
         self.cancel_button = QPushButton("Anuluj")
         self.open_button = QPushButton("Otwórz wynik")
         self.repeat_button = QPushButton("Powtórz")
+        self.restart_button = QPushButton("Zacznij od nowa")
         for button in (self.start_button, self.continue_button, self.copy_button,
-                       self.cancel_button, self.open_button, self.repeat_button):
+                       self.cancel_button, self.open_button, self.repeat_button, self.restart_button):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.start_button.clicked.connect(self._start)
@@ -130,6 +115,7 @@ class RecipeRunnerPage(QWidget):
         self.cancel_button.clicked.connect(controller.cancel)
         self.open_button.clicked.connect(self._open)
         self.repeat_button.clicked.connect(controller.repeat)
+        self.restart_button.clicked.connect(controller.restart)
         controller.selection_changed.connect(self._selection)
         controller.prepared.connect(self._prepared)
         controller.changed.connect(self._changed)
@@ -165,13 +151,16 @@ class RecipeRunnerPage(QWidget):
             if spec.type is ParameterType.BOOLEAN:
                 editor = QCheckBox()
                 editor.setChecked(bool(value))
-                editor.toggled.connect(self._preview)
+                editor.toggled.connect(self._form_edited)
+            elif spec.key in CHOICE_LABELS:
+                editor = choice_editor(spec.key, value)
+                editor.currentIndexChanged.connect(self._form_edited)
             else:
                 editor = QLineEdit()
                 editor.setText(", ".join(value) if isinstance(value, tuple) else str(value if value is not None else ""))
-                editor.textChanged.connect(self._preview)
+                editor.textChanged.connect(self._form_edited)
             self.fields[spec.key] = (editor, spec)
-            label = _LABELS.get(spec.key.value, spec.key.value.replace("_", " "))
+            label = PARAMETER_LABELS[spec.key]
             if spec.type is ParameterType.PATH:
                 row = QWidget()
                 box = QHBoxLayout(row)
@@ -186,9 +175,15 @@ class RecipeRunnerPage(QWidget):
                 self.form.labelForField(row).setBuddy(editor)
             else:
                 self.form.addRow(label, editor)
+        self.controller.draft_edited = False
         self._preview()
         if self.fields:
             next(iter(self.fields.values()))[0].setFocus()
+        self._buttons()
+
+    def _form_edited(self, *_):
+        self.controller.draft_edited = True
+        self._preview()
         self._buttons()
 
     def _values(self):
@@ -198,6 +193,8 @@ class RecipeRunnerPage(QWidget):
         for key, (editor, spec) in self.fields.items():
             if spec.type is ParameterType.BOOLEAN:
                 value = editor.isChecked()
+            elif isinstance(editor, QComboBox):
+                value = editor.currentData() or ""
             else:
                 value = editor.text()
                 if spec.type is ParameterType.INTEGER:
@@ -283,7 +280,10 @@ class RecipeRunnerPage(QWidget):
 
     def _start(self):
         for key, (editor, spec) in self.fields.items():
-            if spec.type is not ParameterType.BOOLEAN and spec.required and not editor.text().strip():
+            if isinstance(editor, QCheckBox) or not spec.required:
+                continue
+            text = editor.currentData() if isinstance(editor, QComboBox) else editor.text()
+            if not (text or "").strip():
                 self._invalid_parameter(key)
                 return
         try:
@@ -428,7 +428,7 @@ class RecipeRunnerPage(QWidget):
             else:
                 self.progress_percent.clear()
             return
-        title = _STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
+        title = STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
         key = (event.record.run_id, event.step_id, title)
         if key != self._stage_key:
             self._stage_key = key
@@ -475,7 +475,7 @@ class RecipeRunnerPage(QWidget):
     def _invalid_parameter(self, key):
         if key is not None and key in self.fields:
             editor, _spec = self.fields[key]
-            label = _LABELS.get(key.value, key.value.replace("_", " ").capitalize())
+            label = PARAMETER_LABELS[key]
             self.status.setText(f"Wybierz lub wpisz: {label}.")
             editor.setFocus()
             return
@@ -495,6 +495,9 @@ class RecipeRunnerPage(QWidget):
                                         and record.decision != "collision")
         self.copy_button.setEnabled(self.controller._task is None)
         self.cancel_button.setEnabled(busy)
+        show_restart = self.controller.draft_edited and not busy
+        self.restart_button.setVisible(show_restart)
+        self.repeat_button.setVisible(not show_restart)
         self.repeat_button.setEnabled(self.controller.can_repeat)
         plan = self.controller.plan
         verified = bool(record and plan and record.run_id == plan.run_id

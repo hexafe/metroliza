@@ -4,7 +4,8 @@ Recipes save a local sequence of supported operations. Open **Receptury** from
 the main navigation, or choose a pinned recipe at the top of Home. Pin, unpin
 and change the order of recipes in **Wszystkie receptury**. Press Enter on a
 selected recipe to open its form. To open Home on launch, clear **View → Open
-last workspace on startup**.
+last workspace on startup**. Return to the same pinned recipe to resume the form
+you started. Choose **Zacznij od nowa** to restore its starting values.
 
 ## Quick report flows
 
@@ -35,9 +36,12 @@ result can be opened directly from Home while the app is open.
 
 ## Your own recipes
 
-Copy a built-in recipe to edit it. The editor lists supported steps and parameter
-modes: fixed, ask when running or derive using an available rule. Save a copy or
-a new revision. Select **Przypnij do Home po zapisaniu** to pin it at the same
+Copy a built-in recipe to edit it. Choose **Pytaj przy każdym uruchomieniu**
+to enter a value for each run, **Używaj zapisanej wartości** to reuse a value,
+or **Ustal automatycznie** to derive the database path from the output.
+Choose **Zapisz recepturę** to save all visible choices together, including
+dates, grouping and the additional HTML report. The confirmation lists the
+report formats. Choose **Zapisz jako nową** to keep a separate recipe. Select **Przypnij do Home po zapisaniu** to pin it at the same
 time. A running job retains the plan that was shown when it started.
 Changes to the library apply to future runs.
 

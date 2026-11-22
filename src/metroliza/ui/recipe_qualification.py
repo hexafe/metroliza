@@ -112,10 +112,9 @@ class _Probe:
         editor.dates.setChecked(True)
         editor.groups.setText("REVISION")
         editor.html.setChecked(True)
-        _button(editor, "Apply Reports steps").click()
         saved = []
         editor.saved.connect(saved.append)
-        _button(editor, "Save revision").click()
+        _button(editor, "Zapisz recepturę").click()
         if len(saved) != 1:
             raise ValueError("save_failed")
         editor.close()

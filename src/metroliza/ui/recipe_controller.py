@@ -54,6 +54,8 @@ class RecipeController(QObject):
         self._append_allowed = append_allowed
         self.definition = None
         self.binding = None
+        self._initial_binding = None
+        self.draft_edited = False
         self.plan = None
         self.last_record = None
         self._task = None
@@ -99,7 +101,7 @@ class RecipeController(QObject):
             value = self._active_database()
             self.runner.active_database = Path(value) if value else None
 
-    def launch(self, definition, binding=None):
+    def launch(self, definition, binding=None, *, start_over=False):
         self.view_requested.emit()
         if self.busy:
             return False
@@ -114,6 +116,9 @@ class RecipeController(QObject):
             else:
                 self.failed.emit("recipe_not_found")
                 return False
+        if (not start_over and self.draft_edited and self.definition == definition
+                and (binding is None or binding == self._initial_binding)):
+            return True
         self.definition = definition
         if binding is None:
             source = self._source_directory() if self._source_directory is not None else None
@@ -121,10 +126,17 @@ class RecipeController(QObject):
                 definition, str(source) if source and Path(source).is_dir() else "",
                 existing_database=str(getattr(self.runner, "active_database", None) or ""),
             )
-        self.binding = binding
+        self.draft_edited = False
+        self._initial_binding = self.binding = binding
         self.plan = None
         self.selection_changed.emit()
         return True
+
+    def restart(self):
+        if self.definition is None or self.busy:
+            return False
+        binding = None if self.definition.builtin else self._initial_binding
+        return self.launch(self.definition, binding, start_over=True)
 
     def prepare(self, values):
         if self.busy or self.definition is None:
@@ -138,6 +150,7 @@ class RecipeController(QObject):
             validate_plan_paths(plan, getattr(self.runner, "active_database", None))
             self.binding = binding
             self.plan = plan
+            self.draft_edited = False
         except RecipeError as exc:
             self.failed.emit(exc.code)
             return False

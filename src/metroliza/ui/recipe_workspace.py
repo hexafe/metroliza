@@ -122,14 +122,15 @@ class RecipeWorkspace(QWidget):
 
     def _home_event(self, event):
         from metroliza.recipes.run_state import RunState
-        from metroliza.ui.recipe_runner_page import _PHASE_LABELS, _STATE_LABELS, _STEP_LABELS
+        from metroliza.ui.recipe_labels import STEP_LABELS
+        from metroliza.ui.recipe_runner_page import _PHASE_LABELS, _STATE_LABELS
 
         if not event.record.ownership or self.controller.plan is None:
             self.quick.set_active()
             return
         stage = _STATE_LABELS[event.record.state]
         if event.record.state is RunState.RUNNING:
-            stage = _STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
+            stage = STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
         self.quick.set_active(self.controller.plan.binding.name, stage)
 
     def _home_result(self, record):
