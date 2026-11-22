@@ -7,6 +7,11 @@ required by grouping, the companion **HTML dashboard** from a Metroliza **databa
 
 This is the main reporting step after [Parsing](parsing.md). It can also use optional
 filtering, optional grouping, and a preset before the export runs.
+After importing reports, you can choose the latest batch directly in Reports.
+Its button shows how many reports were saved in the batch. Choose **Eksportuj całą bazę**
+to export from the full database using your usual filters and groups.
+During an export you can open CSV Summary to work on a separate file. Use **Stop export**
+to cancel the running export.
 
 For grouped exports, read the HTML dashboard first. Export group analysis is
 **HTML dashboard only**: Metroliza does not add the standard group-analysis report as

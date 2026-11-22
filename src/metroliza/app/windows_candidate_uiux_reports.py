@@ -402,10 +402,14 @@ class _Journey:
         saved = {row['name'] for row in result['row_facts'] if row['state'] == 'saved'}
         result['database_counts'], result['numeric_digests'] = _snapshot(database, self.oracle, saved)
         self.summary(case)
+        plain_text = import_module('metroliza.ui.shortcuts').plain_text
+        batch_button = self.window.export_import_batch_button
+        _require(batch_button.isVisible() and batch_button.isEnabled() and batch_button.property('buttonRole') == 'primary'
+                 and plain_text(batch_button.text()) == f'Eksportuj partię ({len(saved)})'
+                 and self.window.export_button.isEnabled() and self.window.export_button.property('buttonRole') == 'secondary'
+                 and plain_text(self.window.export_button.text()) == 'Eksportuj całą bazę')
         if case == 'A':
-            plain_text = import_module('metroliza.ui.shortcuts').plain_text
-            _require(self.window.export_button.isEnabled() and self.window.export_button.property('buttonRole') == 'primary'
-                     and plain_text(self.window.home_next_action.text()) == 'Export Workbook [Ctrl+E]'
+            _require(plain_text(self.window.home_next_action.text()) == 'Export Workbook [Ctrl+E]'
                      and self.window.home_next_action.accessibleName() == 'Export Workbook')
             frozen = tuple(self.workspace.report_planner.model.execution_rows)
             self.window.navigation_combo.setCurrentIndex(self.window.navigation_combo.findData('home'))
