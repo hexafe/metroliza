@@ -27,6 +27,8 @@ PARAMETER_LABELS = {
     ParameterKey.SAMPLE_SIZE: "Liczebność próby",
     ParameterKey.INCLUDE_PLOTS: "Dołącz wykresy",
 }
+GROUP_LABELS = {"DATE": "Data", "PART_NAME": "Nazwa części", "REFERENCE": "Numer referencyjny",
+                 "REVISION": "Rewizja", "SAMPLE_NUMBER": "Numer próbki", "TEMPLATE_VARIANT": "Wariant szablonu"}
 CHOICE_LABELS = {
     ParameterKey.EXPORT_PRESET: {"fast_diagnostics": "Szybka diagnostyka", "full_report": "Pełny raport",
                                  "html_dashboard_only": "Tylko raport HTML"},
@@ -63,3 +65,17 @@ def choice_editor(key, value):
         editor.addItem(str(value), value)
     editor.setCurrentIndex(editor.findData(value))
     return editor
+
+
+def format_parameter_list(key, values):
+    if key is ParameterKey.GROUPING_RULES:
+        return ", ".join(GROUP_LABELS.get(value, value) for value in values)
+    return ", ".join(values)
+
+
+def parse_parameter_list(key, text):
+    values = tuple(word.strip() for word in text.split(",") if word.strip())
+    if key is ParameterKey.GROUPING_RULES:
+        tokens = {label.casefold(): token for token, label in GROUP_LABELS.items()}
+        return tuple(tokens.get(value.casefold(), value.upper()) for value in values)
+    return values

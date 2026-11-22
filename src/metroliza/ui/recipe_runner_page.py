@@ -14,7 +14,9 @@ from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterTy
 from metroliza.recipes.run_state import RunState
 from metroliza.recipes.ports import PreparationPhase, ResultCode
 from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
-from metroliza.ui.recipe_labels import CHOICE_LABELS, PARAMETER_LABELS, STEP_LABELS, choice_editor
+from metroliza.ui.recipe_labels import (
+    CHOICE_LABELS, PARAMETER_LABELS, STEP_LABELS, choice_editor, format_parameter_list, parse_parameter_list,
+)
 
 _BROWSE_LABELS = {ParameterKey.INPUT_FOLDER: "Wybierz folder…", ParameterKey.OUTPUT_FILE: "Wybierz wynik…",
                   ParameterKey.EXISTING_DATABASE: "Wybierz bazę…", ParameterKey.SOURCE_FILE: "Wybierz źródło…"}
@@ -157,7 +159,8 @@ class RecipeRunnerPage(QWidget):
                 editor.currentIndexChanged.connect(self._form_edited)
             else:
                 editor = QLineEdit()
-                editor.setText(", ".join(value) if isinstance(value, tuple) else str(value if value is not None else ""))
+                editor.setText(format_parameter_list(spec.key, value) if isinstance(value, tuple)
+                               else str(value if value is not None else ""))
                 editor.textChanged.connect(self._form_edited)
             self.fields[spec.key] = (editor, spec)
             label = PARAMETER_LABELS[spec.key]
@@ -202,7 +205,7 @@ class RecipeRunnerPage(QWidget):
                 elif spec.type is ParameterType.NUMBER:
                     value = float(value)
                 elif spec.type is ParameterType.STRINGS:
-                    value = tuple(part.strip() for part in value.split(",") if part.strip())
+                    value = parse_parameter_list(key, value)
             values[key] = value
         return values
 

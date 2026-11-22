@@ -9,10 +9,10 @@ from PyQt6.QtWidgets import (
 
 from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, StepKind
 from metroliza.recipes.editor_service import RecipeEditorService
-from metroliza.ui.recipe_labels import CHOICE_LABELS, MODE_LABELS, PARAMETER_LABELS, STEP_LABELS, choice_editor
-
-_GROUP_LABELS = {"DATE": "Data", "PART_NAME": "Nazwa części", "REFERENCE": "Numer referencyjny",
-                 "REVISION": "Rewizja", "SAMPLE_NUMBER": "Numer próbki", "TEMPLATE_VARIANT": "Wariant szablonu"}
+from metroliza.ui.recipe_labels import (
+    CHOICE_LABELS, GROUP_LABELS, MODE_LABELS, PARAMETER_LABELS, STEP_LABELS,
+    choice_editor, format_parameter_list, parse_parameter_list,
+)
 
 
 class RecipeEditor(QDialog):
@@ -42,7 +42,7 @@ class RecipeEditor(QDialog):
         self.html = QCheckBox("Utwórz także raport HTML")
         self.html.setChecked(any(s.kind is StepKind.EXPORT_HTML for s in stored.definition.steps))
         self.groups = QLineEdit()
-        self.groups.setPlaceholderText(", ".join(_GROUP_LABELS.values()))
+        self.groups.setPlaceholderText(", ".join(GROUP_LABELS.values()))
         self.report_controls = QWidget()
         report_layout = QFormLayout(self.report_controls)
         report_layout.addRow(self.dates)
@@ -95,8 +95,9 @@ class RecipeEditor(QDialog):
             self.cards.addItem(STEP_LABELS[step.kind])
         current = self.service.current
         kinds = {step.kind for step in current.definition.steps}
-        self.groups.setText(", ".join(_GROUP_LABELS.get(key, key)
-                                      for key in current.binding.value(ParameterKey.GROUPING_RULES, ())))
+        self.groups.setText(format_parameter_list(
+            ParameterKey.GROUPING_RULES, current.binding.value(ParameterKey.GROUPING_RULES, ()),
+        ))
         group_mode = next((p.mode for p in current.definition.parameters if p.key is ParameterKey.GROUPING_RULES),
                           ParameterMode.FIXED)
         self.group_mode.setCurrentIndex(self.group_mode.findData(group_mode))
@@ -178,9 +179,7 @@ class RecipeEditor(QDialog):
         return text
 
     def _collect_report_options(self):
-        by_name = {label.casefold(): key for key, label in _GROUP_LABELS.items()}
-        groups = tuple(by_name.get(text.casefold(), text.upper()) for word in self.groups.text().split(",")
-                       if (text := word.strip()))
+        groups = parse_parameter_list(ParameterKey.GROUPING_RULES, self.groups.text())
         current = self.service.current
         dates = any(p.key is ParameterKey.DATE_FROM for p in current.definition.parameters)
         html = any(s.kind is StepKind.EXPORT_HTML for s in current.definition.steps)

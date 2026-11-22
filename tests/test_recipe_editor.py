@@ -221,8 +221,11 @@ def test_multi_column_label_roundtrips_normalized_tuple_without_delimiter_ambigu
 
 
 def test_one_save_commits_visible_report_options_and_polish_labels(qapplication_session, tmp_path):
+    from types import SimpleNamespace
     from PyQt6.QtWidgets import QPushButton
+    from metroliza.ui.recipe_controller import RecipeController
     from metroliza.ui.recipe_editor import RecipeEditor
+    from metroliza.ui.recipe_runner_page import RecipeRunnerPage
     copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN), name="Dzienny raport")
     store = RecipeStore(tmp_path / "private")
     editor = RecipeEditor(copied, store)
@@ -234,6 +237,7 @@ def test_one_save_commits_visible_report_options_and_polish_labels(qapplication_
         editor.dates.setChecked(True)
         editor.html.setChecked(True)
         editor.groups.setText("Rewizja")
+        editor.group_mode.setCurrentIndex(editor.group_mode.findData(ParameterMode.PROMPT))
         next(b for b in editor.findChildren(QPushButton) if b.text() == "Zapisz recepturę").click()
         saved = store.load(copied.definition.recipe_id)
         assert saved.binding.value(ParameterKey.GROUPING_RULES) == ("REVISION",)
@@ -242,5 +246,15 @@ def test_one_save_commits_visible_report_options_and_polish_labels(qapplication_
         }
         assert editor.status.text() == "Zapisano recepturę. Wyniki: Excel i HTML"
         assert ParameterKey.DATE_FROM in editor.controls
+        controller = RecipeController(SimpleNamespace())
+        page = RecipeRunnerPage(controller)
+        try:
+            controller.launch(saved.definition, saved.binding)
+            field, _ = page.fields[ParameterKey.GROUPING_RULES]
+            assert field.text() == "Rewizja"
+            field.setText("Nazwa części, Rewizja")
+            assert page._values()[ParameterKey.GROUPING_RULES] == ("PART_NAME", "REVISION")
+        finally:
+            page.close()
     finally:
         editor.close()
