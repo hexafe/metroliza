@@ -129,9 +129,10 @@ class _Probe:
         self.phase = "home_ready"
 
     def home_ready(self):
-        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
+        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS, QUICK_REPORT_RECIPES
         try:
-            buttons = [_button(self.workspace.quick, label) for label in BUILTIN_LABELS.values()]
+            buttons = [_button(self.workspace.quick, BUILTIN_LABELS[recipe.recipe_id])
+                       for recipe in QUICK_REPORT_RECIPES]
         except ValueError:
             return  # A normal Qt turn may still be making the Home controls visible.
         if not all(_paint_ready(button, self.window) for button in buttons):
