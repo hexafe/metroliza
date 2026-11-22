@@ -65,9 +65,12 @@ def _fingerprint(path, directory):
         # An active database may hold committed changes in its write-ahead log.
         wal = path.with_name(path.name + "-wal")
         return f"{_file_digest(path)}/{_file_digest(wal) if wal.is_file() and wal.stat().st_size else ''}"
+    from metroliza.parsing.preflight import supported_report_file_extensions
+
+    extensions = supported_report_file_extensions()
     digest = hashlib.sha256()
     for child in sorted(path.rglob("*")):
-        if child.is_file() and not child.is_symlink():
+        if child.suffix.lower() in extensions and child.is_file() and not child.is_symlink():
             name_and_content = (child.relative_to(path).as_posix(), _file_digest(child))
             digest.update(json.dumps(name_and_content).encode("utf-8"))
             digest.update(b"\n")

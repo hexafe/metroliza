@@ -1251,6 +1251,8 @@ def _approval_matches(profile_path: Path, approval_path: Path) -> tuple[bool, st
         payload = json.loads(approval_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return False, f"approval sidecar is not valid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return False, "approval sidecar must be an object"
     if payload.get("schema_version") != PROFILE_APPROVAL_SCHEMA_VERSION:
         return False, "approval schema version is unsupported"
     if payload.get("validation_passed") is not True:
@@ -1395,6 +1397,8 @@ def _matching_profile_backups(plugin_id, *, home):
             continue
         profile = path / PROFILE_FILE_NAME
         approval = path / APPROVAL_FILE_NAME
+        if profile.is_symlink() or approval.is_symlink():
+            continue
         try:
             accepted, _detail = _approval_matches(profile, approval)
             if accepted and profile_plugin_id(load_profile_payload(profile)) == plugin_id:

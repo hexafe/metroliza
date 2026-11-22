@@ -1090,6 +1090,44 @@ def test_rejected_database_is_not_recorded(window, tmp_path):
     assert window.recent_locations.paths("databases") == []
 
 
+def test_workspace_menu_relinks_moved_files_in_one_snapshot(window, app, tmp_path, monkeypatch):
+    from metroliza.ui import workspace_files
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "sample.pdf").write_bytes(b"synthetic report")
+    database = tmp_path / "workspace.db"
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("CREATE TABLE reports (id INTEGER)")
+    assert window.set_directory(str(source))
+    assert window.set_db_file(str(database))
+    window._show_workspace_page("reports")
+
+    saved = tmp_path / "session.metroliza-workspace"
+    monkeypatch.setattr(workspace_files.QFileDialog, "getSaveFileName", lambda *a, **kw: (str(saved), ""))
+    window.save_workspace_action.trigger()
+    commands = window._workspace_files()
+    wait_until(app, lambda: commands.task is None)
+    assert saved.is_file()
+
+    moved_source = source.rename(tmp_path / "moved-reports")
+    moved_database = database.rename(tmp_path / "moved.db")
+    window.workspace_context.clear()
+    window._show_workspace_page("home")
+    snapshots = []
+    window.workspace_context.snapshot_changed.connect(lambda snapshot, previous: snapshots.append(snapshot))
+    files = iter((saved, moved_database))
+    monkeypatch.setattr(workspace_files.QFileDialog, "getOpenFileName", lambda *_: (str(next(files)), ""))
+    monkeypatch.setattr(workspace_files.QFileDialog, "getExistingDirectory", lambda *_: str(moved_source))
+    window.open_workspace_action.trigger()
+    wait_until(app, lambda: commands.task is None)
+
+    assert len(snapshots) == 1
+    assert snapshots[0].source_directory == str(moved_source)
+    assert snapshots[0].database_file == str(moved_database)
+    assert window.navigation_combo.currentData() == "reports"
+
+
 def test_recent_store_bounded_validated_and_windows_dedup(tmp_path):
     from metroliza.ui.recent_locations import RecentLocations
 

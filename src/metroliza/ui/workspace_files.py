@@ -80,7 +80,7 @@ class WorkspaceFiles(QObject):
             if not candidate:
                 return
             chosen[field] = candidate
-        self._start(_verify_relinks, self._apply_verified, state, tuple(missing), chosen)
+        self._start(_verify_relinks, self._apply_verified, state, chosen)
 
     @staticmethod
     def _locations(state):
@@ -115,9 +115,9 @@ def _prepare_workspace(filename):
     return state, missing
 
 
-def _verify_relinks(state, missing, selected):
-    for field in missing:
+def _verify_relinks(state, selected):
+    for field, path in selected.items():
         location = getattr(state, field)
-        if not location.matches(selected[field]):
+        if location is not None and not location.matches(path):
             raise ValueError(f"The selected location did not match the saved {field}. Choose the original or an unchanged copy.")
     return selected, state.page

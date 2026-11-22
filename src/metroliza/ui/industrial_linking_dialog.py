@@ -93,22 +93,11 @@ def _search_pattern(search_text: str) -> str:
 def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> list[dict[str, Any]]:
     """Return Metroliza reports with their current accepted production link summary."""
 
-    pattern = _search_pattern(search_text)
-    where_clause = ""
-    params: tuple[Any, ...] = ()
-    if str(search_text or "").strip():
-        where_clause = """
-            WHERE COALESCE(report.reference, '') LIKE ?
-               OR COALESCE(report.part_name, '') LIKE ?
-               OR COALESCE(report.revision, '') LIKE ?
-               OR COALESCE(report.sample_number, '') LIKE ?
-               OR COALESCE(report.file_name, '') LIKE ?
-        """
-        params = (pattern, pattern, pattern, pattern, pattern)
+    search = str(search_text or "").strip()
     with sqlite_connection_scope(db_file) as conn:
         ensure_report_schema(db_file, connection=conn)
         rows = conn.execute(
-            f"""
+            """
             SELECT
                 report.report_id AS report_id,
                 COALESCE(report.reference, '') AS reference,
@@ -140,11 +129,16 @@ def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> l
             LEFT JOIN industrial_records ir ON ir.id = ilc.industrial_record_id
             LEFT JOIN industrial_source_profiles isp ON isp.id = ir.source_profile_id
             LEFT JOIN industrial_join_rules ijr ON ijr.id = ilc.join_rule_id
-            {where_clause}
+            WHERE :search = ''
+               OR instr(lower(report.reference), lower(:search)) > 0
+               OR instr(lower(report.part_name), lower(:search)) > 0
+               OR instr(lower(report.revision), lower(:search)) > 0
+               OR instr(lower(report.sample_number), lower(:search)) > 0
+               OR instr(lower(report.file_name), lower(:search)) > 0
             ORDER BY report.reference COLLATE NOCASE, report.report_id
             LIMIT 500
             """,
-            params,
+            {"search": search},
         ).fetchall()
     reports: list[dict[str, Any]] = []
     for row in rows:

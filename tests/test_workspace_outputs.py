@@ -7,7 +7,9 @@ from zipfile import ZipFile
 
 import pytest
 
-from metroliza.app.analysis_history import analysis_is_stale, bundle_analysis, recent_analyses, record_analysis
+from metroliza.app.analysis_history import (
+    analysis_is_stale, bundle_analysis, recent_analyses, record_analysis, result_still_matches,
+)
 from metroliza.app.workspace_file import read_workspace, write_workspace
 from metroliza.ui.workspace_context import WorkspaceSnapshot
 
@@ -72,3 +74,16 @@ def test_history_keeps_real_settings_and_bundle_resources_and_keeps_source_priva
     with pytest.raises(ValueError, match="changed after export"):
         bundle_analysis(saved, changed_package)
     assert not changed_package.exists()
+    assert result_still_matches(saved, workbook)
+    workbook.write_bytes(b"A DIFFERENT WORKBOOK")
+    assert not result_still_matches(saved, workbook)
+
+
+def test_history_rejects_a_dashboard_missing_its_generated_script(tmp_path):
+    dashboard = tmp_path / "report.html"
+    dashboard.write_text('<script src="assets/plotly.js"></script>', encoding="utf-8")
+    saved = record_analysis({"kind": "csv", "artifacts": [dashboard]}, directory=tmp_path / "history")
+    package = tmp_path / "package.zip"
+    with pytest.raises(ValueError, match="resource is missing"):
+        bundle_analysis(saved, package)
+    assert not package.exists()

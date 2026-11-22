@@ -1,6 +1,7 @@
 """Browse local run receipts and package the previously published files."""
 
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -9,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QVBoxLayout,
 )
 
-from metroliza.app.analysis_history import analysis_is_stale, bundle_analysis, recent_analyses
+from metroliza.app.analysis_history import analysis_is_stale, bundle_analysis, recent_analyses, result_still_matches
 from metroliza.exporting.output_publication import OutputConsent
 from metroliza.ui.local_file_task import LocalFileTask
 from metroliza.ui.result_actions import LastResultRow
@@ -88,8 +89,13 @@ class AnalysisHistoryDialog(QDialog):
             return
         run = current.data(Qt.ItemDataRole.UserRole)
         self.details.setPlainText(self._describe(run))
+        validate = partial(result_still_matches, run)
+        available = [path for path in run["files"] if validate(path)]
         outcome = "Source changed · run again to refresh" if analysis_is_stale(run) else "Published"
-        self.result.set_result(outcome, run["files"])
+        if len(available) < len(run["files"]):
+            outcome = "One or more output files were moved or replaced."
+            self.pack.setEnabled(False)
+        self.result.set_result(outcome, available, validate=validate)
 
     def _describe(self, run):
         source = run.get("source")
@@ -134,5 +140,5 @@ class AnalysisHistoryDialog(QDialog):
 
     def _task_finished(self, task):
         self._task = None
-        self.pack.setEnabled(self.runs.currentItem() is not None)
+        self._selection_changed(self.runs.currentItem())
         task.deleteLater()

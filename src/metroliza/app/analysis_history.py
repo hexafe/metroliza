@@ -2,10 +2,13 @@
 
 from datetime import datetime, timezone
 import hashlib
+from html.parser import HTMLParser
+from io import TextIOWrapper
 import json
 import os
 from pathlib import Path
 import tempfile
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -60,7 +63,7 @@ def _output_entries(paths):
 
 
 def record_analysis(receipt, *, directory=None):
-    files, entries = _output_entries(receipt["artifacts"])
+    files, entries = _output_entries((*receipt["artifacts"], *receipt.get("assets", ())))
     if not files:
         return None
     source = str(Path(receipt["source"]).absolute()) if receipt.get("source") else None
@@ -82,6 +85,7 @@ def record_analysis(receipt, *, directory=None):
     content = json.dumps(entry, ensure_ascii=False, allow_nan=False).encode("utf-8")
     if len(content) > _MAX_RECEIPT_BYTES:
         raise ValueError("The result has too many entries to record in analysis history.")
+    temporary = None
     try:
         with tempfile.NamedTemporaryFile(dir=root, delete=False) as stream:
             temporary = Path(stream.name)
@@ -90,7 +94,7 @@ def record_analysis(receipt, *, directory=None):
             os.fsync(stream.fileno())
         os.replace(temporary, target)
     finally:
-        if "temporary" in locals():
+        if temporary is not None:
             temporary.unlink(missing_ok=True)
     return entry
 
@@ -129,6 +133,17 @@ def analysis_is_stale(receipt):
     return bool(source and stored and stored != _source_stamp(source))
 
 
+def result_still_matches(receipt, path):
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return False
+        stamp = _file_stamp(path)
+        return any(raw_path == str(path) and expected == stamp for _, raw_path, expected in receipt["entries"])
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _archive_member(name, raw_path, stamp):
     path = Path(raw_path)
     parts = name.split("/")
@@ -147,6 +162,37 @@ def _copy_to_archive(archive, name, path):
     return digest.hexdigest()
 
 
+class _DashboardResources(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.urls = set()
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        if tag in {"script", "img"} and attributes.get("src"):
+            self.urls.add(attributes["src"])
+        if tag == "link" and attributes.get("rel") == "stylesheet" and attributes.get("href"):
+            self.urls.add(attributes["href"])
+
+
+def _verify_dashboard_resources(archive, names):
+    for name in names:
+        if Path(name).suffix.lower() not in {".html", ".htm"}:
+            continue
+        parser = _DashboardResources()
+        with archive.open(name) as binary:
+            with TextIOWrapper(binary, encoding="utf-8") as html:
+                for text in iter(lambda: html.read(65536), ""):
+                    parser.feed(text)
+        parser.close()
+        for reference in parser.urls:
+            url = urlsplit(reference)
+            if url.scheme == "data":
+                continue
+            if url.scheme or url.netloc or unquote(url.path).removeprefix("./") not in names:
+                raise ValueError("A dashboard resource is missing from the results. Run the analysis again to package it.")
+
+
 def _write_bundle(staged, entries):
     manifest = {}
     with ZipFile(staged, "w", compression=ZIP_DEFLATED, compresslevel=3) as archive:
@@ -162,6 +208,7 @@ def _write_bundle(staged, entries):
     with ZipFile(staged) as archive:
         if archive.testzip() is not None:
             raise ValueError("The packaged outputs could not be verified.")
+        _verify_dashboard_resources(archive, manifest)
 
 
 def bundle_analysis(receipt, destination, consents=()):
