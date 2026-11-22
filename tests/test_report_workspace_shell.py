@@ -1265,6 +1265,11 @@ def test_new_batch_offers_exact_scope_to_open_export_without_replacing_whole_dra
     request = export._build_export_request()
     assert request.existing_database_identity == second.database_identity and request.filter_query is None
     assert tuple(zip(request.approved_report_ids, request.approved_source_digests)) == second.reports
+    window._show_workspace_page("home")
+    window.home_next_action.click()
+    key(app, window.home_next_action, "Ctrl+E")
+    assert window.export_dialog is export
+    assert export._build_export_request() == request
     exact_query = restrict_to_approved_report_sources(build_measurement_filter_query())
     with sqlite_approved_report_export_scope(
         request.paths.db_file, request.existing_database_identity, request.approved_source_digests,
@@ -1285,6 +1290,13 @@ def test_new_batch_offers_exact_scope_to_open_export_without_replacing_whole_dra
     assert not export.export_button.isEnabled()
     with pytest.raises(ValueError, match="expired"):
         export._build_export_request()
+    window.home_next_action.click()
+    key(app, window.home_next_action, "Ctrl+E")
+    action_for(window, "Ctrl+E").trigger()  # Tools menu command
+    assert window.export_dialog is export
+    assert export.scope_combobox.currentText() == "Wybierz zakres ponownie"
+    assert not export.export_button.isEnabled()
+    window._show_workspace_page("reports")
     window.export_button.click()
     assert export.scope_combobox.currentText() == "Cała baza"
     assert export._build_export_request().filter_query == query
@@ -1524,9 +1536,6 @@ def test_review_shortcut_creates_lazy_workspace(app, window, monkeypatch, tmp_pa
 def test_export_shortcut_follows_readiness(app, window, monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(window, "launch_export_dialog", lambda: calls.append("export"))
-    # Use the existing button connection, with its heavy workflow replaced.
-    window.export_button.clicked.disconnect()
-    window.export_button.clicked.connect(window.launch_export_dialog)
     for enabled in (False, True, False):
         window.db_file = str(tmp_path / "test.db") if enabled else None
         window._sync_workflow_next_step()

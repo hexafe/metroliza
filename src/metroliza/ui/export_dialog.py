@@ -1174,8 +1174,8 @@ class ExportDialog(QDialog):
 
         available_batch = batch if batch is not None and batch.matches_database(self.db_file) else None
         mode = self._scope_mode()
-        if select and available_batch is not None:
-            mode = _LAST_IMPORT
+        if select:
+            mode = _LAST_IMPORT if available_batch is not None else _STALE_IMPORT
         elif mode == _LAST_IMPORT and self._import_batch != available_batch:
             mode = _STALE_IMPORT
         self._import_batch = available_batch

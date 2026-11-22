@@ -154,7 +154,7 @@ def _publish_staged(result, staged_assets, staged_workbook, publication, outputs
     consents = publication.replace_outputs or ()
     with ExitStack() as stack:
         for path in sorted(outputs.paths):
-            stack.enter_context(_dashboard_publication_lock(path))
+            stack.enter_context(_dashboard_publication_lock(path, should_cancel=should_cancel))
         _check_cancelled(should_cancel)
         publication.check(outputs)
         destination_assets.mkdir()

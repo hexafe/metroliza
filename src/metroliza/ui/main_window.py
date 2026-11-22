@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
             ("cancel_reports", self.home_cancel_report.click),
             ("review_reports", lambda: self._trigger_report_command("scan_button")),
             ("import_reports", lambda: self._trigger_report_command("parse_button")),
-            ("export_workbook", self.export_button.click),
+            ("export_workbook", lambda: self.launch_export_dialog()),
         ):
             sequence, label = MAIN_SHORTCUTS[command]
             action = self.tools_menu.addAction(label, callback)
@@ -882,7 +882,8 @@ class MainWindow(QMainWindow):
         for button in (self.modifydb_button, self.map_characteristics_button,
                        self.export_import_batch_button, self.export_button):
             downstream_row.addWidget(button)
-        downstream_row.addWidget(secondary_label("Ctrl+E"))
+        self.export_shortcut_hint = secondary_label("Ctrl+E")
+        downstream_row.addWidget(self.export_shortcut_hint)
         reports_layout.addLayout(downstream_row)
         self._add_workspace_page("Reports", self.reports_page)
         for title, description, action, callback in (
@@ -927,7 +928,7 @@ class MainWindow(QMainWindow):
         self.home_review_action.clicked.connect(self.launch_parsing_dialog)
         self.home_cancel_report.clicked.connect(self._cancel_report_operation)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
-        self.export_button.clicked.connect(self.launch_export_dialog)
+        self.export_button.clicked.connect(self._launch_reports_export)
         self.export_import_batch_button.clicked.connect(self._launch_last_import_export)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
         self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
@@ -1217,16 +1218,7 @@ class MainWindow(QMainWindow):
             reports.set_export_primary(not busy and self._export_ready)
         caption = self._home_next_caption(reports, busy)
         choosing_source = not self.directory and not busy and not self._export_ready
-        batch = self._last_report_import
-        set_button_role(self.export_button, "primary" if self._export_ready and not busy and batch is None else "secondary")
-        set_button_role(self.export_import_batch_button, "primary" if batch is not None and not busy else "secondary")
-        self.export_import_batch_button.setVisible(batch is not None)
-        self.export_import_batch_button.setEnabled(not busy and not export_active)
-        if batch is not None:
-            self.export_import_batch_button.setText(f"Eksportuj partię ({len(batch.reports)})")
-        self.export_button.setText("Eksportuj całą bazę" if batch is not None else "Export Workbook")
-        self.export_button.setAccessibleName(self.export_button.text())
-        set_mnemonic(self.export_button, "e")
+        self._sync_reports_export_actions(busy, export_active)
         tooltip = ("Open Export Workbook." if caption == "Export Workbook" else
                    "Choose a report folder, then continue in Reports." if choosing_source else
                    "Open Reports and focus the next available report action.")
@@ -1264,7 +1256,6 @@ class MainWindow(QMainWindow):
         self.home_report_result.setVisible(bool(summary))
         for button in (self.modifydb_button, self.map_characteristics_button):
             button.setEnabled(bool(self.db_file) and not busy and not export_active)
-        self.export_button.setEnabled(bool(self.db_file) and not busy)
         for button in self._database_workflow_buttons:
             button.setEnabled(not busy and not export_active)
         self.industrial_data_action.setEnabled(not busy and not export_active)
@@ -1272,6 +1263,23 @@ class MainWindow(QMainWindow):
         self.enrich_metadata_action.setEnabled(self._pdf_execution_available() and not export_active)
         self._sync_shortcuts()
         self._sync_module_launchers()
+
+    def _sync_reports_export_actions(self, busy, export_active):
+        batch = self._last_report_import
+        set_button_role(self.export_button, "primary" if self._export_ready and not busy and batch is None else "secondary")
+        set_button_role(self.export_import_batch_button, "primary" if batch is not None and not busy else "secondary")
+        self.export_import_batch_button.setVisible(batch is not None)
+        self.export_import_batch_button.setEnabled(not busy and not export_active)
+        if batch is not None:
+            self.export_import_batch_button.setText(f"Eksportuj partię ({len(batch.reports)})")
+        self.export_button.setEnabled(bool(self.db_file) and not busy)
+        self.export_button.setText("Eksportuj całą bazę" if batch is not None else "Export Workbook")
+        self.export_button.setAccessibleName(self.export_button.text())
+        set_mnemonic(self.export_button, "e")
+        self.export_shortcut_hint.setVisible(batch is None)
+        self.export_button.setToolTip("Eksportuj raporty z całej bazy." if batch is not None else "Open Export Workbook.")
+        if batch is None:
+            shortcut_tooltip(self.export_button, "export_workbook")
 
     def _on_report_import_batch_finished(self, batch):
         self._last_report_import = batch if batch is not None and batch.matches_database(self.db_file) else None
@@ -1723,6 +1731,12 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _launch_reports_export(self):
+        if self._last_report_import is None:
+            self.launch_export_dialog()
+        else:
+            self.launch_export_dialog(whole_database=True)
+
     def _launch_last_import_export(self):
         batch = self._last_report_import
         if batch is None:
@@ -1734,7 +1748,7 @@ class MainWindow(QMainWindow):
             return
         self.launch_export_dialog(batch=batch)
 
-    def launch_export_dialog(self, *, batch=None):
+    def launch_export_dialog(self, *, batch=None, whole_database=False):
         if self._report_export_active():
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
@@ -1758,14 +1772,17 @@ class MainWindow(QMainWindow):
 
             self.export_dialog.database_change_allowed = self._report_database_action_allowed
             if hasattr(self.export_dialog, "set_import_batch"):
-                explicit_scope = batch is not None or self._last_report_import is not None
+                explicit_scope = batch is not None or whole_database
                 if explicit_scope and self.export_dialog.db_file != self.db_file and not (
                     self.export_dialog._update_database_context(self.db_file)
                 ):
                     return
-                if batch is None and explicit_scope:
+                if whole_database:
                     self.export_dialog.use_whole_database()
-                self.export_dialog.set_import_batch(self._last_report_import, select=batch is not None)
+                latest = self._last_report_import
+                if batch is not None and batch is not latest:
+                    self.export_dialog.set_import_batch(None, select=True)
+                self.export_dialog.set_import_batch(latest, select=batch is not None and batch is latest)
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:

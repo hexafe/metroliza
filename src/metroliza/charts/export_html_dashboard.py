@@ -128,7 +128,26 @@ def _canonical_path_entry(path: Path) -> Path:
     return path.parent.resolve(strict=False) / path.name
 
 
-def _lock_dashboard_publication_file(handle: Any) -> None:
+def _check_publication_lock_canceled(should_cancel) -> None:
+    if should_cancel is not None and should_cancel():
+        from metroliza.exporting.output_publication import OutputPublicationCanceled
+
+        raise OutputPublicationCanceled()
+
+
+def _retry_publication_lock(acquire, should_cancel, retryable_errors) -> None:
+    while True:
+        _check_publication_lock_canceled(should_cancel)
+        try:
+            acquire()
+            return
+        except OSError as exc:
+            if exc.errno not in retryable_errors:
+                raise
+            sleep(0.05)
+
+
+def _lock_dashboard_publication_file(handle: Any, should_cancel) -> None:
     if os.name == "nt":  # pragma: no cover - exercised by Windows release smoke.
         import msvcrt
 
@@ -137,19 +156,17 @@ def _lock_dashboard_publication_file(handle: Any) -> None:
             handle.write(b"\0")
             handle.flush()
         handle.seek(0)
-        retryable_errors = {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
-        while True:
-            try:
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-                return
-            except OSError as exc:
-                if exc.errno not in retryable_errors:
-                    raise
-                sleep(0.05)
+        _retry_publication_lock(lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1), should_cancel,
+                                {errno.EACCES, errno.EAGAIN, errno.EDEADLK})
+        return
 
     import fcntl
 
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    if should_cancel is None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    else:
+        _retry_publication_lock(lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB),
+                                should_cancel, {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK})
 
 
 def _unlock_dashboard_publication_file(handle: Any) -> None:
@@ -184,19 +201,37 @@ def _output_lock_path(output_path: Path) -> Path:
     )
 
 
-def _output_publication_thread_lock(output_path: Path) -> RLock:
-    """Share one commit lock with analytics publication in the same process."""
-    return _dashboard_thread_lock(_output_lock_path(output_path))
+def _hide_workbook_lock_file(path: Path) -> None:
+    from ctypes import windll
+    from stat import FILE_ATTRIBUTE_HIDDEN
+
+    attributes = path.stat().st_file_attributes
+    if not attributes & FILE_ATTRIBUTE_HIDDEN:
+        windll.kernel32.SetFileAttributesW(str(path), attributes | FILE_ATTRIBUTE_HIDDEN)
 
 
 @contextmanager
-def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
+def _acquire_publication_thread_lock(lock_path: Path, should_cancel) -> Iterator[None]:
+    lock = _dashboard_thread_lock(lock_path)
+    if should_cancel is None:
+        lock.acquire()
+    else:
+        while True:
+            _check_publication_lock_canceled(should_cancel)
+            if lock.acquire(timeout=0.05):
+                break
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+@contextmanager
+def _dashboard_publication_lock(dashboard_path: Path, *, should_cancel=None) -> Iterator[None]:
     """Serialize one output's complete generation lifecycle across writers."""
 
     lock_path = _output_lock_path(dashboard_path)
-    thread_lock = _dashboard_thread_lock(lock_path)
-
-    with thread_lock:
+    with _acquire_publication_thread_lock(lock_path, should_cancel):
         held_paths = getattr(_DASHBOARD_PUBLICATION_LOCK_STATE, "held_paths", [])
         if lock_path in held_paths:
             held_paths.append(lock_path)
@@ -209,10 +244,12 @@ def _dashboard_publication_lock(dashboard_path: Path) -> Iterator[None]:
         # The lock file intentionally persists: unlinking it while another process
         # waits on its inode could split future writers across two different locks.
         with lock_path.open("a+b") as handle:
-            _lock_dashboard_publication_file(handle)
+            _lock_dashboard_publication_file(handle, should_cancel)
             held_paths.append(lock_path)
             _DASHBOARD_PUBLICATION_LOCK_STATE.held_paths = held_paths
             try:
+                if os.name == "nt" and dashboard_path.suffix.lower() == ".xlsx":
+                    _hide_workbook_lock_file(lock_path)
                 yield
             finally:
                 held_paths.pop()

@@ -2,6 +2,8 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+from dataclasses import dataclass
+from multiprocessing import get_context
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -50,6 +52,7 @@ def test_export_race_created_after_check_does_not_replace_target(tmp_path):
 
 @pytest.mark.parametrize("locked", [False, True])
 def test_export_replace_requires_consent_and_locked_file_keeps_old_result(tmp_path, monkeypatch, locked):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
     from metroliza.exporting.export_backends import ExcelExportBackend
     from metroliza.exporting.output_publication import OutputConsent
     import os
@@ -71,7 +74,12 @@ def test_export_replace_requires_consent_and_locked_file_keeps_old_result(tmp_pa
         with zipfile.ZipFile(target) as package:
             assert b"12.5" in package.read("xl/worksheets/sheet1.xml")
             assert b"NOK" in package.read("xl/sharedStrings.xml")
-    assert set(tmp_path.iterdir()) == {target}
+    lock_path = _output_lock_path(target)
+    assert set(tmp_path.iterdir()) == {target, lock_path}
+    if os.name == "nt":
+        from stat import FILE_ATTRIBUTE_HIDDEN
+
+        assert lock_path.stat().st_file_attributes & FILE_ATTRIBUTE_HIDDEN
 
 
 def test_export_cancel_keeps_old_target(tmp_path):
@@ -127,6 +135,151 @@ def test_report_and_analytics_workbook_commits_cannot_both_use_the_same_consent(
             second.result(timeout=10)
     with zipfile.ZipFile(target) as archive:
         assert b"NOK" in archive.read("xl/sharedStrings.xml")
+
+
+@dataclass(frozen=True)
+class _StagedAnalyticsResult:
+    html_dashboard_path: str
+    html_dashboard_assets_path: str
+    workbook_path: str
+
+
+def _publish_held_report_workbook(target, consent, replacing, release):
+    import os
+
+    from metroliza.exporting.export_backends import ExcelExportBackend
+
+    thread = _export_thread(target)
+    thread.replace_outputs = (consent,)
+    backend = ExcelExportBackend()
+
+    def replace_when_released(source, destination):
+        replacing.set()  # consent was checked before ExcelExportBackend calls replace
+        assert release.wait(30)
+        os.replace(source, destination)
+
+    backend.replace_workbook = replace_when_released
+    assert backend.run(thread)
+
+
+def _publish_competing_analytics_family(target, dashboard, consents, waiting, result):
+    from metroliza.charts import export_html_dashboard as locks
+    from metroliza.industrial.tabular_output_publication import (
+        TabularOutputFiles, TabularOutputPublication, publish_tabular_analysis,
+    )
+    from xlsxwriter import Workbook
+
+    lock = locks._lock_dashboard_publication_file
+    workbook_lock = locks._output_lock_path(target)
+
+    def observe_lock(handle, *args, **kwargs):
+        if Path(handle.name) == workbook_lock:
+            waiting.set()
+        return lock(handle, *args, **kwargs)
+
+    def render(*, output_dashboard_file, output_workbook_file, output_assets_dir):
+        assets = Path(f"{output_assets_dir}.generation-" + "a" * 32)
+        assets.mkdir()
+        (assets / "data.js").write_text("const synthetic = true;", encoding="utf-8")
+        Path(output_dashboard_file).write_text("synthetic dashboard", encoding="utf-8")
+        with Workbook(output_workbook_file) as workbook:
+            workbook.add_worksheet().write(0, 0, "synthetic CSV")
+        return _StagedAnalyticsResult(output_dashboard_file, str(assets), output_workbook_file)
+
+    locks._lock_dashboard_publication_file = observe_lock
+    publication = TabularOutputPublication(TabularOutputFiles(dashboard, target), (), replace_outputs=consents)
+    try:
+        publish_tabular_analysis(render, publication, should_cancel=lambda: False)
+    except FileExistsError as error:
+        result.send(str(error))
+    else:
+        result.send("published")
+    finally:
+        result.close()
+
+
+def _join_publication_process(process):
+    process.join(15)
+    if process.is_alive():
+        process.terminate()
+        process.join(5)
+
+
+def test_report_replace_and_csv_publish_serialize_in_separate_processes(tmp_path):
+    from metroliza.exporting.output_publication import OutputConsent
+
+    target, dashboard = tmp_path / "shared.xlsx", tmp_path / "csv.html"
+    target.write_bytes(b"existing workbook")
+    dashboard.write_bytes(b"existing dashboard")
+    workbook_consent = OutputConsent.for_path(target)
+    consents = (OutputConsent.for_path(dashboard), workbook_consent)
+    context = get_context("spawn")
+    replacing, release, competing = (context.Event() for _ in range(3))
+    receiver, sender = context.Pipe(duplex=False)
+    report = context.Process(target=_publish_held_report_workbook, args=(target, workbook_consent, replacing, release))
+    csv = context.Process(target=_publish_competing_analytics_family,
+                          args=(target, dashboard, consents, competing, sender))
+    report.start()
+    try:
+        assert replacing.wait(20)
+        csv.start()
+        sender.close()
+        assert competing.wait(20)
+        # The other process must wait even with a complete staged output and valid original consent.
+        assert not receiver.poll(0.3)
+    finally:
+        release.set()
+        _join_publication_process(report)
+        if csv.pid is not None:
+            _join_publication_process(csv)
+        sender.close()
+    with receiver:
+        assert report.exitcode == csv.exitcode == 0
+        assert receiver.poll(2) and "changed after confirmation" in receiver.recv()
+    assert dashboard.read_bytes() == b"existing dashboard"
+    assert not list(tmp_path.glob("*.generation-*"))
+    with zipfile.ZipFile(target) as archive:
+        assert b"NOK" in archive.read("xl/sharedStrings.xml")
+
+
+def test_cancel_report_replacement_during_another_process_lock(tmp_path, monkeypatch):
+    from metroliza.charts import export_html_dashboard as locks
+    from metroliza.exporting.export_backends import ExcelExportBackend
+    from metroliza.exporting.output_publication import OutputConsent
+    from tests.test_export_html_dashboard import _hold_dashboard_publication_lock_in_process
+
+    target = tmp_path / "shared.xlsx"
+    target.write_bytes(b"last complete workbook")
+    report = _export_thread(target)
+    report.replace_outputs = (OutputConsent.for_path(target),)
+    context = get_context("spawn")
+    acquired, release = context.Event(), context.Event()
+    holder = context.Process(target=_hold_dashboard_publication_lock_in_process,
+                             args=(str(target), acquired, release))
+    waiting = Event()
+    lock = locks._lock_dashboard_publication_file
+
+    def observe_lock(handle, *args, **kwargs):
+        waiting.set()
+        return lock(handle, *args, **kwargs)
+
+    monkeypatch.setattr(locks, "_lock_dashboard_publication_file", observe_lock)
+    holder.start()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            assert acquired.wait(20)
+            running = pool.submit(ExcelExportBackend().run, report)
+            assert waiting.wait(5)
+            report.export_canceled = True
+            assert not running.result(timeout=2)
+            assert holder.is_alive()
+        finally:
+            release.set()
+            _join_publication_process(holder)
+    assert holder.exitcode == 0
+    assert target.read_bytes() == b"last complete workbook"
+    lock_path = locks._output_lock_path(target)
+    assert set(tmp_path.iterdir()) == {target, lock_path}
 
 
 def _request(database, target, *, dashboard=False, html_only=False):
@@ -925,6 +1078,7 @@ def test_replacing_legacy_unicode_dashboard_retains_unowned_assets(tmp_path):
 @pytest.mark.parametrize('stem', ['x' * 245, '測' * 81 + 'ø'], ids=['ascii-bytes', 'unicode-bytes'])
 @pytest.mark.parametrize('mode', ['complete', 'cancel', 'error', 'locked'])
 def test_main_workbook_long_selected_name_keeps_atomic_policy(tmp_path, monkeypatch, stem, mode):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
     from metroliza.exporting.export_backends import ExcelExportBackend
     from metroliza.exporting.output_publication import OutputConsent
 
@@ -952,7 +1106,12 @@ def test_main_workbook_long_selected_name_keeps_atomic_policy(tmp_path, monkeypa
             assert b'12.5' in package.read('xl/worksheets/sheet1.xml')
     else:
         assert target.read_bytes() == b'last complete workbook'
-    assert set(tmp_path.iterdir()) == {target}
+    expected = {target}
+    if mode in {"complete", "locked"}:
+        lock_path = _output_lock_path(target)
+        assert len(lock_path.name.encode("utf-8")) <= 80
+        expected.add(lock_path)
+    assert set(tmp_path.iterdir()) == expected
 
 
 @pytest.mark.parametrize('stem', ['x' * 245, '測' * 81 + 'ø'], ids=['ascii-bytes', 'unicode-bytes'])
