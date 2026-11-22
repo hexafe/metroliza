@@ -1,12 +1,16 @@
-RELEASE_VERSION = "0.8.0-dev.7"
+RELEASE_VERSION = "0.8.0-dev.8"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Pinned recipes, clearer report review, and working explicit sample selection in the parser tools.'
+CURRENT_RELEASE_HIGHLIGHT = 'Multi-file CSV recipes, clearer report scope, and local analysis history.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - Run a CSV recipe on several files, see both output names up front, and keep compatible settings after refreshing the input<br>
+    - Keep report corrections after reviewing again and choose between reports containing NOK and only NOK measurements<br>
+    - Reopen a saved workspace, restore a database backup to a new file, and find recent results in analysis history<br>
+    - Share Excel and HTML results together with their offline charts and resources<br>
     - Pin and reorder recipes on Home and open them directly when the app starts on Home<br>
     - Open recipe forms immediately and review missing report metadata in a larger table<br>
     - Return to a running recipe or open its finished Excel workbook, dashboard and folder from Home<br>

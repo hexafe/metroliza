@@ -1,6 +1,13 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.7 — current version
+## 0.8.0-dev.8 — current version
+
+- Run recipes across several CSV files and see the expected Excel and HTML outputs before starting.
+- Keep compatible CSV settings after a reload and preserve report corrections during another review.
+- Find older alarms, tell when local production data was updated, and see the monitor's saved position.
+- Save and reopen a Reports workspace, restore database copies, and package local analysis results for offline use.
+
+## 0.8.0-dev.7 — previous development version
 
 - Fix explicit sample selection in the parser profile validation, install and repair commands.
 - Keep the Home recipe shortcuts, review layout and progress reset from the previous development build.
