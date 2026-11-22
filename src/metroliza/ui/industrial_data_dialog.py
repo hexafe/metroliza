@@ -290,6 +290,11 @@ class IndustrialDataDialog(QDialog):
         )
         self.sync_summary_label = status_chip("Last sync/cache outcome: not checked", "neutral")
         self.cache_label = status_chip("Local industrial cache: not checked", "neutral")
+        self.analysis_cache_scope = status_chip("", "neutral")
+        self.analysis_cache_scope.setWordWrap(True)
+        self.analysis_cache_scope.hide()
+        self._analysis_cache_details = {}
+
         self.sources_label = status_chip("Production sources: none", "neutral")
         self.sync_filter_label = status_chip(self.sync_filter_state.summary(), "warning")
         self.export_filter_label = status_chip(self.export_filter_state.summary(), "neutral")
@@ -340,6 +345,7 @@ class IndustrialDataDialog(QDialog):
         self.links_button.clicked.connect(self.open_links_dialog)
         self.export_button.clicked.connect(self.open_export_dialog)
         self.analyze_button.clicked.connect(self.open_analytics_dialog)
+        self.analysis_source_combo.currentIndexChanged.connect(self._show_analysis_cache_scope)
         self.initialize_button.clicked.connect(self.initialize_cache)
         self.initialize_cache_action.triggered.connect(self.initialize_cache)
         self.refresh_links_button.clicked.connect(self.refresh_links)
@@ -437,6 +443,9 @@ class IndustrialDataDialog(QDialog):
         analytics_row.addWidget(self.analysis_source_combo)
         grid.addWidget(section_label("CSV Summary cache"), row, 0)
         grid.addLayout(analytics_row, row, 1)
+
+        row += 1
+        grid.addWidget(self.analysis_cache_scope, row, 1, 1, 2)
 
         row += 1
         grid.addWidget(section_label("Workbook groups"), row, 0)
@@ -1345,6 +1354,7 @@ class IndustrialDataDialog(QDialog):
         total_records: int,
     ) -> None:
         current = self.analysis_source_combo.currentData()
+        self._analysis_cache_details = {}
         self.analysis_source_combo.blockSignals(True)
         try:
             self.analysis_source_combo.clear()
@@ -1357,9 +1367,9 @@ class IndustrialDataDialog(QDialog):
                 self.analysis_source_combo.setEnabled(False)
                 return
             self.analysis_source_combo.addItem(f"All sources ({int(total_records):,} rows)", None)
-            records_by_profile = self._cached_record_counts_by_profile(repository)
+            self._analysis_cache_details = self._cached_scope_by_profile(repository)
             for profile in profiles:
-                source_records = records_by_profile.get(profile.id, 0)
+                source_records = self._analysis_cache_details.get(profile.id, (0, None, None, None))[0]
                 if source_records <= 0:
                     continue
                 self.analysis_source_combo.addItem(
@@ -1372,19 +1382,40 @@ class IndustrialDataDialog(QDialog):
             self.analysis_source_combo.setEnabled(True)
         finally:
             self.analysis_source_combo.blockSignals(False)
+            self._show_analysis_cache_scope()
+
+    def _show_analysis_cache_scope(self, _index=None):
+        selected = self.analysis_source_combo.currentData()
+        detail = self._analysis_cache_details.get(selected)
+        self.analysis_cache_scope.setVisible(detail is not None)
+        if detail is not None:
+            rows, start, end, updated = detail
+            date_range = f"{start} → {end}" if start and end else "no recorded process dates"
+            update_time = updated or "unknown"
+            self.analysis_cache_scope.setText(
+                f"Local cache · {int(rows):,} rows · Process dates: {date_range} · Last cache update: {update_time}",
+            )
 
     @staticmethod
-    def _cached_record_counts_by_profile(repository: IndustrialDataRepository) -> dict[int, int]:
-        """Count cached records per source profile with one grouped query."""
+    def _cached_scope_by_profile(repository: IndustrialDataRepository) -> dict:
+        """Inspect persisted cache rows, without asking a remote source."""
 
         try:
             with sqlite_query_only_connection_scope(str(repository.database)) as connection:
                 rows = connection.execute(
-                    "SELECT source_profile_id, COUNT(*) FROM industrial_records GROUP BY source_profile_id"
+                    """SELECT source_profile_id, COUNT(*), MIN(NULLIF(process_timestamp, '')),
+                              MAX(NULLIF(process_timestamp, '')), MAX(updated_at)
+                       FROM industrial_records GROUP BY source_profile_id"""
                 ).fetchall()
         except Exception:
             return {}
-        return {int(profile_id): int(count) for profile_id, count in rows}
+        scoped = {int(profile_id): (count, start, end, updated) for profile_id, count, start, end, updated in rows}
+        if rows:
+            scoped[None] = (sum(row[1] for row in rows),
+                            min((row[2] for row in rows if row[2]), default=None),
+                            max((row[3] for row in rows if row[3]), default=None),
+                            max((row[4] for row in rows if row[4]), default=None))
+        return scoped
 
     def _format_config_source_status(self) -> str:
         try:

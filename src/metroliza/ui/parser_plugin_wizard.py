@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QLabel,
+    QMessageBox,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -28,7 +29,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from metroliza.parsing.declarative_parser_profiles import disable_profile, enable_profile, list_profiles
+from metroliza.parsing.declarative_parser_profiles import (
+    approved_profile_backups, disable_profile, enable_profile, list_profiles, rollback_profile,
+)
 from metroliza.parsing.parser_profile_handoff import (
     HandoffWorkspace,
     create_profile_handoff_workspace,
@@ -173,6 +176,8 @@ class ParserPluginWizardDialog(QDialog):
         self._next_control = self.create_button
         self.enable_button = QPushButton("Enable selected")
         self.disable_button = QPushButton("Disable selected")
+        self.rollback_button = QPushButton("Restore previous version…")
+        self.rollback_button.setEnabled(False)
         self.manage_status_label = status_chip("Select an installed profile to manage its enabled state.", "neutral")
         self.manage_status_label.setWordWrap(True)
         self._set_handoff_actions_enabled(False)
@@ -198,6 +203,7 @@ class ParserPluginWizardDialog(QDialog):
         manage_actions = QGridLayout()
         manage_actions.addWidget(self.enable_button, 0, 0)
         manage_actions.addWidget(self.disable_button, 0, 1)
+        manage_actions.addWidget(self.rollback_button, 1, 0, 1, 2)
         manage_actions.addWidget(self.refresh_button, 1, 0, 1, 2)
         manage_layout.addLayout(manage_actions)
         self.task_tabs.addTab(manage, "Manage installed profiles")
@@ -258,6 +264,7 @@ class ParserPluginWizardDialog(QDialog):
         self.install_button.clicked.connect(self.install_handoff_profile)
         self.enable_button.clicked.connect(lambda: self._change_installed_state(True))
         self.disable_button.clicked.connect(lambda: self._change_installed_state(False))
+        self.rollback_button.clicked.connect(self._restore_profile)
         self.profile_list.currentItemChanged.connect(self._sync_manage_actions)
         self.next_button.clicked.connect(lambda: self._next_control.click())
         self.close_button.clicked.connect(self.accept)
@@ -339,6 +346,7 @@ class ParserPluginWizardDialog(QDialog):
         profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         self.enable_button.setEnabled(bool(profile and not profile.enabled and profile.approved))
         self.disable_button.setEnabled(bool(profile and profile.enabled))
+        self.rollback_button.setEnabled(bool(profile and profile.enabled and self._backup_names(profile)))
         if profile is not None:
             self.manage_status_label.setText(
                 f"{profile.plugin_id}: {'enabled' if profile.enabled else 'disabled'}; "
@@ -346,6 +354,36 @@ class ParserPluginWizardDialog(QDialog):
             )
         else:
             self.manage_status_label.setText("Select an installed profile; enable requires valid approval/integrity.")
+
+    def _backup_names(self, profile):
+        try:
+            return approved_profile_backups(profile.plugin_id, home=self.home)
+        except (OSError, ValueError):
+            return ()
+
+    def _restore_profile(self):
+        item = self.profile_list.currentItem()
+        profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        backups = self._backup_names(profile) if profile and profile.enabled else ()
+        if not backups:
+            return
+        answer = QMessageBox.question(
+            self, "Restore parser profile",
+            f"Restore the latest verified backup of {profile.plugin_id}? The current version is kept as a backup.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            rollback_profile(profile.plugin_id, backup_name=backups[0], home=self.home)
+        except (OSError, ValueError) as exc:
+            self.manage_status_label.setText(str(exc))
+            set_status_variant(self.manage_status_label, "warning")
+            return
+        self.refresh_status()
+        self.manage_status_label.setText(f"Restored verified version of {profile.plugin_id}.")
+        set_status_variant(self.manage_status_label, "success")
 
     def _change_installed_state(self, enabled):
         item = self.profile_list.currentItem()
