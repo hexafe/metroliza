@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import date, datetime
 from uuid import UUID
 
 from .contracts import (
@@ -14,7 +15,36 @@ BUILTIN_IDS = frozenset({"reports_excel_main", "reports_dashboard_html", "report
 PATH_KEYS = frozenset({ParameterKey.INPUT_FOLDER, ParameterKey.OUTPUT_FILE,
     ParameterKey.DATABASE_FILE, ParameterKey.EXISTING_DATABASE, ParameterKey.SOURCE_FILE})
 STRING_LIST_KEYS = frozenset({ParameterKey.COLUMNS, ParameterKey.COLUMN_ROLES,
-    ParameterKey.FILTER_VALUES, ParameterKey.GROUPING_RULES})
+    ParameterKey.FILTER_VALUES, ParameterKey.GROUPING_RULES, ParameterKey.SOURCE_FILES})
+DATE_KEYS = (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
+
+
+class RecipeDateError(RecipeError):
+    def __init__(self, key: ParameterKey, code: str):
+        super().__init__(code)
+        self.key = key
+
+
+def _recipe_date(value: str, key: ParameterKey, *, saved: bool) -> str:
+    if not value:
+        return ""
+    try:
+        # Historical report recipes used the first ten characters of ISO dates.
+        return date.fromisoformat(value[:10] if saved else value).isoformat()
+    except ValueError:
+        try:
+            return datetime.strptime(value, "%d.%m.%Y").date().isoformat()
+        except ValueError as exc:
+            raise RecipeDateError(key, "invalid_recipe_date") from exc
+
+
+def normalize_recipe_dates(values, *, edited=()) -> dict[ParameterKey, str]:
+    dates = {key: _recipe_date(values[key].strip(), key, saved=key not in edited)
+             for key in DATE_KEYS if isinstance(values.get(key), str)}
+    start, end = (dates.get(key, "") for key in DATE_KEYS)
+    if start and end and start > end:
+        raise RecipeDateError(ParameterKey.DATE_TO, "reversed_recipe_dates")
+    return dates
 STEP_TYPES = {
     StepKind.OPEN_DATABASE: ({DataKind.NONE}, DataKind.DATABASE),
     StepKind.PREPARE_DATABASE: ({DataKind.NONE}, DataKind.DATABASE),

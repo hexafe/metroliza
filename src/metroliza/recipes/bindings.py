@@ -9,7 +9,7 @@ from pathlib import Path
 from .contracts import (
     LocalBinding, ParameterKey, ParameterMode, RecipeDefinition, RecipeError, ResolvedRunPlan, StepKind,
 )
-from .validation import PATH_KEYS, validate_binding
+from .validation import PATH_KEYS, normalize_recipe_dates, validate_binding
 
 
 def path_identity(path: Path) -> str:
@@ -56,12 +56,18 @@ def _assets_path(definition: RecipeDefinition, output: Path | None, binding: Loc
 def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> ResolvedRunPlan:
     validate_binding(definition, binding, complete=True)
     values = dict(binding.values)
+    values.update(normalize_recipe_dates(values))
     for key in PATH_KEYS:
         if key in values:
             raw = values[key]
             if not isinstance(raw, str) or not raw.strip():
                 raise RecipeError("invalid_path")
             values[key] = str(Path(raw).expanduser().resolve(strict=False))
+    if ParameterKey.SOURCE_FILES in values:
+        files = values[ParameterKey.SOURCE_FILES]
+        if not isinstance(files, tuple) or any(not path.strip() for path in files):
+            raise RecipeError("invalid_path")
+        values[ParameterKey.SOURCE_FILES] = tuple(str(Path(path).expanduser().resolve(strict=False)) for path in files)
     output = _normalized_output(definition, values)
     for spec in definition.parameters:
         if spec.mode is ParameterMode.DERIVED:
@@ -102,6 +108,7 @@ def _source_overlaps_target(source: Path, target: Path) -> bool:
 
 def _source_paths(plan):
     sources = [plan.value(ParameterKey.SOURCE_FILE), plan.input_folder]
+    sources.extend(plan.value(ParameterKey.SOURCE_FILES, ()))
     if not plan.creates_database:
         sources.extend((plan.value(ParameterKey.EXISTING_DATABASE), plan.database_file))
     return tuple(Path(str(source)) for source in sources if source)

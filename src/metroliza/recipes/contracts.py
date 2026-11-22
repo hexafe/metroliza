@@ -45,6 +45,7 @@ class ParameterKey(str, Enum):
     DATABASE_FILE = "database_file"
     EXISTING_DATABASE = "existing_database"
     SOURCE_FILE = "source_file"
+    SOURCE_FILES = "source_files"
     SHEET = "sheet"
     COLUMNS = "columns"
     COLUMN_ROLES = "column_roles"

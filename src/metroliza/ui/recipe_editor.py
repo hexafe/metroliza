@@ -9,9 +9,10 @@ from PyQt6.QtWidgets import (
 
 from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, StepKind
 from metroliza.recipes.editor_service import RecipeEditorService
+from metroliza.recipes.validation import DATE_KEYS, RecipeDateError, normalize_recipe_dates
 from metroliza.ui.recipe_labels import (
-    CHOICE_LABELS, GROUP_LABELS, MODE_LABELS, PARAMETER_LABELS, STEP_LABELS,
-    choice_editor, format_parameter_list, parse_parameter_list,
+    CHOICE_LABELS, DATE_HINT, GROUP_LABELS, MODE_LABELS, PARAMETER_LABELS, STEP_LABELS,
+    RecipeSourceFilesEdit, choice_editor, date_error_message, date_hint, format_parameter_list, parse_parameter_list,
 )
 
 
@@ -21,6 +22,7 @@ class RecipeEditor(QDialog):
     def __init__(self, stored, store, parent=None):
         super().__init__(parent)
         self._widgets_dirty = False
+        self.date_hints = {}
         self.store = store
         self.service = RecipeEditorService(stored)
         if stored.definition.builtin:
@@ -88,6 +90,8 @@ class RecipeEditor(QDialog):
     def _mark_modified(self, *_args):
         self._widgets_dirty = True
         self.status.setText("Niezapisane zmiany")
+        for hint in self.date_hints.values():
+            hint.setText(DATE_HINT)
 
     def _select_optional_html(self, checked):
         self._optional_html = checked
@@ -116,6 +120,7 @@ class RecipeEditor(QDialog):
         widget = QWidget()
         form = QFormLayout(widget)
         self.controls = {}
+        self.date_hints = {}
         for spec in self.service.current.definition.parameters:
             if spec.key is ParameterKey.GROUPING_RULES and not self.report_controls.isHidden():
                 continue  # Managed by the single report grouping field above.
@@ -129,7 +134,10 @@ class RecipeEditor(QDialog):
                 mode.addItem(MODE_LABELS[value], value)
             mode.setCurrentIndex(modes.index(spec.mode))
             value = self.service.current.binding.value(spec.key, "")
-            if spec.key in CHOICE_LABELS:
+            if spec.key is ParameterKey.SOURCE_FILES:
+                edit = RecipeSourceFilesEdit(value or ())
+                edit.paths_changed.connect(self._mark_modified)
+            elif spec.key in CHOICE_LABELS:
                 edit = choice_editor(spec.key, value)
                 edit.currentIndexChanged.connect(self._mark_modified)
             else:
@@ -146,7 +154,15 @@ class RecipeEditor(QDialog):
             mode.currentIndexChanged.connect(self._mark_modified)
             line.addWidget(mode)
             line.addWidget(edit)
+            if isinstance(edit, RecipeSourceFilesEdit):
+                browse = QPushButton("Wybierz pliki…")
+                browse.clicked.connect(edit.browse)
+                line.addWidget(browse)
             form.addRow(PARAMETER_LABELS[spec.key], row)
+            if spec.key in DATE_KEYS:
+                hint = date_hint(edit)
+                self.date_hints[spec.key] = hint
+                form.addRow(hint)
             mode.setAccessibleName(PARAMETER_LABELS[spec.key] + " — sposób ustawiania")
             edit.setAccessibleName(PARAMETER_LABELS[spec.key])
             self.controls[spec.key] = (spec, mode, edit)
@@ -165,11 +181,19 @@ class RecipeEditor(QDialog):
                     if edit.currentIndex() >= 0:
                         self.service.set_value(key, edit.currentData())
                     continue
+                if isinstance(edit, RecipeSourceFilesEdit):
+                    self.service.set_value(key, edit.paths)
+                    continue
                 if edit.isReadOnly() or mode.currentData() is ParameterMode.DERIVED:
                     continue
                 self.service.set_value(key, self._field_value(spec.type, edit.text()))
             if not self.report_controls.isHidden():
                 self._collect_report_options()
+            values = dict(self.service.current.binding.values)
+            original = dict(previous.binding.values)
+            edited = tuple(key for key in DATE_KEYS if values.get(key) != original.get(key))
+            for key, value in normalize_recipe_dates(values, edited=edited).items():
+                self.service.set_value(key, value)
         except Exception:
             self.service.current = previous
             raise
@@ -209,6 +233,11 @@ class RecipeEditor(QDialog):
             kinds = {s.kind for s in plan.definition.steps}
             if {StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML} <= kinds and plan.output_file:
                 outputs.append(str(plan.output_file.with_suffix(".html")))
+            if StepKind.ANALYZE_TABULAR in kinds:
+                from metroliza.recipes.tabular_adapter import analytics_output_family
+                family = analytics_output_family(plan.binding, plan.output_file)
+                if family.workbook is not None:
+                    outputs.append(str(family.workbook))
             self.preview_label.setText("\n".join(outputs))
         except ValueError as error:
             self._error(error)
@@ -230,6 +259,12 @@ class RecipeEditor(QDialog):
             self._error(error)
 
     def _error(self, error):
+        if isinstance(error, RecipeDateError) and error.key in self.date_hints:
+            message = date_error_message(error)
+            self.status.setText(message)
+            self.date_hints[error.key].setText(message)
+            self.controls[error.key][2].setFocus()
+            return
         code = getattr(error, "code", "invalid_configuration")
         messages = {
             "unsupported_grouping_rule": "Wpisz nazwę kolumny grupowania z listy podpowiedzi.",

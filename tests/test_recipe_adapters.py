@@ -10,7 +10,7 @@ from metroliza.industrial.industrial_analytics_state import (
 )
 from metroliza.recipes.bindings import resolve_plan
 from metroliza.recipes.contracts import ParameterKey, RecipeError
-from metroliza.recipes.ports import StepContext, StepStatus
+from metroliza.recipes.ports import ResultCode, StepContext, StepStatus
 from metroliza.tabular.contracts import GroupingAssignment
 from metroliza.recipes.tabular_adapter import AnalyticsRecipePorts, capture, resolve
 
@@ -117,6 +117,68 @@ def test_real_native_tabular_flow_writes_verified_pair_and_retains_numeric_scope
     assert verified.artifact_verified
     assert not ports._loaded
     ports.finish(plan)
+
+
+def test_multifile_recipe_roundtrips_every_source_through_native_runner(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.recipes.storage import RecipeStore
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_files
+
+    data = tmp_path / "data"
+    data.mkdir()
+    first, second = data / "day, one.csv", data / "day two.csv"
+    for path in (first, second):
+        source(path)
+    with second.open("a", encoding="utf-8") as stream:
+        stream.write("\n2026-11-15 10:04:00,R2,7.5\n")
+    output = tmp_path / "result.html"
+    loaded = load_tabular_analytics_files((first, second))
+    try:
+        item = capture(replace(request_for(first, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    store = RecipeStore(tmp_path / "private")
+    store.save(item.definition, item.binding, expected_revision=None)
+    saved = store.load(item.definition.recipe_id)
+    assert saved.binding.value(ParameterKey.SOURCE_FILES) == (str(first), str(second))
+
+    class RecordingPorts(AnalyticsRecipePorts):
+        def _run(self, request, loaded, consents, cancelled, context):
+            self.loaded_count = loaded.row_count
+            self.loaded_files = loaded.source_files
+            return super()._run(request, loaded, consents, cancelled, context)
+
+    ports = RecordingPorts()
+    plan = resolve_plan(saved.definition, saved.binding)
+    record = RecipeRunner(ports).start(plan)
+    assert ports.loaded_files == (str(first), str(second))
+    assert ports.loaded_count == 9
+    assert record.state is RunState.COMPLETED
+    assert output.is_file() and output.with_suffix(".xlsx").is_file()
+
+
+def test_workbook_publish_failure_reports_new_excel_missing_and_keeps_previous(tmp_path, monkeypatch):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.recipes import tabular_adapter
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    workbook.write_bytes(b"previous workbook remains")
+    entry = capture(request_for(path, output))
+    plan = resolve_plan(entry.definition, entry.binding)
+
+    def failed_publication(_file, target, **_kwargs):
+        assert target == str(workbook)
+        raise PermissionError("Excel is holding the file")
+
+    monkeypatch.setattr(tabular_adapter, "publish_output", failed_publication)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    assert runner.start(plan).state is RunState.REQUIRES_DECISION
+    result = runner.resume("continue")
+    assert (result.state, result.code) == (RunState.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED)
+    assert output.is_file()
+    assert workbook.read_bytes() == b"previous workbook remains"
 
 
 def test_industrial_uses_only_existing_local_cache_and_preserves_filters(tmp_path):
@@ -263,7 +325,8 @@ def test_analytics_new_copy_reserves_optional_workbook_and_repeat_rechecks_full_
     decision = ports.preflight(plan, ctx(plan))
     assert decision.requires_decision and not decision.ready
     assert ports.approve(plan, "continue")
-    assert ports._consents[plan.run_id][0].path == plan.output_file.with_suffix(".xlsx")
+    assert decision.review.conflicts == (plan.output_file.with_suffix(".xlsx"),)
+    assert ports._consents[plan.run_id].consents[0].path == plan.output_file.with_suffix(".xlsx")
     assert occupied_workbook.read_bytes() == b"previous complete workbook"
     ports.finish(plan)
     without_workbook = capture(replace(request_for(path, tmp_path / "result.html"), output_workbook_file=""))

@@ -23,6 +23,8 @@ class ResultCode(str, Enum):
     CANCELLED = "cancelled"
     EXPORT_FAILED = "export_failed"
     OUTPUT_MISSING = "output_missing"
+    WORKBOOK_NOT_PUBLISHED = "workbook_not_published"
+    ANALYTICS_WARNINGS = "analytics_warnings"
     UNSUPPORTED = "unsupported"
     INVALID_PLAN = "invalid_plan"
     DATABASE_UNAVAILABLE = "database_unavailable"

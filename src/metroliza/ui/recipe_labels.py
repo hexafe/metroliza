@@ -1,5 +1,8 @@
 """Polish labels shared by the recipe editor and run form."""
-from PyQt6.QtWidgets import QComboBox
+from pathlib import Path
+
+from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtWidgets import QFileDialog, QComboBox, QLabel, QLineEdit
 
 from metroliza.recipes.contracts import ParameterKey, ParameterMode, StepKind
 
@@ -9,6 +12,7 @@ PARAMETER_LABELS = {
     ParameterKey.DATABASE_FILE: "Baza danych",
     ParameterKey.EXISTING_DATABASE: "Istniejąca baza",
     ParameterKey.SOURCE_FILE: "Plik źródłowy",
+    ParameterKey.SOURCE_FILES: "Pliki źródłowe",
     ParameterKey.SHEET: "Arkusz",
     ParameterKey.COLUMNS: "Kolumny",
     ParameterKey.COLUMN_ROLES: "Przeznaczenie kolumn",
@@ -79,3 +83,45 @@ def parse_parameter_list(key, text):
         tokens = {label.casefold(): token for token, label in GROUP_LABELS.items()}
         return tuple(tokens.get(value.casefold(), value.upper()) for value in values)
     return values
+
+
+DATE_HINT = "Np. 22.11.2026 lub 2026-11-22. Pole można zostawić puste."
+
+
+def date_hint(editor):
+    editor.setPlaceholderText("DD.MM.RRRR")
+    editor.setAccessibleDescription(DATE_HINT)
+    hint = QLabel(DATE_HINT)
+    hint.setWordWrap(True)
+    return hint
+
+
+def date_error_message(error):
+    if error.code == "reversed_recipe_dates":
+        return "Data końcowa musi być równa lub późniejsza od początkowej."
+    return "Wpisz poprawną datę, np. 22.11.2026."
+
+
+class RecipeSourceFilesEdit(QLineEdit):
+    paths_changed = pyqtSignal()
+
+    def __init__(self, paths):
+        super().__init__()
+        self.setReadOnly(True)
+        self.setAccessibleName(PARAMETER_LABELS[ParameterKey.SOURCE_FILES])
+        self.paths = ()
+        self.set_paths(paths)
+
+    def set_paths(self, paths):
+        self.paths = tuple(paths)
+        self.setText(", ".join(Path(path).name for path in self.paths))
+        self.setToolTip("\n".join(self.paths))
+        self.paths_changed.emit()
+
+    def browse(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Wybierz pliki źródłowe", self.paths[0] if self.paths else "",
+            "CSV i Excel (*.csv *.xlsx *.xls)",
+        )
+        if files:
+            self.set_paths(files)

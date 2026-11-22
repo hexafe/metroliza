@@ -1,6 +1,7 @@
 """Persistent recipe form, review and result presentation for a shared controller."""
 from __future__ import annotations
 
+from pathlib import Path
 from time import monotonic
 
 from PyQt6.QtCore import QTimer, QUrl, Qt
@@ -10,16 +11,19 @@ from PyQt6.QtWidgets import (
     QProgressBar, QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, StepKind
+from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, RecipeError, StepKind
 from metroliza.recipes.run_state import RunState
 from metroliza.recipes.ports import PreparationPhase, ResultCode
+from metroliza.recipes.validation import DATE_KEYS, RecipeDateError, normalize_recipe_dates
 from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
 from metroliza.ui.recipe_labels import (
-    CHOICE_LABELS, PARAMETER_LABELS, STEP_LABELS, choice_editor, format_parameter_list, parse_parameter_list,
+    CHOICE_LABELS, DATE_HINT, PARAMETER_LABELS, STEP_LABELS, RecipeSourceFilesEdit, choice_editor,
+    date_error_message, date_hint, format_parameter_list, parse_parameter_list,
 )
 
 _BROWSE_LABELS = {ParameterKey.INPUT_FOLDER: "Wybierz folder…", ParameterKey.OUTPUT_FILE: "Wybierz wynik…",
-                  ParameterKey.EXISTING_DATABASE: "Wybierz bazę…", ParameterKey.SOURCE_FILE: "Wybierz źródło…"}
+                  ParameterKey.EXISTING_DATABASE: "Wybierz bazę…", ParameterKey.SOURCE_FILE: "Wybierz źródło…",
+                  ParameterKey.SOURCE_FILES: "Wybierz pliki…"}
 _STATE_LABELS = {
     RunState.READY: "Gotowe", RunState.RUNNING: "Trwa wykonywanie",
     RunState.REQUIRES_DECISION: "Wymagana decyzja", RunState.COMPLETED: "Zakończono",
@@ -40,6 +44,8 @@ class RecipeRunnerPage(QWidget):
         super().__init__(parent)
         self.controller = controller
         self.fields = {}
+        self.date_hints = {}
+        self._saved_date_inputs = {}
         self._review_rows = ()
         self._presented_review = None
         self._attention_rows = set()
@@ -71,6 +77,7 @@ class RecipeRunnerPage(QWidget):
         self.mode_row.hide()
         layout.addWidget(self.mode_row)
         self.database = QLabel()
+        self.database.setTextFormat(Qt.TextFormat.PlainText)
         self.database.setWordWrap(True)
         layout.addWidget(self.database)
         self.status = QLabel("Wybierz parametry i sprawdź plan przed uruchomieniem.")
@@ -88,6 +95,7 @@ class RecipeRunnerPage(QWidget):
         progress_row.addWidget(self.progress_percent)
         layout.addLayout(progress_row)
         self.scope = QLabel()
+        self.scope.setTextFormat(Qt.TextFormat.PlainText)
         self.scope.setWordWrap(True)
         layout.addWidget(self.scope)
         self.only_attention = QCheckBox("Tylko raporty wymagające uwagi")
@@ -131,6 +139,8 @@ class RecipeRunnerPage(QWidget):
         while self.form.rowCount():
             self.form.removeRow(0)
         self.fields.clear()
+        self.date_hints.clear()
+        self._saved_date_inputs = {key: self.controller.binding.value(key, "") for key in DATE_KEYS}
         self._review_rows = ()
         self._presented_review = None
         self.only_attention.hide()
@@ -154,6 +164,9 @@ class RecipeRunnerPage(QWidget):
                 editor = QCheckBox()
                 editor.setChecked(bool(value))
                 editor.toggled.connect(self._form_edited)
+            elif spec.key is ParameterKey.SOURCE_FILES:
+                editor = RecipeSourceFilesEdit(value or ())
+                editor.paths_changed.connect(self._form_edited)
             elif spec.key in CHOICE_LABELS:
                 editor = choice_editor(spec.key, value)
                 editor.currentIndexChanged.connect(self._form_edited)
@@ -164,7 +177,8 @@ class RecipeRunnerPage(QWidget):
                 editor.textChanged.connect(self._form_edited)
             self.fields[spec.key] = (editor, spec)
             label = PARAMETER_LABELS[spec.key]
-            if spec.type is ParameterType.PATH:
+            editor.setAccessibleName(label)
+            if spec.type is ParameterType.PATH or spec.key is ParameterKey.SOURCE_FILES:
                 row = QWidget()
                 box = QHBoxLayout(row)
                 box.setContentsMargins(0, 0, 0, 0)
@@ -174,6 +188,16 @@ class RecipeRunnerPage(QWidget):
                 browse.setToolTip(browse.accessibleName())
                 browse.clicked.connect(lambda _checked=False, key=spec.key: self._browse(key))
                 box.addWidget(browse)
+                self.form.addRow(label, row)
+                self.form.labelForField(row).setBuddy(editor)
+            elif spec.key in DATE_KEYS:
+                row = QWidget()
+                box = QVBoxLayout(row)
+                box.setContentsMargins(0, 0, 0, 0)
+                box.addWidget(editor)
+                hint = date_hint(editor)
+                self.date_hints[spec.key] = hint
+                box.addWidget(hint)
                 self.form.addRow(label, row)
                 self.form.labelForField(row).setBuddy(editor)
             else:
@@ -186,6 +210,8 @@ class RecipeRunnerPage(QWidget):
 
     def _form_edited(self, *_):
         self.controller.draft_edited = True
+        for hint in self.date_hints.values():
+            hint.setText(DATE_HINT)
         self._preview()
         self._buttons()
 
@@ -196,6 +222,8 @@ class RecipeRunnerPage(QWidget):
         for key, (editor, spec) in self.fields.items():
             if spec.type is ParameterType.BOOLEAN:
                 value = editor.isChecked()
+            elif isinstance(editor, RecipeSourceFilesEdit):
+                value = editor.paths
             elif isinstance(editor, QComboBox):
                 value = editor.currentData() or ""
             else:
@@ -222,8 +250,41 @@ class RecipeRunnerPage(QWidget):
             lines.append("Excel obejmie raporty z wybranego folderu.")
         return lines
 
+    def _source_count_line(self, binding):
+        field = self.fields.get(ParameterKey.SOURCE_FILES)
+        if field:
+            count = len(field[0].paths)
+        elif binding.value(ParameterKey.SOURCE_FILES):
+            count = len(binding.value(ParameterKey.SOURCE_FILES))
+        else:
+            count = int(bool(self._path_value(ParameterKey.SOURCE_FILE)))
+        return f"Liczba plików źródłowych: {count}"
+
+    @staticmethod
+    def _output_lines(kinds, binding, output, assets=None):
+        if not output:
+            return []
+        if StepKind.ANALYZE_TABULAR in kinds:
+            from metroliza.recipes.tabular_adapter import analytics_output_family
+            try:
+                family = analytics_output_family(binding, output)
+            except (RecipeError, ValueError):
+                return []
+            lines = [f"Wynik HTML: {family.dashboard}"]
+            if family.workbook is not None:
+                lines.append(f"Wynik Excel: {family.workbook}")
+            return [*lines, f"Zasoby: {family.assets}"]
+        if StepKind.EXPORT_MAIN in kinds:
+            lines = [f"Wynik Excel: {output.with_suffix('.xlsx')}"]
+        else:
+            lines = []
+        if StepKind.EXPORT_HTML in kinds:
+            from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+            html = output.with_suffix(".html")
+            lines.extend((f"Wynik HTML: {html}", f"Zasoby: {assets or resolve_html_dashboard_assets_dir(html)}"))
+        return lines
+
     def _preview(self, *_):
-        from pathlib import Path
         if self.controller.definition is None:
             self.database.clear()
             return
@@ -231,6 +292,8 @@ class RecipeRunnerPage(QWidget):
         mode = (self.controller.binding.value(ParameterKey.METADATA_MODE, "complete")
                 if self.mode_row.isHidden() else self.mode_combo.currentData())
         lines = self._describe_import(kinds, mode)
+        if StepKind.LOAD_TABULAR in kinds:
+            lines.append(self._source_count_line(self.controller.binding))
         output = self._path_value(ParameterKey.OUTPUT_FILE)
         derived = any(p.key is ParameterKey.DATABASE_FILE and p.mode is ParameterMode.DERIVED
                       for p in self.controller.definition.parameters)
@@ -240,33 +303,29 @@ class RecipeRunnerPage(QWidget):
         elif existing:
             label = "Baza do uzupełnienia" if StepKind.PREPARE_EXISTING_DATABASE in kinds else "Istniejąca baza"
             lines.append(f"{label}: {existing}")
-        if output:
-            lines.append(f"Wynik: {output}")
-            if StepKind.EXPORT_MAIN in kinds and StepKind.EXPORT_HTML in kinds:
-                lines.append(f"Dashboard: {Path(output).with_suffix('.html')}")
-            if kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
-                lines.append(f"Zasoby: {Path(output).with_name(Path(output).stem + '_assets')}")
+        if output and Path(output).name:
+            lines.extend(self._output_lines(kinds, self.controller.binding, Path(output)))
         self.database.setText("\n".join(lines))
 
     def _prepared(self, plan):
         kinds = {step.kind for step in plan.definition.steps}
         lines = self._describe_import(kinds, plan.value(ParameterKey.METADATA_MODE, "complete"))
+        if StepKind.LOAD_TABULAR in kinds:
+            lines.append(self._source_count_line(plan.binding))
         if plan.database_file is not None:
             if plan.appends_to_database:
                 label = "Baza do uzupełnienia"
             else:
                 label = "Wyliczona baza" if StepKind.PREPARE_DATABASE in kinds else "Istniejąca baza"
             lines.append(f"{label}: {plan.database_file}")
-        if plan.output_file is not None:
-            lines.append(f"Wynik: {plan.output_file}")
-            if StepKind.EXPORT_MAIN in kinds and StepKind.EXPORT_HTML in kinds:
-                lines.append(f"Dashboard: {plan.output_file.with_suffix('.html')}")
-        if plan.assets_dir is not None and kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
-            lines.append(f"Zasoby: {plan.assets_dir}")
+        lines.extend(self._output_lines(kinds, plan.binding, plan.output_file, plan.assets_dir))
         self.database.setText("\n".join(lines))
 
     def _browse(self, key):
         editor, _spec = self.fields[key]
+        if isinstance(editor, RecipeSourceFilesEdit):
+            editor.browse()
+            return
         if key is ParameterKey.INPUT_FOLDER:
             path = QFileDialog.getExistingDirectory(self, "Folder raportów", editor.text())
         elif key is ParameterKey.OUTPUT_FILE:
@@ -290,7 +349,18 @@ class RecipeRunnerPage(QWidget):
                 self._invalid_parameter(key)
                 return
         try:
-            prepared = self.controller.prepare(self._values())
+            values = self._values()
+            saved = dict(self.controller.binding.values)
+            edited = tuple(key for key in DATE_KEYS if key in values and values[key] != self._saved_date_inputs[key])
+            values.update(normalize_recipe_dates(saved | values, edited=edited))
+            prepared = self.controller.prepare(values)
+        except RecipeDateError as error:
+            message = date_error_message(error)
+            self.status.setText(message)
+            if error.key in self.date_hints:
+                self.date_hints[error.key].setText(message)
+                self.fields[error.key][0].setFocus()
+            return
         except (ValueError, TypeError):
             self._failed("invalid_parameter")
             return
@@ -320,6 +390,8 @@ class RecipeRunnerPage(QWidget):
             ResultCode.SOURCE_CHANGED: "Źródło zmieniło się. Wybierz Powtórz, aby sprawdzić aktualny zbiór.",
             ResultCode.DATABASE_UNAVAILABLE: "Sprawdź, czy wybrana baza nadal istnieje i jest gotowa do pracy w Reports.",
             ResultCode.EXPORT_FAILED: "Nie udało się zapisać wyniku. Sprawdź plik docelowy i jego uprawnienia.",
+            ResultCode.OUTPUT_MISSING: "Nie udało się potwierdzić zapisu oczekiwanego pliku wynikowego.",
+            ResultCode.WORKBOOK_NOT_PUBLISHED: "Wynik częściowy. Zapisano HTML. Brakuje nowego pliku Excel.",
         }
         self.status.setText(messages.get(record.code, _STATE_LABELS.get(record.state, record.state.value)))
         self.continue_button.setText("Kontynuuj zatwierdzony zakres")
@@ -365,6 +437,9 @@ class RecipeRunnerPage(QWidget):
         excluded = tuple(item.display_name for item in files if item.status.value not in {"ready", "duplicate"})
         missing = sum(len(row.missing_fields) for row in self._review_rows)
         summary = [*result.summary]
+        conflicts = getattr(review, "conflicts", ())
+        if conflicts:
+            summary.extend(("Ścieżki z kolizją przy zapisie", *(str(path) for path in conflicts)))
         if self._review_rows:
             summary.append(f"Uwaga: {len(self._attention_rows)} raportów · Brakujące pola: {missing}")
         if excluded:

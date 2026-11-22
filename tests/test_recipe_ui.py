@@ -58,6 +58,85 @@ def test_micro_form_has_two_prompted_fields_and_preserves_private_plan(qapplicat
     page.close()
 
 
+def test_run_form_checks_polish_dates_before_start_and_keeps_other_values(qapplication_session, tmp_path, monkeypatch):
+    from metroliza.recipes.editor_service import RecipeEditorService
+    from metroliza.recipes.storage import copy_recipe
+
+    item = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN, str(tmp_path / "input"),
+                     str(tmp_path / "new.xlsx")), name="Daty")
+    service = RecipeEditorService(item)
+    service.configure_reports(dates=True, grouping_columns=(), additional_html=False)
+    service.set_value(ParameterKey.DATE_FROM, "2026-11-20T00:00:00.000")
+    controller = RecipeController(Runner())
+    page = RecipeRunnerPage(controller)
+    assert controller.launch(service.current.definition, service.current.binding)
+    received = []
+    monkeypatch.setattr(controller, "start", lambda: received.append(controller.plan))
+    page.show()
+    try:
+        start = page.fields[ParameterKey.DATE_FROM][0]
+        end = page.fields[ParameterKey.DATE_TO][0]
+        end.setText("31.11.2026")
+        page._start()
+        assert not received
+        assert "poprawną datę" in page.date_hints[ParameterKey.DATE_TO].text()
+        assert page.focusWidget() is end
+
+        end.setText("19.11.2026")
+        page._start()
+        assert not received
+        assert "późniejsza" in page.date_hints[ParameterKey.DATE_TO].text()
+        assert str(tmp_path / "new.xlsx") == page.fields[ParameterKey.OUTPUT_FILE][0].text()
+
+        end.setText("22.11.2026")
+        page._start()
+        assert received[-1].value(ParameterKey.DATE_FROM) == "2026-11-20"
+        assert received[-1].value(ParameterKey.DATE_TO) == "2026-11-22"
+        start.clear()
+        page._start()
+        assert received[-1].value(ParameterKey.DATE_FROM) == ""
+        assert received[-1].value(ParameterKey.DATE_TO) == "2026-11-22"
+    finally:
+        page.close()
+
+
+def test_multifile_run_form_lists_output_pair_and_names_workbook_collision(qapplication_session, tmp_path):
+    from dataclasses import replace
+    from metroliza.recipes.runner import RecipeRunner
+    from metroliza.recipes.tabular_adapter import AnalyticsRecipePorts, capture
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_files
+    from tests.test_recipe_adapters import request_for, source
+
+    first, second = tmp_path / "a,csv.csv", tmp_path / "b.csv"
+    source(first)
+    source(second)
+    output = tmp_path / "wynik.html"
+    workbook = output.with_suffix(".xlsx")
+    workbook.write_bytes(b"existing workbook")
+    loaded = load_tabular_analytics_files((first, second))
+    try:
+        item = capture(replace(request_for(first, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    controller = RecipeController(runner)
+    page = RecipeRunnerPage(controller)
+    try:
+        assert controller.launch(item.definition, item.binding)
+        assert page._values()[ParameterKey.SOURCE_FILES] == (str(first), str(second))
+        assert "Liczba plików źródłowych: 2" in page.database.text()
+        assert str(output) in page.database.text() and str(workbook) in page.database.text()
+        assert controller.prepare(page._values())
+        result = runner.start(controller.plan)
+        page._changed(result)
+        assert result.state is RunState.REQUIRES_DECISION
+        assert str(workbook) in page.scope.text() and str(output) not in page.scope.text()
+        assert page.continue_button.text() == "Zastąp wynik i kontynuuj"
+    finally:
+        runner.cancel()
+        page.close()
+
+
 def test_append_form_uses_home_context_and_stage_is_bound_to_current_run(qapplication_session, tmp_path):
     from dataclasses import replace
 

@@ -48,6 +48,9 @@ class RecipeLibraryPage(QWidget):
             self.module.addItem(label, value)
         controls.addWidget(self.search)
         controls.addWidget(self.module)
+        refresh = QPushButton("Odśwież listę")
+        refresh.clicked.connect(self.refresh)
+        controls.addWidget(refresh)
         layout.addLayout(controls)
         self.list = QListWidget()
         layout.addWidget(self.list)
@@ -245,6 +248,7 @@ class RecipeQuickFlows(QWidget):
         self.active.setVisible(bool(name and stage))
 
     def set_result(self, plan, record):
+        from metroliza.recipes.ports import ResultCode
         from metroliza.recipes.run_state import RunState
         from metroliza.ui.result_actions import add_result_actions, existing_result_files
 
@@ -253,6 +257,8 @@ class RecipeQuickFlows(QWidget):
             return
         verified = {step.kind for step in record.steps if step.result.artifact_verified}
         paths = existing_result_files(self._result_paths(plan, verified))
+        if record.code is ResultCode.WORKBOOK_NOT_PUBLISHED:
+            paths = tuple(path for path in paths if path.suffix.lower() != ".xlsx")
         if not paths:
             return
         self._result_run_id = record.run_id
@@ -270,6 +276,7 @@ class RecipeQuickFlows(QWidget):
 
         add_result_actions(self.window(), paths, add_button,
                            labels=("Otwórz Excel", "Otwórz HTML", "Pokaż w folderze"))
+        return paths
 
     @staticmethod
     def _result_paths(plan, verified):

@@ -1,7 +1,7 @@
 """Native CSV/XLSX analytics recipes with private, closed request snapshots."""
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 import json
 import sqlite3
 from pathlib import Path
@@ -28,7 +28,7 @@ from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.shared.dashboard_interactivity import DashboardInteractivityOptions
 from metroliza.tabular.contracts import GroupingAssignment
 from metroliza.tabular.tabular_analytics_service import (
-    TabularColumnFilter, TabularLoadCancelled, cleanup_tabular_load_result, load_tabular_analytics_file,
+    TabularColumnFilter, TabularLoadCancelled, cleanup_tabular_load_result, load_tabular_analytics_files,
 )
 
 _TYPES = {cls.__name__: cls for cls in (
@@ -37,6 +37,12 @@ _TYPES = {cls.__name__: cls for cls in (
     TabularColumnFilter, GroupingAssignment, DashboardInteractivityOptions,
 )}
 _RUNTIME_FIELDS = frozenset({"tabular_load_result", "_grouping_snapshot", "_grouping_owner"})
+
+
+@dataclass(frozen=True, repr=False)
+class _OutputReview:
+    conflicts: tuple[Path, ...]
+    consents: tuple
 
 
 def _encode(value):
@@ -83,6 +89,35 @@ def _source_signature(path):
     return [str(Path(path).resolve()), info.st_size, info.st_mtime_ns]
 
 
+def _source_signatures(paths):
+    return [_source_signature(path) for path in paths]
+
+
+def _grouping_signature(signatures):
+    # Preserve the on-disk representation of an existing single-file binding.
+    return signatures[0] if len(signatures) == 1 else signatures
+
+
+def _plan_sources(plan):
+    single = plan.value(ParameterKey.SOURCE_FILE) or plan.value(ParameterKey.EXISTING_DATABASE)
+    return plan.value(ParameterKey.SOURCE_FILES, ()) or ((single,) if single else ())
+
+
+def _capture_tabular_sources(request):
+    loaded = request.tabular_load_result
+    snapshots = getattr(loaded, "source_snapshots", ())
+    sources = getattr(loaded, "source_files", ()) or tuple(snapshot.path for snapshot in snapshots)
+    if sources and Path(sources[0]).resolve() != Path(request.input_file).resolve():
+        raise RecipeError("invalid_analytics_source")
+    sources = sources or (request.input_file,)
+    signatures = _source_signatures(sources) if request.grouping_df else []
+    if signatures and snapshots and signatures != [
+        [str(Path(snapshot.path).resolve()), snapshot.size, snapshot.mtime_ns] for snapshot in snapshots
+    ]:
+        raise RecipeError("stale_manual_grouping")
+    return sources, signatures
+
+
 def validate(request):
     request = validate_industrial_analytics_request(request, require_runnable=True)
     if request.source_kind == "production_cache":
@@ -104,8 +139,9 @@ def capabilities():
 
 def capture(request: IndustrialAnalyticsRequest, *, name="Analiza CSV/XLSX") -> StoredRecipe:
     request = validate(request)
-    source = request.input_file if request.source_kind == "tabular_file" else request.db_file
-    signature = _source_signature(source) if request.grouping_df else None
+    tabular = request.source_kind == "tabular_file"
+    sources, signatures = _capture_tabular_sources(request) if tabular else ((request.db_file,), [])
+    signature = _grouping_signature(signatures) if signatures else None
     payload = {f.name: _encode(getattr(request, f.name)) for f in fields(request)
                if f.name not in _RUNTIME_FIELDS}
     # Source and output paths are independently prompted; the snapshot contains
@@ -116,10 +152,14 @@ def capture(request: IndustrialAnalyticsRequest, *, name="Analiza CSV/XLSX") -> 
     raw = json.dumps({"version": 1, "request": payload, "grouping_source": signature},
                      separators=(",", ":"), allow_nan=False)
     identity = str(uuid4())
-    source_key = ParameterKey.SOURCE_FILE if request.source_kind == "tabular_file" else ParameterKey.EXISTING_DATABASE
-    load_kind = StepKind.LOAD_TABULAR if request.source_kind == "tabular_file" else StepKind.LOAD_INDUSTRIAL
+    source_key, source_type, source = ParameterKey.EXISTING_DATABASE, ParameterType.PATH, sources[0]
+    if len(sources) > 1:
+        source_key, source_type, source = ParameterKey.SOURCE_FILES, ParameterType.STRINGS, sources
+    elif tabular:
+        source_key = ParameterKey.SOURCE_FILE
+    load_kind = StepKind.LOAD_TABULAR if tabular else StepKind.LOAD_INDUSTRIAL
     parameters = (
-        ParameterSpec(source_key, ParameterType.PATH),
+        ParameterSpec(source_key, source_type),
         ParameterSpec(ParameterKey.OUTPUT_FILE, ParameterType.PATH),
         ParameterSpec(ParameterKey.ANALYTICS_REQUEST, ParameterType.TEXT, ParameterMode.FIXED),
         ParameterSpec(ParameterKey.SOURCE_KIND, ParameterType.CHOICE, ParameterMode.FIXED),
@@ -184,14 +224,19 @@ def _resolve_source(plan, request, payload):
     kind = plan.value(ParameterKey.SOURCE_KIND)
     if kind != request.source_kind or kind not in ("tabular_file", "production_cache"):
         raise RecipeError("invalid_analytics_source")
-    source_key = ParameterKey.SOURCE_FILE if kind == "tabular_file" else ParameterKey.EXISTING_DATABASE
-    source = str(plan.value(source_key) or "")
-    if payload["grouping_source"] is not None and payload["grouping_source"] != _source_signature(source):
+    sources = _plan_sources(plan)
+    if not sources or sum(bool(plan.value(key)) for key in (
+            ParameterKey.SOURCE_FILES, ParameterKey.SOURCE_FILE, ParameterKey.EXISTING_DATABASE)) != 1:
+        raise RecipeError("invalid_analytics_source")
+    if kind == "production_cache" and sources != (plan.value(ParameterKey.EXISTING_DATABASE),):
+        raise RecipeError("invalid_analytics_source")
+    if payload["grouping_source"] is not None and payload["grouping_source"] != _grouping_signature(
+            _source_signatures(sources)):
         raise RecipeError("stale_manual_grouping")
     outputs = _analytics_output_paths(plan.output_file, payload)
     workbook = str(outputs.workbook) if outputs.workbook is not None else ""
-    return replace(request, input_file=source if kind == "tabular_file" else "",
-                   db_file=source if kind == "production_cache" else "",
+    return replace(request, input_file=sources[0] if kind == "tabular_file" else "",
+                   db_file=sources[0] if kind == "production_cache" else "",
                    output_dashboard_file=str(outputs.dashboard), output_workbook_file=workbook)
 
 
@@ -240,6 +285,7 @@ class AnalyticsRecipePorts:
         self._cancel = Event()
         self._requests = {}
         self._consents = {}
+        self._output_reviews = {}
         self._loaded = {}
         self._signatures = {}
         self._results = {}
@@ -248,6 +294,7 @@ class AnalyticsRecipePorts:
         cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
         self._requests.pop(plan.run_id, None)
         self._consents.pop(plan.run_id, None)
+        self._output_reviews.pop(plan.run_id, None)
         self._signatures.pop(plan.run_id, None)
         self._results.pop(plan.run_id, None)
 
@@ -260,13 +307,13 @@ class AnalyticsRecipePorts:
         self._cancel.clear()
         try:
             request = self._validated_request(plan)
-            source = request.input_file or request.db_file
-            signature = _source_signature(source)
+            sources = _plan_sources(plan)
+            signature = _source_signatures(sources)
             previous = self._signatures.get(plan.run_id)
             if previous is not None and signature != previous:
                 self._consents.pop(plan.run_id, None)
                 return PreflightResult(False, ResultCode.SOURCE_CHANGED)
-            if request.source_kind == "production_cache" and not self._cache_ready(source):
+            if request.source_kind == "production_cache" and not self._cache_ready(request.db_file):
                 return PreflightResult(False, ResultCode.REVIEW_REQUIRED, True,
                                        summary=("Brak gotowego lokalnego cache Industrial.",))
             targets = [Path(request.output_dashboard_file)]
@@ -274,15 +321,19 @@ class AnalyticsRecipePorts:
                 targets.append(Path(request.output_workbook_file))
             self._requests[plan.run_id] = request
             self._signatures[plan.run_id] = signature
-            conflicts = conflicting_outputs(targets)
-            if conflicts and plan.run_id not in self._consents:
-                return PreflightResult(False, ResultCode.REVIEW_REQUIRED, True, str(uuid4()),
-                    (f"Zastąpienie istniejących wyników: {len(conflicts)}",), request)
-            return PreflightResult(True, summary=("Natywne filtry i mapowanie zostaną sprawdzone przed publikacją.",))
+            return self._review_outputs(plan, targets)
         except RecipeError:
             return PreflightResult(False, ResultCode.INVALID_PLAN)
         except (OSError, ValueError, sqlite3.Error):
             return PreflightResult(False, ResultCode.REVIEW_REQUIRED, True)
+
+    def _review_outputs(self, plan, targets):
+        conflicts = tuple(dict.fromkeys(conflicting_outputs(targets)))
+        review = _OutputReview(conflicts, ExportRecipeService.replacement_consents(targets))
+        if conflicts and review != self._consents.get(plan.run_id):
+            self._output_reviews[plan.run_id] = review
+            return PreflightResult(False, ResultCode.REVIEW_REQUIRED, True, str(uuid4()), review=review)
+        return PreflightResult(True, summary=("Natywne filtry i mapowanie zostaną sprawdzone przed publikacją.",))
 
     @staticmethod
     def _cache_ready(source):
@@ -306,8 +357,10 @@ class AnalyticsRecipePorts:
             return False
         if request != self._requests.get(plan.run_id):
             return False
-        targets = [request.output_dashboard_file, request.output_workbook_file]
-        self._consents[plan.run_id] = ExportRecipeService.replacement_consents(p for p in targets if p)
+        review = self._output_reviews.get(plan.run_id)
+        if review is None:
+            return False
+        self._consents[plan.run_id] = review
         return True
 
     def execute(self, step, plan, context):
@@ -323,7 +376,7 @@ class AnalyticsRecipePorts:
         try:
             if self._validated_request(plan) != request:
                 return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
-            if _source_signature(request.input_file or request.db_file) != self._signatures[plan.run_id]:
+            if _source_signatures(_plan_sources(plan)) != self._signatures[plan.run_id]:
                 return StepResult(StepStatus.FAILED, ResultCode.SOURCE_CHANGED)
             return self._execute_current(step, plan, request, context, cancelled)
         except RecipeError:
@@ -351,8 +404,9 @@ class AnalyticsRecipePorts:
     def _load_snapshot(self, plan, request, cancelled):
         if request.source_kind != "tabular_file":
             return StepResult(StepStatus.COMPLETED)
-        loaded = load_tabular_analytics_file(
-            request.input_file, sheet_name=request.sheet_name,
+        # The workflow consumes this exact snapshot, including every selected source.
+        loaded = load_tabular_analytics_files(
+            _plan_sources(plan), sheet_name=request.sheet_name,
             timestamp_column=request.timestamp_column, reference_column=request.reference_column,
             cancel_check=cancelled,
         )
@@ -372,14 +426,17 @@ class AnalyticsRecipePorts:
 
     def _analyze(self, plan, request, context, cancelled):
         try:
+            approved = self._consents.get(plan.run_id)
             result = self._run(request, self._loaded.get(plan.run_id),
-                               self._consents.get(plan.run_id, ()), cancelled, context)
+                               approved.consents if approved else (), cancelled, context)
             self._results[plan.run_id] = result
-            if not self._verify_outputs(request):
+            if not ExportRecipeService.verify(Path(result.html_dashboard_path)):
                 return StepResult(StepStatus.FAILED, ResultCode.OUTPUT_MISSING)
-            warnings = bool(result.diagnostics)
-            return StepResult(StepStatus.PARTIAL if warnings else StepStatus.COMPLETED,
-                              ResultCode.SUCCESS, artifact_verified=True)
+            if request.output_workbook_file and not result.workbook_path:
+                return StepResult(StepStatus.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED, artifact_verified=True)
+            warnings = (ResultCode.ANALYTICS_WARNINGS,) if any(
+                note.severity in {"warning", "error"} for note in result.diagnostics) else ()
+            return StepResult(StepStatus.COMPLETED, warnings=warnings, artifact_verified=True)
         finally:
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
 
@@ -417,13 +474,24 @@ class AnalyticsRecipePorts:
 
             published = write_dashboard_safely(writer, output_path=target, consents=consents,
                                                should_cancel=cancelled)
+            workbook_path = ""
             if workbook:
                 if cancelled():
                     raise OutputPublicationCanceled()
-                publish_output(workbook, request.output_workbook_file, consents=consents, should_cancel=cancelled)
+                workbook_path = self._publish_workbook(workbook, request.output_workbook_file, consents, cancelled)
             return replace(result_holder[0], html_dashboard_path=published["html_dashboard_path"],
                            html_dashboard_assets_path=published["html_dashboard_assets_path"],
-                           workbook_path=request.output_workbook_file)
+                           workbook_path=workbook_path)
+
+    @staticmethod
+    def _publish_workbook(workbook, target, consents, cancelled):
+        if not ExportRecipeService.verify(workbook):
+            return ""
+        try:
+            publish_output(workbook, target, consents=consents, should_cancel=cancelled)
+        except OSError:
+            return ""
+        return target
 
 
 def create_adapter_ports():

@@ -1,7 +1,7 @@
 """Lazy composition of the shared recipe workspace and existing service engines."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget
 
 from metroliza.ui.recipe_library_page import RecipeLibraryPage, RecipeQuickFlows
@@ -50,6 +50,8 @@ class RecipeHome(RecipeQuickFlows):
 
 class RecipeWorkspace(QWidget):
     """One persistent controller survives page changes and repeated launch clicks."""
+    analysis_completed = pyqtSignal(object)
+
     def __init__(self, main_window):
         super().__init__(main_window)
         from metroliza.recipes.runner import RecipeRunner
@@ -69,6 +71,7 @@ class RecipeWorkspace(QWidget):
         self._editors = []
         layout = QVBoxLayout(self)
         self.catalog_notice = QLabel()
+        self.catalog_notice.setTextFormat(Qt.TextFormat.PlainText)
         self.catalog_notice.setWordWrap(True)
         layout.addWidget(self.catalog_notice)
         self.stack = QStackedWidget()
@@ -97,15 +100,23 @@ class RecipeWorkspace(QWidget):
         from metroliza.recipes.storage import StoredRecipe
         builtins = tuple(StoredRecipe(d, builtin_binding(d)) for d in BUILTIN_RECIPES)
         try:
-            local = self.store.list()
+            local, issues = self.store.scan()
         except (ValueError, OSError):
             self.catalog_notice.setText("Prywatna biblioteka wymaga sprawdzenia formatu lub dostępu do plików.")
+            self.catalog_notice.setToolTip("")
             return builtins
-        self.catalog_notice.clear()
+        filenames = tuple(issue.filename + (" (nowszy format)" if issue.code == "newer_format" else "")
+                          for issue in issues)
+        self.catalog_notice.setToolTip("\n".join(filenames))
+        shown = ", ".join(filenames[:5])
+        if len(filenames) > 5:
+            shown += f" i {len(filenames) - 5} więcej (zobacz podpowiedź)"
+        self.catalog_notice.setText(f"Nie udało się odczytać receptur z plików {shown}." if shown else "")
         return builtins + local
 
     def launch(self, identity=""):
         if not identity:
+            self._refresh_catalog()
             self.stack.setCurrentWidget(self.library)
             return
         try:
@@ -134,7 +145,19 @@ class RecipeWorkspace(QWidget):
         self.quick.set_active(self.controller.plan.binding.name, stage)
 
     def _home_result(self, record):
-        self.quick.set_result(self.controller.plan, record)
+        from metroliza.recipes.contracts import ParameterKey
+
+        plan = self.controller.plan
+        paths = self.quick.set_result(plan, record)
+        if paths:
+            sources = plan.value(ParameterKey.SOURCE_FILES, ())
+            source = (sources[0] if len(sources) == 1 else None) if sources else (
+                plan.value(ParameterKey.SOURCE_FILE) or plan.input_folder or plan.database_file)
+            settings = {"recipe": plan.binding.name}
+            settings.update((key.value, plan.value(key)) for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
+                            if plan.value(key))
+            self.analysis_completed.emit({"kind": "recipe", "artifacts": [str(path) for path in paths],
+                                          "source": str(source) if source else None, "settings": settings})
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)

@@ -12,7 +12,7 @@ from typing import Any, Iterator
 from uuid import UUID, uuid4
 
 from .contracts import (
-    MAX_PAYLOAD_BYTES, DataKind, DerivationRule, LocalBinding, ParameterKey, ParameterMode,
+    FORMAT_VERSION, MAX_PAYLOAD_BYTES, DataKind, DerivationRule, LocalBinding, ParameterKey, ParameterMode,
     ParameterSpec, ParameterType, RecipeDefinition, RecipeError, StepKind, StepSpec,
 )
 from .validation import validate_binding
@@ -24,6 +24,12 @@ MAX_RECIPES = 256
 class StoredRecipe:
     definition: RecipeDefinition
     binding: LocalBinding
+
+
+@dataclass(frozen=True, repr=False)
+class RecipeLoadIssue:
+    filename: str
+    code: str
 
 
 def default_store_directory() -> Path:
@@ -65,6 +71,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def _decode(raw: bytes) -> StoredRecipe:
     try:
         payload = json.loads(raw, object_pairs_hook=_unique_object)
+        definition_header = payload.get("definition") if isinstance(payload, dict) else None
+        version = definition_header.get("format_version") if isinstance(definition_header, dict) else None
+        if type(version) is int and version > FORMAT_VERSION:
+            raise RecipeError("newer_format")
         _keys(payload, {"definition", "binding"})
         d = _keys(payload["definition"], {"format_version", "method_version", "recipe_id",
             "builtin", "steps", "parameters"})
@@ -172,14 +182,27 @@ class RecipeStore:
         return stored
 
     def list(self) -> tuple[StoredRecipe, ...]:
-        if not self.root.exists():
-            return ()
+        return self.scan()[0]
+
+    def scan(self) -> tuple[tuple[StoredRecipe, ...], tuple[RecipeLoadIssue, ...]]:
+        """Read each catalog entry independently and keep damage local to its filename."""
         if self.root.is_symlink():
             raise RecipeError("unsafe_store")
         paths = sorted(self.root.glob("*.json"))
         if len(paths) > MAX_RECIPES:
             raise RecipeError("recipe_count_limit")
-        return tuple(self.load(path.stem) for path in paths)
+        recipes = []
+        issues = []
+        for path in paths:
+            try:
+                if self._path(path.stem) != path:
+                    raise RecipeError("invalid_recipe_id")
+                recipes.append(self.load(path.stem))
+            except RecipeError as exc:
+                issues.append(RecipeLoadIssue(path.name, exc.code))
+            except OSError:
+                issues.append(RecipeLoadIssue(path.name, "unreadable_recipe_file"))
+        return tuple(recipes), tuple(issues)
 
     def _validate_save(self, definition: RecipeDefinition, binding: LocalBinding,
                        expected_revision: int | None) -> None:
@@ -192,6 +215,10 @@ class RecipeStore:
                 folder = source.parent if key is ParameterKey.SOURCE_FILE else source
                 if candidate == folder or folder in candidate.parents:
                     raise RecipeError("private_location_required")
+        for raw_source in binding.value(ParameterKey.SOURCE_FILES, ()):
+            folder = Path(raw_source).expanduser().resolve(strict=False).parent
+            if candidate == folder or folder in candidate.parents:
+                raise RecipeError("private_location_required")
         if definition.builtin:
             raise RecipeError("builtin_read_only")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
