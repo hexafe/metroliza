@@ -40,7 +40,7 @@ Copy a built-in recipe to edit it. Choose **Pytaj przy każdym uruchomieniu**
 to enter a value for each run, **Używaj zapisanej wartości** to reuse a value,
 or **Ustal automatycznie** to derive the database path from the output.
 Choose **Zapisz recepturę** to save all visible choices together, including
-dates, grouping and the additional HTML report. The confirmation lists the
+dates, grouping and the additional HTML report. Grouping automatically includes the HTML report. The confirmation lists the
 report formats. Choose **Zapisz jako nową** to keep a separate recipe. Select **Przypnij do Home po zapisaniu** to pin it at the same
 time. A running job retains the plan that was shown when it started.
 Changes to the library apply to future runs.

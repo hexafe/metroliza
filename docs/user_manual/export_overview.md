@@ -10,6 +10,7 @@ filtering, optional grouping, and a preset before the export runs.
 After importing reports, you can choose the latest batch directly in Reports.
 Its button shows how many reports were saved in the batch. Choose **Eksportuj całą bazę**
 to export from the full database using your usual filters and groups.
+Reopening the export from Home or with **Ctrl+E** keeps the scope you already selected.
 During an export you can open CSV Summary to work on a separate file. Use **Stop export**
 to cancel the running export.
 
