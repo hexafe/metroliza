@@ -1,7 +1,9 @@
 """#1159: no workbook or HTML output is replaced without operation-specific consent."""
 
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 import errno
 import time
@@ -80,6 +82,51 @@ def test_export_cancel_keeps_old_target(tmp_path):
     assert not ExcelExportBackend().run(_export_thread(target, cancel=True))
     assert target.read_bytes() == b"old workbook"
     assert set(tmp_path.iterdir()) == {target}
+
+
+def test_report_and_analytics_workbook_commits_cannot_both_use_the_same_consent(tmp_path, monkeypatch):
+    import os
+
+    from metroliza.charts.export_html_dashboard import _dashboard_publication_lock
+    from metroliza.exporting.export_backends import ExcelExportBackend
+    from metroliza.exporting.output_publication import OutputConsent, publish_output
+
+    target = tmp_path / "shared.xlsx"
+    target.write_bytes(b"last complete workbook")
+    second_stage = tmp_path / "analytics.xlsx"
+    second_stage.write_bytes(b"analytics workbook")
+    report = _export_thread(target)
+    consent = OutputConsent.for_path(target)
+    report.replace_outputs = (consent,)
+    replacing, release, competing, acquired = Event(), Event(), Event(), Event()
+    backend = ExcelExportBackend()
+
+    def replace_when_released(source, destination):
+        replacing.set()
+        assert release.wait(10)
+        os.replace(source, destination)
+
+    def publish_analytics():
+        competing.set()
+        with _dashboard_publication_lock(target):
+            acquired.set()
+            publish_output(second_stage, target, consents=(consent,))
+
+    monkeypatch.setattr(backend, "replace_workbook", replace_when_released)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(backend.run, report)
+        try:
+            assert replacing.wait(10)
+            second = pool.submit(publish_analytics)
+            assert competing.wait(10)
+            assert not acquired.wait(0.1)
+        finally:
+            release.set()
+        assert first.result(timeout=10)
+        with pytest.raises(FileExistsError, match="Output changed after confirmation"):
+            second.result(timeout=10)
+    with zipfile.ZipFile(target) as archive:
+        assert b"NOK" in archive.read("xl/sharedStrings.xml")
 
 
 def _request(database, target, *, dashboard=False, html_only=False):
@@ -195,15 +242,21 @@ def test_collision_prompt_defaults_to_copy_and_shows_database_and_paths(monkeypa
     target = tmp_path / "existing.xlsx"
     copy = tmp_path / "existing (2).xlsx"
     seen = []
+    dialog = ExportDialog()
 
     def click_default(prompt):
+        assert dialog._publication_admission_dialog is prompt and prompt.parent() is dialog
         seen.append((prompt.defaultButton().text(), prompt.text()))
         prompt.defaultButton().click()
 
     monkeypatch.setattr(QMessageBox, "exec", click_default)
-    assert ExportDialog._choose_output_collision(None, "selected.sqlite3", (target,), (target,), copy) == "copy"
-    assert seen[0][0] == "Save a copy"
-    assert all(value in seen[0][1] for value in ("selected.sqlite3", str(target), str(copy)))
+    try:
+        assert dialog._choose_output_collision("selected.sqlite3", (target,), (target,), copy) == "copy"
+        assert dialog._publication_admission_dialog is None
+        assert seen[0][0] == "Save a copy"
+        assert all(value in seen[0][1] for value in ("selected.sqlite3", str(target), str(copy)))
+    finally:
+        dialog.close()
 
 
 def test_default_copy_publishes_new_workbook_and_keeps_old_bytes(tmp_path, dialog_host):
