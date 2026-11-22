@@ -442,10 +442,11 @@ class ExportDialog(QDialog):
             preset_options = self._preset_options(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
-            initial_profile = not getattr(self, "_chart_profile_loaded", False)
-            if initial_profile or not self.validate_violin_plot_min_samplesize_input():
+            apply_all_chart_values = (not getattr(self, "_chart_profile_loaded", False)
+                                      or self._custom_profile(selected_preset) is not None)
+            if apply_all_chart_values or not self.validate_violin_plot_min_samplesize_input():
                 self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
-            if initial_profile or not self.validate_plot_scale_input():
+            if apply_all_chart_values or not self.validate_plot_scale_input():
                 self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
             self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))

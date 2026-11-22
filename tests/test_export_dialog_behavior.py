@@ -233,12 +233,16 @@ def test_saved_export_options_reopen_preview_and_apply(monkeypatch, tmp_path):
     dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(source))
     try:
         dialog._set_output_path(output, remember=True)
+        dialog.violin_plot_min_samplesize.setText("invalid")
+        dialog.summary_plot_scale.setText("0,5")
         dialog.preset_combobox.setCurrentText("Night inspection (saved)")
         assert "Scatter" in dialog.preset_preview_label.text()
         assert "Optional HTML: On" in dialog.preset_preview_label.text()
         assert dialog.export_type_combobox.currentText() == "Line"
         assert not dialog.generate_html_dashboard_checkbox.isChecked()
         assert not dialog.export_button.isEnabled()
+        assert dialog.violin_plot_min_samplesize.text() == "invalid"
+        assert dialog.summary_plot_scale.text() == "0,5"
         dialog.apply_preset_button.click()
         result = dialog._build_export_request()
         assert result.paths.db_file == str(source) and result.paths.excel_file == str(output)

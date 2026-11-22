@@ -190,6 +190,7 @@ class TabularSourceSnapshot:
     mtime_ns: int
     row_count: int
     csv_config: dict[str, Any] = field(default_factory=dict)
+    file_identity: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -1733,6 +1734,21 @@ def _estimate_csv_data_rows(path: Path) -> int:
         return 0
 
 
+def _tabular_source_revision(path: Path) -> tuple[int, int, int, int, int]:
+    info = path.stat()
+    return info.st_dev, info.st_ino, info.st_ctime_ns, info.st_size, info.st_mtime_ns
+
+
+def _require_tabular_source_revision(path: Path, expected: tuple[int, int, int, int, int]) -> None:
+    message = "A selected source changed while loading. Reload the source and try again."
+    try:
+        current = _tabular_source_revision(path)
+    except FileNotFoundError as exc:
+        raise ValueError(message) from exc
+    if current != expected:
+        raise ValueError(message)
+
+
 def _load_tabular_files_into_sqlite(
     paths: tuple[Path, ...],
     *,
@@ -1747,6 +1763,7 @@ def _load_tabular_files_into_sqlite(
 ) -> TabularAnalyticsLoadResult:
     load_started_at = time.perf_counter()
     load_timings: dict[str, float] = {}
+    source_revisions = {path: _tabular_source_revision(path) for path in paths}
 
     def _record_load_timing(name: str, started_at: float) -> None:
         load_timings[name] = load_timings.get(name, 0.0) + (time.perf_counter() - started_at)
@@ -2017,15 +2034,18 @@ def _load_tabular_files_into_sqlite(
                         rows_loaded=row_number,
                     )
 
-                source_stat = path.stat()
+                revision = source_revisions[path]
+                _require_tabular_source_revision(path, revision)
+                device, inode, changed_ns, size, modified_ns = revision
                 snapshots.append(
                     TabularSourceSnapshot(
                         path=str(path),
                         name=path.name,
-                        size=int(source_stat.st_size),
-                        mtime_ns=int(source_stat.st_mtime_ns),
+                        size=size,
+                        mtime_ns=modified_ns,
                         row_count=file_row_count,
                         csv_config=csv_config,
+                        file_identity=(device, inode, changed_ns),
                     )
                 )
             _raise_if_tabular_load_cancelled(cancel_check)
@@ -2127,6 +2147,8 @@ def _load_tabular_files_into_sqlite(
         preview_started_at = time.perf_counter()
         preview_rows = store.read_row_table(limit=TABULAR_SQLITE_PREVIEW_ROWS)
         preview = _legacy_preview_if_pandas_is_already_loaded(preview_rows)
+        for path, revision in source_revisions.items():
+            _require_tabular_source_revision(path, revision)
         _record_load_timing("preview", preview_started_at)
         _emit_tabular_load_progress(
             progress_callback,

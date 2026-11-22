@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from contextlib import closing, contextmanager
 from datetime import datetime
+import os
 from pathlib import Path
 import sqlite3
 import warnings
@@ -651,6 +652,37 @@ def test_sqlite_csv_loading_can_cancel_between_chunks(tmp_path, monkeypatch) -> 
         )
 
     assert [event["stage"] for event in progress_events].count("chunk_loaded") == 1
+
+
+def test_tabular_load_rejects_replacement_after_final_chunk_and_keeps_previous_store(tmp_path, monkeypatch):
+    source = tmp_path / "measurements.csv"
+    replacement = tmp_path / "replacement.csv"
+    source.write_text("Part,Length\nA,10\nB,20\n", encoding="utf-8")
+    replacement.write_text("Part,Length\nB,20\nA,10\n", encoding="utf-8")
+    source_stat = source.stat()
+    os.utime(replacement, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    monkeypatch.setattr(canonical_tabular_service.tempfile, "tempdir", str(tmp_path))
+    previous = load_tabular_analytics_file(source)
+    fresh = None
+    seen = []
+
+    def replace_after_last_rows(event):
+        if event["stage"] == "chunk_loaded":
+            replacement.replace(source)
+            seen.append(event["rows_loaded"])
+
+    try:
+        with pytest.raises(ValueError, match="source changed while loading"):
+            load_tabular_analytics_file(source, progress_callback=replace_after_last_rows)
+        assert seen == [2]
+        assert set(tmp_path.glob("metroliza_csv_summary_*.sqlite*")) == {Path(previous.sqlite_store.path)}
+        assert tuple(previous.sqlite_store.read_row_table()["part"]) == ("A", "B")
+        fresh = load_tabular_analytics_file(source)
+        assert tuple(fresh.sqlite_store.read_row_table()["part"]) == ("B", "A")
+        assert fresh.source_snapshots != previous.source_snapshots
+    finally:
+        cleanup_tabular_load_result(previous)
+        cleanup_tabular_load_result(fresh)
 
 
 def test_sqlite_group_preview_and_selection_respect_column_filters(tmp_path) -> None:
