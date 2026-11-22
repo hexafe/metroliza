@@ -182,6 +182,9 @@ class WorkspaceNavigationCombo(QComboBox):
         super().keyPressEvent(event)
 
 
+_UNCHANGED_WORKSPACE_SOURCE = object()
+
+
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
 
@@ -525,6 +528,9 @@ class MainWindow(QMainWindow):
         self.open_database_action = self.file_menu.addAction("Open database…", self._choose_database)
         self.file_menu.addAction("Restore database copy…", self._launch_database_restore)
         self.choose_report_folder_action = self.file_menu.addAction("Choose report folder…", self._choose_report_folder)
+        self.save_workspace_action = self.file_menu.addAction("Save workspace…", self._save_workspace_file)
+        self.open_workspace_action = self.file_menu.addAction("Open workspace…", self._open_workspace_file)
+        self.file_menu.addAction("Analysis history…", self._open_analysis_history)
         self.recent_database_menu = self.file_menu.addMenu("Recent databases")
         self.recent_folder_menu = self.file_menu.addMenu("Recent report folders")
         self.clear_recent_action = self.file_menu.addAction("Clear recent lists", self._clear_recent_locations)
@@ -743,6 +749,62 @@ class MainWindow(QMainWindow):
             if folder:
                 self._open_recent_location("folders", folder)
 
+    def _workspace_files(self):
+        if getattr(self, "_workspace_file_commands", None) is None:
+            from metroliza.ui.workspace_files import WorkspaceFiles
+
+            self._workspace_file_commands = WorkspaceFiles(self)
+        return self._workspace_file_commands
+
+    def _save_workspace_file(self):
+        self._workspace_files().save()
+
+    def _open_workspace_file(self):
+        self._workspace_files().open()
+
+    def restore_workspace_locations(self, database, source, page):
+        if self.navigation_combo.findData(page) < 0:
+            QMessageBox.warning(self, "Open workspace", "The workspace refers to an unknown page.")
+            return False
+        if database != self.db_file:
+            accepted = self.set_db_file(database, workspace_source=source)
+        else:
+            accepted = self.set_directory(source)
+        if accepted:
+            self._show_workspace_page(page)
+        return accepted
+
+    def _open_analysis_history(self):
+        from metroliza.ui.analysis_history_dialog import AnalysisHistoryDialog
+
+        dialog = self._open_coordinated_window(
+            "analysis_history", lambda _snapshot: AnalysisHistoryDialog(self), context_fields=frozenset(),
+        )
+        dialog.reload()
+
+    def _record_analysis(self, receipt):
+        from metroliza.app.analysis_history import record_analysis
+
+        sender = self.sender()
+        if sender is not None:
+            sender.last_analysis_source = receipt.get("source")
+        try:
+            record_analysis(receipt)
+        except (OSError, ValueError, TypeError) as exc:
+            self.statusBar().showMessage(f"Result saved. Could not add it to analysis history: {exc}", 8000)
+
+    def _connect_analysis_history(self, dialog):
+        completed = getattr(dialog, "analysis_completed", None)
+        if completed is not None:
+            completed.connect(self._record_analysis)
+
+    def _after_database_edit(self, database):
+        dialog = self.export_dialog
+        previous_source = getattr(dialog, "last_analysis_source", None)
+        if previous_source and Path(previous_source).resolve() == Path(database).resolve():
+            dialog.last_result_row.mark_source_changed()
+        self.statusBar().showMessage("Database updated. Run analyses using this database again to refresh their results.", 8000)
+
     def _open_recent_location(self, kind, path):
         if not self._report_context_change_allowed():
             return
@@ -960,6 +1022,7 @@ class MainWindow(QMainWindow):
         if workspace is None:
             from metroliza.ui.recipe_workspace import RecipeWorkspace
             workspace = RecipeWorkspace(self)
+            self._connect_analysis_history(workspace)
             self.recipe_workspace = workspace
             self.recipe_page.layout().addWidget(workspace)
         return workspace
@@ -1726,7 +1789,7 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(ModifyDB):
                 self.modifydb_dialog = self._open_coordinated_window(
                     "modify_database",
-                    lambda snapshot: ModifyDB(self, snapshot.database_file, modal=False),
+                    lambda snapshot: self._create_modify_database_dialog(ModifyDB, snapshot.database_file),
                     context_policy=WindowContextPolicy.CLOSE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -1740,6 +1803,13 @@ class MainWindow(QMainWindow):
             self.modifydb_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _create_modify_database_dialog(self, factory, database):
+        dialog = factory(self, database, modal=False)
+        edited = getattr(dialog, "database_edited", None)
+        if edited is not None:
+            edited.connect(self._after_database_edit)
+        return dialog
 
     def _launch_reports_export(self):
         if self._last_report_import is None:
@@ -1800,6 +1870,7 @@ class MainWindow(QMainWindow):
 
     def _create_report_export_dialog(self, factory, database):
         dialog = factory(self, database)
+        self._connect_analysis_history(dialog)
         dialog.operation_start_allowed = self._report_export_start_allowed
         dialog.operation_state_changed.connect(self._sync_workflow_next_step)
         return dialog
@@ -1829,6 +1900,7 @@ class MainWindow(QMainWindow):
 
             def create_csv(_snapshot):
                 dialog = IndustrialAnalyticsDialog(self, source_kind=SOURCE_TABULAR_FILE)
+                self._connect_analysis_history(dialog)
                 dialog.setModal(False)
                 dialog.setWindowModality(Qt.WindowModality.NonModal)
                 field = getattr(dialog, "input_file_field", None)
@@ -2225,7 +2297,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
-    def set_db_file(self, db_file):
+    def set_db_file(self, db_file, *, workspace_source=_UNCHANGED_WORKSPACE_SOURCE):
         try:
             if not self._report_selection_change_allowed(db_file, self.db_file, database=True):
                 return False
@@ -2237,7 +2309,7 @@ class MainWindow(QMainWindow):
             self.workspace_notice_label.setVisible(False)
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self._export_ready = readiness
-            self.workspace_context.set_database_file(db_file)
+            self._apply_database_location(db_file, workspace_source)
             if db_file and Path(db_file).is_file():
                 self.recent_locations.record("databases", db_file)
                 self._refresh_recent_menus()
@@ -2273,6 +2345,15 @@ class MainWindow(QMainWindow):
             return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _apply_database_location(self, db_file, workspace_source):
+        if workspace_source is _UNCHANGED_WORKSPACE_SOURCE:
+            self.workspace_context.set_database_file(db_file)
+            return
+        self.workspace_context.update(database_file=db_file, source_directory=workspace_source)
+        if workspace_source and Path(workspace_source).is_dir():
+            self.recent_locations.record("folders", workspace_source)
+            self._refresh_recent_menus()
 
     def _show_previous_database_workflows_notice(self, labels):
         notice = self.workspace_notice_label

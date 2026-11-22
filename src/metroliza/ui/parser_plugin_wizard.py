@@ -291,7 +291,9 @@ class ParserPluginWizardDialog(QDialog):
         for button in (self.create_button, self.open_folder_button, self.copy_path_button, self.check_package_button,
                        self.validate_button, self.diagnose_button, self.repair_button, self.install_button):
             configure_accessibility(button, name=button.text().split(" [")[0])
-        self.install_button.setToolTip("Install explicitly revalidates current samples and checked results. Earlier PASS is not approval.")
+        self.validate_button.setToolTip("Compare the parser's results with readings you checked by hand from sample reports.")
+        self.install_button.setToolTip("Use Install after reviewing the checked results. It repeats validation on the current samples before enabling the profile.")
+        self.rollback_button.setToolTip("Return to a previously approved version of the selected parser profile.")
 
     def _configure_commands(self):
         commands = (

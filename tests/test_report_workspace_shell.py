@@ -1044,7 +1044,8 @@ def test_file_menu_recent_acceptance_guards_and_clear(window, tmp_path, monkeypa
     menus = [action.text() for action in window.menuBar().actions()]
     assert menus == ["&File", "&Tools", "&View", "&Help"]
     assert [action.text() for action in window.file_menu.actions()] == [
-        "Open database…", "Choose report folder…", "Recent databases", "Recent report folders",
+        "Open database…", "Restore database copy…", "Choose report folder…", "Save workspace…", "Open workspace…",
+        "Analysis history…", "Recent databases", "Recent report folders",
         "Clear recent lists", "", "Exit",
     ]
     database = tmp_path / "accepted.sqlite"

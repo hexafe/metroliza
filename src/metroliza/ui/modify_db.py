@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 import PyQt6.QtCore as QtCore
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6 import sip
 from functools import partial
 import weakref
@@ -74,6 +74,8 @@ class ModifyDB(QDialog):
     record tabs load report and measurement rows and apply changed fields
     through the repository API when available.
     """
+
+    database_edited = pyqtSignal(str)
 
     REPORT_RECORD_COLUMNS = (
         {"label": "REPORT_ID", "field": "report_id", "source": "report_id", "editable": False, "key": True},
@@ -1262,6 +1264,8 @@ class ModifyDB(QDialog):
             self._report_save_error(e)
 
     def _edit_succeeded(self):
+        if isinstance(self, ModifyDB) and not sip.isdeleted(self):
+            self.database_edited.emit(str(self.db_file))
         QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
         if "_changes_committed" not in vars(self) or not sip.isdeleted(self):
             self._changes_committed = True

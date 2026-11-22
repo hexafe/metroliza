@@ -1240,6 +1240,9 @@ class IndustrialDataDialog(QDialog):
             presentation_mode="industrial_cache",
         )
         analytics_window = self.analytics_window
+        connect_history = getattr(self.parent(), "_connect_analysis_history", None)
+        if connect_history is not None:
+            connect_history(analytics_window)
         analytics_window.exec()
         # A custom dialog retains its old lifetime contract. For the native dialog,
         # modal return plus cleared worker references proves its callbacks/waits have

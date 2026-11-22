@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QFileDialog, QFormLayout, QLabel, QPushButton, QVBoxLayout
 
 from metroliza.industrial.industrial_cache_target import publish_verified_database_copy
@@ -59,6 +59,7 @@ class DatabaseRestoreDialog(QDialog):
         self.restore_button = QPushButton("Verify and restore")
         self.restore_button.setEnabled(False)
         self.status = QLabel("Choose a backup and a new file. The current database stays open.")
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
         paths = QFormLayout()
         paths.addRow("Backup", self.source_button)

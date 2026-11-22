@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID, uuid4
 
+from metroliza.shared.local_app_paths import local_metroliza_directory
+
 from .contracts import (
     FORMAT_VERSION, MAX_PAYLOAD_BYTES, DataKind, DerivationRule, LocalBinding, ParameterKey, ParameterMode,
     ParameterSpec, ParameterType, RecipeDefinition, RecipeError, StepKind, StepSpec,
@@ -33,11 +35,7 @@ class RecipeLoadIssue:
 
 
 def default_store_directory() -> Path:
-    if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-    else:
-        base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return base / "metroliza" / "recipes"
+    return local_metroliza_directory() / "recipes"
 
 
 def definition_payload(definition: RecipeDefinition) -> dict[str, Any]:

@@ -112,6 +112,12 @@ class LastResultRow(QWidget):
         self.summary.clear()
         self.hide()
 
+    def mark_source_changed(self):
+        notice = " · Source changed. Run again to refresh."
+        current = self.summary.text()
+        if current and not current.endswith(notice):
+            self.summary.setText(current + notice)
+
     def set_result(self, outcome, paths=(), *, counts=""):
         self.clear()
         paths = existing_result_files(paths)
