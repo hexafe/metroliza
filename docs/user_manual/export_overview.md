@@ -12,7 +12,8 @@ Its button shows how many reports were saved in the batch. Choose **Eksportuj ca
 to export from the full database using your usual filters and groups.
 Reopening the export from Home or with **Ctrl+E** keeps the scope you already selected.
 During an export you can open CSV Summary to work on a separate file. Use **Stop export**
-to cancel the running export.
+to cancel the running export. If two copies of Metroliza try to replace the same workbook,
+the second must confirm the changed file again. A small hidden lock file stays beside the workbook.
 
 For grouped exports, read the HTML dashboard first. Export group analysis is
 **HTML dashboard only**: Metroliza does not add the standard group-analysis report as
