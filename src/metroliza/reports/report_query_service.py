@@ -22,7 +22,6 @@ from metroliza.shared.grouping_filter_core import (
 _REPORT_OVERVIEW_VIEW = "vw_report_overview"
 _GROUPING_REPORT_VIEW = "vw_grouping_reports"
 _MEASUREMENT_EXPORT_VIEW = "vw_measurement_export"
-_DEFAULT_DATE_FROM = "1970-01-01"
 
 _MEASUREMENT_FILTER_COLUMNS = {
     "absolute_path",
@@ -405,14 +404,7 @@ def _filter_state_requires_measurement_scope(filter_state):
         ),
     ):
         return True
-    date_from = str(getattr(filter_state, "date_from", "") or "").strip()
-    date_to = str(getattr(filter_state, "date_to", "") or "").strip()
-    default_date_to = date.today().isoformat()
-    if date_from and date_from != _DEFAULT_DATE_FROM:
-        return True
-    if date_to and date_to != default_date_to:
-        return True
-    return False
+    return bool(getattr(filter_state, "date_from", None) or getattr(filter_state, "date_to", None))
 
 
 def build_grouping_scope_query_from_filter_state(filter_state=None):

@@ -676,12 +676,12 @@ def test_date_presets_fill_inclusive_ranges_and_summary(date_preset_dialog, pres
         assert all(day in dialog.filter_summary_label.text() for day in expected)
     assert dialog.apply_filters() is True
     assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from=expected[0], date_to=expected[1],
+        date_from=expected[0] if active else None, date_to=expected[1] if active else None,
     )
     assert not dialog._is_dirty()
 
 
-def test_all_dates_default_and_return_preserve_legacy_query(date_preset_dialog):
+def test_all_dates_default_and_return_include_undated_and_outside_calendar(date_preset_dialog):
     dialog, _clock = date_preset_dialog
     assert dialog.date_range_selector.currentText() == "All dates"
     assert "All dates" in dialog.filter_summary_label.text()
@@ -691,9 +691,14 @@ def test_all_dates_default_and_return_preserve_legacy_query(date_preset_dialog):
     dialog.date_range_selector.setCurrentText("All dates")
     assert dialog._draft_snapshot() == original
     assert dialog.apply_filters() is True
-    assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from="1970-01-01", date_to="2026-03-01",
-    )
+    import sqlite3
+    with sqlite3.connect(":memory:") as connection:
+        from metroliza.reports.report_schema import ensure_report_schema
+        ensure_report_schema(":memory:", connection=connection)
+        connection.execute("CREATE TEMP TABLE vw_measurement_export AS SELECT * FROM main.vw_measurement_export LIMIT 0")
+        dates = [(None,), ("1969-01-01",), ("2099-01-01",)]
+        connection.executemany("INSERT INTO vw_measurement_export(report_date) VALUES (?)", dates)
+        assert connection.execute(f"SELECT DATE FROM ({dialog.filter_query}) ORDER BY DATE").fetchall() == dates
 
 
 @pytest.mark.parametrize("field", ["date_from_calendar", "date_to_calendar"])
@@ -859,9 +864,7 @@ def test_all_dates_refresh_after_midnight(date_preset_dialog, reopen, action):
         assert not dialog._is_dirty()
     getattr(dialog, action)()
     assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
-    assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from="1970-01-01", date_to="2026-03-02",
-    )
+    assert dialog.filter_query == filter_dialog.build_measurement_filter_query()
     assert changes == []
     assert dialog.date_range_selector.currentText() == "All dates"
     assert dialog.filter_summary_label.text() == "No active filters | All dates"

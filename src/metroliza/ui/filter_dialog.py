@@ -1352,8 +1352,10 @@ class FilterDialog(QDialog):
             parser_id_selected_items = [item.text() for item in self.parser_id_list.selectedItems()]
             template_family_selected_items = [item.text() for item in self.template_family_list.selectedItems()]
             has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
-            date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
-            date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+            date_from = date_to = None
+            if self._has_custom_date_range():
+                date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
+                date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
             expression_text = self._filter_expression_text()
             expression_error = self._validate_filter_expression(expression_text)
             if expression_error:

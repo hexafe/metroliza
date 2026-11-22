@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 
 NOT_APPLIED_LABEL = "Not applied"
-DEFAULT_DATE_FROM = "1970-01-01"
 
 
 @dataclass(frozen=True)
@@ -41,9 +39,6 @@ def _label_count(label: str, values: tuple[str, ...]) -> str | None:
 def _effective_date_range(filter_state: FilterState) -> str | None:
     date_from = (filter_state.date_from or "").strip()
     date_to = (filter_state.date_to or "").strip()
-    today = date.today().isoformat()
-    if date_from == DEFAULT_DATE_FROM and (not date_to or date_to == today):
-        return None
     if date_from and date_to:
         return f"{date_from} to {date_to}"
     if date_from:

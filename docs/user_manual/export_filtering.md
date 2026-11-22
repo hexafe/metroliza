@@ -191,9 +191,8 @@ which choices are visible; it does not clear conditions.
 
 Use **Date range** to choose an inclusive range based on your local calendar date:
 
-- **All dates** (default): no active date filter; the From/To fields are disabled.
-  It keeps the existing export bounds, 1 January 1970 through today when the draft
-  is created or All dates is selected.
+- **All dates** includes reports with missing dates, historical dates and future dates.
+  The From and To fields become available when you choose a date range.
 - **Today**: today only.
 - **Yesterday**: yesterday only.
 - **Last 7 days**: today and the six preceding days.
@@ -208,7 +207,7 @@ Use the arrow keys to choose a preset. Tab then reaches From and To.
 **Cancel** restores the previously applied dates and preset. Reopening keeps those
 concrete dates; if a relative preset no longer matches the current day, it is shown as
 **Custom**. Choose the preset again to update its dates. **Reset draft** selects
-**All dates** with today's upper bound. Presets are not remembered across app sessions.
+**All dates**. Presets are not remembered across app sessions.
 
 ### Select today
 
