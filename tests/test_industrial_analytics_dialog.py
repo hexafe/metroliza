@@ -999,6 +999,41 @@ def test_tabular_group_rule_is_visible_and_in_the_recipe_request(tmp_path) -> No
         _dispose_dialog(dialog)
 
 
+def test_analysis_receipt_uses_source_stamp_captured_before_work_started(tmp_path) -> None:
+    from metroliza.app.analysis_history import capture_source_stamp
+
+    _app()
+    source = tmp_path / "table.csv"
+    source.write_text("Measurement\n3\n4\n")
+    output = tmp_path / "dashboard.html"
+    output.write_text("<html><body>dashboard</body></html>")
+    assets = tmp_path / "dashboard_assets.generation-native"
+    assets.mkdir()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        request = dialog._build_analytics_request(require_runnable=True)
+        dialog._capture_analysis_source(request)
+        original = capture_source_stamp(source)
+        source.write_text("Measurement\n30000\n40000\n")
+
+        receipts = []
+        dialog.analysis_completed.connect(receipts.append)
+        dialog.analytics_thread = types.SimpleNamespace(request=request)
+        try:
+            dialog._emit_analysis_completion((output,), assets)
+        finally:
+            dialog.analytics_thread = None
+        assert receipts[0]["source_stamp"] == original
+        assert receipts[0]["source_stamp"] != capture_source_stamp(source)
+        assert receipts[0]["artifacts"] == [str(output)]
+        assert receipts[0]["assets"] == [str(assets)]
+    finally:
+        _dispose_dialog(dialog)
+
+
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
     tmp_path,
     monkeypatch,

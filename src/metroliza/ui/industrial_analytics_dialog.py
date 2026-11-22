@@ -798,6 +798,7 @@ class IndustrialAnalyticsDialog(QDialog):
             default_workbook_path(self.db_file or "production_analytics")
         )
         self.analytics_thread = None
+        self._analysis_source_stamp = None
         self.tabular_load_thread = None
         self._applying_tabular_load = None
         self._worker_progress = {}
@@ -3277,6 +3278,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self._sync_ui_state()
         self.start_button.setEnabled(False)
         self.readiness_label.setText("Generating analytics. Ctrl+Shift+S requests stop.")
+        self._capture_analysis_source(request)
         self.analytics_thread.start()
         self.loading_dialog.show()
 
@@ -3314,19 +3316,29 @@ class IndustrialAnalyticsDialog(QDialog):
         except Exception:
             QMessageBox.information(self, title, message)
 
-    def _emit_analysis_completion(self, paths, assets):
-        request = getattr(self.analytics_thread, "request", None)
-        if request is None:
-            return
+    def _analysis_source(self, request):
         loaded = request.tabular_load_result
         source_files = getattr(loaded, "source_files", ()) or ((request.input_file,) if request.input_file else ())
         industrial = request.source_kind == SOURCE_PRODUCTION_CACHE or self.is_industrial_cache_presentation
         source = request.db_file if industrial else source_files[0] if len(source_files) == 1 else None
+        return source, industrial, len(source_files)
+
+    def _capture_analysis_source(self, request):
+        from metroliza.app.analysis_history import capture_source_stamp
+        source, _, _ = self._analysis_source(request)
+        self._analysis_source_stamp = None if self.is_preloaded_tabular_source else capture_source_stamp(source)
+
+    def _emit_analysis_completion(self, paths, assets):
+        request = getattr(self.analytics_thread, "request", None)
+        if request is None:
+            return
+        source, industrial, source_count = self._analysis_source(request)
         settings = {"sheet": request.sheet_name, "metrics": [metric.field_name for metric in request.metric_selection],
-                    "groups": list(request.aggregation_state.group_fields), "source_count": len(source_files)}
+                    "groups": list(request.aggregation_state.group_fields), "source_count": source_count}
         html_published = any(path.suffix.lower() in {".html", ".htm"} for path in paths)
         self.analysis_completed.emit({"kind": "industrial" if industrial else "csv",
                                       "artifacts": [str(path) for path in paths], "source": source or None,
+                                      "source_stamp": self._analysis_source_stamp,
                                       "settings": settings, "assets": [str(assets)] if assets and html_published else []})
 
     def on_analytics_error(self, message: str) -> None:

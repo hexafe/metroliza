@@ -36,6 +36,7 @@ class RecipeController(QObject):
     failed = pyqtSignal(str)
     event_received = pyqtSignal(object)
     selection_changed = pyqtSignal()
+    starting = pyqtSignal(object)
     idle = pyqtSignal()
     database_appended = pyqtSignal(object)
 
@@ -184,6 +185,7 @@ class RecipeController(QObject):
             self.failed.emit(exc.code)
             return False
         try:
+            self.starting.emit(plan)
             submitted = self._submit(lambda: self.runner.start(plan, admission=token))
         except Exception:
             self.runner.withdraw_start(token)

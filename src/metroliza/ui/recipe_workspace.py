@@ -68,6 +68,7 @@ class RecipeWorkspace(QWidget):
             append_allowed=main_window._recipe_append_allowed)
         self.controller.database_appended.connect(main_window._on_recipe_database_appended)
         self._close_requested = False
+        self._analysis_source_stamp = (None, None)
         self._editors = []
         layout = QVBoxLayout(self)
         self.catalog_notice = QLabel()
@@ -93,6 +94,7 @@ class RecipeWorkspace(QWidget):
         self.library.favorites_changed.connect(self._favorites)
         self.quick.return_requested.connect(self.controller.view_requested)
         self.controller.event_received.connect(self._home_event)
+        self.controller.starting.connect(self._capture_analysis_source)
         self.controller.changed.connect(self._home_result)
 
     def entries(self):
@@ -144,15 +146,26 @@ class RecipeWorkspace(QWidget):
             stage = STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
         self.quick.set_active(self.controller.plan.binding.name, stage)
 
+    @staticmethod
+    def _analysis_source(plan):
+        from metroliza.recipes.contracts import ParameterKey
+        sources = plan.value(ParameterKey.SOURCE_FILES, ())
+        if sources:
+            return sources[0] if len(sources) == 1 else None
+        return plan.value(ParameterKey.SOURCE_FILE) or plan.input_folder or plan.database_file
+
+    def _capture_analysis_source(self, plan):
+        from metroliza.app.analysis_history import capture_source_stamp
+        self._analysis_source_stamp = (plan.flow_id, capture_source_stamp(self._analysis_source(plan)))
+
     def _home_result(self, record):
         from metroliza.recipes.contracts import ParameterKey
 
         plan = self.controller.plan
         paths = self.quick.set_result(plan, record)
         if paths:
-            sources = plan.value(ParameterKey.SOURCE_FILES, ())
-            source = (sources[0] if len(sources) == 1 else None) if sources else (
-                plan.value(ParameterKey.SOURCE_FILE) or plan.input_folder or plan.database_file)
+            source = self._analysis_source(plan)
+            flow_id, stamp = self._analysis_source_stamp
             settings = {"recipe": plan.binding.name}
             settings.update((key.value, plan.value(key)) for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
                             if plan.value(key))
@@ -161,7 +174,9 @@ class RecipeWorkspace(QWidget):
                 assets = list(dict.fromkeys(step.result.dashboard_assets_path for step in record.steps
                               if step.result.artifact_verified and step.result.dashboard_assets_path))
             self.analysis_completed.emit({"kind": "recipe", "artifacts": [str(path) for path in paths],
-                                          "source": str(source) if source else None, "settings": settings, "assets": assets})
+                                          "source": str(source) if source else None,
+                                          "source_stamp": stamp if flow_id == plan.flow_id else None,
+                                          "settings": settings, "assets": assets})
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)

@@ -289,10 +289,12 @@ def test_admitted_controller_cancel_before_worker_start_is_not_lost(qapplication
     assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
                                ParameterKey.OUTPUT_FILE: str(tmp_path / "result.xlsx")})
     pending = []
+    controller.starting.connect(pending.append)
     monkeypatch.setattr(controller, "_submit", lambda operation: pending.append(operation) or True)
     assert controller.start()
+    assert pending[0] is controller.plan
     controller.cancel()
-    record = pending[0]()
+    record = pending[1]()
     assert record.state is RunState.CANCELLED
     assert not controller.plan.database_file.exists()
 
