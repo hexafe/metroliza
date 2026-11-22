@@ -26,6 +26,7 @@ class ResultCode(str, Enum):
     WORKBOOK_NOT_PUBLISHED = "workbook_not_published"
     ANALYTICS_WARNINGS = "analytics_warnings"
     GROUPING_RULE_UNAVAILABLE = "grouping_rule_unavailable"
+    MANUAL_GROUPING_RECAPTURE_REQUIRED = "manual_grouping_recapture_required"
     UNSUPPORTED = "unsupported"
     INVALID_PLAN = "invalid_plan"
     DATABASE_UNAVAILABLE = "database_unavailable"

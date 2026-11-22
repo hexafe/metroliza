@@ -101,6 +101,64 @@ def test_type_drift_and_stale_manual_row_membership_are_rejected(tmp_path):
         resolve(plan)
 
 
+def test_manual_grouping_rejects_same_size_same_mtime_replacement_after_load(tmp_path):
+    import os
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    header = "Label,Length mm\n"
+    path.write_text(header + "AA,1\nBB,2\n")
+    loaded = load_tabular_analytics_file(path)
+    request = replace(request_for(path, output), tabular_load_result=loaded,
+                      grouping_df=(GroupingAssignment(group="A", report_id=1),))
+    try:
+        item = capture(request)
+        plan = resolve_plan(item.definition, item.binding)
+        assert resolve(plan).grouping_df == request.grouping_df
+        before = path.stat()
+        replacement = tmp_path / "replacement.csv"
+        replacement.write_text(header + "BB,2\nAA,1\n")
+        os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(replacement, path)
+        after = path.stat()
+        assert (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
+        with pytest.raises(RecipeError, match="stale_manual_grouping"):
+            capture(request)
+        record = RecipeRunner(AnalyticsRecipePorts()).start(plan)
+        assert record.state is RunState.FAILED
+        assert record.code is ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED
+        assert not output.exists()
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_legacy_manual_recipe_is_readable_and_requires_explicit_recapture(tmp_path):
+    import json
+    from metroliza.recipes.storage import RecipeStore
+
+    data = tmp_path / "input"
+    data.mkdir()
+    path, output = data / "table.csv", tmp_path / "result.html"
+    source(path)
+    request = replace(request_for(path, output), grouping_df=(GroupingAssignment(group="A", report_id=1),))
+    item = capture(request)
+    values = dict(item.binding.values)
+    payload = json.loads(values[ParameterKey.ANALYTICS_REQUEST])
+    payload["grouping_source"] = payload["grouping_source"][:3]
+    values[ParameterKey.ANALYTICS_REQUEST] = json.dumps(payload)
+    legacy = replace(item.binding, values=tuple(values.items()))
+    store = RecipeStore(tmp_path / "private")
+    saved = store.save(item.definition, legacy, expected_revision=None)
+    assert store.list() == (saved,)
+    plan = resolve_plan(saved.definition, saved.binding)
+    with pytest.raises(RecipeError, match="manual_grouping_needs_review"):
+        resolve(plan)
+    review = AnalyticsRecipePorts().preflight(plan, ctx(plan))
+    assert not review.ready and review.code is ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED
+    assert not output.exists()
+
+
 def test_real_native_tabular_flow_writes_verified_pair_and_retains_numeric_scope(tmp_path):
     path = tmp_path / "table.csv"
     source(path)

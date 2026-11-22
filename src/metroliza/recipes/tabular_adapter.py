@@ -87,8 +87,9 @@ def _decode(value):
 
 
 def _source_signature(path):
-    info = Path(path).stat()
-    return [str(Path(path).resolve()), info.st_size, info.st_mtime_ns]
+    resolved = Path(path).resolve()
+    info = resolved.stat()
+    return [str(resolved), info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino, info.st_ctime_ns]
 
 
 def _source_signatures(paths):
@@ -98,6 +99,30 @@ def _source_signatures(paths):
 def _grouping_signature(signatures):
     # Preserve the on-disk representation of an existing single-file binding.
     return signatures[0] if len(signatures) == 1 else signatures
+
+
+def _snapshot_signature(snapshot):
+    return [str(Path(snapshot.path).resolve()), snapshot.size, snapshot.mtime_ns, *(snapshot.file_identity or ())]
+
+
+def _expanded_file_signature(signature):
+    return (isinstance(signature, list) and len(signature) == 6 and isinstance(signature[0], str)
+            and all(type(value) is int for value in signature[1:]))
+
+
+def _validate_manual_grouping_sources(sources, saved):
+    signatures = [saved] if len(sources) == 1 else saved
+    if (not isinstance(signatures, list) or len(signatures) != len(sources) or
+            any(not _expanded_file_signature(signature) for signature in signatures)):
+        raise RecipeError("manual_grouping_needs_review")
+    if signatures != _source_signatures(sources):
+        raise RecipeError("stale_manual_grouping")
+
+
+def _invalid_analytics_code(error):
+    if error.code in {"manual_grouping_needs_review", "stale_manual_grouping"}:
+        return ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED
+    return ResultCode.INVALID_PLAN
 
 
 def _plan_sources(plan):
@@ -113,9 +138,7 @@ def _capture_tabular_sources(request):
         raise RecipeError("invalid_analytics_source")
     sources = sources or (request.input_file,)
     signatures = _source_signatures(sources) if request.grouping_df else []
-    if signatures and snapshots and signatures != [
-        [str(Path(snapshot.path).resolve()), snapshot.size, snapshot.mtime_ns] for snapshot in snapshots
-    ]:
+    if signatures and loaded is not None and signatures != [_snapshot_signature(snapshot) for snapshot in snapshots]:
         raise RecipeError("stale_manual_grouping")
     return sources, signatures
 
@@ -273,9 +296,8 @@ def _resolve_source(plan, request, payload):
         raise RecipeError("invalid_analytics_source")
     if kind == "tabular_file" and plan.value(ParameterKey.EXISTING_DATABASE):
         raise RecipeError("invalid_analytics_source")
-    if payload["grouping_source"] is not None and payload["grouping_source"] != _grouping_signature(
-            _source_signatures(sources)):
-        raise RecipeError("stale_manual_grouping")
+    if request.grouping_df:
+        _validate_manual_grouping_sources(sources, payload["grouping_source"])
     outputs = _analytics_output_paths(plan.output_file, payload)
     workbook = str(outputs.workbook) if outputs.workbook is not None else ""
     return replace(request, input_file=sources[0] if kind == "tabular_file" else "",
@@ -379,8 +401,8 @@ class AnalyticsRecipePorts:
             self._requests[plan.run_id] = request
             self._signatures[plan.run_id] = signature
             return self._review_outputs(plan, targets)
-        except RecipeError:
-            return PreflightResult(False, ResultCode.INVALID_PLAN)
+        except RecipeError as exc:
+            return PreflightResult(False, _invalid_analytics_code(exc))
         except (OSError, ValueError, sqlite3.Error):
             return PreflightResult(False, ResultCode.REVIEW_REQUIRED, True)
 
@@ -436,9 +458,9 @@ class AnalyticsRecipePorts:
             if _source_signatures(_plan_sources(plan)) != self._signatures[plan.run_id]:
                 return StepResult(StepStatus.FAILED, ResultCode.SOURCE_CHANGED)
             return self._execute_current(step, plan, request, context, cancelled)
-        except RecipeError:
+        except RecipeError as exc:
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
-            return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
+            return StepResult(StepStatus.FAILED, _invalid_analytics_code(exc))
         except (AnalyticsCancelled, TabularLoadCancelled, OutputPublicationCanceled):
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
             return StepResult(StepStatus.CANCELLED, ResultCode.CANCELLED)

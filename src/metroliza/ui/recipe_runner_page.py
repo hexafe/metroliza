@@ -407,6 +407,10 @@ class RecipeRunnerPage(QWidget):
             ResultCode.GROUPING_RULE_UNAVAILABLE: (
                 "W źródle brakuje kolumny wymaganej przez regułę grupowania. Sprawdź mapowanie kolumn lub wybierz inne źródło."
             ),
+            ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED: (
+                "Nie można potwierdzić ręcznych przypisań. W CSV Summary wczytaj aktualne źródło, "
+                "sprawdź grupy i zapisz recepturę ponownie."
+            ),
         }
         self.status.setText(messages.get(record.code, _STATE_LABELS.get(record.state, record.state.value)))
         self.continue_button.setText("Kontynuuj zatwierdzony zakres")
