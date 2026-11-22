@@ -938,6 +938,43 @@ def test_role_change_names_lost_metric_and_limit_before_applying(tmp_path, monke
         _dispose_dialog(dialog)
 
 
+def test_column_type_dialog_keyboard_preview_applies_native_conversion(tmp_path, monkeypatch) -> None:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from metroliza.ui.industrial_analytics_dialog import ColumnTypesDialog
+
+    _app()
+    source = tmp_path / "sample.csv"
+    source.write_text("Batch code,Reading\n00123,3.4\n123,bad\n891,5.6\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert dialog.column_types_button.isEnabled()
+
+        def choose(picker):
+            assert picker.columns.currentText() == "Batch code"
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            assert "00123 → 00123" in picker.examples.text()
+            QTest.keyClick(picker.columns, Qt.Key.Key_Down)
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            assert picker.kinds.currentData() == "number"
+            assert "bad → brak poprawnej liczby" in picker.examples.text()
+            assert picker.examples.text().endswith("— 1")
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(ColumnTypesDialog, "exec", choose)
+        dialog.open_column_types()
+        _wait_for_tabular_load(dialog)
+        assert dialog.tabular_load_result.column_types == {("Batch code", 1): "text", ("Reading", 1): "number"}
+        assert [item.field_name for item in dialog.metric_candidates] == ["reading"]
+        assert "1 wartości bez poprawnej liczby" in dialog.readiness_label.text()
+    finally:
+        _dispose_dialog(dialog)
+
+
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
     tmp_path,
     monkeypatch,

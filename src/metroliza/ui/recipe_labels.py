@@ -16,6 +16,7 @@ PARAMETER_LABELS = {
     ParameterKey.SHEET: "Arkusz",
     ParameterKey.COLUMNS: "Kolumny",
     ParameterKey.COLUMN_ROLES: "Przeznaczenie kolumn",
+    ParameterKey.COLUMN_TYPES: "Typy kolumn",
     ParameterKey.CACHE_REFERENCE: "Zapisane dane źródłowe",
     ParameterKey.DATE_FROM: "Data początkowa",
     ParameterKey.DATE_TO: "Data końcowa",

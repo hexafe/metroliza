@@ -7,6 +7,7 @@ from time import monotonic
 
 from dataclasses import dataclass, replace
 import inspect
+import sqlite3
 
 from metroliza.ui.result_actions import LastResultRow, existing_result_files
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
@@ -19,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -76,6 +78,7 @@ from metroliza.shared.progress_status import build_three_line_status
 from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
 from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
+from metroliza.tabular.column_types import column_conversion_examples
 from metroliza.tabular.reload_scope import (
     compatible_columns, compatible_filters, reconcile_reload_grouping, same_tabular_source,
 )
@@ -386,6 +389,81 @@ def build_analytics_completion_message(result) -> tuple[str, str, str, str]:
     reveal_path = str(result.workbook_path or "")
     level, title = ("warning", "Analytics completed with warnings") if has_warnings else ("info", "Analytics successful")
     return level, title, "\n".join(message_lines), reveal_path
+
+
+class ColumnTypesDialog(QDialog):
+    """Choose explicit types using raw input and the loader's converted values."""
+
+    def __init__(self, parent, loaded, overrides):
+        super().__init__(parent)
+        self.loaded = loaded
+        self.overrides = dict(overrides)
+        self.setWindowTitle("Typy kolumn CSV i Excel")
+        self.columns = QComboBox()
+        self.kinds = QComboBox()
+        self.inferred = QLabel()
+        self.examples = QLabel()
+        for label in (self.inferred, self.examples):
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setWordWrap(True)
+        for identity in loaded.source_column_identities:
+            name, occurrence = identity
+            self.columns.addItem(name if occurrence == 1 else f"{name} ({occurrence})", identity)
+        for label, kind in (("Wykryj automatycznie", "auto"), ("Tekst", "text"), ("Liczba", "number")):
+            self.kinds.addItem(label, kind)
+        self.columns.setAccessibleName("Kolumna źródłowa")
+        self.kinds.setAccessibleName("Wybrany typ kolumny")
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.addRow("&Kolumna", self.columns)
+        form.addRow("&Typ", self.kinds)
+        layout.addLayout(form)
+        layout.addWidget(self.inferred)
+        layout.addWidget(self.examples)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Zastosuj i odśwież")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.columns.currentIndexChanged.connect(self._show_column)
+        self.kinds.currentIndexChanged.connect(self._set_type)
+        self._show_column()
+        apply_metroliza_theme(self)
+
+    def _show_column(self):
+        identity = self.columns.currentData()
+        self.kinds.blockSignals(True)
+        self.kinds.setCurrentIndex(self.kinds.findData(self.overrides.get(identity, "auto")))
+        self.kinds.blockSignals(False)
+        self._update_preview()
+
+    def _set_type(self):
+        identity, kind = self.columns.currentData(), self.kinds.currentData()
+        if kind == "auto":
+            self.overrides.pop(identity, None)
+        else:
+            self.overrides[identity] = kind
+        self._update_preview()
+
+    def _update_preview(self):
+        identity = self.columns.currentData()
+        kind = self.kinds.currentData()
+        field = self.loaded.source_column_identities[identity]
+        inferred = "liczba" if field in self.loaded.inferred_metric_columns else "tekst"
+        if field == self.loaded.timestamp_column:
+            inferred = "data i godzina"
+        self.inferred.setText(f"Wykryty typ — {inferred}")
+        try:
+            examples = column_conversion_examples(self.loaded, identity, kind)
+        except (OSError, sqlite3.Error):
+            self.examples.setText("Nie udało się odczytać próbki. Odśwież dane.")
+            return
+        display = [f"{raw} → {converted if converted is not None else 'brak poprawnej liczby'}"
+                   for raw, converted in examples if raw is not None]
+        invalid = self.loaded.invalid_numeric_counts.get(field, 0)
+        if kind == "number" and invalid:
+            display.append(f"Liczba nieprawidłowych wartości w kolumnie — {invalid}")
+        self.examples.setText("\n".join(display) or "Brak danych w próbce.")
 
 
 class MetricSelectionDialog(QDialog):
@@ -744,6 +822,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._tabular_refresh_result = ""
         self._tabular_refresh_lost = False
         self._pending_role_reload = None
+        self._column_type_overrides = {}
         self.dashboard_interactivity_options = DashboardInteractivityOptions()
 
         self.setWindowTitle(self._window_title_for_source())
@@ -884,6 +963,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.filters_button = QPushButton("Filters...")
         self.clear_filter_button = QPushButton("Clear filter")
         self.load_metrics_button = QPushButton("Load metrics")
+        self.column_types_button = QPushButton("Typy kolumn…")
+        self.column_types_button.clicked.connect(self.open_column_types)
         self.choose_metrics_button = QPushButton("Choose metrics...")
         self.edit_limits_button = QPushButton("Limits...")
         self.edit_groups_button = QPushButton("Edit groups...")
@@ -1051,6 +1132,7 @@ class IndustrialAnalyticsDialog(QDialog):
         metric_actions.setContentsMargins(0, 0, 0, 0)
         metric_actions.setSpacing(8)
         metric_actions.addWidget(self.load_metrics_button)
+        metric_actions.addWidget(self.column_types_button)
         metric_actions.addStretch(1)
         grid.addWidget(section_label("Data"), row, 0)
         grid.addLayout(metric_actions, row, 1, 1, 2)
@@ -1576,6 +1658,7 @@ class IndustrialAnalyticsDialog(QDialog):
         if self.input_file and (self.tabular_load_result is not None or self.metric_candidates):
             self._tabular_reload_notice = "Reload CSV/Excel data after changing the selected sheet."
         self.metric_candidates = ()
+        self._column_type_overrides = {}
         self._discard_role_reload()
         self._set_tabular_load_result(None)
         self.metric_spec_limits = {}
@@ -1842,6 +1925,7 @@ class IndustrialAnalyticsDialog(QDialog):
             output_seed = str(first_path.with_name(f"{first_path.stem}_combined.csv"))
         self.output_dashboard_file = _explicit_output_path(default_dashboard_path(output_seed))
         self.output_workbook_file = _explicit_output_path(default_workbook_path(output_seed))
+        self._column_type_overrides = {}
         self._tabular_reload_notice = ""
         self.metric_candidates = ()
         self._discard_role_reload()
@@ -2121,7 +2205,8 @@ class IndustrialAnalyticsDialog(QDialog):
             choices, lost = result
         self._discard_role_reload()
         self._replace_tabular_snapshot(loaded, choices, populate_metrics)
-        if choices is not None:
+        lost = (*lost, *self._column_type_messages(loaded))
+        if choices is not None or lost:
             self._tabular_refresh_result = "\n".join(lost) if lost else "Odświeżono dane i zachowano ustawienia analizy."
             self._tabular_refresh_lost = bool(lost)
         if populate_metrics:
@@ -2130,6 +2215,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def _replace_tabular_snapshot(self, loaded, choices, populate_metrics):
         self._tabular_reload_notice = ""
         self._set_tabular_load_result(loaded)
+        self._column_type_overrides = dict(getattr(loaded, "column_types", {}))
         self.metric_candidates = tuple(candidate.to_selection() for candidate in loaded.metric_candidates)
         self.metric_spec_limits = choices.limits if choices else {}
         self._reset_group_options(
@@ -2160,6 +2246,23 @@ class IndustrialAnalyticsDialog(QDialog):
         self.df_for_grouping = choices.grouping
         self.grouping_applied = choices.grouping is not None and not choices.grouping.empty
         self._set_groupstats_output_checked(choices.groupstats and self._tabular_groupstats_available())
+
+    @staticmethod
+    def _column_type_messages(loaded):
+        messages = [note.message for note in getattr(loaded, "diagnostics", ())
+                    if note.code == "tabular_number_override_invalid_values"]
+        messages.extend(f"Brak kolumny z wybranym typem — {name} ({occurrence})"
+                        for name, occurrence in getattr(loaded, "unavailable_column_types", ()))
+        return messages
+
+    def open_column_types(self):
+        loaded = self.tabular_load_result
+        if self._tabular_source_busy() or loaded is None or not loaded.source_column_identities:
+            return
+        dialog = ColumnTypesDialog(self, loaded, self._column_type_overrides)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.overrides != self._column_type_overrides:
+            self._column_type_overrides = dialog.overrides
+            self.show_tabular_load_screen()
 
     def _apply_auto_file_grouping(self, loaded) -> None:
         if self.is_production_source or not self._auto_group_selected_files:
@@ -2663,6 +2766,9 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         self.clear_groups_button.setEnabled(bool(not self.is_production_source and self.grouping_applied))
         self.load_metrics_button.setEnabled(source_ready)
+        self.column_types_button.setVisible(not self.is_production_source and not self.is_preloaded_tabular_source)
+        self.column_types_button.setEnabled(bool(getattr(self.tabular_load_result, "source_column_identities", {}))
+                                            and not self._tabular_source_busy())
         if not self.is_production_source:
             source_idle = not self._tabular_source_busy()
             self.browse_input_button.setEnabled(source_idle)
@@ -2824,6 +2930,7 @@ class IndustrialAnalyticsDialog(QDialog):
             sheet_name=self._selected_sheet_name(),
             timestamp_column=self._selected_tabular_column(self.timestamp_column_combo),
             reference_column=self._selected_tabular_column(self.reference_column_combo),
+            column_types=self._column_type_overrides,
         )
         # Terminal handlers can enter a nested event loop. Retain each worker's
         # own widgets so late cleanup cannot dispose a newer analytics window.

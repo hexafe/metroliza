@@ -181,6 +181,34 @@ def test_workbook_publish_failure_reports_new_excel_missing_and_keeps_previous(t
     assert workbook.read_bytes() == b"previous workbook remains"
 
 
+def test_recipe_keeps_explicit_column_types_and_rejects_a_missing_override(tmp_path):
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+
+    path, output = tmp_path / "measurements.csv", tmp_path / "result.html"
+    columns = "Batch code,Length mm\n"
+    path.write_text(columns + "00123,1.2\n124,broken\n125,1.3\n", encoding="utf-8")
+    types = {("Batch code", 1): "text", ("Length mm", 1): "number"}
+    loaded = load_tabular_analytics_file(path, column_types=types)
+    try:
+        item = capture(replace(request_for(path, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    assert item.binding.value(ParameterKey.COLUMN_TYPES)
+    plan = resolve_plan(item.definition, item.binding)
+    ports = AnalyticsRecipePorts()
+    try:
+        assert ports.preflight(plan, ctx(plan)).ready
+        assert ports.execute(plan.definition.steps[0], plan, ctx(plan)).status is StepStatus.COMPLETED
+        assert ports._loaded[plan.run_id].column_types == types
+    finally:
+        ports.finish(plan)
+
+    path.write_text("Other code,Length mm\n00123,1.2\n124,broken\n125,1.3\n", encoding="utf-8")
+    assert ports.preflight(plan, ctx(plan)).ready
+    assert ports.execute(plan.definition.steps[0], plan, ctx(plan)).code is ResultCode.INVALID_PLAN
+    ports.finish(plan)
+
+
 def test_industrial_uses_only_existing_local_cache_and_preserves_filters(tmp_path):
     from tests.industrial_analytics_fixtures import seed_production_analytics_cache
     from metroliza.recipes.industrial_adapter import capture as capture_industrial

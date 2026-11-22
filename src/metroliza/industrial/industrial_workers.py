@@ -32,6 +32,7 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
     TabularLoadCancelled,
+    cleanup_tabular_load_result,
     load_tabular_analytics_file,
     load_tabular_analytics_files,
 )
@@ -521,6 +522,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
+        column_types=None,
     ):
         super().__init__()
         self.input_file = input_file
@@ -528,6 +530,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
+        self.column_types = dict(column_types or {})
         self._init_cancellation_state()
 
     def _emit_tabular_load_progress(self, payload: dict[str, Any]) -> None:
@@ -557,6 +560,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
     def run(self):
         try:
             self.update_label.emit("Loading CSV/Excel data...\nReading rows and detecting metrics\nETA --")
+            overrides = {"column_types": self.column_types} if self.column_types else {}
             if self.input_files:
                 result = load_tabular_analytics_files(
                     self.input_files,
@@ -565,6 +569,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     reference_column=self.reference_column,
                     progress_callback=self._emit_tabular_load_progress,
                     cancel_check=self._is_cancelled,
+                    **overrides,
                 )
             else:
                 result = load_tabular_analytics_file(
@@ -574,8 +579,10 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     reference_column=self.reference_column,
                     progress_callback=self._emit_tabular_load_progress,
                     cancel_check=self._is_cancelled,
+                    **overrides,
                 )
             if self._is_cancelled():
+                cleanup_tabular_load_result(result)
                 self.cancelled.emit("CSV/Excel loading was canceled.")
                 return
             self.result_ready.emit(result)

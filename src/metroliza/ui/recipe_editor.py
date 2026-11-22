@@ -105,6 +105,18 @@ class RecipeEditor(QDialog):
         with QSignalBlocker(self.html):
             self.html.setChecked(grouped or not self._has_excel or self._optional_html)
 
+    def _parameter_editor(self, spec, value):
+        if spec.key is ParameterKey.SOURCE_FILES:
+            edit = RecipeSourceFilesEdit(value or ())
+            edit.paths_changed.connect(self._mark_modified)
+        elif spec.key in CHOICE_LABELS:
+            edit = choice_editor(spec.key, value)
+            edit.currentIndexChanged.connect(self._mark_modified)
+        else:
+            edit = QLineEdit(", ".join(value) if type(value) is tuple else str(value))
+            edit.textEdited.connect(self._mark_modified)
+        return edit
+
     def _refresh(self):
         self.cards.clear()
         for step in self.service.current.definition.steps:
@@ -134,17 +146,9 @@ class RecipeEditor(QDialog):
                 mode.addItem(MODE_LABELS[value], value)
             mode.setCurrentIndex(modes.index(spec.mode))
             value = self.service.current.binding.value(spec.key, "")
-            if spec.key is ParameterKey.SOURCE_FILES:
-                edit = RecipeSourceFilesEdit(value or ())
-                edit.paths_changed.connect(self._mark_modified)
-            elif spec.key in CHOICE_LABELS:
-                edit = choice_editor(spec.key, value)
-                edit.currentIndexChanged.connect(self._mark_modified)
-            else:
-                edit = QLineEdit(", ".join(value) if type(value) is tuple else str(value))
-                edit.textEdited.connect(self._mark_modified)
+            edit = self._parameter_editor(spec, value)
             if spec.key in {ParameterKey.EXPORT_OPTIONS, ParameterKey.FILTER_VALUES,
-                            ParameterKey.ANALYTICS_REQUEST}:
+                            ParameterKey.ANALYTICS_REQUEST, ParameterKey.COLUMN_TYPES}:
                 # Captured typed configuration remains exact; no raw JSON editor.
                 edit.setReadOnly(True)
                 edit.setEchoMode(QLineEdit.EchoMode.Password)

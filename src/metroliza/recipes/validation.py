@@ -15,7 +15,7 @@ BUILTIN_IDS = frozenset({"reports_excel_main", "reports_dashboard_html", "report
 PATH_KEYS = frozenset({ParameterKey.INPUT_FOLDER, ParameterKey.OUTPUT_FILE,
     ParameterKey.DATABASE_FILE, ParameterKey.EXISTING_DATABASE, ParameterKey.SOURCE_FILE})
 STRING_LIST_KEYS = frozenset({ParameterKey.COLUMNS, ParameterKey.COLUMN_ROLES,
-    ParameterKey.FILTER_VALUES, ParameterKey.GROUPING_RULES, ParameterKey.SOURCE_FILES})
+    ParameterKey.FILTER_VALUES, ParameterKey.GROUPING_RULES, ParameterKey.SOURCE_FILES, ParameterKey.COLUMN_TYPES})
 DATE_KEYS = (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
 
 

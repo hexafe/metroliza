@@ -191,6 +191,32 @@ def test_load_tabular_analytics_file_preserves_identifier_lexemes_and_large_inte
         cleanup_tabular_load_result(result)
 
 
+@pytest.mark.parametrize("suffix", ["csv", "xlsx"])
+def test_type_overrides_preserve_codes_and_report_number_conversion_failures(tmp_path, suffix):
+    from metroliza.tabular.column_types import column_conversion_examples
+
+    rows = [("00123", "1.2"), ("45", "bad"), ("56", "3.4"), ("67", "bad"), ("78", "5.6")]
+    path = tmp_path / f"types.{suffix}"
+    source = pd.DataFrame(rows, columns=["Batch code", "Reading"])
+    if suffix == "csv":
+        source.to_csv(path, index=False)
+    else:
+        source.to_excel(path, sheet_name="Pomiar", index=False)
+    loaded = load_tabular_analytics_file(path, sheet_name="Pomiar" if suffix == "xlsx" else None,
+        column_types={("Batch code", 1): "text", ("Reading", 1): "number"})
+    try:
+        assert set(loaded.inferred_metric_columns) == {"batch_code"}
+        assert {item.field_name for item in loaded.metric_candidates} == {"reading"}
+        assert loaded.dataframe["batch_code"].tolist() == [code for code, _ in rows]
+        assert loaded.dataframe["reading"].dropna().tolist() == [1.2, 3.4, 5.6]
+        examples = column_conversion_examples(loaded, ("Reading", 1), "number")
+        assert examples[:2] == (("1.2", 1.2), ("bad", None))
+        assert loaded.invalid_numeric_counts["reading"] == 2
+        assert any(note.code == "tabular_number_override_invalid_values" for note in loaded.diagnostics)
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
 def test_tabular_numeric_shadows_preserve_decimal_comma_analytics(tmp_path) -> None:
     input_file = tmp_path / "decimal_comma.csv"
     input_file.write_text(

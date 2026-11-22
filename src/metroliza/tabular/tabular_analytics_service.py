@@ -40,6 +40,7 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionMetricSelection,
 )
 from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+from metroliza.tabular.column_types import ColumnIdentity, ColumnType, normalize_column_types
 
 try:
     from metroliza.shared.grouping_filter_core import (
@@ -1485,6 +1486,10 @@ class TabularAnalyticsLoadResult:
     load_timings_s: dict[str, float] = field(default_factory=dict)
     row_table: RowTable | None = None
     source_column_identities: dict[_HeaderIdentity, str] = field(default_factory=dict)
+    column_types: dict[ColumnIdentity, ColumnType] = field(default_factory=dict)
+    inferred_metric_columns: tuple[str, ...] = ()
+    invalid_numeric_counts: dict[str, int] = field(default_factory=dict)
+    unavailable_column_types: tuple[ColumnIdentity, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1628,6 +1633,7 @@ def load_tabular_analytics_files(
     force_sqlite: bool | None = None,
     progress_callback: TabularProgressCallback | None = None,
     cancel_check: TabularCancelCheck | None = None,
+    column_types: Mapping[ColumnIdentity, str] | None = None,
 ) -> TabularAnalyticsLoadResult:
     """Load one or more tabular analytics files.
 
@@ -1655,6 +1661,7 @@ def load_tabular_analytics_files(
         min_numeric_count=min_numeric_count,
         progress_callback=progress_callback,
         cancel_check=cancel_check,
+        column_types=column_types,
     )
 
 
@@ -1669,6 +1676,7 @@ def load_tabular_analytics_file(
     force_sqlite: bool | None = None,
     progress_callback: TabularProgressCallback | None = None,
     cancel_check: TabularCancelCheck | None = None,
+    column_types: Mapping[ColumnIdentity, str] | None = None,
 ) -> TabularAnalyticsLoadResult:
     """Load CSV/Excel data and normalize it to the production analytics dataframe shape."""
 
@@ -1688,6 +1696,7 @@ def load_tabular_analytics_file(
         min_numeric_count=min_numeric_count,
         progress_callback=progress_callback,
         cancel_check=cancel_check,
+        column_types=column_types,
     )
 
 
@@ -1734,6 +1743,7 @@ def _load_tabular_files_into_sqlite(
     min_numeric_count: int,
     progress_callback: TabularProgressCallback | None = None,
     cancel_check: TabularCancelCheck | None = None,
+    column_types: Mapping[ColumnIdentity, str] | None = None,
 ) -> TabularAnalyticsLoadResult:
     load_started_at = time.perf_counter()
     load_timings: dict[str, float] = {}
@@ -1778,6 +1788,9 @@ def _load_tabular_files_into_sqlite(
     )
     global_mapping = _first_raw_label_aliases(global_header_identities, identity_mapping)
     source_columns = [identity_mapping[identity] for identity in global_header_identities]
+    requested_types = normalize_column_types(column_types)
+    effective_types = {key: kind for key, kind in requested_types.items() if key in identity_mapping}
+    types_by_column = {identity_mapping[key]: kind for key, kind in effective_types.items()}
 
     for sampled_spec in sampled_specs:
         header = tuple(str(column) for column in sampled_spec["header"])
@@ -2075,11 +2088,16 @@ def _load_tabular_files_into_sqlite(
             )
         )
         metric_candidates_started_at = time.perf_counter()
-        metric_candidates = _metric_candidates_from_stats(
+        inferred_candidates = _metric_candidates_from_stats(
             metric_stats,
             numeric_threshold=numeric_threshold,
             min_numeric_count=min_numeric_count,
         )
+        metric_candidates = _metric_candidates_from_stats(
+            metric_stats, numeric_threshold=numeric_threshold, min_numeric_count=min_numeric_count,
+            column_types=types_by_column,
+        ) if types_by_column else inferred_candidates
+        invalid_numeric_counts = _invalid_numeric_counts(metric_stats, types_by_column, diagnostics)
         _record_load_timing("metric_candidates", metric_candidates_started_at)
         if not metric_candidates:
             diagnostics.append(
@@ -2147,6 +2165,10 @@ def _load_tabular_files_into_sqlite(
             row_count=row_number,
             load_timings_s=dict(load_timings),
             source_column_identities=identity_mapping,
+            column_types=effective_types,
+            inferred_metric_columns=tuple(candidate.field_name for candidate in inferred_candidates),
+            invalid_numeric_counts=invalid_numeric_counts,
+            unavailable_column_types=tuple(key for key in requested_types if key not in effective_types),
         )
     except Exception:
         for candidate in (db_path, Path(f"{db_path}-wal"), Path(f"{db_path}-shm")):
@@ -2913,15 +2935,19 @@ def _metric_candidates_from_stats(
     *,
     numeric_threshold: float,
     min_numeric_count: int,
+    column_types: Mapping[str, str] | None = None,
 ) -> tuple[ProductionMetricCandidate, ...]:
     candidates: list[ProductionMetricCandidate] = []
     for column, stats in metric_stats.items():
+        kind = (column_types or {}).get(column)
         non_null_count = int(stats.get("non_null_count") or 0)
         numeric_count = int(stats.get("numeric_count") or 0)
-        if non_null_count <= 0:
+        if non_null_count <= 0 or kind == "text":
             continue
         numeric_ratio = numeric_count / non_null_count
-        if numeric_count < int(min_numeric_count) or numeric_ratio < float(numeric_threshold):
+        if kind == "number" and numeric_count == 0:
+            continue
+        if kind != "number" and (numeric_count < int(min_numeric_count) or numeric_ratio < float(numeric_threshold)):
             continue
         warning_flags = ("contains_non_numeric_values",) if numeric_count < non_null_count else ()
         candidates.append(
@@ -2937,6 +2963,20 @@ def _metric_candidates_from_stats(
             )
         )
     return tuple(sorted(candidates, key=lambda item: item.display_label.lower()))
+
+
+def _invalid_numeric_counts(metric_stats, types_by_column, diagnostics):
+    counts = {column: stats["non_null_count"] - stats["numeric_count"]
+              for column, stats in metric_stats.items()}
+    for column, kind in types_by_column.items():
+        count = counts.get(column, 0)
+        if kind == "number" and count:
+            diagnostics.append(ProductionAnalyticsDiagnostic(
+                severity="warning", code="tabular_number_override_invalid_values",
+                message=f"{column}: {count} wartości bez poprawnej liczby.",
+                context={"column": column, "invalid_count": count},
+            ))
+    return counts
 
 
 def build_tabular_grouping_dataframe(

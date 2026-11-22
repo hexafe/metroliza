@@ -49,6 +49,7 @@ class ParameterKey(str, Enum):
     SHEET = "sheet"
     COLUMNS = "columns"
     COLUMN_ROLES = "column_roles"
+    COLUMN_TYPES = "column_types"
     CACHE_REFERENCE = "cache_reference"
     DATE_FROM = "date_from"
     DATE_TO = "date_to"

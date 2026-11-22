@@ -26,6 +26,7 @@ from metroliza.recipes.ports import PreflightResult, ResultCode, StepResult, Ste
 from metroliza.recipes.storage import StoredRecipe
 from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.shared.dashboard_interactivity import DashboardInteractivityOptions
+from metroliza.tabular.column_types import normalize_column_types
 from metroliza.tabular.contracts import GroupingAssignment
 from metroliza.tabular.tabular_analytics_service import (
     TabularColumnFilter, TabularLoadCancelled, cleanup_tabular_load_result, load_tabular_analytics_files,
@@ -174,6 +175,12 @@ def capture(request: IndustrialAnalyticsRequest, *, name="Analiza CSV/XLSX") -> 
         (source_key, source), (ParameterKey.OUTPUT_FILE, request.output_dashboard_file),
         (ParameterKey.ANALYTICS_REQUEST, raw), (ParameterKey.SOURCE_KIND, request.source_kind),
     ))
+    overrides = getattr(request.tabular_load_result, "column_types", {})
+    if tabular and overrides:
+        spec = ParameterSpec(ParameterKey.COLUMN_TYPES, ParameterType.STRINGS, ParameterMode.FIXED)
+        values = tuple(json.dumps((*key, kind), ensure_ascii=False) for key, kind in overrides.items())
+        definition = replace(definition, parameters=(*definition.parameters, spec))
+        binding = replace(binding, values=(*binding.values, (spec.key, values)))
     from metroliza.recipes.validation import validate_binding
     validate_binding(definition, binding, complete=True)
     return StoredRecipe(definition, binding)
@@ -248,6 +255,20 @@ def _column_remapping(plan):
             raise RecipeError("invalid_column_remapping")
         remapping[old.strip()] = new.strip()
     return remapping
+
+
+def _column_type_overrides(plan):
+    overrides = {}
+    try:
+        for value in plan.value(ParameterKey.COLUMN_TYPES, ()):
+            name, occurrence, kind = json.loads(value)
+            key = (name, occurrence)
+            if key in overrides:
+                raise ValueError("duplicate_column_type")
+            overrides[key] = kind
+        return normalize_column_types(overrides)
+    except (ValueError, TypeError, RecursionError) as exc:
+        raise RecipeError("invalid_column_type_overrides") from exc
 
 
 def _remap_request(request, remapping):
@@ -405,14 +426,15 @@ class AnalyticsRecipePorts:
         if request.source_kind != "tabular_file":
             return StepResult(StepStatus.COMPLETED)
         # The workflow consumes this exact snapshot, including every selected source.
+        overrides = _column_type_overrides(plan)
         loaded = load_tabular_analytics_files(
             _plan_sources(plan), sheet_name=request.sheet_name,
             timestamp_column=request.timestamp_column, reference_column=request.reference_column,
-            cancel_check=cancelled,
+            cancel_check=cancelled, column_types=overrides,
         )
         self._loaded[plan.run_id] = loaded
-        names = {c.field_name for c in loaded.metric_candidates if c.numeric_ratio >= 0.8}
-        if any(metric.field_name not in names for metric in request.metric_selection):
+        names = {c.field_name for c in loaded.metric_candidates}
+        if loaded.unavailable_column_types or any(metric.field_name not in names for metric in request.metric_selection):
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id))
             return StepResult(StepStatus.FAILED, ResultCode.INVALID_PLAN)
         return StepResult(StepStatus.COMPLETED)
