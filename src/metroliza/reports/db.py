@@ -346,7 +346,7 @@ def backup_sqlite_database(source_path: str, destination_path: str) -> None:
     """Write and integrity-check a consistent SQLite backup at ``destination_path``."""
 
     with (
-        closing(sqlite3.connect(source_path)) as source_connection,
+        sqlite_readonly_connection_scope(source_path) as source_connection,
         closing(sqlite3.connect(destination_path)) as destination_connection,
     ):
         source_connection.backup(destination_connection)

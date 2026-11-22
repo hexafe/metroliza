@@ -523,6 +523,7 @@ class MainWindow(QMainWindow):
         """Set up the menu actions for the main window."""
         self.file_menu = self.menuBar().addMenu("&File")
         self.open_database_action = self.file_menu.addAction("Open database…", self._choose_database)
+        self.file_menu.addAction("Restore database copy…", self._launch_database_restore)
         self.choose_report_folder_action = self.file_menu.addAction("Choose report folder…", self._choose_report_folder)
         self.recent_database_menu = self.file_menu.addMenu("Recent databases")
         self.recent_folder_menu = self.file_menu.addMenu("Recent report folders")
@@ -726,6 +727,15 @@ class MainWindow(QMainWindow):
             filename, _ = QFileDialog.getOpenFileName(self, "Open database", "", SQLITE_FILE_FILTER)
             if filename:
                 self._open_recent_location("databases", filename)
+
+    def _launch_database_restore(self):
+        from metroliza.ui.database_restore_dialog import DatabaseRestoreDialog
+
+        self._open_coordinated_window(
+            "restore_database", lambda snapshot: DatabaseRestoreDialog(self, snapshot.database_file),
+            context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
+            context_policy=WindowContextPolicy.CLOSE,
+        )
 
     def _choose_report_folder(self):
         if self._report_context_change_allowed():
