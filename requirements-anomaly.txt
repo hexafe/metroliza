@@ -1,4 +1,4 @@
 # Optional ML anomaly detection dependencies.
 # Install only when enabling ML-backed industrial anomaly detectors.
 scikit-learn==1.9.1
-river==0.26.1
+river==0.27.0
