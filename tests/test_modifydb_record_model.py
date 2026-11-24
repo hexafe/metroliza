@@ -1320,3 +1320,87 @@ def test_show_selected_report_measurements_preserves_edits_when_scope_changes(cu
     dialog.show_all_measurements_button.click()
     assert model.rowCount() == 10
     assert model.pending_cell_count == 1
+
+
+@pytest.mark.parametrize("choice", ["Cancel", "Rename visible only", "Rename all selected"])
+def test_bulk_reference_rename_keeps_hidden_scope_explicit_until_apply(
+    current_dialog, monkeypatch, choice,
+):
+    from PyQt6.QtCore import QItemSelectionModel, QTimer
+    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+
+    dialog = current_dialog
+    dialog.tab_widget.setCurrentWidget(dialog.normalize_tab)
+    table = dialog.reference_table
+    dialog.show()
+    table.setFocus()
+    assert _pump(lambda: dialog.focusWidget() is table)
+    edit_column = dialog._normalize_table_edit_column(table)
+    rows = {table.item(row, 0).text(): row for row in range(table.rowCount())}
+    assert {"REF-A", "REF-B"} <= rows.keys()
+    for name in ("REF-A", "REF-B"):
+        index = table.model().index(rows[name], 0)
+        selection = QItemSelectionModel.SelectionFlag
+        table.selectionModel().select(index, selection.Select | selection.Rows)
+    dialog.reference_filter_edit.setText("REF-A")
+    assert not table.isRowHidden(rows["REF-A"])
+    assert table.isRowHidden(rows["REF-B"])
+
+    scopes, rename_prompts, errors = [], [], []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *_args: errors.append(_args[2]))
+    real_exec = QMessageBox.exec
+
+    def choose_scope(box):
+        scopes.append(box.text())
+        button = next((button for button in box.buttons() if button.text() == choice), None)
+        if button is None:
+            return QMessageBox.StandardButton.Cancel
+        QTimer.singleShot(0, button.click)
+        return real_exec(box)
+
+    def enter_new_reference(_dialog, _title, prompt, **_kwargs):
+        rename_prompts.append(prompt)
+        return "REF-NEW", True
+
+    def database_references():
+        with closing(sqlite3.connect(dialog.db_file)) as connection:
+            return connection.execute("SELECT report_id, reference FROM report_metadata ORDER BY report_id").fetchall()
+
+    before = database_references()
+    with monkeypatch.context() as patcher:
+        patcher.setattr(QMessageBox, "exec", choose_scope)
+        patcher.setattr(QInputDialog, "getText", enter_new_reference)
+        if choice == "Rename visible only":
+            QTest.keyClick(table, Qt.Key.Key_Return)
+        else:
+            dialog.rename_normalized_button.click()
+
+    assert scopes == ["Selected values: 2. Hidden by the search: 1."]
+    assert not errors
+    assert database_references() == before
+    if choice == "Cancel":
+        assert not rename_prompts
+        assert not dialog.has_pending_changes()
+        return
+
+    all_selected = choice == "Rename all selected"
+    count = 2 if all_selected else 1
+    assert rename_prompts == [f"Enter new value for {count} selected item(s):"]
+    assert table.item(rows["REF-A"], edit_column).text() == "REF-NEW"
+    assert table.item(rows["REF-B"], edit_column).text() == ("REF-NEW" if all_selected else "REF-B")
+
+    def confirm_apply(box):
+        assert box.windowTitle() == "Confirm changes"
+        QTimer.singleShot(0, box.button(QMessageBox.StandardButton.Ok).click)
+        return real_exec(box)
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "exec", confirm_apply)
+    dialog.apply_button.click()
+    assert _pump(lambda: dialog._changes_committed or bool(errors))
+    assert not errors
+    renamed = {"REF-A", "REF-B"} if all_selected else {"REF-A"}
+    assert database_references() == [
+        (report_id, "REF-NEW" if value in renamed else value)
+        for report_id, value in before
+    ]
