@@ -865,7 +865,7 @@ def test_failed_producer_atomically_retains_closed_phase_and_never_marks_uiux_pa
 def test_bugreport_failure_after_capture_retains_snapshot_and_passed_facet(monkeypatch, tmp_path):
     producer, _value = _producer_protocol(monkeypatch, tmp_path, failed='bugreport')
     receipt = dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={})
-    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+    with pytest.raises(producer.ScenarioFailure, match='^uiux_bugreport_failed$'):
         producer._run_uiux_slice(tmp_path, FIXTURES.parent, receipt)
     value = uiux.load_json(tmp_path / 'uiux-observation.json')
     captures = value['evidence']['captures']
