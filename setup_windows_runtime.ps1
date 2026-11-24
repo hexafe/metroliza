@@ -96,7 +96,13 @@ function Install-VcRedistX64 {
             Invoke-WebRequest -Uri $vcRedistUrl -OutFile $installer -UseBasicParsing -MaximumRedirection 0 -TimeoutSec 90
             # Retain read access while denying writers and deletion through process completion.
             $installerFile = [IO.File]::Open($installer, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-            $digest = (Get-FileHash -InputStream $installerFile -Algorithm SHA256).Hash
+            $hasher = [System.Security.Cryptography.SHA256]::Create()
+            try {
+                $digest = [BitConverter]::ToString($hasher.ComputeHash($installerFile)).Replace('-', '')
+            }
+            finally {
+                $hasher.Dispose()
+            }
         }
         catch {
             throw "Could not download or read the pinned VC++ Redistributable. $vcRedistManual"
