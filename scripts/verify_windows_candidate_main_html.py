@@ -201,7 +201,7 @@ def verify(path, *, source, packaged):
     for case in CASES:
         record = keys(receipt['cases'][case], ('status', 'files'))
         literal(record['status'], 'complete')
-        require(type(record['files']) is dict and 3 <= len(record['files']) <= 7, "main_html_manifest")
+        require(type(record['files']) is dict and 4 <= len(record['files']) <= 8, "main_html_manifest")
         names = set(record['files'])
         require(all(name.startswith(case + '/') and name not in seen and name in files for name in names),
                 "main_html_manifest")
