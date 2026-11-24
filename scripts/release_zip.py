@@ -30,6 +30,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -383,6 +384,24 @@ def _verify_payload(
     }
 
 
+def _source_predates_plotly_notice(source_root: Path, source_sha: str) -> bool:
+    git = ("git", "-C", str(source_root.resolve()))
+    try:
+        identity = subprocess.run(
+            (*git, "rev-parse", "--show-toplevel", "HEAD"), capture_output=True, text=True, check=True, timeout=5,
+        ).stdout.splitlines()
+        if len(identity) != 2 or Path(identity[0]).resolve() != source_root.resolve() or identity[1] != source_sha:
+            return False
+        companion = REQUIRED_NOTICES[PLOTLY_NOTICE_FILENAME].as_posix()
+        tracked = subprocess.run(
+            (*git, "ls-tree", "--full-tree", "--name-only", source_sha, "--", companion),
+            capture_output=True, check=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return False
+    return not tracked
+
+
 def _verify_extracted(
     folder: Path,
     exe_name: str,
@@ -400,11 +419,12 @@ def _verify_extracted(
         raise ReleaseZipError("EXE differs from the smoke-tested launcher")
     manifest = read_payload_manifest(exe)
     historical = (
-        expected_source_sha is not None
+        not exe_name.startswith("Metroliza-")
+        and expected_source_sha is not None
         and expected_exe_sha256 is not None
         and source_root is not None
-        and not (source_root / REQUIRED_NOTICES[PLOTLY_NOTICE_FILENAME]).exists()
         and all(PurePosixPath(item["path"]).name != PLOTLY_NOTICE_FILENAME for item in manifest["files"])
+        and _source_predates_plotly_notice(source_root, expected_source_sha)
     )
     notices = _verify_notices(folder, exe_name, names, source_root, historical=historical)
     return {

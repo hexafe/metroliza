@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import struct
+import subprocess
 import zipfile
 
 import pytest
@@ -54,15 +55,16 @@ def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SH
 
 
 def _stage_release(tmp_path: Path, *, notices: bool = True, name: str = EXE_NAME,
-                   label: str = "2026.09rc1(261031)", version: str = "2026.09rc1_261031") -> Path:
+                   label: str = "2026.09rc1(261031)", version: str = "2026.09rc1_261031",
+                   git_sha: str = GIT_SHA) -> Path:
     dist = tmp_path / "dist"
     dist.mkdir()
     exe = dist / name
-    _fake_launcher(exe, ONEDIR_FILES, version=version)
+    _fake_launcher(exe, ONEDIR_FILES, version=version, git_sha=git_sha)
     provenance = {
         "artifact": {"name": exe.name, "sha256": hashlib.sha256(exe.read_bytes()).hexdigest(), "size_bytes": exe.stat().st_size},
         "dirty": False,
-        "git_sha": GIT_SHA,
+        "git_sha": git_sha,
         "release_label": label,
         "schema_version": 1,
     }
@@ -317,30 +319,56 @@ def test_notice_manifest_must_list_exactly_the_required_notices(tmp_path: Path) 
 
 
 def test_archived_zip_without_companion_requires_bound_legacy_evidence(tmp_path: Path) -> None:
-    exe = _stage_release(tmp_path)
-    licenses = exe.with_name(f"{exe.name}.licenses")
     notice_name = release_zip.PLOTLY_NOTICE_FILENAME
+    source_root = tmp_path / "historic-source"
+    loose_notice_directory = tmp_path / "unbound-source"
+    for name, relative in release_zip.REQUIRED_NOTICES.items():
+        if name == notice_name:
+            continue
+        for directory in (source_root, loose_notice_directory):
+            source_file = directory / relative
+            source_file.parent.mkdir(parents=True, exist_ok=True)
+            source_file.write_bytes((release_zip.REPO_ROOT / relative).read_bytes())
+    git = ("git", "-C", str(source_root))
+    subprocess.run((*git, "init", "-q"), check=True)
+    subprocess.run((*git, "add", "."), check=True)
+    subprocess.run((*git, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                    "commit", "-qm", "Historical notices"), check=True)
+    source_sha = subprocess.check_output((*git, "rev-parse", "HEAD"), text=True).strip()
+    exe = _stage_release(tmp_path, git_sha=source_sha)
+    licenses = exe.with_name(f"{exe.name}.licenses")
     manifest_path = licenses / release_zip.NOTICE_MANIFEST
     manifest = json.loads(manifest_path.read_bytes())
     manifest["files"] = [item for item in manifest["files"] if item["name"] != notice_name]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     (licenses / notice_name).unlink()
     archive = release_zip.assemble(exe, tmp_path / "legacy.zip")
-    source_root = tmp_path / "historic-source"
-    for item in manifest["files"]:
-        name = item["name"]
-        source_file = source_root / release_zip.REQUIRED_NOTICES[name]
-        source_file.parent.mkdir(parents=True, exist_ok=True)
-        source_file.write_bytes((licenses / name).read_bytes())
-
-    pins = {"expected_source_sha": GIT_SHA, "expected_exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest()}
+    pins = {"expected_source_sha": source_sha, "expected_exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest()}
     receipt = release_zip.verify(archive, source_root=source_root, **pins)
     assert receipt["status"] == "PASS"
     assert set(receipt["notices"]) == set(release_zip.REQUIRED_NOTICES) - {notice_name}
     with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
-        release_zip.verify(archive, source_root=source_root, expected_source_sha=GIT_SHA)
+        release_zip.verify(archive, source_root=source_root, expected_source_sha=source_sha)
     with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
         release_zip.verify(archive, source_root=release_zip.REPO_ROOT, **pins)
+    with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
+        release_zip.verify(archive, source_root=loose_notice_directory, **pins)
+
+    modern_root = tmp_path / "modern"
+    modern_root.mkdir()
+    modern = _stage_release(
+        modern_root, git_sha=source_sha, name="Metroliza-0.8.0-dev.1-windows-x64.exe",
+        label="0.8.0-dev.1", version="0.8.0-dev.1",
+    )
+    modern_licenses = modern.with_name(f"{modern.name}.licenses")
+    (modern_licenses / release_zip.NOTICE_MANIFEST).write_bytes(manifest_path.read_bytes())
+    (modern_licenses / notice_name).unlink()
+    modern_archive = release_zip.assemble(modern, tmp_path / "modern.zip")
+    with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
+        release_zip.verify(
+            modern_archive, source_root=source_root, expected_source_sha=source_sha,
+            expected_exe_sha256=hashlib.sha256(modern.read_bytes()).hexdigest(),
+        )
 
 
 def test_blob_layout_must_tile_the_blob_region(tmp_path: Path) -> None:
