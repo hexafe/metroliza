@@ -82,10 +82,12 @@ def test_export_frozen_summary_uses_post_collision_request(qapplication_session,
     thread = _ExportThread()
     monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
     monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_a: pytest.fail(f"Unexpected export warning: {_a[-1]}"))
     try:
         window.excel_file = tmp_path / "chosen.xlsx"
         if mode == "html":
             window.preset_combobox.setCurrentText("HTML dashboard only")
+            window.apply_preset_button.click()
         window.generate_html_dashboard_checkbox.setChecked(mode in {"sidecar", "html"})
         window.include_google_sheets_checkbox.setChecked(mode == "google")
         window.set_filter_query("SELECT * FROM reports WHERE REFERENCE = 'East'")
@@ -340,11 +342,13 @@ def test_real_save_copy_handler_passes_selected_paths_to_worker(qapplication_ses
     thread = _ExportThread()
     monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
     monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_a: pytest.fail(f"Unexpected export warning: {_a[-1]}"))
     monkeypatch.setattr(window, "_choose_output_collision", lambda *_a: "copy")
     try:
         window.excel_file = tmp_path / ("original.html" if html_only else "original.xlsx")
         if html_only:
             window.preset_combobox.setCurrentText("HTML dashboard only")
+            window.apply_preset_button.click()
         else:
             window.generate_html_dashboard_checkbox.setChecked(True)
         Path(window.excel_file).write_text("last complete output")
@@ -524,6 +528,7 @@ def test_real_copy_choice_preserves_intervening_destination_and_next_attempt(
     monkeypatch.setattr(export_module, "create_export_data_thread", lambda request: captured.append(request) or thread)
     monkeypatch.setattr(export_module, "save_export_dialog_config", lambda *_a: None)
     monkeypatch.setattr(QMessageBox, "information", lambda *_a: messages.append(_a[-1]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_a: pytest.fail(f"Unexpected export warning: {_a[-1]}"))
     monkeypatch.setattr(export_module.QFileDialog, "getSaveFileName", lambda *_a: (str(different), ""))
 
     def change_destination_then_copy(*_args):
@@ -534,6 +539,7 @@ def test_real_copy_choice_preserves_intervening_destination_and_next_attempt(
     try:
         if html_only:
             window.preset_combobox.setCurrentText("HTML dashboard only")
+            window.apply_preset_button.click()
         window.excel_file = original
         original.write_text("last complete output")
         window.show_loading_screen()  # actual confirmation must not erase the new destination
