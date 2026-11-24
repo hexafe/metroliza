@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 from tempfile import TemporaryDirectory, mkdtemp
 from unicodedata import normalize
 
@@ -21,6 +22,7 @@ from metroliza.exporting.output_publication import (
     conflicting_outputs,
     publish_output,
 )
+from metroliza.industrial.industrial_cache_target import _is_symlink_or_reparse
 
 _ASSET_OWNER_FILE = ".metroliza-tabular-dashboard"
 _LEGACY_DASHBOARD_HEAD_LIMIT = 128 * 1024
@@ -258,17 +260,21 @@ def _retire_owned_assets(outputs, current_assets, sources):
     from metroliza.industrial.industrial_analytics_dashboard import PLOTLY_ASSET_NAME
 
     for directory in outputs.assets.parent.glob(f"{outputs.assets.name}.generation-*"):
-        if directory == current_assets or directory.is_symlink():
+        if directory == current_assets:
             continue
         marker = directory / _ASSET_OWNER_FILE
         try:
-            if any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
+            identity = OutputConsent.for_path(directory)
+            if identity.path != directory or not _same_plain_directory(identity) or any(
+                source.resolve().is_relative_to(directory.resolve()) for source in sources
+            ):
                 continue
             entries = tuple(directory.iterdir())
             if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME, PLOTLY_NOTICE_FILENAME} and
-                       not entry.is_symlink() and entry.is_file() for entry in entries):
+                       not _is_symlink_or_reparse(entry.lstat()) and entry.is_file() for entry in entries):
                 continue
-            if marker.read_text(encoding="utf-8") == os.path.normcase(outputs.dashboard.name):
+            if (marker.read_text(encoding="utf-8") == os.path.normcase(outputs.dashboard.name)
+                    and _same_plain_directory(identity) and OutputConsent.for_path(directory) == identity):
                 shutil.rmtree(directory)
         except (OSError, RuntimeError, UnicodeError):
             continue
@@ -299,9 +305,11 @@ def _approved_legacy_assets(outputs, consents):
         ):
             return None
         directory = base.with_name(name)
-        if not directory.is_dir() or directory.is_symlink() or (directory / _ASSET_OWNER_FILE).exists():
+        approval = OutputConsent.for_path(directory)
+        if (approval.path != directory or not _same_plain_directory(approval)
+                or (directory / _ASSET_OWNER_FILE).exists()):
             return None
-        return OutputConsent.for_path(directory)
+        return approval
     except (OSError, ValueError):
         return None
 
@@ -313,7 +321,9 @@ def _retire_legacy_assets(approved, sources):
     script = directory / PLOTLY_ASSET_NAME
     notice = directory / PLOTLY_NOTICE_FILENAME
     try:
-        if directory.is_symlink() or any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
+        if not _same_plain_directory(approved) or any(
+            source.resolve().is_relative_to(directory.resolve()) for source in sources
+        ):
             return
         entries = set(directory.iterdir())
         if entries == {script}:
@@ -325,22 +335,30 @@ def _retire_legacy_assets(approved, sources):
         verified = tuple(_verified_legacy_asset(asset, PLOTLY_ASSET_SOURCE.with_name(asset.name)) for asset in assets)
         if None in verified or OutputConsent.for_path(directory) != approved:
             return
-        for asset in verified:
-            if OutputConsent.for_path(asset.path) != asset:
+        for asset, identity in zip(assets, verified, strict=True):
+            if (not _same_plain_directory(approved) or _is_symlink_or_reparse(asset.lstat())
+                    or OutputConsent.for_path(asset) != identity):
                 return
-            asset.path.unlink()
-        directory.rmdir()
+            asset.unlink()
+        if _same_plain_directory(approved):
+            directory.rmdir()
     except (OSError, RuntimeError):
         pass
 
 
 def _verified_legacy_asset(asset, bundled):
-    if asset.is_symlink() or not asset.is_file():
+    if _is_symlink_or_reparse(asset.lstat()) or not asset.is_file():
         return None
     identity = OutputConsent.for_path(asset)
-    if identity.identity[2] != bundled.stat().st_size:
+    if identity.path != asset or identity.identity[2] != bundled.stat().st_size:
         return None
     with asset.open("rb") as old, bundled.open("rb") as original:
         if file_digest(old, "sha256").digest() != file_digest(original, "sha256").digest():
             return None
     return identity
+
+
+def _same_plain_directory(consent):
+    metadata = consent.path.lstat()
+    return (stat.S_ISDIR(metadata.st_mode) and not _is_symlink_or_reparse(metadata)
+            and (metadata.st_dev, metadata.st_ino) == consent.identity[:2])

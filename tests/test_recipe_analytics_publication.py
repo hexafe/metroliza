@@ -1,5 +1,11 @@
 """Real native analytics replacement preserves the last published dashboard."""
+import os
 from pathlib import Path
+import shutil
+import stat
+import subprocess
+import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -201,6 +207,56 @@ def test_replacement_leaves_legacy_directory_with_unowned_content(tmp_path, unow
         _assert_generation_references(Path(request.output_dashboard_file), Path(result.dashboard_assets_path))
     finally:
         ports.finish(plan)
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_recipe_asset_retirement_preserves_windows_junction_target(tmp_path, monkeypatch, owned):
+    from metroliza.industrial import tabular_output_publication as publication
+    from metroliza.industrial.industrial_analytics_dashboard import PLOTLY_ASSET_SOURCE
+
+    outputs = publication.TabularOutputFiles.from_paths(str(tmp_path / "result.html"), None)
+    name = (outputs.assets.name + ".generation-" + "a" * 32) if owned else "result_assets"
+    junction = tmp_path / name
+    native_windows = sys.platform == "win32"
+    target = tmp_path / "other-dashboard-assets" if native_windows else junction
+    target.mkdir()
+    for asset_name in (PLOTLY_ASSET_SOURCE.name, PLOTLY_NOTICE_FILENAME):
+        shutil.copyfile(PLOTLY_ASSET_SOURCE.with_name(asset_name), target / asset_name)
+    if owned:
+        (target / publication._ASSET_OWNER_FILE).write_text(outputs.dashboard.name, encoding="utf-8")
+    expected = _asset_bytes(target)
+    reparse_flag = stat.FILE_ATTRIBUTE_REPARSE_POINT
+    if native_windows:
+        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
+                       check=True, capture_output=True)
+    else:
+        real_lstat = Path.lstat
+
+        def lstat(path):
+            metadata = real_lstat(path)
+            if path != junction:
+                return metadata
+            keys = ("st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns")
+            return SimpleNamespace(st_file_attributes=reparse_flag, **{key: getattr(metadata, key) for key in keys})
+
+        monkeypatch.setattr(Path, "lstat", lstat)
+    try:
+        assert junction.lstat().st_file_attributes & reparse_flag
+        assert not junction.is_symlink()
+        if owned:
+            publication._retire_owned_assets(outputs, outputs.assets, ())
+        else:
+            outputs.dashboard.write_text(f'<script src="{name}/{PLOTLY_ASSET_SOURCE.name}"></script>', encoding="utf-8")
+            consent = publication.OutputConsent.for_path(outputs.dashboard)
+            approved = publication._approved_legacy_assets(outputs, (consent,))
+            # Recheck at retirement even if approval happened while the directory was ordinary.
+            publication._retire_legacy_assets(publication.OutputConsent.for_path(junction), ())
+            assert approved is None
+        assert _asset_bytes(target) == expected
+        assert junction.is_dir()
+    finally:
+        if native_windows and os.path.lexists(junction):
+            junction.rmdir()
 
 
 @pytest.mark.parametrize("generation", [False, True])
