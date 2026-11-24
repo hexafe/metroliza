@@ -561,3 +561,192 @@ def test_real_review_cancellation_and_deferred_close(app, reports, monkeypatch, 
             dialog.stop_scanning()
             dialog.preflight_thread.wait(20000)
         dialog.close()
+
+
+def _profile_journey_yaml(version, reference_field, header, marker="SYNTHETIC PROFILE JOURNEY"):
+    row_pattern = (
+        r"^DIM\s+(?P<axis_code>\w+)\s+(?P<nominal>[-0-9.]+)"
+        r"\s+(?P<tol_plus>[-0-9.]+)\s+(?P<tol_minus>[-0-9.]+)\s+(?P<bonus>[-0-9.]+)"
+        r"\s+(?P<measured>[-0-9.]+)\s+(?P<deviation>[-0-9.]+)"
+        r"\s+(?P<out_of_tolerance>[-0-9.]+)$"
+    )
+    return rf"""
+schema_version: 1
+plugin:
+  plugin_id: synthetic_profile_journey
+  display_name: Synthetic profile journey
+  version: {version}
+  source_format: pdf
+  supported_locales: ["*"]
+  template_ids: [synthetic_profile_template]
+  priority: 910
+probe:
+  required_markers: ["{marker}"]
+  reject_markers: []
+  confidence: 91
+extraction:
+  report_fields:
+    reference: '^{reference_field}:\s*(?P<value>\S+)$'
+    report_date: '^Date:\s*(?P<value>\d{{4}}-\d{{2}}-\d{{2}})$'
+    sample_number: '^Sample:\s*(?P<value>\S+)$'
+  blocks:
+    - header: "{header}"
+      pattern: '{row_pattern}'
+normalization:
+  decimal_separator: "."
+  date_formats: ["%Y-%m-%d"]
+"""
+
+
+def _write_profile_journey_expectations(expected, reference, header):
+    expected.write_text(
+        "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
+        "axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n"
+        f"profile-sample.pdf,{reference},2026-01-05,0007,0,{header},X,10,0.2,-0.2,,10.09,0.09,0\n"
+        f"profile-sample.pdf,{reference},2026-01-05,0007,0,{header},Y,20,0.2,-0.2,0.01,20.35,0.35,0.14\n",
+        encoding="utf-8",
+    )
+
+
+def _review_and_import_profile(app, source, database, *, approved=True):
+    dialog = ParsingDialog(directory=str(source), db_file=str(database))
+    try:
+        dialog.scan_button.click()
+        wait_until(app, lambda: dialog.preflight_thread is None and dialog.metadata_thread is None)
+        assert not database.exists()
+        if not approved:
+            assert not dialog.parse_button.isEnabled()
+            assert not dialog.report_planner.model.selected_ids
+            dialog._import_reviewed_reports()
+            assert dialog.parse_thread is None
+            assert not database.exists()
+            return
+
+        assert dialog.report_planner.model.selected_ids == ("profile-sample.pdf",)
+        dialog.parse_button.click()
+        worker = dialog.parse_thread
+        assert worker is not None
+        wait_until(app, lambda: dialog.parse_thread is None, parse_dialog=dialog)
+        assert worker.last_parse_result.imported_files == 1
+        assert worker.last_parse_result.failed_files == 0
+    finally:
+        if dialog.parse_thread is not None:
+            dialog.parse_thread.stop_parsing()
+            dialog.parse_thread.wait(20000)
+        if dialog.preflight_thread is not None:
+            dialog.preflight_thread.stop_scan()
+            dialog.preflight_thread.wait(20000)
+        dialog.close()
+
+
+def _assert_profile_journey_database(database, *, version, reference, header):
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("""
+            SELECT pr.parser_id, pr.parser_version, pr.template_variant, pr.measurement_count,
+                   pr.has_nok, pr.nok_count, rm.reference, rm.report_date, rm.sample_number,
+                   src.file_name
+            FROM parsed_reports AS pr
+            JOIN report_metadata AS rm ON rm.report_id = pr.id
+            JOIN source_file_locations AS src ON src.source_file_id = pr.source_file_id
+        """).fetchall() == [
+            ("synthetic_profile_journey", version, "synthetic_profile_template", 2, 1, 1,
+             reference, "2026-01-05", "0007", "profile-sample.pdf"),
+        ]
+        assert connection.execute("""
+            SELECT header, ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol,
+                   status_code, is_nok
+            FROM report_measurements
+            ORDER BY row_order
+        """).fetchall() == [
+            (header, "X", 10.0, 0.2, -0.2, None, 10.09, 0.09, 0.0, "ok", 0),
+            (header, "Y", 20.0, 0.2, -0.2, 0.01, 20.35, 0.35, 0.14, "nok", 1),
+        ]
+
+
+def test_profile_handoff_approval_and_rollback_drive_real_reports_import(app, tmp_path, monkeypatch):
+    from metroliza.parsing.declarative_parser_profiles import approved_profiles_dir
+    from metroliza.parsing.parser_plugin_paths import invalidate_parser_plugin_runtime
+    from metroliza.parsing.report_parser_factory import get_registry_snapshot
+    from scripts import parser_plugin_self_service as cli
+
+    home = tmp_path / "isolated operator profile"
+    handoff = tmp_path / "parser handoff"
+    plugin_id = "synthetic_profile_journey"
+    assert cli.main([
+        "--home", str(home), "handoff", "--plugin-id", plugin_id, "--output-dir", str(handoff),
+    ]) == 0
+    assert cli.main(["integrity", str(handoff)]) == 0
+
+    profile = handoff / "profile.yaml"
+    expected = handoff / "expected_results.csv"
+    source = handoff / "samples"
+    with fitz.open() as document:
+        page = document.new_page()
+        page.insert_text((72, 72), (
+            "SYNTHETIC PROFILE JOURNEY\nReference: REF-A\nAlternate reference: REF-B\n"
+            "Date: 2026-01-05\nSample: 0007\n"
+            "DIM X 10 0.2 -0.2 - 10.09 0.09 0\nDIM Y 20 0.2 -0.2 0.01 20.35 0.35 0.14"
+        ))
+        document.save(source / "profile-sample.pdf")
+    _write_profile_journey_expectations(expected, "REF-A", "TEST FEATURE")
+    candidate_args = [str(profile), "--expected-results", str(expected), "--workspace", str(handoff)]
+    install_args = ["--home", str(home), "install", *candidate_args, "--approved-by", "test operator"]
+
+    profile.write_text(
+        _profile_journey_yaml("0.1.0", "Reference", "TEST FEATURE", marker="WRONG MARKER"),
+        encoding="utf-8",
+    )
+    assert cli.main(["repair", *candidate_args]) == 1
+    repair_prompt = (handoff / "artifacts" / "profile_repair_prompt.md").read_text(encoding="utf-8")
+    assert "Return complete corrected `profile.yaml` only" in repair_prompt
+    assert "probe_required_markers_present" in repair_prompt
+    assert cli.main(install_args) == 1
+    approved_profile = approved_profiles_dir(home=home) / plugin_id / "profile.yaml"
+    assert not approved_profile.exists()
+
+    profile.write_text(_profile_journey_yaml("0.1.0", "Reference", "TEST FEATURE"), encoding="utf-8")
+    assert cli.main(["validate", *candidate_args]) == 0
+    approved_profile.parent.mkdir(parents=True)
+    approved_profile.write_bytes(profile.read_bytes())
+
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(Path, "home", lambda: home)
+            context.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
+            context.delenv("PARSER_DISABLED_PLUGIN_IDS", raising=False)
+            context.setattr(QMessageBox, "information", lambda *_args: None)
+            context.setattr(QMessageBox, "warning", lambda *_args: None)
+            invalidate_parser_plugin_runtime()
+
+            _review_and_import_profile(app, source, tmp_path / "unapproved.db", approved=False)
+            approved_profile.unlink()
+            approved_profile.parent.rmdir()
+
+            first_database = tmp_path / "first.db"
+            assert cli.main(install_args) == 0
+            _review_and_import_profile(app, source, first_database)
+            _assert_profile_journey_database(
+                first_database, version="0.1.0", reference="REF-A", header="TEST FEATURE",
+            )
+
+            updated_database = tmp_path / "updated.db"
+            profile.write_text(
+                _profile_journey_yaml("0.2.0", "Alternate reference", "SECOND FEATURE"),
+                encoding="utf-8",
+            )
+            _write_profile_journey_expectations(expected, "REF-B", "SECOND FEATURE")
+            assert cli.main(install_args) == 0
+            _review_and_import_profile(app, source, updated_database)
+            _assert_profile_journey_database(
+                updated_database, version="0.2.0", reference="REF-B", header="SECOND FEATURE",
+            )
+
+            restored_database = tmp_path / "restored.db"
+            assert cli.main(["--home", str(home), "rollback", plugin_id]) == 0
+            _review_and_import_profile(app, source, restored_database)
+            _assert_profile_journey_database(
+                restored_database, version="0.1.0", reference="REF-A", header="TEST FEATURE",
+            )
+    finally:
+        invalidate_parser_plugin_runtime()
+        get_registry_snapshot()
