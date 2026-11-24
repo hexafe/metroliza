@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tomllib
 from typing import Any, Iterable
 
@@ -17,13 +18,13 @@ from packaging.markers import default_environment
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-if __package__:
-    from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
-else:
-    from vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
-
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if not __package__:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory  # noqa: E402
+
+
 DEFAULT_OUTPUT = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
 

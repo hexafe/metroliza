@@ -7,14 +7,15 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-
-if __package__:
-    from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files
-else:
-    from vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files
-
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if not __package__:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files  # noqa: E402
+
+
 DEFAULT_NOTICE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 DEFAULT_INVENTORY = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
