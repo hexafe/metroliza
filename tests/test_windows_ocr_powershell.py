@@ -388,13 +388,20 @@ def test_native_required_setup_propagation(powershell, fixture_repo, mode, flags
     ],
 )
 def test_native_vc_redistributable_verifies_before_elevated_launch(powershell, tmp_path, mode, expected, starts):
-    setup, marker, _ = (ROOT / "setup_windows_runtime.ps1").read_text().partition("Push-Location $repoRoot")
+    setup, marker, main = (ROOT / "setup_windows_runtime.ps1").read_text().partition("Push-Location $repoRoot")
     assert marker
     payload = b"synthetic-not-an-executable"
     expected_hash = hashlib.sha256(payload).hexdigest()
     setup += f"\n$vcRedistSha256 = '{expected_hash}'\n$testMode = '{mode}'\n$testPayload = '{payload.decode('ascii')}'\n"
     setup += """
 $script:downloadPath = $null
+function Invoke-Step {
+    param([string]$Title, [scriptblock]$Action)
+    if ($Title -eq 'Checking Windows native prerequisite') { & $Action }
+}
+function Test-VcRedistX64 { return $false }
+function Invoke-Checked { throw 'TEST_FORBIDDEN_INSTALL_COMMAND' }
+function New-ProjectVenv { throw 'TEST_FORBIDDEN_VENV_COMMAND' }
 function Invoke-WebRequest {
     param([uri]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$MaximumRedirection, [int]$TimeoutSec)
     if ($Uri.Scheme -ne 'https' -or $Uri.Host -ne 'download.visualstudio.microsoft.com' -or
@@ -447,8 +454,9 @@ function Start-Process {
     $code = switch ($testMode) { 'reboot' { 3010 } 'installer-exit' { 1603 } default { 0 } }
     return [pscustomobject]@{ ExitCode = $code }
 }
-try {
-    Install-VcRedistX64
+"""
+    setup += "\ntry {\n" + marker + main
+    setup += """
 }
 finally {
     if ($null -eq $script:downloadPath -or (Test-Path -LiteralPath (Split-Path -Parent $script:downloadPath))) {
@@ -457,9 +465,12 @@ finally {
     Write-Host 'TEST_CLEANUP_COMPLETE'
 }
 """
-    script = tmp_path / "vc-redistributable-contract.ps1"
+    script = tmp_path / f"vc-redistributable-{CANARY}.ps1"
     script.write_text(setup, encoding="utf-8-sig")
-    result = invoke(powershell, tmp_path, script.name)
+    result = invoke(
+        powershell, tmp_path, script.name, "-InstallVcRedist", "-SkipValidation", "-SkipOcr",
+        "-VenvDir", r"C:\synthetic-vc-venv",
+    )
     assert_owned_completion(result)
     output = public_text(result)
     assert result.returncode == (0 if mode in {"success", "reboot"} else 1), output
@@ -470,6 +481,7 @@ finally {
     assert ("TEST_SIGNATURE_ATTEMPT" in output) == (mode not in {"bad-digest", "redirect", "download-failure"})
     assert ("TEST_LAUNCH_ATTEMPT" in output) == starts
     assert ("TEST_VERIFIED_BYTES_LOCKED" in output) == starts
+    assert ("Windows runtime setup completed." in output) == (result.returncode == 0)
     if starts:
         assert output.index("SHA-256 and Authenticode verified") < output.index("TEST_LAUNCH_ATTEMPT")
     if result.returncode:

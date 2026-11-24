@@ -80,8 +80,8 @@ function Test-VcRedistX64 {
 }
 
 function Install-VcRedistX64 {
-    $workDir = Join-Path ([IO.Path]::GetTempPath()) ('metroliza-vcredist-' + [Guid]::NewGuid().ToString('N'))
     try {
+        $workDir = Join-Path ([IO.Path]::GetTempPath()) ('metroliza-vcredist-' + [Guid]::NewGuid().ToString('N'))
         $null = New-Item -Path $workDir -ItemType Directory -ErrorAction Stop
     }
     catch {
@@ -173,7 +173,13 @@ try {
             Write-Host '    Microsoft Visual C++ Redistributable x64: present or not required on this OS.'
         }
         elseif ($InstallVcRedist) {
-            Install-VcRedistX64
+            try {
+                Install-VcRedistX64
+            }
+            catch {
+                [Console]::Error.WriteLine($_.Exception.Message)
+                exit 1
+            }
         }
         else {
             throw "Microsoft Visual C++ Redistributable 2015-2022 x64 was not detected. Run setup with -InstallVcRedist for automatic installation. $vcRedistManual"
