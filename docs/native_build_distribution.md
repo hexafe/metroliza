@@ -238,6 +238,19 @@ If a source venv or packaged artifact fails with `ImportError: DLL load failed w
 .\.venv\Scripts\python.exe scripts\validate_qt_runtime.py --compact
 ```
 
+`-InstallVcRedist` automatically installs the approved Microsoft VC++ v14 x64
+package `14.44.35211.0`. The script pins the direct HTTPS URL at
+`download.visualstudio.microsoft.com` and the package's SHA-256 digest. When
+updating the pin, resolve Microsoft's `https://aka.ms/vs/17/release/vc_redist.x64.exe`
+over HTTPS, verify the new version and Windows Authenticode publisher, and update
+the direct URL and digest together. The automatic download declines redirects and
+starts the installer only after checking both the digest and a valid signature
+for `Microsoft Corporation`. Approve the administrator prompt if Windows
+displays it. Setup accepts exit codes `0` and `3010` and removes its unique
+temporary copy after success or failure. If verification or elevation fails,
+install the x64 package using the [Microsoft VC++ downloads page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)
+and rerun setup.
+
 The Qt validator reports the installed `PyQt6`, `PyQt6-Qt6`, `PyQt6-sip`, Qt
 library paths, and VC++ Redistributable registry status. Do not release a Windows
 artifact from an environment where the PyQt wrapper and bundled Qt payload are
