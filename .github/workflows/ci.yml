@@ -2217,6 +2217,7 @@ jobs:
           import json
           import os
           from pathlib import Path, PureWindowsPath
+          from struct import unpack_from
           import sys
 
           from defusedxml.ElementTree import parse
@@ -2227,6 +2228,62 @@ jobs:
           def digest(path):
               with path.open('rb') as stream:
                   return file_digest(stream, 'sha256').hexdigest()
+
+          def report_output_matches(raw, executable):
+              reported = PureWindowsPath(raw)
+              expected = PureWindowsPath(executable)
+              relative = PureWindowsPath(expected.parent.name, expected.name)
+              if reported.parts[:1] == ('${cwd}',):
+                  return PureWindowsPath(*reported.parts[1:]) == relative
+              return reported in (relative, expected)
+
+          def verify_x64_executable(path):
+              with path.open('rb') as stream:
+                  file_size = os.fstat(stream.fileno()).st_size
+                  dos = stream.read(64)
+                  if len(dos) != 64 or dos[:2] != b'MZ':
+                      raise SystemExit('Invalid Windows x64 PE executable: DOS header')
+                  pe_offset, = unpack_from('<I', dos, 0x3C)
+                  if not 64 <= pe_offset <= file_size - 24:
+                      raise SystemExit('Invalid Windows x64 PE executable: COFF header bounds')
+                  stream.seek(pe_offset)
+                  coff = stream.read(24)
+                  if len(coff) != 24:
+                      raise SystemExit('Invalid Windows x64 PE executable: truncated COFF header')
+                  signature, machine, section_count, _, _, _, optional_size, flags = unpack_from('<4sHHIIIHH', coff)
+                  if (signature != b'PE\0\0' or machine != 0x8664 or not 1 <= section_count <= 96
+                      or not flags & 0x0002 or flags & 0x3000 or optional_size < 112):
+                      raise SystemExit('Invalid Windows x64 PE executable: COFF image fields')
+
+                  optional = stream.read(optional_size)
+                  if len(optional) != optional_size or unpack_from('<H', optional)[0] != 0x20B:
+                      raise SystemExit('Invalid Windows x64 PE executable: PE32+ optional header')
+                  entry_rva, = unpack_from('<I', optional, 16)
+                  image_size, headers_size = unpack_from('<II', optional, 56)
+                  directory_count, = unpack_from('<I', optional, 108)
+                  table_size = section_count * 40
+                  if (directory_count > (optional_size - 112) // 8
+                      or not pe_offset + 24 + optional_size + table_size <= headers_size <= file_size
+                      or not headers_size <= entry_rva < image_size):
+                      raise SystemExit('Invalid Windows x64 PE executable: header or entry bounds')
+
+                  sections = stream.read(table_size)
+                  if len(sections) != table_size:
+                      raise SystemExit('Invalid Windows x64 PE executable: truncated section table')
+                  entry_backed = False
+                  virtual_end = headers_size
+                  for section in range(0, table_size, 40):
+                      virtual_size, rva, raw_size, raw_offset = unpack_from('<IIII', sections, section + 8)
+                      characteristics, = unpack_from('<I', sections, section + 36)
+                      if (not virtual_end <= rva or rva + max(virtual_size, raw_size) > image_size
+                          or (raw_size and not headers_size <= raw_offset <= file_size - raw_size)):
+                          raise SystemExit('Invalid Windows x64 PE executable: section bounds')
+                      virtual_end = rva + max(virtual_size, raw_size)
+                      if characteristics & 0x20000000 and 0 <= entry_rva - rva < min(virtual_size, raw_size):
+                          entry_backed = True
+                  if not entry_backed:
+                      raise SystemExit('Invalid Windows x64 PE executable: entry point lacks executable file data')
+              return file_size
 
           if sys.platform != 'win32' or os.environ['RUNNER_ARCH'] != 'X64':
               raise SystemExit('Native Windows x64 runner required')
@@ -2239,20 +2296,11 @@ jobs:
           if (report.tag != 'nuitka-compilation-report' or report.get('completion') != 'yes'
               or report.get('mode') != 'standalone' or report.get('nuitka_version') != nuitka_version):
               raise SystemExit('Nuitka standalone completion report does not match the build')
-          reported_output = PureWindowsPath(report.find('output').get('run_filename', ''))
-          if reported_output.parts[-2:] != (distribution.name, exe.name):
+          reported_output = report.find('output')
+          if reported_output is None or not report_output_matches(reported_output.get('run_filename', ''), exe):
               raise SystemExit('Nuitka report does not identify the observed executable')
 
-          exe_size = exe.stat().st_size
-          with exe.open('rb') as stream:
-              header = stream.read(64)
-              offset = int.from_bytes(header[60:64], 'little')
-              if header[:2] != b'MZ' or not 64 <= offset <= exe_size - 6:
-                  raise SystemExit('Invalid Windows executable header')
-              stream.seek(offset)
-              if stream.read(6) != b'PE\0\0\x64\x86':
-                  raise SystemExit('Windows x64 PE executable required')
-
+          exe_size = verify_x64_executable(exe)
           assets = verified_plotly_files(distribution / PLOTLY_ASSET_DIRECTORY)
           licenses = exe.with_name(f'{exe.name}.licenses')
           if {path.name for path in licenses.iterdir()} != {*REQUIRED_NOTICES, NOTICE_MANIFEST}:

@@ -399,9 +399,54 @@ def test_nuitka_notice_qualification_is_owner_only_and_uploads_one_bound_receipt
     assert '`run_windows_nuitka_qualification=1`' in CI_POLICY_PATH.read_text(encoding='utf-8')
 
 
+def _synthetic_amd64_image(mutation):
+    import struct
+
+    pe = 0x40
+    optional = pe + 24
+    section = optional + 0xF0
+    image = bytearray(0x400)
+    image[:2] = b'MZ'
+    struct.pack_into('<I', image, 0x3C, pe)
+    struct.pack_into('<4sHHIIIHH', image, pe, b'PE\0\0', 0x8664, 1, 0, 0, 0, 0xF0, 0x22)
+    struct.pack_into('<H', image, optional, 0x20B)
+    struct.pack_into('<IIQII', image, optional + 16, 0x1000, 0x1000, 0x140000000, 0x1000, 0x200)
+    struct.pack_into('<II', image, optional + 56, 0x2000, 0x200)
+    struct.pack_into('<H', image, optional + 68, 3)
+    struct.pack_into('<I', image, optional + 108, 16)
+    struct.pack_into('<8sIIIIIIHHI', image, section, b'.text', 1, 0x1000, 0x200, 0x200, 0, 0, 0, 0, 0x60000020)
+    image[0x200] = 0xC3
+    if mutation == 'partial-coff':
+        return image[:pe + 6]
+    if mutation == 'partial-section-table':
+        return image[:section + 39]
+    if mutation == 'entry-outside-section':
+        struct.pack_into('<I', image, optional + 16, 0x1010)
+    if mutation == 'non-executable-section':
+        struct.pack_into('<I', image, section + 36, 0x40000020)
+    if mutation == 'raw-data-past-eof':
+        return image[:-1]
+    if mutation == 'pe32-magic':
+        struct.pack_into('<H', image, optional, 0x10B)
+    return image
+
+
 @pytest.mark.parametrize(('mutation', 'failure'), [
     ('none', None),
+    ('relative-output', None),
+    ('absolute-output', None),
     ('incorrect-output', 'report does not identify'),
+    ('outside-output', 'report does not identify'),
+    ('unc-output', 'report does not identify'),
+    ('drive-relative-output', 'report does not identify'),
+    ('prefixed-relative-output', 'report does not identify'),
+    ('traversal-output', 'report does not identify'),
+    ('partial-coff', 'Invalid Windows x64 PE executable'),
+    ('partial-section-table', 'Invalid Windows x64 PE executable'),
+    ('entry-outside-section', 'Invalid Windows x64 PE executable'),
+    ('non-executable-section', 'Invalid Windows x64 PE executable'),
+    ('raw-data-past-eof', 'Invalid Windows x64 PE executable'),
+    ('pe32-magic', 'Invalid Windows x64 PE executable'),
     ('compiled-license', 'unexpected SHA-256'),
     ('serialized-manifest', 'does not describe the staged files'),
 ])
@@ -410,6 +455,7 @@ def test_nuitka_notice_lane_verifies_compiled_and_visible_notice_bytes(tmp_path,
     import json
     import shutil
     import sys
+    from xml.sax.saxutils import quoteattr
 
     import yaml
 
@@ -435,14 +481,24 @@ def test_nuitka_notice_lane_verifies_compiled_and_visible_notice_bytes(tmp_path,
     assets = distribution / PLOTLY_ASSET_DIRECTORY
     shutil.copytree(Path('src') / PLOTLY_ASSET_DIRECTORY, assets)
     exe = distribution / release.nuitka_name
-    pe_header = b'MZ' + b'\0' * 58 + b'\x40\0\0\0' + b'PE\0\0\x64\x86'
-    exe.write_bytes(pe_header)
+    pe_image = _synthetic_amd64_image(mutation)
+    exe.write_bytes(pe_image)
     manifest = stage_release_notices(dist_dir=tmp_path / 'dist', artifacts=(exe,))[-1]
     assert manifest.name == NOTICE_MANIFEST
-    recorded_exe = 'stale.exe' if mutation == 'incorrect-output' else exe.name
+    recorded_relative = f'{distribution.name}/{exe.name}'
+    recorded_exe = {
+        'relative-output': recorded_relative,
+        'absolute-output': str(exe),
+        'incorrect-output': f'${{cwd}}/{distribution.name}/stale.exe',
+        'outside-output': f'R:/unrelated/{recorded_relative}',
+        'unc-output': f'//server/share/{recorded_relative}',
+        'drive-relative-output': f'R:{recorded_relative}',
+        'prefixed-relative-output': f'other/{recorded_relative}',
+        'traversal-output': f'${{cwd}}/../{recorded_relative}',
+    }.get(mutation, '${cwd}/' + recorded_relative)
     (tmp_path / 'nuitka-build-report.xml').write_text(
         '<nuitka-compilation-report completion="yes" mode="standalone" nuitka_version="4.3.1">'
-        f'<output run_filename="${{cwd}}/{distribution.name}/{recorded_exe}"/>'
+        f'<output run_filename={quoteattr(recorded_exe)}/>'
         '</nuitka-compilation-report>', encoding='utf-8',
     )
     if mutation == 'compiled-license':
@@ -458,6 +514,7 @@ def test_nuitka_notice_lane_verifies_compiled_and_visible_notice_bytes(tmp_path,
     }.items():
         monkeypatch.setenv(key, value)
     receipt_path = tmp_path / 'nuitka-standalone-notices.json'
+    namespace = {}
     with monkeypatch.context() as platform:
         platform.setattr(sys, 'platform', 'win32')
         if failure:
@@ -466,12 +523,17 @@ def test_nuitka_notice_lane_verifies_compiled_and_visible_notice_bytes(tmp_path,
                 exec(code, {})
             assert not receipt_path.exists()
             return
-        exec(code, {})
+        exec(code, namespace)
     receipt = json.loads(receipt_path.read_text(encoding='utf-8'))
     assert receipt['source_sha'] == 'a' * 40 and receipt['source_tree'] == 'b' * 40
-    assert receipt['exe']['name'] == exe.name and receipt['exe']['bytes'] == len(pe_header)
+    assert receipt['exe']['name'] == exe.name and receipt['exe']['bytes'] == len(pe_image)
     assert {Path(asset['path']).name: asset['sha256'] for asset in receipt['plotly_assets']} == PLOTLY_ASSET_HASHES
     assert receipt['notice_manifest'] == json.loads(manifest.read_text(encoding='utf-8'))['files']
+    if mutation == 'none':
+        match = namespace['report_output_matches']
+        exact_windows_path = rf'D:\a\checkout\{distribution.name}\{exe.name}'
+        assert match(exact_windows_path.lower(), exact_windows_path)
+        assert not match(exact_windows_path.replace('checkout', 'sibling'), exact_windows_path)
 
 
 def test_static_checks_verify_the_pinned_release_docs_ref(tmp_path, monkeypatch) -> None:
