@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from metroliza.charts.plotly_runtime_assets import PLOTLY_NOTICE_FILENAME
 from metroliza.industrial.contracts import IndustrialAnalyticsRequest
 from metroliza.industrial.industrial_analytics_state import ProductionChartSelection, ProductionMetricSelection
 from metroliza.industrial import industrial_analytics_workflow as workflow
@@ -71,13 +72,20 @@ def _approve_replacement(entry):
 
 
 @pytest.mark.parametrize("source_kind", ["tabular_file", "production_cache"])
-def test_native_replacement_commits_unique_assets_then_retires_previous_generation(tmp_path, monkeypatch, source_kind):
+@pytest.mark.parametrize("legacy_notice", [False, True])
+def test_native_replacement_commits_unique_assets_then_retires_previous_generation(
+    tmp_path, monkeypatch, source_kind, legacy_notice,
+):
     from metroliza.industrial import tabular_output_publication as output_publication
     request = _request(tmp_path, source_kind)
     legacy = _legacy_native_result(request)
     target = Path(request.output_dashboard_file)
     previous_assets = Path(legacy.html_dashboard_assets_path)
     assert previous_assets.name == "result_assets"
+    notice = previous_assets / PLOTLY_NOTICE_FILENAME
+    assert notice.is_file()
+    if not legacy_notice:
+        notice.unlink()
     assert _asset_bytes(previous_assets)  # A nonempty existing directory caused the reported defect.
     foreign = tmp_path / "unrelated_assets.generation-preserve"
     foreign.mkdir()
@@ -175,11 +183,14 @@ def test_failed_or_cancelled_native_render_preserves_old_html_assets_and_workboo
 
 
 
-def test_replacement_leaves_legacy_directory_with_unowned_content(tmp_path):
+@pytest.mark.parametrize("unowned_name", ["user.txt", PLOTLY_NOTICE_FILENAME])
+def test_replacement_leaves_legacy_directory_with_unowned_content(tmp_path, unowned_name):
     request = _request(tmp_path)
     legacy = _legacy_native_result(request)
     assets = Path(legacy.html_dashboard_assets_path)
-    (assets / "user.txt").write_bytes(b"do not delete")
+    entry = assets / unowned_name
+    original_size = entry.stat().st_size if entry.exists() else 1
+    entry.write_bytes(b"!" * original_size)
     before = _asset_bytes(assets)
 
     ports, plan = _approve_replacement(capture(request))

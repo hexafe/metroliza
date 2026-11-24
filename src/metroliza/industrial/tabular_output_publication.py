@@ -13,6 +13,7 @@ import shutil
 from tempfile import TemporaryDirectory, mkdtemp
 from unicodedata import normalize
 
+from metroliza.charts.plotly_runtime_assets import PLOTLY_NOTICE_FILENAME
 from metroliza.exporting.output_publication import (
     OutputConsent,
     OutputPublicationCanceled,
@@ -22,7 +23,6 @@ from metroliza.exporting.output_publication import (
 )
 
 _ASSET_OWNER_FILE = ".metroliza-tabular-dashboard"
-_PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
 _LEGACY_DASHBOARD_HEAD_LIMIT = 128 * 1024
 
 
@@ -265,7 +265,7 @@ def _retire_owned_assets(outputs, current_assets, sources):
             if any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
                 continue
             entries = tuple(directory.iterdir())
-            if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME, _PLOTLY_NOTICE_FILENAME} and
+            if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME, PLOTLY_NOTICE_FILENAME} and
                        not entry.is_symlink() and entry.is_file() for entry in entries):
                 continue
             if marker.read_text(encoding="utf-8") == os.path.normcase(outputs.dashboard.name):
@@ -311,19 +311,36 @@ def _retire_legacy_assets(approved, sources):
 
     directory = approved.path
     script = directory / PLOTLY_ASSET_NAME
+    notice = directory / PLOTLY_NOTICE_FILENAME
     try:
         if directory.is_symlink() or any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
             return
-        if set(directory.iterdir()) != {script} or script.is_symlink() or not script.is_file():
+        entries = set(directory.iterdir())
+        if entries == {script}:
+            assets = (script,)
+        elif entries == {script, notice}:
+            assets = (script, notice)
+        else:
             return
-        script_identity = OutputConsent.for_path(script)
-        if script_identity.identity[2] != PLOTLY_ASSET_SOURCE.stat().st_size:
+        verified = tuple(_verified_legacy_asset(asset, PLOTLY_ASSET_SOURCE.with_name(asset.name)) for asset in assets)
+        if None in verified or OutputConsent.for_path(directory) != approved:
             return
-        with script.open("rb") as old, PLOTLY_ASSET_SOURCE.open("rb") as bundled:
-            if file_digest(old, "sha256").digest() != file_digest(bundled, "sha256").digest():
+        for asset in verified:
+            if OutputConsent.for_path(asset.path) != asset:
                 return
-        if OutputConsent.for_path(directory) == approved and OutputConsent.for_path(script) == script_identity:
-            script.unlink()
-            directory.rmdir()
+            asset.path.unlink()
+        directory.rmdir()
     except (OSError, RuntimeError):
         pass
+
+
+def _verified_legacy_asset(asset, bundled):
+    if asset.is_symlink() or not asset.is_file():
+        return None
+    identity = OutputConsent.for_path(asset)
+    if identity.identity[2] != bundled.stat().st_size:
+        return None
+    with asset.open("rb") as old, bundled.open("rb") as original:
+        if file_digest(old, "sha256").digest() != file_digest(original, "sha256").digest():
+            return None
+    return identity
