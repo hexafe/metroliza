@@ -348,7 +348,9 @@ def test_install_creates_backup_and_rollback_restores_previous_profile(tmp_path,
     assert evidence_after["approval"]["version"] == "0.1.0"
 
 
-def test_rollback_refuses_to_silently_skip_the_latest_damaged_backup(tmp_path, capsys):
+def test_rollback_refuses_to_silently_skip_the_latest_damaged_backup(
+    tmp_path, capsys, monkeypatch, qapplication_session,
+):
     module = _load_cli_module()
     workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
     home = tmp_path / "home"
@@ -367,6 +369,21 @@ def test_rollback_refuses_to_silently_skip_the_latest_damaged_backup(tmp_path, c
     latest_profile.write_text("# damaged", encoding="utf-8")
     with pytest.raises(ValueError, match="latest backup.*cannot be verified"):
         rollback_profile("supplier_alpha", backup_name="", home=home)
+
+    from PyQt6.QtWidgets import QMessageBox
+    from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    dialog = ParserPluginWizardDialog(home=home)
+    try:
+        dialog.profile_list.setCurrentRow(0)
+        assert dialog.rollback_button.isEnabled()
+        dialog.rollback_button.click()
+        assert "latest backup" in dialog.manage_status_label.text()
+        assert "cannot be verified" in dialog.manage_status_label.text()
+        assert dialog.manage_status_label.property("statusVariant") == "warning"
+    finally:
+        dialog.close()
 
     capsys.readouterr()
     assert module.main(["--home", str(home), "evidence", "supplier_alpha"]) == 0

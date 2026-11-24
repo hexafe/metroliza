@@ -367,19 +367,18 @@ class ParserPluginWizardDialog(QDialog):
     def _restore_profile(self):
         item = self.profile_list.currentItem()
         profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
-        backups = self._backup_names(profile) if profile and profile.enabled else ()
-        if not backups:
+        if profile is None or not self.rollback_button.isEnabled():
             return
         answer = QMessageBox.question(
             self, "Restore parser profile",
-            f"Restore the latest verified backup of {profile.plugin_id}? The current version is kept as a backup.",
+            f"Verify and restore the latest backup of {profile.plugin_id}? The current version is kept as a backup.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            rollback_profile(profile.plugin_id, backup_name=backups[0], home=self.home)
+            rollback_profile(profile.plugin_id, home=self.home)
         except (OSError, ValueError) as exc:
             self.manage_status_label.setText(str(exc))
             set_status_variant(self.manage_status_label, "warning")

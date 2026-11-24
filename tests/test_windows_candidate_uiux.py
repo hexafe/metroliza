@@ -850,7 +850,7 @@ def test_producer_bridge_adds_exact_one_artifact_and_four_receipt_facets(monkeyp
 def test_failed_producer_atomically_retains_closed_phase_and_never_marks_uiux_passed(monkeypatch, tmp_path):
     producer, _value = _producer_protocol(monkeypatch, tmp_path, failed='reports')
     receipt = dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={})
-    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+    with pytest.raises(producer.ScenarioFailure, match='^uiux_reports_failed$'):
         producer._run_uiux_slice(tmp_path, FIXTURES.parent, receipt)
     assert receipt['artifacts'] == receipt['facets'] == {}
     value = uiux.load_json(tmp_path / 'uiux-observation.json')
@@ -994,7 +994,8 @@ def test_producer_unknown_failure_detail_is_closed_without_losing_reached_leaf(m
         def unexpected(*_args, **_kwargs):
             raise OSError('PRIVATE_PATH')
         monkeypatch.setattr(reports, 'run_reports_checks', unexpected)
-    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+    failure = 'uiux_unexpected' if change == 'raised' else 'uiux_reports_failed'
+    with pytest.raises(producer.ScenarioFailure, match=f'^{failure}$'):
         producer._run_uiux_slice(tmp_path, FIXTURES.parent, dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={}))
     observed = uiux.load_json(tmp_path / 'uiux-observation.json')
     summary = observed['evidence']['reports']

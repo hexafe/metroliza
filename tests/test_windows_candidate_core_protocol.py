@@ -96,6 +96,8 @@ def test_nonzero_child_exit_projects_only_known_synthetic_failure(tmp_path) -> N
     assert driver._closed_child_exit_reason(tmp_path) == (
         "package_scenario_nonzero_exit_root_not_new_empty_directory"
     )
+    receipt.write_text(json.dumps(dict(base, stage="uiux", failure="uiux_controls_failed")))
+    assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_uiux_controls_failed"
     receipt.write_text(json.dumps(dict(base, failure="SYNTHETIC_PRIVATE_PATH")))
     assert driver._closed_child_exit_reason(tmp_path) == "package_scenario_nonzero_exit_receipt_unclassified"
     receipt.write_text("{SYNTHETIC_PRIVATE_PATH")
