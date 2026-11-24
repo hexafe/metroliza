@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from metroliza.shared.diagnostic_events import (
     ExportFailureDiagnostic, WorkflowDiagnosticEvent, WorkflowError, WorkflowOperation,
@@ -46,6 +48,19 @@ def _record_copyable_workflow_action(operation, outcome) -> None:
         return
 
 
+_flow_correlation = ContextVar("workflow_flow_correlation", default=None)
+
+
+@contextmanager
+def recipe_workflow_scope(flow_id: uuid.UUID, run_id: uuid.UUID, step_id: uuid.UUID):
+    """Bind runtime-only correlation to the actual synchronous request execution."""
+    token = _flow_correlation.set((flow_id, run_id, step_id))
+    try:
+        yield
+    finally:
+        _flow_correlation.reset(token)
+
+
 class WorkflowTrace:
     def __init__(self, operation: WorkflowOperation):
         self.operation = operation
@@ -55,6 +70,7 @@ class WorkflowTrace:
         self.started = time.monotonic()
         self.invocation_id = supervised_invocation_id() or uuid.uuid4()
         self.operation_id = uuid.uuid4()
+        self.flow_correlation = _flow_correlation.get()
         self.stage(WorkflowStage.STARTED)
 
     def stage(self, stage: WorkflowStage, *, selected_report_count: int | None = None) -> None:
@@ -83,6 +99,8 @@ class WorkflowTrace:
                 imported_report_count=imported,
                 duration_ms=elapsed if stage is WorkflowStage.FINISHED else None,
                 export_failure=export_failure,
+                **(dict(zip(("flow_id", "run_id", "step_id"), self.flow_correlation))
+                   if self.flow_correlation is not None else {}),
             )
             if stage is WorkflowStage.STARTED or stage is WorkflowStage.FINISHED:
                 _record_copyable_workflow_action(self.operation, outcome)

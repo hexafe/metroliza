@@ -53,12 +53,13 @@ def _combo_labels(combo):
     return [combo.itemText(index) for index in range(combo.count())]
 
 
-def _set_combo_to_existing_label(combo, needle):
-    for label in _combo_labels(combo):
+def _select_and_apply_preset(dialog, needle):
+    for label in _combo_labels(dialog.preset_combobox):
         if needle in label:
-            combo.setCurrentText(label)
+            dialog.preset_combobox.setCurrentText(label)
+            dialog.apply_preset_button.click()
             return label
-    raise AssertionError(f"Missing combo label containing {needle!r}: {_combo_labels(combo)}")
+    raise AssertionError(f"Missing export preset containing {needle!r}")
 
 
 @pytest.mark.parametrize("html_only", [False, True])
@@ -114,6 +115,141 @@ def test_export_keeps_user_chosen_name_when_browsing_again(monkeypatch, tmp_path
         assert captured[-1] == str(chosen)
         dialog._coerce_output_path_for_mode()
         assert dialog.excel_file == chosen
+    finally:
+        dialog.close()
+
+
+def test_output_modes_remember_explicit_paths_and_optional_html(monkeypatch, tmp_path):
+    from tests.test_1089_acceptance_analytics import _fixture_db
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(_fixture_db(tmp_path)))
+    workbook = tmp_path / "quality_dashboard.xlsx"
+    standalone = tmp_path / "independent-dashboard.html"
+    targets = iter((workbook, standalone))
+    monkeypatch.setattr(export_dialog.QFileDialog, "getSaveFileName", lambda *args: (str(next(targets)), ""))
+    try:
+        workbook_preset = dialog.preset_combobox.currentText()
+        dialog.select_excel_file()
+        dialog.generate_html_dashboard_checkbox.setChecked(True)
+        _select_and_apply_preset(dialog, "HTML dashboard only")
+        assert dialog.excel_file == workbook.with_suffix(".html")
+        dialog.select_excel_file()
+        assert dialog._build_export_request().paths.html_dashboard_file == str(standalone)
+        _select_and_apply_preset(dialog, workbook_preset)
+        assert dialog.excel_file == workbook
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+
+        dialog.set_grouping_applied(True)
+        assert not dialog.generate_html_dashboard_checkbox.isEnabled()
+        assert "Grouping requires" in dialog.generate_html_dashboard_checkbox.toolTip()
+        dialog.clear_grouping()
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+
+        workbook.write_bytes(b"previous synthetic workbook")
+        collision = []
+
+        def save_copy(_database, paths, conflicts, copy_path):
+            collision.append((paths, conflicts, copy_path))
+            return "copy"
+
+        monkeypatch.setattr(dialog, "_choose_output_collision", save_copy)
+        request = dialog._build_export_request()
+        original_summary = dialog.request_summary_label.toolTip()
+        copied = dialog._confirm_output_publication(request)
+        paths, conflicts, copy_path = collision[0]
+        assert paths[0] == workbook and conflicts == (workbook,)
+        assert all(str(path) in original_summary for path in paths)
+        assert copied.paths.excel_file == str(copy_path) and dialog.excel_file == copy_path
+        assert workbook.read_bytes() == b"previous synthetic workbook"
+
+        dialog.generate_html_dashboard_checkbox.setChecked(False)
+        dialog.set_grouping_applied(True)
+        assert dialog.generate_html_dashboard_checkbox.isChecked()
+        _select_and_apply_preset(dialog, "HTML dashboard only")
+        assert dialog.excel_file == standalone
+        dialog.clear_grouping()
+        _select_and_apply_preset(dialog, workbook_preset)
+        assert dialog.excel_file == copy_path
+        assert not dialog.generate_html_dashboard_checkbox.isChecked()
+    finally:
+        dialog.close()
+
+
+def test_preview_then_apply_export_preset_with_keyboard(monkeypatch, tmp_path):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(tmp_path / "source.db"))
+    path = tmp_path / "export.xlsx"
+    dialog.show()
+    try:
+        dialog._set_output_path(path, remember=True)
+        dialog.export_type_combobox.setCurrentText("Scatter")
+        dialog.preset_combobox.setFocus()
+        _app().processEvents()
+        QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_End)
+        assert dialog.preset_combobox.currentText() == "HTML dashboard only"
+        assert "no workbook" in dialog.preset_preview_label.accessibleDescription()
+        assert dialog.export_type_combobox.currentText() == "Scatter"
+        assert not dialog.export_button.isEnabled() and dialog.excel_file == path
+        QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_Tab)
+        assert dialog.apply_preset_button.hasFocus()
+        QTest.keyClick(dialog.apply_preset_button, Qt.Key.Key_Space)
+        assert dialog.export_type_combobox.currentText() == "Line"
+        assert dialog._selected_export_target() == "html_dashboard"
+        assert dialog.select_excel_button.accessibleName() == "Select standalone HTML dashboard"
+        assert dialog.export_button.isEnabled() and dialog.excel_file.suffix == ".html"
+    finally:
+        dialog.close()
+
+
+def test_saved_export_options_reopen_preview_and_apply(monkeypatch, tmp_path):
+    from PyQt6.QtWidgets import QInputDialog
+    from metroliza.ui import export_option_profiles
+
+    monkeypatch.setattr(export_option_profiles, "local_metroliza_directory", lambda: tmp_path / "settings")
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args: ("Night inspection", True))
+    source = tmp_path / "private-source.db"
+    output = tmp_path / "private-output.xlsx"
+    first = _build_dialog(monkeypatch, tmp_path, db_file=str(source))
+    try:
+        _select_and_apply_preset(first, "Extended plots")
+        first._set_output_path(output, remember=True)
+        first.export_type_combobox.setCurrentText("Scatter")
+        first.sort_measurements_combobox.setCurrentText("Sample #")
+        first.violin_plot_min_samplesize.setText("15")
+        first.summary_plot_scale.setText("2")
+        first.hide_ok_results_checkbox.setChecked(True)
+        first.generate_html_dashboard_checkbox.setChecked(True)
+        first.save_options_button.click()
+    finally:
+        first.close()
+
+    store = export_option_profiles.ExportOptionProfiles()
+    assert [profile.name for profile in store.load()] == ["Night inspection"]
+    payload = store.path.read_text(encoding="utf-8")
+    assert source.name not in payload and output.name not in payload
+
+    dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(source))
+    try:
+        dialog._set_output_path(output, remember=True)
+        dialog.violin_plot_min_samplesize.setText("invalid")
+        dialog.summary_plot_scale.setText("0,5")
+        dialog.preset_combobox.setCurrentText("Night inspection (saved)")
+        assert "Scatter" in dialog.preset_preview_label.text()
+        assert "Optional HTML: On" in dialog.preset_preview_label.text()
+        assert dialog.export_type_combobox.currentText() == "Line"
+        assert not dialog.generate_html_dashboard_checkbox.isChecked()
+        assert not dialog.export_button.isEnabled()
+        assert dialog.violin_plot_min_samplesize.text() == "invalid"
+        assert dialog.summary_plot_scale.text() == "0,5"
+        dialog.apply_preset_button.click()
+        result = dialog._build_export_request()
+        assert result.paths.db_file == str(source) and result.paths.excel_file == str(output)
+        assert result.options.preset == "full_report" and result.options.generate_summary_sheet
+        assert result.options.export_type == "scatter" and result.options.sorting_parameter == "sample #"
+        assert result.options.violin_plot_min_samplesize == 15 and result.options.summary_plot_scale == 2
+        assert result.options.hide_ok_results and result.options.generate_html_dashboard
     finally:
         dialog.close()
 
@@ -280,8 +416,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert not dialog.generate_html_dashboard_checkbox.isEnabled()
         assert dialog.dashboard_visuals_button.isEnabled()
 
-        selected_label = _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
-        dialog.preset_combobox.setCurrentText(selected_label)
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         dialog._sync_html_dashboard_only_state()
 
         assert dialog._selected_export_target() == "html_dashboard"
@@ -296,7 +431,7 @@ def test_output_mode_and_option_synchronization(monkeypatch, tmp_path):
         assert dialog.dashboard_visuals_button.isEnabled()
         assert "Adjust HTML dashboard" in dialog.dashboard_visuals_button.toolTip()
 
-        _set_combo_to_existing_label(dialog.preset_combobox, "Main plots")
+        _select_and_apply_preset(dialog, "Main plots")
         dialog._sync_html_dashboard_only_state()
 
         assert dialog.select_excel_label.text() == "Output workbook:"
@@ -337,7 +472,7 @@ def test_deliverables_summary_tracks_export_context(monkeypatch, tmp_path):
         assert dialog.deliverables_summary_label.property("statusVariant") == "success"
 
         dialog.set_grouping_applied(False)
-        _set_combo_to_existing_label(dialog.preset_combobox, "HTML dashboard only")
+        _select_and_apply_preset(dialog, "HTML dashboard only")
         dialog._sync_html_dashboard_only_state()
 
         summary = dialog.deliverables_summary_label.text()
@@ -368,8 +503,10 @@ def test_select_excel_file_and_validation_warning_branches(monkeypatch, tmp_path
         dialog.validate_violin_plot_min_samplesize_input()
         dialog.validate_plot_scale_input()
 
-        assert dialog.violin_plot_min_samplesize.text() == "2"
-        assert dialog.summary_plot_scale.text() == "0"
+        assert dialog.violin_plot_min_samplesize.text() == "1"
+        assert dialog.summary_plot_scale.text() == "bad"
+        assert "whole number of 2 or more" in dialog.violin_input_error.text()
+        assert "whole number of 0 or more" in dialog.plot_scale_error.text()
 
         warnings = []
         monkeypatch.setattr(
@@ -383,6 +520,25 @@ def test_select_excel_file_and_validation_warning_branches(monkeypatch, tmp_path
             lambda **kwargs: (_ for _ in ()).throw(ValueError("missing source rows")),
         )
 
+        dialog.show()
+        dialog.show_loading_screen()
+
+        assert not warnings
+        assert dialog.advanced_toggle_button.isChecked()
+        assert dialog.focusWidget() is dialog.violin_plot_min_samplesize
+        assert dialog.export_thread is None
+
+        dialog.violin_plot_min_samplesize.setText("2")
+        dialog.summary_plot_scale.setText("0,5")
+        dialog.show_loading_screen()
+        assert not warnings and dialog.focusWidget() is dialog.summary_plot_scale
+        assert dialog.summary_plot_scale.text() == "0,5"
+
+        dialog.chart_defaults_button.click()
+        preset = dialog._selected_preset_options()
+        assert dialog.violin_plot_min_samplesize.text() == str(preset["violin_plot_min_samplesize"])
+        assert dialog.summary_plot_scale.text() == str(preset["summary_plot_scale"])
+        assert not dialog.violin_input_error.text() and not dialog.plot_scale_error.text()
         dialog.show_loading_screen()
 
         assert warnings
@@ -659,7 +815,8 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
         assert not dialog.last_result_row.findChildren(export_dialog.QPushButton)
         assert progress_dialog.rejected_as_terminal
         assert events[-2:] == ["progress_rejected", "rich_message"]
-        assert dialog.export_button.isEnabled()
+        assert not dialog.export_button.isEnabled()
+        assert dialog.is_export_active()
         assert dialog._cancel_requested is False
         assert progress_dialog.cancel_button.isEnabled()
 
@@ -716,7 +873,7 @@ def test_export_lifecycle_success_cancel_and_terminal_paths(monkeypatch, tmp_pat
 
         dialog.stop_exporting()
 
-        assert notices[-1][1] == "Export canceled"
+        assert not notices
     finally:
         dialog.close()
 

@@ -8,11 +8,10 @@ def test_summarize_filter_state_not_applied_when_empty():
     assert tooltip == "Not applied"
 
 
-def test_summarize_filter_state_hides_default_broad_date_range():
+def test_summarize_filter_state_shows_explicit_broad_date_range():
     state = FilterState(date_from="1970-01-01", date_to=date.today().isoformat())
     label, tooltip = summarize_filter_state(state)
-    assert label == "Not applied"
-    assert tooltip == "Not applied"
+    assert label == tooltip == f"Date: 1970-01-01 to {state.date_to}"
 
 
 def test_summarize_filter_state_shows_nondefault_date_range():

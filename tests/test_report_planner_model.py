@@ -82,6 +82,34 @@ def _review():
     )
 
 
+def test_select_visible_ready_combines_filters_and_preserves_hidden_checks():
+    from dataclasses import replace
+    from metroliza.ui.report_planner import ReportPlanner
+
+    review = _review()
+    original = review.files[0]
+    second = replace(original, display_name="archive/second.pdf", occurrence_id="second")
+    third = replace(original, display_name="archive/third.pdf", occurrence_id="third")
+    planner = ReportPlanner()
+    try:
+        planner.set_review(replace(review, files=(*review.files, second, third)))
+        planner.model.clear_selection()
+        planner.model.setData(planner.model.index(0, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+        planner.search.setText("second")
+        planner.status_filter.setCurrentIndex(planner.status_filter.findData("ready"))
+        planner.parser_filter.setCurrentIndex(planner.parser_filter.findData("cmm"))
+        assert planner.select_ready.text() == "Zaznacz widoczne (1)"
+        planner.select_ready.click()
+        assert planner.model.selected_ids == (original.stable_occurrence_id, "second")
+        assert "2 selected (1 hidden)" in planner.counts.text()
+        planner.status_filter.setCurrentIndex(planner.status_filter.findData("duplicate"))
+        assert planner.select_ready.text() == "Zaznacz widoczne (0)"
+        assert not planner.select_ready.isEnabled()
+        assert "2 selected (2 hidden)" in planner.counts.text()
+    finally:
+        planner.close()
+
+
 def test_fresh_review_selects_only_ready_and_keeps_duplicate_uncheckable():
     from metroliza.ui.report_planner_model import ReportPlannerModel
 

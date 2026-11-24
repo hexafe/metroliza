@@ -232,7 +232,7 @@ def test_repository_tree_has_exactly_one_primary_owner_per_path() -> None:
     assert report["duplicate_primary_count"] == 0
     assert set(report["owner_counts"]) == {str(issue) for issue in range(975, 986)}
     assert set(report["class_counts"]) == COVERAGE.PATH_CLASSES
-    assert len(ledger["rules"]) == 61
+    assert len(ledger["rules"]) == 62
     assert [record["rule"] for record in report["rule_snapshots"]] == [
         rule["id"] for rule in ledger["rules"]
     ]

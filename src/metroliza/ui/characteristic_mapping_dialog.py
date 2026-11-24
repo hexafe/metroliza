@@ -42,7 +42,7 @@ from metroliza.reports.characteristic_alias_service import (
     preview_characteristic_aliases_csv,
     apply_characteristic_alias_import,
     normalize_scope_type,
-    upsert_characteristic_alias,
+    save_manual_characteristic_alias,
 )
 from metroliza.reports.characteristic_mapping_service import (
     fetch_distinct_references,
@@ -401,6 +401,7 @@ class CharacteristicAliasEditorDialog(QDialog):
         self.metric_options = list(metric_options or [])
         self.reference_options = list(reference_options or [])
         self.impact_resolver = impact_resolver
+        self.save_match = None
         self._known_metric_names = {
             _metric_option_name(row)
             for row in self.metric_options
@@ -492,6 +493,11 @@ class CharacteristicAliasEditorDialog(QDialog):
 
         row += 1
         layout.addWidget(self.impact_label, row, 0, 1, 2)
+        row += 1
+        self.save_error_label = status_chip('', 'danger')
+        self.save_error_label.setWordWrap(True)
+        self.save_error_label.hide()
+        layout.addWidget(self.save_error_label, row, 0, 1, 2)
 
         row += 1
         self.button_box_layout = QHBoxLayout()
@@ -507,6 +513,8 @@ class CharacteristicAliasEditorDialog(QDialog):
         self.apply_to_combo.currentTextChanged.connect(lambda _value: self._refresh_impact_preview())
         self.alias_input.currentTextChanged.connect(lambda _value: self._refresh_impact_preview())
         self.reference_input.currentTextChanged.connect(lambda _value: self._refresh_impact_preview())
+        for field in (self.alias_input, self.common_name_input, self.apply_to_combo, self.reference_input):
+            field.currentTextChanged.connect(self.save_error_label.hide)
         self.save_button.clicked.connect(self._validate_and_accept)
         self.clear_button.clicked.connect(self._clear_fields)
         self.cancel_button.clicked.connect(self.reject)
@@ -595,13 +603,30 @@ class CharacteristicAliasEditorDialog(QDialog):
             QMessageBox.warning(self, 'Validation error', str(exc))
             return
 
-        self._result_payload = {
+        payload = {
             'alias_name': alias_name,
             'canonical_name': common_name,
             'scope_type': scope_type,
             'scope_value': scope_value,
         }
-        self.accept()
+        if self._commit_match(payload):
+            self._result_payload = payload
+            self.accept()
+
+    def _commit_match(self, payload):
+        if self.save_match is None:
+            return True
+        try:
+            self.save_match(payload)
+        except ValueError as exc:
+            self.save_error_label.setText(str(exc))
+            self.alias_input.setFocus()
+        except (OSError, sqlite3.Error):
+            self.save_error_label.setText('Could not save the match. Check the database and retry.')
+        else:
+            return True
+        self.save_error_label.show()
+        return False
 
     @property
     def result_payload(self):
@@ -661,6 +686,11 @@ class CharacteristicMappingDialog(QDialog):
         self.metric_empty_label = status_chip('Select a database to load report/export names.', 'neutral')
 
         self.table_title_label = section_label('Saved name matches')
+        self.alias_search_input = QLineEdit()
+        self.alias_search_input.setPlaceholderText('Search saved matches [Ctrl+F]')
+        self.alias_search_input.setAccessibleName('Search saved name matches')
+        self.alias_match_count = QLabel()
+
         self.empty_state_label = QLabel(
             'No name matches have been added yet.\n'
             'Select a report/export name on the left, then add a match.'
@@ -733,6 +763,8 @@ class CharacteristicMappingDialog(QDialog):
 
         saved_layout = QVBoxLayout()
         saved_layout.addWidget(self.table_title_label)
+        saved_layout.addWidget(self.alias_search_input)
+        saved_layout.addWidget(self.alias_match_count)
         saved_layout.addWidget(self.empty_state_label)
         saved_layout.addWidget(self.empty_warning_label)
         saved_layout.addWidget(self.collision_warning_label)
@@ -751,6 +783,7 @@ class CharacteristicMappingDialog(QDialog):
         layout.addLayout(footer_row)
 
         self.metric_search_input.textChanged.connect(lambda _text: self._populate_metric_table())
+        self.alias_search_input.textChanged.connect(self._filter_alias_table)
         self.add_from_selected_button.clicked.connect(self.add_selected_mapping)
         self.add_button.clicked.connect(lambda: self.add_mapping())
         self.edit_button.clicked.connect(self.edit_mapping)
@@ -765,7 +798,8 @@ class CharacteristicMappingDialog(QDialog):
         self.add_action = bind_button(self, self.add_button, 'Ctrl+E')
         self.edit_action = bind_button(self, self.edit_button, 'Ctrl+Shift+E')
         self.close_action = bind_button(self, self.close_button, 'Ctrl+W')
-        self.search_action = bind_search_shortcut(self, [(self.metric_search_input, self.metric_table)])
+        self.search_action = bind_search_shortcut(self, [(self.metric_search_input, self.metric_table),
+                                                         (self.alias_search_input, self.alias_table)])
         self.metric_search_input.setPlaceholderText('Search names or references [Ctrl+F]')
         install_button_commands(self, "mapping")
 
@@ -1060,8 +1094,21 @@ class CharacteristicMappingDialog(QDialog):
                 self.alias_table.setItem(row_index, column_index, QTableWidgetItem(value))
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
-        self._sync_selection_actions()
+        self._filter_alias_table()
         self._sync_warning_labels()
+
+    def _filter_alias_table(self):
+        needle = self.alias_search_input.text().strip().casefold()
+        visible = 0
+        for row in range(self.alias_table.rowCount()):
+            matches = any(needle in self.alias_table.item(row, column).text().casefold()
+                          for column in (0, 1, 3) if self.alias_table.item(row, column) is not None)
+            self.alias_table.setRowHidden(row, not matches)
+            visible += matches
+        self.alias_match_count.setText(
+            f"{visible} saved matches shown" if visible else "No saved matches found",
+        )
+        self._sync_selection_actions()
 
     def _resolve_impact_preview(self, alias_name, scope_type, scope_value):
         if not self.db_file:
@@ -1079,6 +1126,8 @@ class CharacteristicMappingDialog(QDialog):
             return None
 
         row = selected_rows[0].row()
+        if self.alias_table.isRowHidden(row):
+            return None
         apply_to = self.alias_table.item(row, 2).text()
         reference_display = self.alias_table.item(row, 3).text()
         scope_type, scope_value = self._scope_from_display(apply_to, reference_display)
@@ -1116,108 +1165,39 @@ class CharacteristicMappingDialog(QDialog):
         )
 
     def add_mapping(self, initial_values=None):
-        if _alias_csv_busy(self):
-            return
-        if not self._ensure_db_file_selected():
-            return
-
-        editor = self._build_editor(initial_values=initial_values)
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            return
-
-        payload = editor.result_payload
-        if payload is None:
-            return
-
-        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_STARTED)
-        try:
-            ensure_characteristic_alias_schema(self.db_file)
-            existing = fetch_all_characteristic_aliases(self.db_file)
-            if any(
-                row['alias_name'] == payload['alias_name']
-                and row['scope_type'] == payload['scope_type']
-                and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
-                for row in existing
-            ):
-                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_FAILED)
-                QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
-                return
-
-            upsert_characteristic_alias(
-                self.db_file,
-                alias_name=payload['alias_name'],
-                canonical_name=payload['canonical_name'],
-                scope_type=payload['scope_type'],
-                scope_value=payload['scope_value'],
-            )
-            self.load_aliases()
-            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_COMPLETED)
-        except Exception as exc:
-            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_ADD_FAILED)
-            CustomLogger(exc, reraise=False, logger_name=__name__)
-            QMessageBox.critical(self, 'Save error', f'Could not save name match: {exc}')
+        self._open_mapping_editor(initial_values)
 
     def edit_mapping(self):
-        if _alias_csv_busy(self):
-            return
-        if not self._ensure_db_file_selected():
-            return
-
         selected = self._selected_mapping()
-        if selected is None:
+        if selected is not None:
+            self._open_mapping_editor(selected, previous=selected)
+
+    def _open_mapping_editor(self, initial_values, previous=None):
+        if _alias_csv_busy(self) or not self._ensure_db_file_selected():
             return
+        editor = self._build_editor(initial_values=initial_values)
+        database = self.db_file
+        if previous is None:
+            started = BugReportAction.WORKFLOW_MAPPING_ADD_STARTED
+            failed = BugReportAction.WORKFLOW_MAPPING_ADD_FAILED
+            completed = BugReportAction.WORKFLOW_MAPPING_ADD_COMPLETED
+        else:
+            started = BugReportAction.WORKFLOW_MAPPING_EDIT_STARTED
+            failed = BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED
+            completed = BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED
 
-        editor = self._build_editor(initial_values=selected)
-        if editor.exec() != QDialog.DialogCode.Accepted:
-            return
+        def save_match(payload):
+            _record_mapping_action(started)
+            try:
+                save_manual_characteristic_alias(database, payload, previous)
+            except Exception:
+                _record_mapping_action(failed)
+                raise
+            _record_mapping_action(completed)
 
-        payload = editor.result_payload
-        if payload is None:
-            return
-
-        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_STARTED)
-        try:
-            ensure_characteristic_alias_schema(self.db_file)
-            existing = fetch_all_characteristic_aliases(self.db_file)
-            if any(
-                row['alias_name'] == payload['alias_name']
-                and row['scope_type'] == payload['scope_type']
-                and (row.get('scope_value') or None) == (payload.get('scope_value') or None)
-                and not (
-                    row['alias_name'] == selected['alias_name']
-                    and row['scope_type'] == selected['scope_type']
-                    and (row.get('scope_value') or None) == (selected.get('scope_value') or None)
-                )
-                for row in existing
-            ):
-                _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
-                QMessageBox.warning(self, 'Validation error', 'This name match already exists.')
-                return
-
-            upsert_characteristic_alias(
-                self.db_file,
-                alias_name=payload['alias_name'],
-                canonical_name=payload['canonical_name'],
-                scope_type=payload['scope_type'],
-                scope_value=payload['scope_value'],
-            )
-            if (
-                selected['alias_name'] != payload['alias_name']
-                or selected['scope_type'] != payload['scope_type']
-                or (selected['scope_value'] or None) != (payload['scope_value'] or None)
-            ):
-                delete_characteristic_alias(
-                    self.db_file,
-                    alias_name=selected['alias_name'],
-                    scope_type=selected['scope_type'],
-                    scope_value=selected['scope_value'],
-                )
+        editor.save_match = save_match
+        if editor.exec() == QDialog.DialogCode.Accepted:
             self.load_aliases()
-            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED)
-        except Exception as exc:
-            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
-            CustomLogger(exc, reraise=False, logger_name=__name__)
-            QMessageBox.critical(self, 'Save error', f'Could not update name match: {exc}')
 
     def delete_mapping(self):
         if _alias_csv_busy(self):

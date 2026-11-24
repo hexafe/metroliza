@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
 )
 import PyQt6.QtCore as QtCore
-from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6 import sip
 from functools import partial
 import weakref
@@ -114,6 +114,8 @@ class ModifyDB(QDialog):
     through the repository API when available.
     """
 
+    database_edited = pyqtSignal(str)
+
     REPORT_RECORD_COLUMNS = (
         {"label": "REPORT_ID", "field": "report_id", "source": "report_id", "editable": False, "key": True},
         {"label": "REFERENCE", "field": "reference", "source": "reference", "editable": True},
@@ -195,6 +197,7 @@ class ModifyDB(QDialog):
         self.db_file = db_file
         self.database_change_allowed = None
         self.undo_data = {}
+        self._measurement_report_id = None
         self._dirty_normalize_rows = {}
         self._last_clicked_row_by_table = {}
         self._record_slots = []
@@ -301,6 +304,12 @@ class ModifyDB(QDialog):
             self.apply_button = QPushButton("Apply changes")
             if not self.db_file:
                 self.apply_button.setEnabled(False)
+            self.rename_normalized_button = QPushButton("Rename selected")
+            self.show_measurements_button = QPushButton("Show measurements")
+            self.show_all_measurements_button = QPushButton("Show all measurements")
+            self.measurement_scope_label = QtWidgets.QLabel("All measurements")
+            self.show_all_measurements_button.setEnabled(False)
+            self.show_measurements_button.setEnabled(False)
             self.undo_button = QPushButton("Undo last change")
             self.cancel_button = QPushButton("Close")
             self.pending_label = QtWidgets.QLabel("Draft: no pending changes. Apply saves; Close asks before discarding.")
@@ -367,6 +376,7 @@ class ModifyDB(QDialog):
 
             normalize_layout = QtWidgets.QVBoxLayout(self.normalize_tab)
             normalize_layout.addWidget(self.normalize_tab_widget)
+            normalize_layout.addWidget(self.rename_normalized_button)
             self._add_normalize_field_tab("Reference", self.reference_filter_edit, self.reference_table)
             self._add_normalize_field_tab("Sample number", self.part_number_filter_edit, self.part_number_table)
             self._add_normalize_field_tab("Header", self.header_filter_edit, self.header_table)
@@ -375,9 +385,14 @@ class ModifyDB(QDialog):
             report_layout.addWidget(self.report_filter_edit)
             report_layout.addWidget(self.report_busy_banner)
             report_layout.addWidget(self.report_records_table)
+            report_layout.addWidget(self.show_measurements_button)
 
             measurement_layout = QtWidgets.QVBoxLayout(self.measurement_rows_tab)
             measurement_layout.addWidget(self.measurement_filter_edit)
+            scope_row = QHBoxLayout()
+            scope_row.addWidget(self.measurement_scope_label, 1)
+            scope_row.addWidget(self.show_all_measurements_button)
+            measurement_layout.addLayout(scope_row)
             measurement_layout.addWidget(self.measurement_busy_banner)
             measurement_layout.addWidget(self.measurement_records_table)
 
@@ -420,6 +435,10 @@ class ModifyDB(QDialog):
             self.apply_button.clicked.connect(self.confirm_and_apply_changes)
             self.undo_button.clicked.connect(self.undo_last_change)
             self.cancel_button.clicked.connect(self.cancel_changes)
+            self.rename_normalized_button.clicked.connect(lambda: self._rename_normalized(self._visible_normalize_table()))
+            self.show_measurements_button.clicked.connect(self._show_selected_report_measurements)
+            self.show_all_measurements_button.clicked.connect(lambda: self._set_measurement_scope(None))
+
 
             for table in (self.reference_table, self.part_number_table, self.header_table):
                 table.itemChanged.connect(lambda item, table=table: self._normalization_item_changed(table, item))
@@ -504,12 +523,30 @@ class ModifyDB(QDialog):
         if target_table is None:
             return False
 
+        return self._rename_normalized(target_table)
+
+    def _visible_normalize_table(self):
+        tables = (self.reference_table, self.part_number_table, self.header_table)
+        index = self.normalize_tab_widget.currentIndex()
+        return tables[index] if 0 <= index < len(tables) else None
+
+    def _rename_normalized(self, target_table):
+        if target_table is None:
+            return False
         selected_rows = sorted({index.row() for index in target_table.selectionModel().selectedRows()})
         if not selected_rows:
             return False
 
+        visible_rows = [row for row in selected_rows if not target_table.isRowHidden(row)]
+        hidden_count = len(selected_rows) - len(visible_rows)
+        if hidden_count:
+            selected_rows = self._confirm_rename_scope(visible_rows, selected_rows, hidden_count)
+            if not selected_rows:
+                return True
         edit_column = self._normalize_table_edit_column(target_table)
-        current_row = target_table.currentRow() if hasattr(target_table, "currentRow") else selected_rows[0]
+        current_row = target_table.currentRow()
+        if current_row not in selected_rows:
+            current_row = selected_rows[0]
         suggested_item = target_table.item(current_row, edit_column)
         current_item = target_table.currentItem()
         if suggested_item is None:
@@ -531,6 +568,41 @@ class ModifyDB(QDialog):
                 item.setText(normalized_value)
 
         return True
+
+    def _confirm_rename_scope(self, visible_rows, all_rows, hidden_count):
+        scope = QMessageBox(self)
+        scope.setWindowTitle("Scope of bulk rename")
+        scope.setText(f"Selected values: {len(all_rows)}. Hidden by the search: {hidden_count}.")
+        visible = scope.addButton("Rename visible only", QMessageBox.ButtonRole.AcceptRole)
+        everything = scope.addButton("Rename all selected", QMessageBox.ButtonRole.ActionRole)
+        cancel = scope.addButton(QMessageBox.StandardButton.Cancel)
+        visible.setEnabled(bool(visible_rows))
+        scope.setDefaultButton(visible if visible_rows else cancel)
+        scope.exec()
+        if scope.clickedButton() is visible:
+            return visible_rows
+        if scope.clickedButton() is everything:
+            return all_rows
+        return []
+
+    def _show_selected_report_measurements(self):
+        view = self.report_records_table
+        selected = view.currentIndex()
+        if selected.isValid():
+            model = view.model()
+            key = next((i for i, spec in enumerate(model.specs) if spec.get("key")), None)
+            if key is not None:
+                report_id = int(model.original_value(model.source_row(selected.row()), key))
+                self._set_measurement_scope(report_id)
+                self.tab_widget.setCurrentWidget(self.measurement_rows_tab)
+
+    def _set_measurement_scope(self, report_id):
+        self._measurement_report_id = report_id
+        self.measurement_scope_label.setText(f"Measurements for report #{report_id}" if report_id else "All measurements")
+        self.show_all_measurements_button.setEnabled(report_id is not None)
+        slot = self._record_slots[1]
+        if slot.state == "loaded":
+            slot.view.model().set_report_scope(report_id)
 
     def _focused_table_widget(self):
         app_cls = getattr(QtWidgets, "QApplication", None)
@@ -597,6 +669,8 @@ class ModifyDB(QDialog):
                     table.setRowCount(0)
             self._pending_normalize_sources = {}
             self._reset_record_tables()
+            self._set_measurement_scope(None)
+            self.show_measurements_button.setEnabled(False)
             self.undo_data.clear()
             self._dirty_normalize_rows.clear()
             self._refresh_pending_status()
@@ -953,6 +1027,12 @@ class ModifyDB(QDialog):
         model.pendingChanged.connect(self._refresh_pending_status)
         model.set_filter_text(slot.filter_edit.text())
         slot.view.set_record_model(model)
+        if slot.kind == "measurement":
+            model.set_report_scope(self._measurement_report_id)
+        elif slot.kind == "report":
+            slot.view.selectionModel().currentChanged.connect(
+                lambda current, _previous: self.show_measurements_button.setEnabled(current.isValid()),
+            )
         self._configure_record_table(slot.view, specs)
         self._last_clicked_row_by_table.pop(slot.view, None)
         slot.state = "loaded"
@@ -1231,6 +1311,10 @@ class ModifyDB(QDialog):
             self._report_save_error(e)
 
     def _edit_succeeded(self):
+        if isinstance(self, ModifyDB) and not sip.isdeleted(self):
+            self.database_edited.emit(str(self.db_file))
+
+
         _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_COMPLETED)
         QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
         if "_changes_committed" not in vars(self) or not sip.isdeleted(self):

@@ -54,6 +54,11 @@ _ROW_STATE_NOTES = {
     ROW_FAILED: "Metadata could not be read from this report.",
     ROW_UNSUPPORTED: "This parser's metadata is imported as detected and cannot be edited here.",
 }
+_OCR_REGION_LABELS = {
+    "page1_header_band_ocr": "first-page header image",
+    "page1_header_band_words": "embedded text in the first-page header",
+    "page1_header_band": "first-page header text",
+}
 _MAX_ALTERNATIVES = 4
 
 
@@ -164,12 +169,23 @@ def _value_tooltip_lines(row: ReviewRow, field_name: str) -> list[str]:
         ]
     if cell.value:
         lines = [f"Source: {source_label(cell.source, cell.origin) or 'unknown'}{_percent(cell.confidence)}"]
+        if cell.origin == ORIGIN_OCR:
+            lines.append(_ocr_candidate_source(row, field_name, cell.value))
         if is_low_confidence(row, field_name):
             lines.append("Low confidence: check this value.")
         return lines
     if is_missing(row, field_name):
         return ["Missing: double-click or press F2 to enter a value."]
     return []
+
+
+def _ocr_candidate_source(row: ReviewRow, field_name: str, value: str) -> str:
+    candidate = next((item for item in row.ocr_candidates if item.selected
+                      and item.field_name == field_name and item.normalized_value == value), None)
+    if candidate is None:
+        return "OCR review source unavailable."
+    source = _OCR_REGION_LABELS.get(candidate.region_name) or _SOURCE_LABELS.get(candidate.source_type)
+    return f"OCR review source: {source or 'unknown'}{_percent(candidate.confidence)}."
 
 
 def cell_tooltip(row: ReviewRow | None, report_name: str, field_name: str, *, status_note: str = "") -> str:
@@ -185,6 +201,8 @@ def cell_tooltip(row: ReviewRow | None, report_name: str, field_name: str, *, st
         suggestion = row.cells[field_name].ocr_suggestion
         if suggestion is not None:
             lines.append(f"OCR suggests {suggestion}; your value is kept.")
+            lines.append(_ocr_candidate_source(row, field_name, suggestion))
+            lines.append("Compare the suggested value with the report before accepting it.")
         if not _is_pending(row):
             lines.append("Double-click or press F2 to edit.")
     return "\n".join(line for line in lines if line)

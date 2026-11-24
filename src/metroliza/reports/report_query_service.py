@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date
+import sqlite3
 
-from metroliza.reports.db import quote_identifier
+from metroliza.reports.db import quote_identifier, sqlite_readonly_connection_scope
 from metroliza.shared.finite_numeric import sqlite_numeric_filter, sqlite_numeric_membership
 from metroliza.shared.grouping_filter_core import (
     DateFilterSpec,
@@ -20,7 +22,6 @@ from metroliza.shared.grouping_filter_core import (
 _REPORT_OVERVIEW_VIEW = "vw_report_overview"
 _GROUPING_REPORT_VIEW = "vw_grouping_reports"
 _MEASUREMENT_EXPORT_VIEW = "vw_measurement_export"
-_DEFAULT_DATE_FROM = "1970-01-01"
 
 _MEASUREMENT_FILTER_COLUMNS = {
     "absolute_path",
@@ -345,6 +346,36 @@ def _build_in_clause(column_name, values):
     return f'{column_name} IN ({", ".join(cleaned_values)})'
 
 
+_APPROVED_REPORT_IDS = """
+    SELECT pr.id
+    FROM temp.recipe_source_digests approved
+    JOIN source_files sf ON sf.sha256 = approved.sha256
+    JOIN parsed_reports pr ON pr.source_file_id = sf.id
+    WHERE sf.is_active = 1 AND (
+        (approved.report_id IS NOT NULL AND pr.id = approved.report_id)
+        OR (approved.report_id IS NULL AND pr.measurement_count > 0
+            AND EXISTS (SELECT 1 FROM report_measurements m WHERE m.report_id = pr.id))
+    )
+"""
+
+
+def restrict_to_approved_report_sources(query: str) -> str:
+    """Extend the canonical filter with the connection's approved folder membership."""
+    return " ".join((query, "AND report_id IN (", _APPROVED_REPORT_IDS, ")"))
+
+
+@contextmanager
+def sqlite_approved_report_export_scope(db_path, identity, digests, report_ids=()):
+    """Attach one run's content membership to its read-only export connection."""
+    with sqlite_readonly_connection_scope(db_path, existing_identity=identity) as connection:
+        connection.execute("CREATE TEMP TABLE recipe_source_digests (sha256 TEXT PRIMARY KEY, report_id INTEGER) WITHOUT ROWID")
+        pairs = zip(digests, report_ids, strict=True) if report_ids else ((digest, None) for digest in digests)
+        connection.executemany("INSERT INTO temp.recipe_source_digests VALUES (?, ?)", pairs)
+        if sum(1 for _ in connection.execute(_APPROVED_REPORT_IDS)) != len(digests):
+            raise sqlite3.OperationalError("The approved report selection changed in the database.")
+        yield connection
+
+
 def _filter_state_has_values(filter_state, field_names):
     for field_name in field_names:
         value = getattr(filter_state, field_name, ())
@@ -377,14 +408,7 @@ def _filter_state_requires_measurement_scope(filter_state):
         ),
     ):
         return True
-    date_from = str(getattr(filter_state, "date_from", "") or "").strip()
-    date_to = str(getattr(filter_state, "date_to", "") or "").strip()
-    default_date_to = date.today().isoformat()
-    if date_from and date_from != _DEFAULT_DATE_FROM:
-        return True
-    if date_to and date_to != default_date_to:
-        return True
-    return False
+    return bool(getattr(filter_state, "date_from", None) or getattr(filter_state, "date_to", None))
 
 
 def build_grouping_scope_query_from_filter_state(filter_state=None):

@@ -141,6 +141,7 @@ def _cached_group_display_color(color, dark_mode, fallback):
 
 
 _GROUPING_LIST_PREVIEW_LIMIT = 1000
+_PART_SEARCH_FIELDS = ("PART_NAME", "SAMPLE_NUMBER", "FILENAME")
 _SCOPE_FILTER_PLACEHOLDER = "Filter rows (Enter), e.g. Status=NOK AND Part=Body*"
 _SCOPE_FILTER_DISPLAY_COLUMNS = {
     "Reference": "__metroliza_grouping_filter_reference",
@@ -513,11 +514,11 @@ class DataGrouping(QDialog):
             self.reference_search_input = QLineEdit()
             self.reference_search_input.setPlaceholderText("Search reference...")
             self.part_search_input = QLineEdit()
-            self.part_search_input.setPlaceholderText("Search part name...")
+            self.part_search_input.setPlaceholderText("Search part, sample, or file...")
             self.group_search_input = QLineEdit()
             self.group_search_input.setPlaceholderText("Search group...")
             self.part_group_search_input = QLineEdit()
-            self.part_group_search_input.setPlaceholderText("Search selected group part name...")
+            self.part_group_search_input.setPlaceholderText("Search part, sample, or file in group...")
 
             # Create buttons
             self.create_group_button = QPushButton("Create or add")
@@ -663,8 +664,27 @@ class DataGrouping(QDialog):
                 initial=(1240, 700),
                 screen_margin=44,
             )
+            self._configure_grouping_accessibility()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _configure_grouping_accessibility(self):
+        panes = (
+            (self.reference_search_input, self.reference_list, "Report references"),
+            (self.part_search_input, self.part_list, "Parts in selected reference"),
+            (self.group_search_input, self.groups_list, "Report groups"),
+            (self.part_group_search_input, self.part_group_list, "Parts in selected group"),
+        )
+        order = [self.scope_filter_input]
+        for search, listing, name in panes:
+            ui_foundation.configure_accessibility(search, name=f"Search {name.lower()}")
+            ui_foundation.configure_accessibility(listing, name=name)
+            order.extend((search, listing))
+        order.extend((self.create_group_button, self.rename_group_button, self.remove_from_group_button,
+                      self.delete_group_button, self.dont_use_grouping_button, self.cancel_button,
+                      self.use_grouping_button))
+        for first, second in zip(order, order[1:]):
+            self.setTabOrder(first, second)
 
     def connect_signals(self):
         """Handle `connect_signals` for `DataGrouping`.
@@ -1535,45 +1555,71 @@ class DataGrouping(QDialog):
         )
         return selected
 
-    def _add_list_limit_marker(self, list_widget, total_rows):
+    def _add_list_limit_marker(self, list_widget, total_rows, *, hint="Narrow the filter/search."):
         remaining = int(total_rows) - _GROUPING_LIST_PREVIEW_LIMIT
         if remaining <= 0:
             return
-        item = QListWidgetItem(f"... {remaining} more matching row(s). Narrow the filter/search.")
+        item = QListWidgetItem(f"… {remaining:,} more matches. {hint}")
         item.setData(Qt.ItemDataRole.UserRole, None)
+        if hasattr(item, "setFlags"):
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
         list_widget.addItem(item)
 
     def _populate_part_list(self, selected_reference=None, *, row_index=None):
         rows_df = self._grouping_row_index(selected_reference=selected_reference, row_index=row_index)
-
+        self._part_search_scope = rows_df
         self._apply_list_theme_styles()
+        search = self._safe_attr(self, "part_search_input")
+        self._render_part_matches(self.part_list, rows_df, search.text() if search is not None else "")
 
-        self.part_list.clear()
-        total_rows = int(len(rows_df.index)) if isinstance(rows_df, pd.DataFrame) else 0
-        rows_df = rows_df.head(_GROUPING_LIST_PREVIEW_LIMIT)
-        for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(self._part_display_label(row))
-            item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
-            item.setData(_GROUPING_SEARCH_ROLE, self._part_search_label(row))
-            self._apply_item_color(item, self._group_color_for_row(row))
-            self.part_list.addItem(item)
-        self._add_list_limit_marker(self.part_list, total_rows)
 
     def _populate_part_group_list(self, selected_group=None, *, row_index=None):
         rows_df = self._grouping_row_index(selected_group=selected_group, row_index=row_index)
-
+        self._assigned_search_scope = rows_df
         self._apply_list_theme_styles()
+        search = self._safe_attr(self, "part_group_search_input")
+        self._render_part_matches(self.part_group_list, rows_df, search.text() if search is not None else "")
 
-        self.part_group_list.clear()
-        total_rows = int(len(rows_df.index)) if isinstance(rows_df, pd.DataFrame) else 0
-        rows_df = rows_df.head(_GROUPING_LIST_PREVIEW_LIMIT)
-        for row in rows_df.itertuples(index=False):
-            item = QListWidgetItem(self._part_display_label(row))
-            item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
-            item.setData(_GROUPING_SEARCH_ROLE, self._part_search_label(row))
-            self._apply_item_color(item, self._group_color_for_row(row))
-            self.part_group_list.addItem(item)
-        self._add_list_limit_marker(self.part_group_list, total_rows)
+    @staticmethod
+    def _matching_part_preview(rows_df, search_text):
+        needle = str(search_text or "").strip().casefold()
+        if not needle or rows_df.empty:
+            return rows_df.head(_GROUPING_LIST_PREVIEW_LIMIT), len(rows_df)
+        matches = pd.Series(False, index=rows_df.index)
+        for field in _PART_SEARCH_FIELDS:
+            if field in rows_df:
+                values = rows_df[field].astype("string").str.casefold()
+                matches |= values.str.contains(needle, regex=False, na=False)
+        positions = matches.to_numpy().nonzero()[0]
+        return rows_df.iloc[positions[:_GROUPING_LIST_PREVIEW_LIMIT]], len(positions)
+
+    def _render_part_matches(self, list_widget, rows_df, search_text, *, preserve_selection=False):
+        rows, total = self._matching_part_preview(rows_df, search_text)
+        selected = set(self._selected_part_keys_from_list(list_widget)) if preserve_selection else set()
+        blocked = list_widget.blockSignals(True) if hasattr(list_widget, "blockSignals") else None
+        try:
+            list_widget.clear()
+            for row in rows.itertuples(index=False):
+                item = QListWidgetItem(self._part_display_label(row))
+                item.setData(Qt.ItemDataRole.UserRole, row.GROUP_KEY)
+                item.setData(_GROUPING_SEARCH_ROLE, self._part_search_label(row))
+                self._apply_item_color(item, self._group_color_for_row(row))
+                list_widget.addItem(item)
+                if row.GROUP_KEY in selected:
+                    item.setSelected(True)
+            self._add_list_limit_marker(list_widget, total, hint="Search by part, sample, or file to narrow the list.")
+        finally:
+            if blocked is not None:
+                list_widget.blockSignals(blocked)
+        self._describe_part_preview(list_widget, len(rows), total)
+
+    def _describe_part_preview(self, list_widget, shown, total):
+        assigned = list_widget is self._safe_attr(self, "part_group_list")
+        title = "Parts in selected group" if assigned else "Parts"
+        label = self._safe_attr(self, "part_group_label" if assigned else "part_label")
+        if label is not None:
+            label.setText(f"{title} ({shown:,} of {total:,} matches):")
+            list_widget.setAccessibleDescription(f"Showing {shown:,} of {total:,} matching reports.")
 
     @staticmethod
     def _group_display_label(group_name, sample_size, *, display_index=None, default_group=None):
@@ -1799,6 +1845,8 @@ class DataGrouping(QDialog):
         """
 
         try:
+            if self._search_part_rows(list_widget, search_text):
+                return
             canonical_text_getter = self._search_text_getter_for_list(list_widget)
             self._list_selection_utils.preserve_selection_during_filter(
                 list_widget,
@@ -1808,6 +1856,21 @@ class DataGrouping(QDialog):
             )
         except Exception as e:
             self.log_and_exit(e)
+
+    def _search_part_rows(self, list_widget, search_text):
+        if list_widget is self._safe_attr(self, "part_list"):
+            scope = self._safe_attr(self, "_part_search_scope")
+            summary = self.on_part_selection_changed
+        elif list_widget is self._safe_attr(self, "part_group_list"):
+            scope = self._safe_attr(self, "_assigned_search_scope")
+            summary = self.on_part_group_selection_changed
+        else:
+            return False
+        if scope is None:
+            return False
+        self._render_part_matches(list_widget, scope, search_text, preserve_selection=True)
+        summary()
+        return True
 
     def _search_text_getter_for_list(self, list_widget):
         part_lists = (

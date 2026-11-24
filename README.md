@@ -10,8 +10,8 @@ dashboard-first grouped analysis, and CSV/production dashboards.
 
 The accepted [versioning policy](docs/project/versioning_policy.md) uses development packages
 `0.8.0-dev.N`, frozen candidates `0.8.0-rc.N` and the accepted current-scope release `0.8.0`.
-Actual build dates and qualification receipts are separate. This source checkout's identity is
-`0.8.0-dev.5`; version assignment does not claim a new package passed or was delivered. See
+Actual build dates and qualification receipts are separate. The development candidate identity is `0.8.0-dev.8`;
+version assignment does not claim a new package passed or was delivered. See
 [release status](docs/release_checks/release_status.md) for exact evidence and the separate `1.0.0` targets.
 Normal work targets `dev`; `main` remains the production/history default. Historical June RC2
 evidence is preserved through immutable recovery refs; promotion to `main` is separately gated.
@@ -329,7 +329,7 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`0.8.0-dev.5`): Add detailed local bug reports with operation options, technical build facts, safe failure stages and output-publication checks. Confidential input data and free text remain excluded; reproduction and user acceptance remain separate.
+Current release highlight (`0.8.0-dev.8`): Multi-file CSV recipes, clearer report scope, and local analysis history.
 
 Historical build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
@@ -342,7 +342,7 @@ version label does not change those historical receipts. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `0.8.0-dev.5`)
+### Changelog highlights (release `0.8.0-dev.8`)
 
 - Add detailed local bug reports with operation options, technical build facts, safe failure stages and output-publication checks. Confidential input data and free text remain excluded; reproduction and user acceptance remain separate.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.

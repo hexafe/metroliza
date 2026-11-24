@@ -8,7 +8,7 @@ never parser-selection inputs beyond identifying the source container format.
 from __future__ import annotations
 
 from contextlib import closing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from functools import lru_cache, partial
 import hashlib
@@ -25,7 +25,7 @@ from typing import BinaryIO, Callable, Iterable, Iterator
 import zipfile
 
 from metroliza.parsing import report_parser_factory
-from metroliza.parsing.cmm_report_parser import CMMReportParser
+from metroliza.parsing.cmm_report_parser import CMMReportParser, MAX_REVIEWED_OCR_HEADER_BYTES, ReviewedCmmHeaderOcr
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.source_inspection import SourceInspectionContext, source_stat_signature
 from metroliza.reports.db import sqlite_readonly_connection_scope
@@ -51,6 +51,7 @@ _MAX_ARCHIVE_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_ARCHIVE_COMPRESSION_RATIO = 500
 _ARCHIVE_RATIO_CHECK_MIN_BYTES = 64 * 1024 * 1024
 _CURRENT_PARSE_PREFLIGHT_VERSION = "parse-preflight-v1"
+MAX_IMPORT_REVIEWED_OCR_BYTES = 32 * 1024 * 1024
 _TAR_ARCHIVE_EXTENSIONS_BY_COMPRESSION = {
     "tar": frozenset({".tar"}),
     "gz": frozenset({".tar.gz", ".tgz"}),
@@ -564,6 +565,12 @@ class SelectedReportIdentity:
     registry_generation_id: int
 
 
+@dataclass(frozen=True, repr=False)
+class ReviewedReportOcr:
+    identity: SelectedReportIdentity
+    header: ReviewedCmmHeaderOcr
+
+
 @dataclass(frozen=True)
 class ImportPlan:
     """Immutable destination-bound plan for an explicit reviewed report subset."""
@@ -579,6 +586,8 @@ class ImportPlan:
     # Values confirmed in the pre-import metadata review (#1100). Each override
     # is bound to a selected report by occurrence id and content fingerprint.
     metadata_overrides: tuple[ReportMetadataOverride, ...] = ()
+    reviewed_ocr: tuple[ReviewedReportOcr, ...] = field(default=(), repr=False)
+    existing_database_identity: tuple[int, int] | None = field(default=None, repr=False)
 
     @classmethod
     def from_preflight(
@@ -588,6 +597,8 @@ class ImportPlan:
         *,
         selected_occurrence_ids: Iterable[str],
         metadata_overrides: Iterable[ReportMetadataOverride] = (),
+        reviewed_ocr: Iterable[ReviewedReportOcr] = (),
+        existing_database_identity: tuple[int, int] | None = None,
     ) -> ImportPlan:
         """Build a plan from an explicit set of reviewed occurrence identities."""
 
@@ -644,6 +655,8 @@ class ImportPlan:
             preflight_result_id=preflight_result.result_id,
             selected_reports=tuple(selected_reports),
             metadata_overrides=tuple(metadata_overrides),
+            reviewed_ocr=tuple(reviewed_ocr),
+            existing_database_identity=existing_database_identity,
         )
         return validate_import_plan(plan)
 
@@ -730,6 +743,8 @@ def validate_import_plan(plan: ImportPlan) -> ImportPlan:
     _validate_import_plan_context(plan)
     _validate_selected_reports(plan)
     _validate_metadata_overrides(plan)
+    if plan.reviewed_ocr:
+        _validate_reviewed_ocr(plan)
     return plan
 
 
@@ -750,6 +765,8 @@ def _validate_import_plan_context(plan: ImportPlan) -> None:
         raise ValueError("Import plan does not match its reviewed preflight result.")
     if not isinstance(plan.run_background_metadata_enrichment, bool):
         raise ValueError("run_background_metadata_enrichment must be a boolean.")
+    if plan.existing_database_identity is not None:
+        _validate_existing_database_import(plan)
     if not isinstance(plan.selected_reports, tuple):
         raise ValueError("Import plan selected_reports must be an immutable tuple.")
     if not preflight.matches_request(
@@ -758,6 +775,14 @@ def _validate_import_plan_context(plan: ImportPlan) -> None:
         metadata_parsing_mode=plan.metadata_parsing_mode,
     ):
         raise ValueError("Import plan inputs do not match the reviewed preflight result.")
+
+
+def _validate_existing_database_import(plan: ImportPlan) -> None:
+    identity = plan.existing_database_identity
+    if (type(identity) is not tuple or len(identity) != 2
+            or any(type(value) is not int or value < 0 for value in identity)
+            or plan.run_background_metadata_enrichment):
+        raise ValueError("Invalid existing database import approval.")
 
 
 def _validate_selected_reports(plan: ImportPlan) -> None:
@@ -813,6 +838,25 @@ def _validate_metadata_overrides(plan: ImportPlan) -> None:
             )
 
 
+def _validate_reviewed_ocr(plan: ImportPlan) -> None:
+    if plan.metadata_parsing_mode != "complete" or type(plan.reviewed_ocr) is not tuple:
+        raise ValueError("Reviewed OCR needs a complete-mode import plan.")
+    selected = set(plan.selected_reports)
+    seen = set()
+    size = 0
+    for entry in plan.reviewed_ocr:
+        if (not isinstance(entry, ReviewedReportOcr) or entry.identity not in selected
+                or entry.identity in seen or entry.identity.parser_id != CMMReportParser.manifest.plugin_id):
+            raise ValueError("Reviewed OCR does not match a selected CMM report.")
+        if (not isinstance(entry.header, ReviewedCmmHeaderOcr) or type(entry.header.payload) is not bytes
+                or not 0 < len(entry.header.payload) <= MAX_REVIEWED_OCR_HEADER_BYTES):
+            raise ValueError("Invalid reviewed OCR header.")
+        seen.add(entry.identity)
+        size += len(entry.header.payload)
+    if size > MAX_IMPORT_REVIEWED_OCR_BYTES:
+        raise ValueError("Reviewed OCR exceeds the import budget.")
+
+
 def supported_report_file_extensions() -> set[str]:
     """Return suffixes advertised by the active parser registry."""
 
@@ -833,6 +877,7 @@ def load_existing_report_fingerprints(
     database_path: str | Path,
     *,
     metadata_parsing_mode: str,
+    preserve_existing: bool = False,
 ) -> frozenset[str]:
     """Read existing source digests without creating or migrating a database."""
 
@@ -851,7 +896,16 @@ def load_existing_report_fingerprints(
             if not {"source_files", "parsed_reports"}.issubset(tables):
                 return frozenset()
 
-            if metadata_parsing_mode == "light":
+            if preserve_existing:
+                rows = connection.execute(
+                    """
+                    SELECT sf.sha256
+                    FROM source_files sf
+                    JOIN parsed_reports pr ON pr.source_file_id = sf.id
+                    WHERE sf.is_active = 1
+                    """
+                ).fetchall()
+            elif metadata_parsing_mode == "light":
                 rows = connection.execute(
                     """
                     SELECT sf.sha256
@@ -962,6 +1016,7 @@ class ParsePreflightService:
         should_cancel: Callable[[], bool] = lambda: False,
         on_progress: Callable[[int, int, str], None] | None = None,
         workers: int | None = None,
+        preserve_existing: bool = False,
     ) -> ParsePreflightResult:
         """Classify every report below ``source_path`` without writing anything.
 
@@ -975,6 +1030,7 @@ class ParsePreflightService:
         existing_fingerprints = load_existing_report_fingerprints(
             database,
             metadata_parsing_mode=metadata_parsing_mode,
+            **({"preserve_existing": True} if preserve_existing else {}),
         )
 
         temporary_directory: TemporaryDirectory[str] | None = None

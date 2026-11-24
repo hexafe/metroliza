@@ -2,6 +2,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 from metroliza.parsing.pdf_backend import require_pdf_backend
 
 
@@ -15,6 +17,17 @@ def _load_cli_module():
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("command", ["validate", "install", "repair"])
+@pytest.mark.parametrize("sample_paths", [(), ("first.pdf",), ("first.pdf", "second report.pdf")])
+def test_sample_option_collects_explicit_paths_in_order(command, sample_paths):
+    module = _load_cli_module()
+    argv = [command, "profile.yaml"]
+    for sample in sample_paths:
+        argv.extend(("--sample", sample))
+
+    assert module._sample_paths(module.build_parser().parse_args(argv)) == tuple(map(Path, sample_paths))
 
 
 def _profile_yaml(*, version: str = "0.1.0", marker: str = "SUPPLIER TEMPLATE MARKER") -> str:

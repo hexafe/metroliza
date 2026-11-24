@@ -536,7 +536,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
     def test_workflow_next_step_tracks_source_and_database_context(self):
         window = self._main_window()
         try:
-            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports [Ctrl+2]")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Wybierz folder raportów… [Ctrl+Shift+D]")
             self.assertIn("Select a source and database", window.workflow_next_step_label.text())
             self.assertEqual(window.workflow_next_step_label.property("statusVariant"), "warning")
 
@@ -552,7 +552,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             self.assertFalse(window.reports_workspace.parse_button.isEnabled())
 
             window.set_directory("")
-            self.assertEqual(plain_text(window.home_next_action.text()), "Choose reports in Reports [Ctrl+2]")
+            self.assertEqual(plain_text(window.home_next_action.text()), "Wybierz folder raportów… [Ctrl+Shift+D]")
             self.assertTrue(window.export_button.isEnabled())
         finally:
             window.close()
@@ -659,9 +659,14 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     "Realtime Monitor",
                     "Parser Profiles",
                     "Tools",
+                    "Receptury",
                 ],
             )
             self.assertEqual(window.workspace_stack.count(), len(navigation))
+            self.assertIsNone(getattr(window, "recipe_workspace", None))
+            quick_buttons = [button.text() for button in window.recipe_home.findChildren(QPushButton)]
+            self.assertIn("Raporty → Excel Main", quick_buttons)
+            self.assertIn("Raporty → Dashboard HTML", quick_buttons)
             window.navigation_list.setCurrentRow(3)
             self.assertEqual(window.workspace_stack.currentIndex(), 3)
             self.assertEqual(

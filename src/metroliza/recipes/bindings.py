@@ -1,0 +1,205 @@
+"""Resolve private values exactly once before a run is submitted."""
+from __future__ import annotations
+
+import ntpath
+import os
+from dataclasses import replace
+from pathlib import Path
+
+from .contracts import (
+    LocalBinding, ParameterKey, ParameterMode, RecipeDefinition, RecipeError, ResolvedRunPlan, StepKind,
+)
+from .validation import PATH_KEYS, normalize_recipe_dates, validate_binding
+
+
+def path_identity(path: Path) -> str:
+    """Conservatively fold Windows aliases even when planning on Linux."""
+    parts = str(path.resolve(strict=False)).replace("/", "\\").split("\\")
+    return ntpath.normcase("\\".join(part.rstrip(". ") for part in parts))
+
+
+def paths_alias(first: Path, second: Path) -> bool:
+    if path_identity(first) == path_identity(second):
+        return True
+    try:
+        return os.path.samefile(first, second)
+    except OSError:
+        return False
+
+
+def _normalized_output(definition: RecipeDefinition, values: dict) -> Path | None:
+    raw = values.get(ParameterKey.OUTPUT_FILE)
+    if raw is None:
+        return None
+    output = Path(str(raw))
+    kinds = {step.kind for step in definition.steps}
+    if StepKind.EXPORT_MAIN in kinds:
+        output = output.with_suffix(".xlsx")
+    elif StepKind.EXPORT_HTML in kinds:
+        output = output.with_suffix(".html")
+    values[ParameterKey.OUTPUT_FILE] = str(output)
+    return output
+
+
+def _assets_path(definition: RecipeDefinition, output: Path | None, binding: LocalBinding) -> Path | None:
+    if output is None:
+        return None
+    if any(step.kind is StepKind.ANALYZE_TABULAR for step in definition.steps):
+        from .tabular_adapter import analytics_output_family
+        return analytics_output_family(binding, output).assets
+    if any(step.kind is StepKind.EXPORT_HTML for step in definition.steps):
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        return resolve_html_dashboard_assets_dir(output.with_suffix(".html"))
+    return output.with_name(output.stem + "_assets")
+
+
+def resolve_plan(definition: RecipeDefinition, binding: LocalBinding) -> ResolvedRunPlan:
+    validate_binding(definition, binding, complete=True)
+    values = dict(binding.values)
+    values.update(normalize_recipe_dates(values))
+    for key in PATH_KEYS:
+        if key in values:
+            raw = values[key]
+            if not isinstance(raw, str) or not raw.strip():
+                raise RecipeError("invalid_path")
+            values[key] = str(Path(raw).expanduser().resolve(strict=False))
+    if ParameterKey.SOURCE_FILES in values:
+        files = values[ParameterKey.SOURCE_FILES]
+        if not isinstance(files, tuple) or any(not path.strip() for path in files):
+            raise RecipeError("invalid_path")
+        values[ParameterKey.SOURCE_FILES] = tuple(str(Path(path).expanduser().resolve(strict=False)) for path in files)
+    output = _normalized_output(definition, values)
+    for spec in definition.parameters:
+        if spec.mode is ParameterMode.DERIVED:
+            if output is None:
+                raise RecipeError("missing_output")
+            values[spec.key] = str(output.with_suffix(".db"))
+    database_raw = values.get(ParameterKey.DATABASE_FILE, values.get(ParameterKey.EXISTING_DATABASE))
+    database = Path(str(database_raw)) if database_raw else None
+    source_raw = values.get(ParameterKey.INPUT_FOLDER)
+    source = Path(str(source_raw)) if source_raw else None
+    snapshot = replace(binding, values=tuple(values.items()))
+    plan = ResolvedRunPlan(definition, snapshot, source, output, database, _assets_path(definition, output, snapshot))
+    validate_plan_paths(plan)
+    return plan
+
+
+def _target_paths(plan: ResolvedRunPlan) -> tuple[Path, ...]:
+    targets = [p for p in (plan.output_file, plan.assets_dir) if p is not None]
+    if plan.creates_database and plan.database_file is not None:
+        targets.append(plan.database_file)
+    if any(step.kind is StepKind.ANALYZE_TABULAR for step in plan.definition.steps):
+        from .tabular_adapter import analytics_output_family
+        outputs = analytics_output_family(plan.binding, plan.output_file)
+        targets.extend(p for p in (outputs.dashboard, outputs.workbook, outputs.assets) if p is not None)
+    if plan.output_file is not None and any(s.kind is StepKind.EXPORT_HTML for s in plan.definition.steps):
+        html = plan.output_file.with_suffix(".html")
+        targets.extend((html, html.with_name(html.stem + "_assets")))
+    return tuple(dict.fromkeys(targets))
+
+
+def _source_overlaps_target(source: Path, target: Path) -> bool:
+    if paths_alias(target, source):
+        return True
+    # Existing asset bases/generations are retirement targets. Reading a source
+    # anywhere below them would let a successful publication remove that input.
+    return path_identity(source).startswith(path_identity(target).rstrip("\\") + "\\")
+
+
+def _source_paths(plan):
+    sources = [plan.value(ParameterKey.SOURCE_FILE), plan.input_folder]
+    sources.extend(plan.value(ParameterKey.SOURCE_FILES, ()))
+    if not plan.creates_database:
+        sources.extend((plan.value(ParameterKey.EXISTING_DATABASE), plan.database_file))
+    return tuple(Path(str(source)) for source in sources if source)
+
+
+def _asset_bases(plan):
+    kinds = {step.kind for step in plan.definition.steps}
+    if not kinds & {StepKind.EXPORT_HTML, StepKind.ANALYZE_TABULAR}:
+        return ()
+    bases = [plan.assets_dir] if plan.assets_dir is not None else []
+    if StepKind.ANALYZE_TABULAR in kinds:
+        from .tabular_adapter import analytics_output_family
+        bases.append(analytics_output_family(plan.binding, plan.output_file).assets)
+    elif plan.output_file is not None:
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+        bases.append(resolve_html_dashboard_assets_dir(plan.output_file.with_suffix(".html")))
+    return tuple(dict.fromkeys(bases))
+
+
+def _source_in_asset_namespace(source, base):
+    if _source_overlaps_target(source, base):
+        return True
+    # Retirement removes the base entry and its generation-* siblings. Check
+    # the source's canonical ancestry, not every old directory in that family.
+    source_id = path_identity(source)
+    parent_id = path_identity(base.parent).rstrip("\\") + "\\"
+    if not source_id.startswith(parent_id):
+        return False
+    first_component = source_id[len(parent_id):].split("\\", 1)[0]
+    prefix = ntpath.normcase(base.name.rstrip(". ") + ".generation-")
+    return first_component.startswith(prefix)
+
+
+def _validate_asset_sources(plan, active_database=None):
+    protected = list(_source_paths(plan))
+    # A writable DB is an owned durable result, not a generic read source. It
+    # must survive asset retirement without becoming a self-alias in target checks.
+    if plan.creates_database and plan.database_file is not None:
+        protected.append(plan.database_file)
+    if active_database is not None:
+        protected.append(active_database)
+    for base in _asset_bases(plan):
+        if any(_source_in_asset_namespace(path, base) for path in protected):
+            raise RecipeError("source_alias")
+
+
+def _validate_source_target(plan: ResolvedRunPlan, path: Path) -> None:
+    if any(_source_overlaps_target(source, path) for source in _source_paths(plan)):
+        raise RecipeError("source_alias")
+    if plan.input_folder is None:
+        return
+    if paths_alias(path, plan.input_folder):
+        raise RecipeError("source_alias")
+    source_identity = path_identity(plan.input_folder)
+    if path_identity(path).startswith(source_identity.rstrip("\\") + "\\"):
+        raise RecipeError("target_inside_input")
+
+
+def validate_plan_paths(plan: ResolvedRunPlan, active_database: Path | None = None) -> None:
+    _validate_asset_sources(plan, active_database)
+    targets = _target_paths(plan)
+    for index, path in enumerate(targets):
+        if any(paths_alias(path, other) for other in targets[index + 1:]):
+            raise RecipeError("target_alias")
+        if active_database is not None and paths_alias(path, active_database) and (
+                path != plan.database_file or plan.creates_database):
+            raise RecipeError("active_database_alias")
+        _validate_source_target(plan, path)
+
+
+def _copy_is_free(plan: ResolvedRunPlan) -> bool:
+    from metroliza.exporting.output_publication import conflicting_outputs
+    targets = [p for p in _target_paths(plan) if p != plan.database_file]
+    if plan.creates_database and plan.database_file is not None:
+        database = plan.database_file
+        targets.extend((database, Path(str(database) + "-wal"), Path(str(database) + "-shm")))
+    return not conflicting_outputs(targets)
+
+
+def new_output_copy(plan: ResolvedRunPlan) -> ResolvedRunPlan:
+    if plan.output_file is None:
+        raise RecipeError("missing_output")
+    original = plan.output_file
+    for index in range(1, 10001):
+        output = original.with_name(f"{original.stem} ({index}){original.suffix}")
+        values = dict(plan.binding.values)
+        values[ParameterKey.OUTPUT_FILE] = str(output)
+        if plan.creates_database:
+            values[ParameterKey.DATABASE_FILE] = str(output.with_suffix(".db"))
+        binding = replace(plan.binding, values=tuple(values.items()))
+        candidate = replace(resolve_plan(plan.definition, binding), flow_id=plan.flow_id)
+        if _copy_is_free(candidate):
+            return candidate
+    raise RecipeError("copy_limit")

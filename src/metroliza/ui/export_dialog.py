@@ -4,6 +4,7 @@ from time import monotonic
 from dataclasses import replace
 from datetime import date
 
+from metroliza.app.version import VERSION_LABEL
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
@@ -17,8 +18,11 @@ from metroliza.exporting.export_dialog_service import (
     build_export_folder_link_line as build_export_folder_link_line,
     build_export_options_payload as build_export_options_payload,
     build_validated_export_request,
+    normalize_excel_export_path,
+    normalize_html_dashboard_export_path,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
+from metroliza.exporting.report_export_context import export_settings
 from metroliza.ui.result_actions import (
     LastResultRow, add_result_actions, export_result_files, open_local_link,
 )
@@ -27,6 +31,7 @@ from metroliza.exporting.output_publication import (
 )
 from metroliza.exporting.export_preset_utils import (
     build_export_options_for_preset,
+    get_export_preset_description,
     get_export_preset_id_for_label,
     get_export_preset_ids,
     get_export_preset_label,
@@ -179,6 +184,9 @@ def _record_export_request_options(request):
 
 _URL_PATTERN = re.compile(r"((?:https?|file)://[^\s]+)")
 DEFAULT_FILTER_QUERY = build_measurement_export_query()
+_WHOLE_DATABASE = "whole"
+_LAST_IMPORT = "batch"
+_STALE_IMPORT = "stale"
 
 
 def create_export_data_thread(export_request):
@@ -191,6 +199,10 @@ def create_export_data_thread(export_request):
 def _reject_progress_dialog_as_terminal(dialog) -> None:
     """Dismiss a worker progress dialog after the worker has already stopped."""
     dismiss_worker_progress_dialog(dialog, rejected=True)
+
+
+def _batch_scope_label(count):
+    return f"Ostatni import ({count})"
 
 
 def format_message_with_clickable_links(message):
@@ -287,6 +299,8 @@ def show_export_result_message(
     excel_file=None,
     diagnostics="",
     artifacts=None,
+    *,
+    modeless=False,
 ):
     """Display an export outcome with copyable diagnostics and output actions."""
     diagnostics = sanitize_export_diagnostics(diagnostics)
@@ -305,6 +319,14 @@ def show_export_result_message(
         artifacts=artifacts,
     )
     _connect_export_result_links(dialog, parent=parent, excel_file=excel_file)
+    if modeless:
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if copy_diagnostics_button is not None:
+            copy_diagnostics_button.clicked.connect(lambda: QApplication.clipboard().setText(str(diagnostics)))
+        dialog.show()
+        return
     dialog.exec()
     if isinstance(dialog, QDialog) and sip.isdeleted(dialog):
         return
@@ -391,10 +413,15 @@ class ExportDialog(QDialog):
     """
 
     close_deferral_cancelled = pyqtSignal()
+    operation_state_changed = pyqtSignal()
+    analysis_completed = pyqtSignal(object)
     database_change_allowed = None
+    operation_start_allowed = None
     database_context_transition_active = False
 
     def __init__(self, parent=None, db_file=""):
+        from metroliza.ui.export_option_profiles import ExportOptionProfiles
+
         super().__init__(parent)
 
         self.setWindowTitle("Export")
@@ -404,6 +431,11 @@ class ExportDialog(QDialog):
 
         self.db_file = db_file
         self.excel_file = ""
+        self._chosen_output_paths = {}
+        self._shown_output_path = ""
+        self._html_dashboard_preference = False
+        self._html_dashboard_forced = False
+        self._chart_profile_loaded = False
         self.filter_query = DEFAULT_FILTER_QUERY
         self.filter_state = None
         self.df_for_grouping = None
@@ -411,12 +443,19 @@ class ExportDialog(QDialog):
         self.filter_window = None
         self.grouping_window = None
         self.export_thread = None
+        self._submitted_export_request = None
+        self._submitted_source_stamp = None
         self.export_error_message = None
         self._cancel_requested = False
         self._close_requested = False
+        self._export_starting = False
+        self._report_workspace_busy = False
+        self._import_batch = None
         self._grouping_applied = False
         self.config_path = Path.home() / '.metroliza' / '.export_dialog_config.json'
         self.config = self._load_dialog_config()
+        self._export_option_profiles = ExportOptionProfiles()
+        self._saved_presets = {profile.profile_id: profile for profile in self._export_option_profiles.load()}
         self.dashboard_visual_settings = load_dashboard_visual_settings()
 
         self.init_widgets()
@@ -443,9 +482,7 @@ class ExportDialog(QDialog):
     def _save_dialog_config(self):
         """Persist currently selected preset to the user config file."""
         try:
-            selected_label = self.preset_combobox.currentText()
-            selected_preset = get_export_preset_id_for_label(selected_label)
-            self.config['selected_preset'] = selected_preset
+            self.config['selected_preset'] = self._base_preset_id(self._active_preset_id())
             save_export_dialog_config(self.config_path, self.config)
         except Exception as e:
             self.log_and_exit(e)
@@ -463,14 +500,22 @@ class ExportDialog(QDialog):
             if any(not hasattr(self, control_name) for control_name in required_controls):
                 return
 
-            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
-            preset_options = build_export_options_for_preset(selected_preset)
+            selected_preset = self._requested_preset_id()
+            self._applied_preset_id = selected_preset
+            preset_options = self._preset_options(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
-            self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
-            self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            apply_all_chart_values = (not getattr(self, "_chart_profile_loaded", False)
+                                      or self._custom_profile(selected_preset) is not None)
+            if apply_all_chart_values or not self.validate_violin_plot_min_samplesize_input():
+                self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
+            if apply_all_chart_values or not self.validate_plot_scale_input():
+                self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
+            self._apply_saved_output_choices(selected_preset)
             self._sync_html_dashboard_only_state()
+            self._preview_selected_preset()
             self._save_dialog_config()
         except Exception as e:
             self.log_and_exit(e)
@@ -483,6 +528,14 @@ class ExportDialog(QDialog):
             self.select_db_button.clicked.connect(self.select_db_file)
             self.select_db_label.setToolTip("Select the database used as the source for this export.")
             self.select_db_button.setToolTip(self.select_db_label.toolTip())
+
+            self.scope_label = QLabel("Zakres raportów")
+            self.scope_combobox = QComboBox()
+            self.scope_combobox.addItem("Cała baza", _WHOLE_DATABASE)
+            self.scope_combobox.setAccessibleName("Export report scope")
+            self.scope_combobox.currentIndexChanged.connect(self._refresh_scope_controls)
+            self.scope_label.hide()
+            self.scope_combobox.hide()
 
             self.select_filter_label = QLabel(NOT_APPLIED_LABEL)
             self.select_filter_label.setToolTip("Optional export filters for AX, reference, header, or date range.")
@@ -542,10 +595,22 @@ class ExportDialog(QDialog):
             self.preset_label = QLabel("Preset:")
             self.preset_combobox = QComboBox()
             for preset_id in get_export_preset_ids():
-                self.preset_combobox.addItem(get_export_preset_label(preset_id))
+                self.preset_combobox.addItem(get_export_preset_label(preset_id), preset_id)
+            for profile in self._saved_presets.values():
+                self._add_saved_preset_choice(profile)
             selected_preset = self.config.get('selected_preset', 'fast_diagnostics')
             self.preset_combobox.setCurrentText(get_export_preset_label(selected_preset))
-            self.preset_combobox.currentTextChanged.connect(lambda _: self.apply_selected_preset())
+            self.apply_preset_button = QPushButton("Apply preset")
+            self.apply_preset_button.setAutoDefault(False)
+            self.apply_preset_button.clicked.connect(self.apply_selected_preset)
+            self.save_options_button = QPushButton("Save options as…")
+            self.save_options_button.setAutoDefault(False)
+            self.save_options_button.clicked.connect(self._save_option_profile)
+            self.preset_preview_label = status_chip("", "info")
+            self.preset_preview_label.setTextFormat(Qt.TextFormat.PlainText)
+            self.preset_preview_label.setWordWrap(True)
+            self.preset_preview_label.hide()
+            self.preset_combobox.currentTextChanged.connect(self._preview_selected_preset)
             self.preset_label.setToolTip(
                 "Main plots: exports core charts only.\n"
                 "Extended plots: includes additional summary plots and statistics sheets.\n"
@@ -578,10 +643,7 @@ class ExportDialog(QDialog):
             self.generate_html_dashboard_checkbox.setToolTip(html_dashboard_tooltip)
             self.html_dashboard_info_button = self._build_info_button(html_dashboard_tooltip)
             self.generate_html_dashboard_checkbox.stateChanged.connect(
-                lambda _state: self._sync_dashboard_visual_controls()
-            )
-            self.generate_html_dashboard_checkbox.stateChanged.connect(
-                lambda _state: self._refresh_deliverables_summary()
+                self._on_html_dashboard_preference_changed
             )
             self.dashboard_visuals_label = QLabel("Dashboard style:")
             self.dashboard_visuals_summary_label = status_chip("", "neutral")
@@ -628,7 +690,7 @@ class ExportDialog(QDialog):
             self.sort_measurements_combobox.setToolTip("Use this menu to select how data should be sorted - by date or measurement or sample number")
 
             # Add textbox to set min samplesize for violin plot
-            self.violin_plot_min_samplesize_label = QLabel("Violin min n:")
+            self.violin_plot_min_samplesize_label = QLabel("Violin min n (whole ≥ 2):")
             self.violin_plot_min_samplesize = QLineEdit()
             self.violin_plot_min_samplesize.setPlaceholderText('Min: 2, Default: 6')
             self.violin_plot_min_samplesize_label.setToolTip(
@@ -640,7 +702,7 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setMaximumWidth(96)
 
             # Add textbox to set scale for y-axis
-            self.summary_plot_scale_label = QLabel("Y-limit x:")
+            self.summary_plot_scale_label = QLabel("Y-limit x (whole ≥ 0):")
             self.summary_plot_scale = QLineEdit()
             self.summary_plot_scale.setPlaceholderText('Default: 0')
             self.summary_plot_scale_label.setToolTip(
@@ -651,9 +713,15 @@ class ExportDialog(QDialog):
             )
             self.summary_plot_scale.setMaximumWidth(96)
 
-            # Normalize advanced numeric fields only when editing is finished.
-            self.violin_plot_min_samplesize.editingFinished.connect(self.validate_violin_plot_min_samplesize_input)
-            self.summary_plot_scale.editingFinished.connect(self.validate_plot_scale_input)
+            self.violin_input_error = status_chip("", "danger")
+            self.plot_scale_error = status_chip("", "danger")
+            for label in (self.violin_input_error, self.plot_scale_error):
+                label.setWordWrap(True)
+                label.hide()
+            self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
+            self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
+            self.chart_defaults_button = QPushButton("Use chart defaults")
+            self.chart_defaults_button.clicked.connect(self._use_chart_defaults)
 
             # Add a QCheckBox for "Hide OK results?"
             self.hide_ok_results_checkbox = QCheckBox("Hide OK results")
@@ -671,7 +739,10 @@ class ExportDialog(QDialog):
             advanced_options_layout.addWidget(self.violin_plot_min_samplesize, 0, 1)
             advanced_options_layout.addWidget(self.summary_plot_scale_label, 0, 2)
             advanced_options_layout.addWidget(self.summary_plot_scale, 0, 3)
-            advanced_options_layout.addWidget(self.hide_ok_results_checkbox, 1, 0, 1, 4)
+            advanced_options_layout.addWidget(self.violin_input_error, 1, 0, 1, 2)
+            advanced_options_layout.addWidget(self.plot_scale_error, 1, 2, 1, 2)
+            advanced_options_layout.addWidget(self.hide_ok_results_checkbox, 2, 0, 1, 2)
+            advanced_options_layout.addWidget(self.chart_defaults_button, 2, 2, 1, 2)
             self.advanced_options_container.setVisible(False)
 
             self.advanced_toggle_button = QPushButton("Show advanced options")
@@ -719,12 +790,22 @@ class ExportDialog(QDialog):
             content_layout.addWidget(self.preset_output_section_label, row, 0, 1, 4)
             row += 1
             content_layout.addWidget(self.preset_label, row, 0)
-            content_layout.addWidget(self.preset_combobox, row, 1, 1, 3)
+            content_layout.addWidget(self.preset_combobox, row, 1, 1, 2)
+            preset_actions = QHBoxLayout()
+            preset_actions.addWidget(self.apply_preset_button)
+            preset_actions.addWidget(self.save_options_button)
+            content_layout.addLayout(preset_actions, row, 3)
+            row += 1
+            content_layout.addWidget(self.preset_preview_label, row, 0, 1, 4)
 
             row += 1
             content_layout.addWidget(self.select_db_label, row, 0)
             content_layout.addWidget(self.database_text_label, row, 1, 1, 2)
             content_layout.addWidget(self.select_db_button, row, 3)
+
+            row += 1
+            content_layout.addWidget(self.scope_label, row, 0)
+            content_layout.addWidget(self.scope_combobox, row, 1, 1, 3)
 
             row += 1
             content_layout.addWidget(self.select_excel_label, row, 0)
@@ -833,7 +914,14 @@ class ExportDialog(QDialog):
 
             footer_layout = QHBoxLayout()
             footer_layout.setContentsMargins(0, 0, 0, 0)
+            self.save_recipe_button = QPushButton("Zapisz jako recepturę")
+            self.save_recipe_button.clicked.connect(self._save_as_recipe)
+            self.stop_export_button = QPushButton("Stop export")
+            self.stop_export_button.clicked.connect(self._stop_active_export)
+            self.stop_export_button.hide()
+            footer_layout.addWidget(self.save_recipe_button)
             footer_layout.addStretch(1)
+            footer_layout.addWidget(self.stop_export_button)
             footer_layout.addWidget(self.close_button)
             footer_layout.addWidget(self.export_button)
             self.layout.addLayout(footer_layout)
@@ -858,8 +946,11 @@ class ExportDialog(QDialog):
                 ),
             )
 
-            self.setTabOrder(self.preset_combobox, self.select_db_button)
-            self.setTabOrder(self.select_db_button, self.select_excel_button)
+            self.setTabOrder(self.preset_combobox, self.apply_preset_button)
+            self.setTabOrder(self.apply_preset_button, self.save_options_button)
+            self.setTabOrder(self.save_options_button, self.select_db_button)
+            self.setTabOrder(self.select_db_button, self.scope_combobox)
+            self.setTabOrder(self.scope_combobox, self.select_excel_button)
             self.setTabOrder(self.select_excel_button, self.filter_button)
             self.setTabOrder(self.filter_button, self.clear_filter_button)
             self.setTabOrder(self.clear_filter_button, self.group_button)
@@ -873,7 +964,8 @@ class ExportDialog(QDialog):
             self.setTabOrder(self.include_industrial_context_checkbox, self.advanced_toggle_button)
             self.setTabOrder(self.advanced_toggle_button, self.violin_plot_min_samplesize)
             self.setTabOrder(self.violin_plot_min_samplesize, self.summary_plot_scale)
-            self.setTabOrder(self.summary_plot_scale, self.hide_ok_results_checkbox)
+            self.setTabOrder(self.summary_plot_scale, self.chart_defaults_button)
+            self.setTabOrder(self.chart_defaults_button, self.hide_ok_results_checkbox)
             self.setTabOrder(self.hide_ok_results_checkbox, self.close_button)
             self.setTabOrder(self.close_button, self.export_button)
             self._configure_accessibility()
@@ -887,8 +979,9 @@ class ExportDialog(QDialog):
 
     def _configure_accessibility(self):
         configure_accessibility(self.preset_combobox, name="Export preset")
+        configure_accessibility(self.preset_preview_label, name="Proposed export preset changes")
         configure_accessibility(self.select_db_button, name="Select export database")
-        configure_accessibility(self.select_excel_button, name="Select output workbook")
+        configure_accessibility(self.select_excel_button, name=self._output_picker_name())
         configure_accessibility(self.database_text_label, name="Export source database")
         configure_accessibility(self.excel_file_text_label, name="Export output path")
         configure_accessibility(self.filter_button, name="Edit export filters")
@@ -990,20 +1083,138 @@ class ExportDialog(QDialog):
         has_database = bool(str(getattr(self, "db_file", "") or "").strip())
         has_output = bool(str(getattr(self, "excel_file", "") or "").strip())
         if hasattr(self, "export_button"):
-            self.export_button.setEnabled(has_database and has_output)
+            self.export_button.setEnabled(
+                has_database and has_output and not self._settings_locked() and self._scope_mode() != _STALE_IMPORT
+                and not self._preset_pending()
+            )
         self._refresh_path_readiness_state(has_database=has_database, has_output=has_output)
         self._refresh_deliverables_summary(has_database=has_database, has_output=has_output)
 
-    def _selected_preset_options(self):
+    def _requested_preset_id(self):
         combobox = getattr(self, "preset_combobox", None)
-        selected_label = combobox.currentText() if combobox is not None else ""
-        selected_preset = get_export_preset_id_for_label(selected_label)
-        return build_export_options_for_preset(selected_preset)
+        preset_id = getattr(combobox, "currentData", lambda: None)()
+        return preset_id or get_export_preset_id_for_label(combobox.currentText() if combobox is not None else "")
+
+    def _active_preset_id(self):
+        return getattr(self, "_applied_preset_id", self._requested_preset_id())
+
+    def _preset_pending(self):
+        return self._requested_preset_id() != self._active_preset_id()
+
+    def _selected_preset_options(self):
+        return self._preset_options(self._active_preset_id())
+
+    def _custom_profile(self, preset_id):
+        return getattr(self, "_saved_presets", {}).get(preset_id)
+
+    def _base_preset_id(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        return profile.base_preset if profile else preset_id
+
+    def _preset_name(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        return profile.name if profile else get_export_preset_label(preset_id)
+
+    def _preset_options(self, preset_id):
+        options = build_export_options_for_preset(self._base_preset_id(preset_id))
+        profile = self._custom_profile(preset_id)
+        if profile:
+            options.update(profile.chart_options())
+        return options
+
+    def _add_saved_preset_choice(self, profile):
+        label = f"{profile.name} (saved)"
+        index = self.preset_combobox.findData(profile.profile_id)
+        if index == -1:
+            self.preset_combobox.addItem(label, profile.profile_id)
+        else:
+            self.preset_combobox.setItemText(index, label)
+
+    def _apply_saved_output_choices(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        if profile:
+            self._html_dashboard_preference = profile.local_html
+            self.include_google_sheets_checkbox.setChecked(profile.google_sheets)
+            self.include_industrial_context_checkbox.setChecked(profile.industrial_context)
+
+    def _preview_selected_preset(self, _label=None):
+        preview = getattr(self, "preset_preview_label", None)
+        if preview is None:
+            return
+        requested = self._requested_preset_id()
+        pending = self._preset_pending()
+        if pending:
+            options = self._preset_options(requested)
+            description = get_export_preset_description(self._base_preset_id(requested))
+            sort = "Date" if options["sorting_parameter"] == "date" else "Sample number"
+            hide_ok = "On" if options["hide_ok_results"] else "Off"
+            preview.setText(
+                f"Active preset: {self._preset_name(self._active_preset_id())}. {description}\n"
+                f"Chart type: {options['export_type'].title()}. Sort by: {sort}. "
+                f"Hide OK-only columns: {hide_ok}. Violin min n: {options['violin_plot_min_samplesize']}. "
+                f"Y-limit x: {options['summary_plot_scale']}."
+                + self._saved_output_description(requested)
+            )
+            preview.setAccessibleDescription(preview.text())
+        preview.setVisible(pending)
+        self.apply_preset_button.setEnabled(pending)
+        self.save_options_button.setEnabled(not pending)
+        self._update_export_button_enabled_state()
+
+    def _saved_output_description(self, preset_id):
+        profile = self._custom_profile(preset_id)
+        if profile is None:
+            return ""
+        return (
+            f"\nOptional HTML: {'On' if profile.local_html else 'Off'}. "
+            f"Google Sheets: {'On' if profile.google_sheets else 'Off'}. "
+            f"Industrial context: {'On' if profile.industrial_context else 'Off'}."
+        )
+
+    def _save_option_profile(self):
+        from PyQt6.QtWidgets import QInputDialog
+        from metroliza.ui.export_option_profiles import ExportOptionProfile
+
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            self.advanced_toggle_button.setChecked(True)
+            invalid_field.setFocus()
+            return
+        name, accepted = QInputDialog.getText(self, "Save export options", "Profile name")
+        if not accepted:
+            return
+        profile = ExportOptionProfile(
+            name.strip(), self._base_preset_id(self._active_preset_id()),
+            self.export_type_combobox.currentText().lower(),
+            self.sort_measurements_combobox.currentText().lower(),
+            int(self.violin_plot_min_samplesize.text()), int(self.summary_plot_scale.text()),
+            self.hide_ok_results_checkbox.isChecked(), self._html_dashboard_preference,
+            self.include_google_sheets_checkbox.isChecked(), self.include_industrial_context_checkbox.isChecked(),
+        )
+        if self._custom_profile(profile.profile_id) and QMessageBox.question(
+            self, "Replace profile?", "Replace the settings of the existing profile with this name?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._export_option_profiles.save(profile)
+        except (OSError, ValueError):
+            QMessageBox.warning(self, "Save export options", "Could not save this profile. Check its name and settings.")
+            return
+        self._saved_presets[profile.profile_id] = profile
+        self._add_saved_preset_choice(profile)
+        self.preset_preview_label.setText(f"Saved profile: {profile.name}.")
+        self.preset_preview_label.setVisible(True)
 
     def _is_html_dashboard_only(self):
         return self._selected_preset_options().get("export_target") == "html_dashboard"
 
+    def _output_picker_name(self):
+        return "Select standalone HTML dashboard" if self._is_html_dashboard_only() else "Select output workbook"
+
     def _grouping_is_applied(self):
+        if self._scope_mode() != _WHOLE_DATABASE:
+            return False
         if bool(getattr(self, "_grouping_applied", False)):
             return True
         label = getattr(self, "select_group_label", None)
@@ -1014,39 +1225,49 @@ class ExportDialog(QDialog):
             label_text = str(label.value or "")
         return label_text.strip().lower() == "applied"
 
-    def _coerce_output_path_for_mode(self):
-        if not str(getattr(self, "excel_file", "") or "").strip():
-            return
-        path = Path(str(self.excel_file))
-        if self._is_html_dashboard_only():
-            if path.suffix.lower() != ".html":
-                stem = path.stem
-                if not stem.endswith("_dashboard"):
-                    stem = f"{stem}_dashboard"
-                self.excel_file = path.with_name(f"{stem}.html")
-        elif path.suffix.lower() == ".html":
-            stem = path.stem
-            if stem.endswith("_dashboard"):
-                stem = stem[: -len("_dashboard")]
-            self.excel_file = path.with_name(f"{stem or 'export'}.xlsx")
+    def _set_output_path(self, path, *, remember=False):
+        if remember:
+            self._chosen_output_paths[self._is_html_dashboard_only()] = path
+        self.excel_file = self._shown_output_path = path
         if hasattr(self, "excel_file_text_label"):
-            self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self._set_path_field_value(self.excel_file_text_label, path)
+
+    def _coerce_output_path_for_mode(self):
+        if not getattr(self, "excel_file", "") and not getattr(self, "_chosen_output_paths", {}):
+            return
+        html_only = self._is_html_dashboard_only()
+        if self.excel_file and (self.excel_file != self._shown_output_path or not self._chosen_output_paths):
+            external_path = Path(self.excel_file)
+            self._chosen_output_paths[external_path.suffix.lower() == ".html"] = external_path
+        path = self._chosen_output_paths.get(html_only)
+        other = self._chosen_output_paths.get(not html_only)
+        if path is None and other is not None:
+            if html_only:
+                stem = other.stem if other.stem.endswith("_dashboard") else f"{other.stem}_dashboard"
+                path = other.with_name(f"{stem}.html")
+            else:
+                path = other.with_name(f"{other.stem.removesuffix('_dashboard') or 'export'}.xlsx")
+        self._set_output_path(path or "")
+
+    def _on_html_dashboard_preference_changed(self, _state):
+        if not self._html_dashboard_forced:
+            self._html_dashboard_preference = self.generate_html_dashboard_checkbox.isChecked()
+        self._sync_dashboard_visual_controls()
+        self._refresh_deliverables_summary()
 
     def _sync_html_dashboard_only_state(self, _checked=None):
         html_only = self._is_html_dashboard_only()
         grouped = self._grouping_is_applied()
         if hasattr(self, "generate_html_dashboard_checkbox"):
-            if html_only or grouped:
-                self.generate_html_dashboard_checkbox.setChecked(True)
-            elif (
-                hasattr(self.generate_html_dashboard_checkbox, "isEnabled")
-                and not self.generate_html_dashboard_checkbox.isEnabled()
-            ):
-                self.generate_html_dashboard_checkbox.setChecked(False)
+            forced = html_only or grouped
+            # Keep forced changes separate from the optional sidecar choice.
+            self._html_dashboard_forced = True
+            self.generate_html_dashboard_checkbox.setChecked(forced or self._html_dashboard_preference)
+            self._html_dashboard_forced = forced
             if hasattr(self.generate_html_dashboard_checkbox, "setEnabled"):
-                self.generate_html_dashboard_checkbox.setEnabled(not (html_only or grouped))
+                self.generate_html_dashboard_checkbox.setEnabled(not forced)
             tooltip = (
-                "Grouped exports include Group Analysis in the HTML dashboard."
+                "Grouping requires the HTML dashboard to include Group Analysis."
                 if grouped and not html_only
                 else "Create a local HTML sidecar for browser-based chart review next to the workbook."
             )
@@ -1065,6 +1286,7 @@ class ExportDialog(QDialog):
             )
         if hasattr(self, "select_excel_button"):
             self.select_excel_button.setToolTip(self.select_excel_label.toolTip())
+            configure_accessibility(self.select_excel_button, name=self._output_picker_name())
         self._coerce_output_path_for_mode()
         self._sync_dashboard_visual_controls()
         self._update_export_button_enabled_state()
@@ -1072,6 +1294,18 @@ class ExportDialog(QDialog):
     def _refresh_path_readiness_state(self, *, has_database=None, has_output=None):
         label = getattr(self, "path_readiness_label", None)
         if label is None:
+            return
+        if self.export_thread is not None:
+            label.setText("Stopping export…" if self._cancel_requested else
+                          "Generating export. Use Stop export or Ctrl+Shift+S to request cancellation.")
+            return
+        if self._report_workspace_busy:
+            label.setText("Reports is using this database. Wait for the operation to finish before exporting.")
+            set_status_variant(label, "warning")
+            return
+        if self._scope_mode() == _STALE_IMPORT:
+            label.setText("The last import changed. Choose the report scope again before exporting.")
+            set_status_variant(label, "warning")
             return
         if has_database is None:
             has_database = bool(str(getattr(self, "db_file", "") or "").strip())
@@ -1126,8 +1360,7 @@ class ExportDialog(QDialog):
         output_kind = "Dashboard" if html_only else "Output workbook"
         db_summary = self._summary_path_name(db_file, missing_label="not selected")
         output_summary = self._summary_path_name(output_file, missing_label="not selected")
-        preset_combobox = getattr(self, "preset_combobox", None)
-        preset_summary = preset_combobox.currentText() if preset_combobox is not None else "unknown"
+        preset_summary = self._preset_name(self._active_preset_id())
 
         if html_only:
             html_summary = "standalone"
@@ -1170,12 +1403,86 @@ class ExportDialog(QDialog):
             return self._filter_scope_description
         return "custom applied filter (review Filters)"
 
+    def _scope_mode(self):
+        combo = getattr(self, "scope_combobox", None)
+        return combo.currentData() if combo is not None else _WHOLE_DATABASE
+
+    def set_import_batch(self, batch, *, select=False):
+        """Offer the latest committed batch while keeping an existing draft's scope explicit."""
+        from PyQt6.QtCore import QSignalBlocker
+
+        available_batch = batch if batch is not None and batch.matches_database(self.db_file) else None
+        mode = self._scope_mode()
+        if select:
+            mode = _LAST_IMPORT if available_batch is not None else _STALE_IMPORT
+        elif mode == _LAST_IMPORT and self._import_batch != available_batch:
+            mode = _STALE_IMPORT
+        self._import_batch = available_batch
+        combo = self.scope_combobox
+        with QSignalBlocker(combo):
+            combo.clear()
+            combo.addItem("Cała baza", _WHOLE_DATABASE)
+            if available_batch is not None:
+                combo.addItem(_batch_scope_label(len(available_batch.reports)), _LAST_IMPORT)
+            if mode == _STALE_IMPORT:
+                combo.addItem("Wybierz zakres ponownie", _STALE_IMPORT)
+            combo.setCurrentIndex(combo.findData(mode))
+        self.scope_label.setVisible(combo.count() > 1)
+        combo.setVisible(combo.count() > 1)
+        self._refresh_scope_controls()
+
+    def use_whole_database(self):
+        self.scope_combobox.setCurrentIndex(self.scope_combobox.findData(_WHOLE_DATABASE))
+
+    def _refresh_scope_controls(self, *_args):
+        whole_database = self._scope_mode() == _WHOLE_DATABASE
+        for button in (self.filter_button, self.clear_filter_button, self.group_button, self.clear_group_button):
+            button.setEnabled(whole_database)
+        if whole_database:
+            self._refresh_filter_state_summary()
+            self.select_group_label.setText("Applied" if self._grouping_applied else "Not applied")
+        else:
+            self.select_filter_label.setText("Whole database only")
+            self.select_group_label.setText("Whole database only")
+        self.scope_combobox.setToolTip("Filters and grouping are used with the whole database scope.")
+        self._sync_html_dashboard_only_state()
+        self._refresh_background_controls()
+
+    def is_export_active(self):
+        """Own admission, the worker and its terminal delivery as one operation."""
+        return self._export_starting or self.export_thread is not None
+
+    def _settings_locked(self):
+        return self.is_export_active() or self._report_workspace_busy
+
+    def has_open_scope_editors(self):
+        return any(callable(getattr(dialog, "isVisible", None)) and dialog.isVisible()
+                   for dialog in (self.filter_window, self.grouping_window))
+
+    def set_report_workspace_busy(self, busy):
+        if self._report_workspace_busy != busy:
+            self._report_workspace_busy = busy
+            self._refresh_background_controls()
+
+    def _refresh_background_controls(self):
+        self.content_widget.setEnabled(not self._settings_locked())
+        self.save_recipe_button.setEnabled(not self._settings_locked() and self._scope_mode() == _WHOLE_DATABASE)
+        self.stop_export_button.setVisible(self.export_thread is not None)
+        self.stop_export_button.setEnabled(not self._cancel_requested)
+        self._update_export_button_enabled_state()
+
+    def _export_state_changed(self):
+        self._refresh_background_controls()
+        self.operation_state_changed.emit()
+
     def _export_request_summary(self, request):
         primary = request.paths.excel_file or request.paths.html_dashboard_file
         paths = output_paths(primary, html_only=request.options.export_target == "html_dashboard",
                              dashboard=request.options.generate_html_dashboard)
         return output_summary(
-            source=request.paths.db_file, scope=self._scope_for_query(request.filter_query),
+            source=request.paths.db_file,
+            scope=_batch_scope_label(len(request.approved_report_ids)) if request.approved_report_ids
+            else self._scope_for_query(request.filter_query),
             grouping=assignment_summary(request.grouping_df),
             dashboard=str(paths[-1]) if paths[-1].suffix.lower() == ".html" else "",
             workbook=request.paths.excel_file, phase="Launch request",
@@ -1189,9 +1496,16 @@ class ExportDialog(QDialog):
         html_only = self._is_html_dashboard_only()
         html = html_only or self.generate_html_dashboard_checkbox.isChecked() or self._grouping_is_applied()
         paths = output_paths(primary, html_only=html_only, dashboard=html) if primary else ()
-        frame = self.df_for_grouping
+        mode = self._scope_mode()
+        frame = self.df_for_grouping if mode == _WHOLE_DATABASE else None
+        if mode == _LAST_IMPORT:
+            scope = _batch_scope_label(len(self._import_batch.reports))
+        elif mode == _STALE_IMPORT:
+            scope = "choose a new report scope"
+        else:
+            scope = self._scope_for_query(self.filter_query)
         set_output_summary(self.request_summary_label, output_summary(
-            source=self.db_file, scope=self._scope_for_query(self.filter_query),
+            source=self.db_file, scope=scope,
             grouping=f"{len(frame)} assigned rows" if frame is not None else "not applied",
             dashboard=str(paths[-1]) if paths and html else "",
             workbook=str(primary) if primary and not html_only else "",
@@ -1203,6 +1517,7 @@ class ExportDialog(QDialog):
 
     def _export_draft_signature(self):
         return (str(self.db_file), self.filter_query, id(self.df_for_grouping),
+                self._scope_mode(), self._import_batch,
                 self.preset_combobox.currentText(), self.export_type_combobox.currentText(),
                 self.sort_measurements_combobox.currentText(), self.violin_plot_min_samplesize.text(),
                 self.summary_plot_scale.text(), self.hide_ok_results_checkbox.isChecked(),
@@ -1218,38 +1533,41 @@ class ExportDialog(QDialog):
             f"Select a database file before you {action_name}.",
         )
 
-    def validate_violin_plot_min_samplesize_input(self):
+    @staticmethod
+    def _validate_chart_integer(field, error_label, minimum):
+        text = field.text().strip()
         try:
-            user_input = self.violin_plot_min_samplesize.text()
-            try:
-                input_value = int(user_input)
-                if input_value < 2:
-                    input_value = 2
-            except ValueError:
-                input_value = 6
-            if self.violin_plot_min_samplesize.text() != str(input_value):
-                self.violin_plot_min_samplesize.setText(str(input_value))
-        except Exception as e:
-            self.log_and_exit(e)
+            valid = re.fullmatch(r"[+-]?[0-9]+", text) is not None and int(text) >= minimum
+        except ValueError:
+            valid = False
+        message = "" if valid else f"Enter a whole number of {minimum} or more."
+        error_label.setText(message)
+        error_label.setVisible(not valid)
+        field.setAccessibleDescription(message or field.toolTip())
+        return message
+
+    def validate_violin_plot_min_samplesize_input(self):
+        return self._validate_chart_integer(self.violin_plot_min_samplesize, self.violin_input_error, 2)
 
     def validate_plot_scale_input(self):
-        try:
-            user_input = self.summary_plot_scale.text()
-            try:
-                input_value = int(user_input)
-                if input_value <= 0:
-                    input_value = 0
-            except ValueError:
-                input_value = 0
-            if self.summary_plot_scale.text() != str(input_value):
-                self.summary_plot_scale.setText(str(input_value))
-        except Exception as e:
-            self.log_and_exit(e)
+        return self._validate_chart_integer(self.summary_plot_scale, self.plot_scale_error, 0)
+
+    def _first_chart_error_field(self):
+        if self.validate_violin_plot_min_samplesize_input():
+            return self.violin_plot_min_samplesize
+        if self.validate_plot_scale_input():
+            return self.summary_plot_scale
+        return None
+
+    def _use_chart_defaults(self):
+        preset = self._selected_preset_options()
+        self.violin_plot_min_samplesize.setText(str(preset["violin_plot_min_samplesize"]))
+        self.summary_plot_scale.setText(str(preset["summary_plot_scale"]))
 
     def select_db_file(self):
         try:
             """Open a file dialog to select a database file"""
-            if self.database_change_allowed is not None and not self.database_change_allowed():
+            if self._settings_locked() or (self.database_change_allowed is not None and not self.database_change_allowed()):
                 return
             filename, _ = QFileDialog.getOpenFileName(self, "Select a database file", "",
                                                     SQLITE_FILE_FILTER)
@@ -1288,7 +1606,7 @@ class ExportDialog(QDialog):
         return accepted
 
     def _update_database_context(self, db_file):
-        if self.database_context_transition_active:
+        if self.database_context_transition_active or self.export_thread is not None or self._report_workspace_busy:
             return False
         if self.database_change_allowed is not None and not self.database_change_allowed():
             return False
@@ -1306,6 +1624,8 @@ class ExportDialog(QDialog):
             self.df_for_grouping = None
             self._refresh_filter_state_summary()
             self.set_grouping_applied(False)
+            self.use_whole_database()
+            self.set_import_batch(None)
             self._update_export_button_enabled_state()
 
             return True
@@ -1315,6 +1635,8 @@ class ExportDialog(QDialog):
     def open_filter_window(self):
         """Open or focus the filter dialog while keeping a single dialog instance."""
         try:
+            if self._settings_locked() or self._scope_mode() != _WHOLE_DATABASE:
+                return
             if not str(self.db_file or "").strip():
                 self._show_database_required_warning("edit filters")
                 return
@@ -1335,6 +1657,8 @@ class ExportDialog(QDialog):
     def open_grouping_window(self):
         """Open/focus the grouping dialog and refresh data for reused instances."""
         try:
+            if self._settings_locked() or self._scope_mode() != _WHOLE_DATABASE:
+                return
             if not str(self.db_file or "").strip():
                 self._show_database_required_warning("edit grouping")
                 return
@@ -1459,64 +1783,113 @@ class ExportDialog(QDialog):
             filename, _ = QFileDialog.getSaveFileName(self, dialog_title, str(file_path), file_filter)
 
             if filename:
-                file_path = Path(filename)
+                normalize_path = normalize_html_dashboard_export_path if html_only else normalize_excel_export_path
+                file_path = Path(normalize_path(filename))
                 logger.info("Selected export output file: %s", file_path)
-                self.excel_file = file_path
-                self._coerce_output_path_for_mode()
-                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+                self._set_output_path(file_path, remember=True)
                 self._update_export_button_enabled_state()
         except Exception as e:
             self.log_and_exit(e)
 
+    def _build_export_request(self):
+        """Freeze the selected report scope and all output settings."""
+        if self._preset_pending():
+            raise ValueError("Apply the selected preset or return to the active preset before exporting.")
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            raise ValueError(invalid_field.accessibleDescription())
+        mode = self._scope_mode()
+        batch = self._import_batch if mode == _LAST_IMPORT else None
+        if mode == _LAST_IMPORT and (batch is None or not batch.matches_database(self.db_file)):
+            self.set_import_batch(None)
+            mode = _STALE_IMPORT
+        if mode == _STALE_IMPORT:
+            raise ValueError("The last import selection expired. Choose the report scope again.")
+        violin_input = self.violin_plot_min_samplesize.text()
+        summary_scale_input = self.summary_plot_scale.text()
+        selected_preset = self._base_preset_id(self._active_preset_id())
+        request = build_validated_export_request(
+            db_file=str(batch.database) if batch is not None else self.db_file,
+            excel_file=self.excel_file,
+            selected_preset=selected_preset,
+            export_type=self.export_type_combobox.currentText(),
+            export_target=self._selected_export_target(),
+            sorting_parameter=self.sort_measurements_combobox.currentText(),
+            violin_input=violin_input,
+            summary_scale_input=summary_scale_input,
+            hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
+            generate_html_dashboard=(
+                self.generate_html_dashboard_checkbox.isChecked()
+                or self._is_html_dashboard_only()
+                or self._grouping_is_applied()
+            ),
+            include_industrial_context=(
+                self.include_industrial_context_checkbox.isChecked()
+                if hasattr(self, "include_industrial_context_checkbox")
+                else False
+            ),
+            filter_query=self.filter_query if batch is None else None,
+            grouping_df=self.df_for_grouping if batch is None else None,
+            group_analysis_level=self._selected_group_analysis_level(),
+            group_analysis_scope=self._selected_group_analysis_scope(),
+            dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
+        )
+        request = replace(request, application_version=VERSION_LABEL)
+        if batch is None:
+            description = self._scope_for_query(request.filter_query)
+            if description not in {"all rows", "custom applied filter (review Filters)"}:
+                request = replace(request, filter_description=description.strip()[:2000])
+            return request
+        return replace(
+            request,
+            existing_database_identity=batch.database_identity,
+            approved_report_ids=tuple(report_id for report_id, _digest in batch.reports),
+            approved_source_digests=tuple(digest for _report_id, digest in batch.reports),
+        )
+
+    def _build_recipe_export_request(self):
+        if self._scope_mode() != _WHOLE_DATABASE:
+            raise ValueError("Choose Whole database before saving a recipe.")
+        return self._build_export_request()
+
+    def _save_as_recipe(self):
+        from metroliza.ui.recipe_workspace import open_capture_editor
+        try:
+            request = self._build_recipe_export_request()
+            open_capture_editor(self, "reports", request, filter_state=self.filter_state)
+        except ValueError:
+            QMessageBox.warning(self, "Recipe", "Review the configuration before saving it as a recipe.")
+
     def show_loading_screen(self):
         """Validate inputs, persist options, and hand work to the export thread."""
+        if self._settings_locked() or not self._allow_export_start():
+            return
+        if self.has_open_scope_editors():
+            self.path_readiness_label.setText("Close the Filters or Grouping editor to start exporting.")
+            return
+        invalid_field = self._first_chart_error_field()
+        if invalid_field is not None:
+            self.advanced_toggle_button.setChecked(True)
+            invalid_field.setFocus()
+            return
         action_started_at = monotonic()
+        self._export_starting = True
         try:
+            self._export_state_changed()
             self._refresh_metadata_enrichment_notice()
-            violin_input = self.violin_plot_min_samplesize.text() or "6"
-            summary_scale_input = self.summary_plot_scale.text() or "0"
-
-            selected_preset = get_export_preset_id_for_label(self.preset_combobox.currentText())
             try:
-                export_request = build_validated_export_request(
-                    db_file=self.db_file,
-                    excel_file=self.excel_file,
-                    selected_preset=selected_preset,
-                    export_type=self.export_type_combobox.currentText(),
-                    export_target=self._selected_export_target(),
-                    sorting_parameter=self.sort_measurements_combobox.currentText(),
-                    violin_input=violin_input,
-                    summary_scale_input=summary_scale_input,
-                    hide_ok_results=self.hide_ok_results_checkbox.isChecked(),
-                    generate_html_dashboard=(
-                        self.generate_html_dashboard_checkbox.isChecked()
-                        or self._is_html_dashboard_only()
-                        or self._grouping_is_applied()
-                    ),
-                    include_industrial_context=(
-                        self.include_industrial_context_checkbox.isChecked()
-                        if hasattr(self, "include_industrial_context_checkbox")
-                        else False
-                    ),
-                    filter_query=self.filter_query,
-                    grouping_df=self.df_for_grouping,
-                    group_analysis_level=self._selected_group_analysis_level(),
-                    group_analysis_scope=self._selected_group_analysis_scope(),
-                    dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
-                )
+                export_request = self._build_export_request()
             except ValueError as validation_error:
                 QMessageBox.warning(self, "Export validation failed", str(validation_error))
                 return
 
             # Normalize user-visible values after validation/coercion.
             output_path = export_request.paths.excel_file or export_request.paths.html_dashboard_file
-            self.excel_file = Path(output_path)
-            if hasattr(self, "excel_file_text_label"):
-                self._set_path_field_value(self.excel_file_text_label, self.excel_file)
+            self._set_output_path(Path(output_path))
             draft_signature = self._export_draft_signature()
             original_output = str(self.excel_file)
             export_request = self._confirm_output_publication(export_request)
-            if export_request is None:
+            if export_request is None or self._close_requested or not self._allow_export_start():
                 return
             returned_output = export_request.paths.excel_file or export_request.paths.html_dashboard_file
             expected_output = str(returned_output) if export_request.copy_output_from else original_output
@@ -1529,47 +1902,60 @@ class ExportDialog(QDialog):
             self.violin_plot_min_samplesize.setText(str(export_request.options.violin_plot_min_samplesize))
             self.summary_plot_scale.setText(str(export_request.options.summary_plot_scale))
 
-            self.config['selected_preset'] = selected_preset
+            self.config['selected_preset'] = export_request.options.preset
             save_export_dialog_config(self.config_path, self.config)
 
-            self.last_result_row.clear()
-            self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
-                self,
-                window_title="Exporting data...",
-                initial_status_text=build_three_line_status("Exporting data...", "Preparing export thread", "ETA --"),
-                on_cancel=self.stop_exporting,
-                action_started_at=action_started_at,
-            )
-
-            # Disable the export button before the worker starts.
-            self.export_button.setDisabled(True)
-            self.path_readiness_label.setText("Generating export. Ctrl+Shift+S requests stop.")
-
-            # Start the exporting thread with validated options
-            self._cancel_requested = False
-            self._export_terminal_handled = False
-            self.export_thread = create_export_data_thread(export_request)
-            self.export_thread.update_label.connect(self.loading_label.setText)
-            self.export_thread.update_progress.connect(self.loading_bar.setValue)
-            self.export_thread.error_occurred.connect(self.on_export_error)
-            completion_signal = getattr(self.export_thread, 'completed', self.export_thread.finished)
-            completion_signal.connect(self.on_export_finished)
-            self.export_thread.finished.connect(self.on_export_thread_stopped)
-            self.export_thread.canceled.connect(self.on_export_canceled)
-            # Keep only closed option states. Never retain the target path, query,
-            # preset label, chart text, or values from the export request.
-            _record_export_option_states(
-                getattr(export_request, "options", None),
-                filters_applied=bool(
-                    export_request.filter_query and export_request.filter_query != DEFAULT_FILTER_QUERY
-                ),
-                grouping_applied=export_request.grouping_df is not None,
-            )
-            self.export_thread._bugreport_option_token = _record_export_request_options(export_request)
-            self.export_thread.start()
-            self.loading_dialog.show()
+            self._start_export_worker(export_request, action_started_at)
         except Exception as e:
+            if not self._thread_is_running(self.export_thread):
+                self._dismiss_loading_progress(rejected=True)
+                thread, self.export_thread = self.export_thread, None
+                if callable(getattr(thread, "deleteLater", None)):
+                    thread.deleteLater()
             self.log_and_exit(e)
+        finally:
+            self._export_starting = False
+            self._export_state_changed()
+            self._complete_deferred_close_if_idle()
+
+    def _allow_export_start(self):
+        return self.operation_start_allowed is None or self.operation_start_allowed(self.db_file)
+
+    def _start_export_worker(self, request, action_started_at):
+        from metroliza.app.analysis_history import capture_source_stamp
+
+        self.last_result_row.clear()
+        self.loading_dialog, self.loading_label, self.loading_bar, self.loading_gif = create_worker_progress_dialog(
+            self,
+            window_title="Exporting data...",
+            initial_status_text=build_three_line_status("Exporting data...", "Preparing export thread", "ETA --"),
+            on_cancel=self.stop_exporting,
+            action_started_at=action_started_at,
+        )
+        set_modality = getattr(self.loading_dialog, "setWindowModality", None)
+        if callable(set_modality):
+            set_modality(Qt.WindowModality.NonModal)
+            self.loading_dialog.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self._cancel_requested = False
+        self._export_terminal_handled = False
+        self._submitted_source_stamp = capture_source_stamp(request.paths.db_file)
+        self.export_thread = create_export_data_thread(request)
+        self._submitted_export_request = request
+        self.export_thread.update_label.connect(self.loading_label.setText)
+        self.export_thread.update_progress.connect(self.loading_bar.setValue)
+        self.export_thread.error_occurred.connect(self.on_export_error)
+        completion_signal = getattr(self.export_thread, 'completed', self.export_thread.finished)
+        completion_signal.connect(self.on_export_finished)
+        self.export_thread.finished.connect(self.on_export_thread_stopped)
+        self.export_thread.canceled.connect(self.on_export_canceled)
+        _record_export_option_states(
+            request.options,
+            filters_applied=bool(request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
+            grouping_applied=request.grouping_df is not None,
+        )
+        self.export_thread._bugreport_option_token = _record_export_request_options(request)
+        self.export_thread.start()
+        self.loading_dialog.show()
 
     def _confirm_output_publication(self, request):
         """Decide afresh for every operation; never store replacement consent on the dialog."""
@@ -1600,8 +1986,7 @@ class ExportDialog(QDialog):
             excel_file=None if html_only else str(copy_path),
             html_dashboard_file=str(copy_paths[-1]) if html_only or request.options.generate_html_dashboard else None,
         )
-        self.excel_file = copy_path
-        self._set_path_field_value(self.excel_file_text_label, copy_path)
+        self._set_output_path(copy_path, remember=True)
         return replace(request, paths=paths_contract, replace_outputs=(), copy_output_from=str(primary))
 
     def _verify_publication_scope(self, request):
@@ -1609,7 +1994,8 @@ class ExportDialog(QDialog):
             unchanged = False
         else:
             try:
-                unchanged = verify_grouping_after_consent(self, self.df_for_grouping, request.grouping_df)
+                grouping = None if request.approved_report_ids else self.df_for_grouping
+                unchanged = verify_grouping_after_consent(self, grouping, request.grouping_df)
             except ValueError as exc:
                 self.log_and_exit(exc)
                 QMessageBox.warning(self, "Export scope verification failed", str(exc))
@@ -1639,7 +2025,11 @@ class ExportDialog(QDialog):
         cancel = prompt.addButton(QMessageBox.StandardButton.Cancel)
         prompt.setDefaultButton(copy)
         prompt.setEscapeButton(cancel)
-        prompt.exec()
+        self._publication_admission_dialog = prompt
+        try:
+            prompt.exec()
+        finally:
+            self._publication_admission_dialog = None
         return "copy" if prompt.clickedButton() is copy else "replace" if prompt.clickedButton() is overwrite else "cancel"
 
 
@@ -1668,16 +2058,10 @@ class ExportDialog(QDialog):
                     return
                 self._cancel_requested = True
                 self._set_loading_cancel_enabled(False)
+                self._refresh_background_controls()
                 self.export_thread.stop_exporting()
                 if self.loading_label is not None:
                     self.loading_label.setText(build_three_line_status("Cancel requested...", "Waiting for export thread to confirm cancellation", "ETA --"))
-                return
-
-            self._dismiss_loading_progress(rejected=True)
-            QMessageBox.information(self, "Export canceled", "Cancel confirmed. Data exporting has been canceled")
-            self.export_button.setEnabled(True)
-            self._cancel_requested = False
-            self._set_loading_cancel_enabled(True)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1713,12 +2097,11 @@ class ExportDialog(QDialog):
                 level, title, message = build_export_completion_message(**outcome_kwargs)
                 diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
                 paths = self._retain_export_result(outcome_kwargs)
-                show_kwargs = {"excel_file": result_path, "artifacts": paths}
+                show_kwargs = {"excel_file": result_path, "artifacts": paths, "modeless": True}
                 if diagnostics:
                     show_kwargs["diagnostics"] = diagnostics
                 show_export_result_message(self, level, title, message, **show_kwargs)
             if not sip.isdeleted(self):
-                self.export_button.setEnabled(True)
                 self._cancel_requested = False
                 self._set_loading_cancel_enabled(True)
         except Exception as e:
@@ -1733,15 +2116,42 @@ class ExportDialog(QDialog):
         )
         paths = export_result_files(result)
         self.last_result_row.set_result(outcome, paths)
+        request = getattr(self, "_submitted_export_request", None)
+        source_stamp = getattr(self, "_submitted_source_stamp", None)
+        self._submitted_export_request = None
+        self._submitted_source_stamp = None
+        if request is not None and paths and result.status.value in {"complete", "complete_with_omissions"}:
+            self._record_completed_analysis(
+                request, paths, outcome_kwargs.get("completion_metadata") or {}, source_stamp=source_stamp,
+            )
         return paths
+
+    def _record_completed_analysis(self, request, paths, metadata, *, source_stamp):
+        published = {Path(metadata[key]) for key in ("published_output_path", "html_dashboard_path")
+                     if metadata.get(key)}
+        paths = tuple(path for path in paths if path in published)
+        if not paths:
+            return
+        artifacts = [str(path) for path in paths]
+        assets = metadata.get("html_dashboard_assets_path")
+        if assets:
+            asset_dir = Path(assets)
+            if asset_dir.is_dir() and any(path.suffix.lower() == ".html" and path.parent == asset_dir.parent
+                                          for path in paths):
+                artifacts.append(str(asset_dir))
+        self.analysis_completed.emit({
+            "kind": "reports",
+            "source": request.paths.db_file,
+            "source_stamp": source_stamp,
+            "artifacts": artifacts,
+            "settings": export_settings(request),
+        })
 
     def on_export_finished(self):
         """Finalize export flow with success/error messaging and UI reset."""
         try:
             self._export_terminal_handled = True
             self._dismiss_loading_progress()
-            if getattr(self, "_close_requested", False):
-                return
             export_target = getattr(self.export_thread, 'export_target', 'excel_xlsx')
             completion_metadata = getattr(self.export_thread, 'completion_metadata', {})
             run_result = getattr(self.export_thread, "export_run_result", None)
@@ -1763,8 +2173,10 @@ class ExportDialog(QDialog):
             diagnostics = build_export_completion_diagnostics(**outcome_kwargs)
 
             paths = self._retain_export_result(outcome_kwargs)
+            if getattr(self, "_close_requested", False):
+                return
             try:
-                show_kwargs = {"excel_file": result_path, "artifacts": paths}
+                show_kwargs = {"excel_file": result_path, "artifacts": paths, "modeless": True}
                 if diagnostics:
                     show_kwargs["diagnostics"] = diagnostics
                 show_export_result_message(self, level, title, message, **show_kwargs)
@@ -1781,14 +2193,19 @@ class ExportDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
         finally:
-            # Re-enable actions after completion flow and clear transient error state.
             if not sip.isdeleted(self):
-                self.export_button.setEnabled(True)
                 self.export_error_message = None
 
     def on_export_thread_stopped(self):
         """Restore export UI when the worker stops without a success/cancel signal."""
+        from PyQt6.QtCore import QDeadlineTimer, QThread, QTimer
+
         stopped_thread = self.export_thread
+        if stopped_thread is None:
+            return
+        if isinstance(stopped_thread, QThread) and not stopped_thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)):
+            QTimer.singleShot(10, self.on_export_thread_stopped)
+            return
         try:
             if getattr(self, '_export_terminal_handled', False):
                 return
@@ -1800,7 +2217,6 @@ class ExportDialog(QDialog):
                 return
             if getattr(self, 'loading_dialog', None) is not None:
                 self._dismiss_loading_progress()
-            self.export_button.setEnabled(True)
             self._cancel_requested = False
             self._set_loading_cancel_enabled(True)
         except Exception as e:
@@ -1811,7 +2227,9 @@ class ExportDialog(QDialog):
                 if callable(delete_later):
                     delete_later()
                 self.export_thread = None
-            self._refresh_path_readiness_state()
+                self._submitted_export_request = None
+                self._submitted_source_stamp = None
+            self._export_state_changed()
             self._complete_deferred_close_if_idle()
 
     @staticmethod
@@ -1824,7 +2242,7 @@ class ExportDialog(QDialog):
             return False
 
     def _defer_close_for_active_export(self):
-        if not self._thread_is_running(self.export_thread):
+        if not self.is_export_active():
             return False
         self._close_requested = True
         self.stop_exporting()
@@ -1838,7 +2256,7 @@ class ExportDialog(QDialog):
     def _complete_deferred_close_if_idle(self):
         if not getattr(self, "_close_requested", False):
             return
-        if self._thread_is_running(self.export_thread):
+        if self.is_export_active():
             return
         self._close_requested = False
         if not self._discard_child_drafts():

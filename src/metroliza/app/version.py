@@ -1,14 +1,34 @@
-RELEASE_VERSION = "0.8.0-dev.5"
+RELEASE_VERSION = "0.8.0-dev.8"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Add detailed local bug reports with operation options, technical build facts, safe failure stages and output-publication checks. Confidential input data and free text remain excluded; reproduction and user acceptance remain separate.'
+CURRENT_RELEASE_HIGHLIGHT = 'Multi-file CSV recipes, clearer report scope, and local analysis history.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Create a local-only report from a bounded history of selected, predefined actions and boolean options across application modules; confidential input data and free text are excluded<br>
-    - Coverage is selective; a report may not reconstruct the incident and does not establish user acceptance<br>
+    - Run a CSV recipe on several files, see both output names up front, and keep compatible settings after refreshing the input<br>
+    - Keep report corrections after reviewing again and choose between reports containing NOK and only NOK measurements<br>
+    - Reopen a saved workspace, restore a database backup to a new file, and find recent results in analysis history<br>
+    - Share Excel and HTML results together with their offline charts and resources<br>
+    - Pin and reorder recipes on Home and open them directly when the app starts on Home<br>
+    - Open recipe forms immediately and review missing report metadata in a larger table<br>
+    - Return to a running recipe or open its finished Excel workbook, dashboard and folder from Home<br>
+    - Open a recipe with Enter and see which input needs attention before you can start<br>
+    - Append reports to an existing database and export the chosen folder to Excel<br>
+    - Pass one or more sample reports to the parser validation, install and repair commands<br>
+    - Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>
+    - Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>
+    - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>
+    - Visible Ctrl/Shift commands follow the active window, while editors and modal children keep their own keys<br>
+    - After import, keep per-report saved, skipped and failed results in view, then review again before importing more<br>
+    - Filter dialogs show hidden selection counts; groups have explicit column and member controls<br>
+    - Choose HTML dashboards and optional workbooks with visible paths and the scope that will be generated<br>
+    - Parser Profiles separates installed profiles from adding a format, with preparation, check, validation and installation stages<br>
+    - Industrial Data shows source setup, access checks, cache readiness and the next available action<br>
+    - Realtime separates polling, last-snapshot freshness and dashboard state, with visible Stop and event review<br>
+    - Offline dashboards use a compact overview, retain sampling warnings, and show local Enter/E/Esc/Q hints<br>
+    - Help opens manuals pinned to this build, including the shared keyboard reference<br>
 
     <br><b>Archive:</b><br>
     <br><b>Version 2026.09rc1 (build 261115), superseded candidate build:</b><br>

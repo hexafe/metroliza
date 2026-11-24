@@ -4,7 +4,22 @@ from __future__ import annotations
 
 import os
 import tempfile
+from functools import wraps
 from pathlib import Path
+from threading import RLock
+
+
+_render_lock = RLock()
+
+
+def serialize_matplotlib_render(function):
+    """Protect process-wide pyplot figures and rcParams during a render."""
+    @wraps(function)
+    def render(*args, **kwargs):
+        with _render_lock:
+            return function(*args, **kwargs)
+
+    return render
 
 
 def _default_cache_dir(cache_dir_name: str) -> Path:
@@ -31,6 +46,7 @@ def _fallback_cache_dir(cache_dir_name: str) -> Path:
     return Path(tempfile.gettempdir()) / "metroliza" / cache_dir_name
 
 
+@serialize_matplotlib_render
 def configure_headless_matplotlib(*, cache_dir_name: str = "metroliza-mpl") -> None:
     """Configure a deterministic, writable headless matplotlib runtime.
 

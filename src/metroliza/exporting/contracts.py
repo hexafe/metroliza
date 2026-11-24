@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from metroliza.charts.dashboard_visual_options import normalize_dashboard_visual_settings
-from metroliza.exporting.output_publication import OutputConsent
+from metroliza.exporting.output_publication import OutputConsent, output_paths, validate_sources_outside_outputs
 from metroliza.tabular.contracts import (
     GroupingAssignments,
     validate_grouping_df,
@@ -56,6 +56,11 @@ class ExportRequest:
     grouping_df: GroupingAssignments | None = None
     replace_outputs: tuple[OutputConsent, ...] = ()
     copy_output_from: str | None = None
+    existing_database_identity: tuple[int, int] | None = field(default=None, repr=False)
+    approved_source_digests: tuple[str, ...] = field(default=(), repr=False)
+    approved_report_ids: tuple[int, ...] = field(default=(), repr=False)
+    filter_description: str = field(default="", repr=False)
+    application_version: str = ""
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -102,12 +107,13 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
 
     if request.filter_query is not None and not isinstance(request.filter_query, str):
         raise ValueError("Filter query must be a string when provided.")
+    if not isinstance(request.filter_description, str):
+        raise ValueError("Filter description must be text.")
+    if not isinstance(request.application_version, str):
+        raise ValueError("Application version must be text.")
+    _validate_approved_source_scope(request)
 
-    if validated_options.export_target == "html_dashboard":
-        if not validated_paths.html_dashboard_file:
-            raise ValueError("HTML dashboard output path is required for HTML-only export.")
-    elif not validated_paths.excel_file:
-        raise ValueError("Excel file path is required for workbook export.")
+    _validate_output_namespace(validated_paths, validated_options)
 
     return ExportRequest(
         paths=validated_paths,
@@ -116,7 +122,46 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         grouping_df=validated_grouping_df,
         replace_outputs=request.replace_outputs,
         copy_output_from=request.copy_output_from,
+        existing_database_identity=request.existing_database_identity,
+        approved_source_digests=request.approved_source_digests,
+        approved_report_ids=request.approved_report_ids,
+        filter_description=request.filter_description.strip()[:2000],
+        application_version=request.application_version.strip()[:64],
     )
+
+
+def _validate_output_namespace(paths, options):
+    if options.export_target == "html_dashboard":
+        if not paths.html_dashboard_file:
+            raise ValueError("HTML dashboard output path is required for HTML-only export.")
+        outputs = (Path(paths.html_dashboard_file),)
+    else:
+        if not paths.excel_file:
+            raise ValueError("Excel file path is required for workbook export.")
+        outputs = output_paths(paths.excel_file, dashboard=options.generate_html_dashboard)
+        if options.generate_html_dashboard and paths.html_dashboard_file:
+            outputs = (outputs[0], Path(paths.html_dashboard_file))
+    validate_sources_outside_outputs(outputs, paths.db_file)
+
+
+def _validate_approved_source_scope(request: ExportRequest) -> None:
+    identity, digests = request.existing_database_identity, request.approved_source_digests
+    if type(digests) is not tuple or bool(digests) != (identity is not None):
+        raise ValueError("An approved source scope requires its existing database identity.")
+    report_ids = request.approved_report_ids
+    if type(report_ids) is not tuple or (report_ids and (
+        len(report_ids) != len(digests) or any(type(value) is not int or value < 1 for value in report_ids)
+        or len(set(report_ids)) != len(report_ids)
+        or request.filter_query is not None or request.grouping_df is not None
+    )):
+        raise ValueError("A last-import export requires complete report membership and its own scope.")
+    if identity is None:
+        return
+    if type(identity) is not tuple or len(identity) != 2 or any(type(n) is not int or n < 0 for n in identity):
+        raise ValueError("Invalid existing database identity.")
+    if any(type(digest) is not str or len(digest) != 64 or
+           any(char not in "0123456789abcdef" for char in digest) for digest in digests):
+        raise ValueError("Invalid approved report source digest.")
 
 
 def validate_paths(paths: AppPaths) -> AppPaths:

@@ -5,8 +5,9 @@ from __future__ import annotations
 import threading
 import time
 
+import pandas as pd
 import pytest
-from PyQt6.QtWidgets import QApplication, QDialog
+from PyQt6.QtWidgets import QApplication, QDialog, QInputDialog
 
 from metroliza.ui import data_grouping, detached_threads
 from metroliza.ui.data_grouping import DataGrouping
@@ -268,6 +269,49 @@ def test_visible_selection_batches_actual_dialog_update(tmp_path, qapplication_s
         assert [dialog.part_list.item(i).isSelected() for i in range(3)] == [True, False, True]
     finally:
         dialog.close()
+
+
+def test_grouping_search_matches_before_preview_limit_and_keeps_assignments(monkeypatch):
+    ids = range(1, 1002)
+    reports = pd.DataFrame({
+        "REPORT_ID": ids,
+        "REFERENCE": "REF",
+        "PART_NAME": [f"part-{number:05}" for number in ids],
+        "SAMPLE_NUMBER": [f"sample-{number:05}" for number in ids],
+        "FILENAME": [f"source-{number:05}.pdf" for number in ids],
+    })
+    monkeypatch.setattr(DataGrouping, "read_data_to_df", lambda dialog: setattr(dialog, "df", reports.copy()))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Batch", True))
+    parent = _Parent()
+    dialog = DataGrouping(parent=parent)
+    role = data_grouping.Qt.ItemDataRole.UserRole
+    try:
+        assert dialog.part_list.count() == 1001  # bounded preview and a non-report notice
+        assert "1,000 of 1,001 matches" in dialog.part_label.text()
+        assert "Search by part, sample, or file" in dialog.part_list.item(1000).text()
+        first_key = dialog.part_list.item(0).data(role)
+        dialog.part_list.setCurrentRow(0)
+        dialog.create_group()
+
+        last_key = reports.loc[reports["REPORT_ID"] == 1001, "REPORT_ID"].iloc[0]
+        last_group_key = dialog.df.loc[dialog.df["REPORT_ID"] == last_key, "GROUP_KEY"].iloc[0]
+        for query in ("part-01001", "sample-01001", "SOURCE-01001.PDF"):
+            dialog.part_search_input.setText(query)
+            assert dialog.part_list.count() == 1
+            assert dialog.part_list.item(0).data(role) == last_group_key
+            assert "1 of 1 matches" in dialog.part_label.text()
+
+        dialog.part_list.setCurrentRow(0)
+        dialog.create_group()
+        dialog.part_group_search_input.setText("SOURCE-01001.PDF")
+        assert dialog.part_group_list.count() == 1
+        assert dialog.part_group_list.item(0).data(role) == last_group_key
+        dialog.use_grouping()
+        assignments = parent.df_for_grouping.set_index("GROUP_KEY")["GROUP"]
+        assert assignments[first_key] == assignments[last_group_key] == "Batch"
+    finally:
+        dialog.close()
+        parent.close()
 
 
 @pytest.mark.parametrize("quit_route", ["quit", "lastwindow"])

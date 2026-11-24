@@ -21,6 +21,9 @@ Start here for current product scope, architecture, planning, and development pr
 - [`engineering/codex-task-packet-template.md`](engineering/codex-task-packet-template.md) — reusable pre-dispatch and post-execution packet with MUST/SHOULD/DEFERRED scope.
 - [`engineering/pr-routing-report-template.md`](engineering/pr-routing-report-template.md) — PR-ready routing, MUST-to-evidence, validation, review, and remote-operation report.
 - [`engineering/supervised-diagnostics-v1.md`](engineering/supervised-diagnostics-v1.md) — supervised process/store contracts, bounds, rollback and source/package qualification boundaries.
+- [Recipe delivery #1232](engineering/recipe-delivery-1232.md) — scope, ownership and final validation gates for local recipe flows.
+- [Recipe review disposition](engineering/recipe-review-1232.md) — required corrections and bounded remaining observations.
+- [Recipes](user_manual/recipes.md) — quick flows, private configurations and execution decisions.
 - `project/branch_audit.md` — durable branch archaeology and cleanup-closeout record with historical recovery evidence, executed Gates 1–4, the observed pre-Gate-5 state, and the final branch target.
 - `project/branch_cleanup_execution.md` — branch-cleanup closeout and final-state contract with the Gate 5 handoff; #960 remains the authoritative exact-ref execution ledger.
 

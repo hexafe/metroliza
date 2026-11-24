@@ -11,7 +11,8 @@ After filters are applied, the Export dialog shows a compact summary next to **F
 - `Reference: 2 selected`
 - `Header: 8 selected`
 - `Date: 2026-01-01 to 2026-05-08`
-- `NOK only`
+- `Reports with at least one NOK`
+- `Only NOK measurements`
 
 Hover over the summary to see the full selected values when the label only shows counts.
 
@@ -20,7 +21,11 @@ The dialog uses tabs so the available choices stay readable on smaller screens:
 - **Measurement** tab: AX, REFERENCE, HEADER, SELECTED HEADERS, and STATUS CODE.
 - **Report metadata** tab: PART NAME, REVISION, TEMPLATE VARIANT, SAMPLE NUMBER, OPERATOR NAME, and SAMPLE NUMBER KIND.
 - **Source** tab: FILENAME, PARSER ID, and TEMPLATE FAMILY.
-- The combined filter expression, date range, and **HAS NOK ONLY** controls stay at the bottom with the apply action.
+- The combined filter expression, date range, and NOK controls stay at the bottom with the apply action.
+
+**Reports with at least one NOK** includes matching measurements from any report that contains a NOK reading.
+For example, a HEIGHT filter can include an OK height from a report with a NOK width.
+**Only NOK measurements** selects NOK under **Measurement status** and applies to each measurement row.
 
 It filters across the main report and measurement metadata dimensions:
 
@@ -191,9 +196,8 @@ which choices are visible; it does not clear conditions.
 
 Use **Date range** to choose an inclusive range based on your local calendar date:
 
-- **All dates** (default): no active date filter; the From/To fields are disabled.
-  It keeps the existing export bounds, 1 January 1970 through today when the draft
-  is created or All dates is selected.
+- **All dates** includes reports with missing dates, historical dates and future dates.
+  The From and To fields become available when you choose a date range.
 - **Today**: today only.
 - **Yesterday**: yesterday only.
 - **Last 7 days**: today and the six preceding days.
@@ -208,7 +212,7 @@ Use the arrow keys to choose a preset. Tab then reaches From and To.
 **Cancel** restores the previously applied dates and preset. Reopening keeps those
 concrete dates; if a relative preset no longer matches the current day, it is shown as
 **Custom**. Choose the preset again to update its dates. **Reset draft** selects
-**All dates** with today's upper bound. Presets are not remembered across app sessions.
+**All dates**. Presets are not remembered across app sessions.
 
 ### Select today
 
@@ -230,6 +234,10 @@ When applied:
 Use **Clear filters** in the Export dialog to reset the export back to the default unfiltered state in one click.
 
 If you want to revise filters instead, reopen the dialog, change the selections, and click **Apply filters** again.
+
+Use **Saved filters… → Save filter draft as…** to keep the current conditions under a name.
+Selecting a saved filter loads it as a draft. Review the selections and choose **Apply Filters** to use it.
+The draft identifies any values that are unavailable in the loaded choices.
 
 ## Practical examples
 

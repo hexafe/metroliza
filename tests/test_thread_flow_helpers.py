@@ -2733,6 +2733,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread.get_export_backend = lambda: _BackendRunner()
             thread.add_measurements_horizontal_sheet = lambda *_args, **_kwargs: None
             thread.export_filtered_data = lambda *_: None
+            thread._write_report_scope_sheet = lambda *_: None
             thread.update_progress.connect(lambda value: progress_values.append(value))
             thread.update_label.connect(lambda *_: None)
             thread.completed.connect(lambda: None)

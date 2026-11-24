@@ -22,6 +22,9 @@ nothing; an open modal dialog owns its commands. The launcher has no search fiel
 Ctrl+F opens Choose metrics. The Industrial cache presentation uses the same
 commands and its own Industrial Data manual on F1.
 
+**Clear filter** restores the rows excluded by the filter and keeps your manual group assignments.
+Use **Clear groups** to remove those assignments.
+
 In **Filter rows** and **Edit groups**, **Ctrl+F** selects the search for the focused
 list: available columns, selected columns, or matching values/rows. From elsewhere
 it selects the available-columns search. F1 opens this CSV Summary manual.
@@ -237,7 +240,9 @@ deviation, and percentiles.
 
 ### 5. Choose Outputs
 
-Choose an HTML dashboard path first. This is the routine CSV Summary output.
+Choose an HTML dashboard path first. If a file-based analysis would replace an existing result,
+**Zapisz kopię** proposes a numbered name for the dashboard and optional workbook.
+**Zastąp** updates the chosen files. **Anuluj** returns to the form.
 
 Use **Advanced** when you want to change chart/statistics outputs:
 

@@ -107,6 +107,23 @@ For docs-only changes the Tier-0 result and explicit heavy-job skips described a
 | CMM parser perf guardrail + trend gate | `cmm-parser-perf-gate` | Runs `scripts/benchmark_paths.py` for `cmm_parser_backend_compare` with fixed synthetic workload, enforces native speed/usage guardrails, and compares measured medians to checked-in baseline via `scripts/benchmark_trend_compare.py`. |
 
 
+The additive `Run native Windows recipe flow contracts` step in `windows-core-smoke`
+runs the recipe model, private storage, runner, Reports ports, editor, source
+adapters, shared UI, diagnostic correlation and real synthetic PDF-to-output
+tests with the Windows Qt plugin, including real analytics replacement, failure
+and cancellation preservation in `test_recipe_analytics_publication.py`.
+These are native source contracts; separate
+packaged recipe journeys and PO acceptance remain required by #1239.
+
+The opt-in portable/launcher job also runs `scripts/qualify_recipe_package.py`
+against the built launcher at scales 1, 1.25 and 1.5. It records the actual
+frozen Windows source identity, EXE hash, GUI journey receipts and screenshots.
+It exercises both report quick flows plus a larger saved/reopened flow, using
+synthetic input and independent SQLite/output checks. Source-only or non-Windows
+execution does not satisfy that packaged gate. The evidence is retained in
+`windows-recipe-qualification`; separate PO acceptance remains required.
+
+
 The `Run native Windows safe bug report tests` step in `windows-core-smoke` checks the
 fixed-schema local recorder, private history lifecycle, report dialog, synthetic replay,
 early startup-failure recovery, closed error categories, and application-wide workflow

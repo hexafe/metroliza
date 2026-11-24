@@ -154,7 +154,8 @@ def test_repository_pin_is_immutable_and_covers_every_linked_manual() -> None:
     ref = checker.pinned_docs_ref(REPO_ROOT)
     assert checker.FULL_COMMIT_SHA.fullmatch(ref), ref
     linked = {item.path for item in checker.linked_paths(REPO_ROOT)}
-    assert len([path for path in linked if path.startswith("docs/user_manual/") and path.count("/") == 2]) == 12
+    assert "docs/user_manual/recipes.md" in linked
+    assert len([path for path in linked if path.startswith("docs/user_manual/") and path.count("/") == 2]) == 13
     assert "docs/user_manual/group_analysis/user_manual.pdf" in linked
 
     available = subprocess.run(

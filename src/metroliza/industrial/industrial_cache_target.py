@@ -330,7 +330,21 @@ def persist_temporary_industrial_cache(
 
     if not target.is_temporary:
         raise ValueError("Only a temporary industrial cache can be saved as a durable cache")
-    source_path = Path(target.cache_db_file).expanduser().resolve()
+    result = publish_verified_database_copy(
+        target.cache_db_file, destination, forbidden_destinations=forbidden_destinations,
+    )
+    return persistent_industrial_cache_target(result)
+
+
+def publish_verified_database_copy(
+    source: str | Path,
+    destination: str | Path,
+    *,
+    forbidden_destinations: Iterable[str | Path] = (),
+    validate=None,
+) -> Path:
+    """Publish a verified SQLite snapshot to an unused path."""
+    source_path = Path(source).expanduser().resolve()
     destination_path = resolve_industrial_cache_destination(destination)
     forbidden_paths = tuple(
         _resolved_leaf_path(candidate)
@@ -352,13 +366,14 @@ def persist_temporary_industrial_cache(
         )
     )
     staging_path = staging_directory / "snapshot.sqlite"
-    persistent_target = persistent_industrial_cache_target(destination_path)
     try:
         if _PUBLICATION_PLATFORM == "posix":
             staging_directory.chmod(_PRIVATE_DIRECTORY_MODE)
             if stat.S_IMODE(staging_directory.stat().st_mode) != _PRIVATE_DIRECTORY_MODE:
                 raise RuntimeError("Private staging directory permissions could not be verified")
         _prepare_private_staging_database(source_path, staging_path)
+        if validate is not None:
+            validate(staging_path)
 
         # Recheck every fallible destination condition immediately before the
         # single commit point. Nothing after a successful primitive may reject
@@ -368,7 +383,7 @@ def persist_temporary_industrial_cache(
         _validate_destination_absent(destination_path, source_path, forbidden_paths)
         _reject_existing_sidecars(destination_path)
         _atomic_publish_no_replace(staging_path, destination_path)
-        return persistent_target
+        return destination_path
     finally:
         _cleanup_staging_artifacts(staging_directory, staging_path)
 

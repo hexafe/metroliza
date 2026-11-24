@@ -46,7 +46,9 @@ def _show(dialog, qapp):
 def _assert_one_primary(dialog):
     assert [button for button in dialog.findChildren(QPushButton)
             if button.property("buttonRole") == "primary"] == [dialog.next_button]
-    assert dialog.next_button.isDefault() == dialog._next_control.isVisibleTo(dialog)
+    assert dialog.next_button.isDefault() == (
+        dialog._next_control is dialog.configure_source_button or dialog._next_control.isVisibleTo(dialog)
+    )
 
 
 class _ControlledWorker:
@@ -113,6 +115,8 @@ def test_unready_sources_route_to_setup_without_start(dashboard_dialog, source, 
     assert not dialog.start_button.isEnabled()
     _assert_one_primary(dialog)
     assert dialog._next_control is dialog.configure_source_button
+    assert dialog.configure_source_button.isHidden()
+    assert dialog.monitor_content.isHidden() == (source == "none")
     dialog.next_button.click()
     assert dialog.workflow_tabs.currentIndex() == 1
     assert dialog.poll_thread is None and not dialog.poll_timer.isActive()
@@ -554,7 +558,11 @@ def test_small_window_keeps_state_and_next_action_visible(dashboard_dialog, qapp
     finally:
         diagnostic('after_readiness')
     controls = [dialog.freshness_label, dialog.next_action_label, dialog.next_button,
-                dialog.configure_source_button, dialog.event_review_button, dialog.close_button]
+                dialog.event_review_button, dialog.close_button]
+    if tab == 0:
+        assert dialog.configure_source_button.isHidden()
+    else:
+        controls.append(dialog.configure_source_button)
     if tab == 2:
         controls += [dialog.event_operator_edit, dialog.event_comment_edit,
                      dialog.acknowledge_event_button, dialog.resolve_event_button,

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from importlib import import_module
+from pathlib import Path
 from typing import Callable, Protocol, cast
 
 
 MAIN_WINDOW_MODULE = "metroliza.ui.main_window"
+RECIPE_QUALIFICATION_MODULE = "metroliza.ui.recipe_qualification"
 
 
 class MainWindowHandle(Protocol):
@@ -40,3 +42,12 @@ def load_main_window_factory() -> MainWindowFactory:
     if not callable(factory):
         raise TypeError(f"{MAIN_WINDOW_MODULE}.MainWindow must be callable")
     return cast(MainWindowFactory, factory)
+
+
+def install_recipe_qualification(main_window: MainWindowHandle, root: Path) -> None:
+    """Load the fixed GUI probe through the existing lazy application/UI boundary."""
+    module = import_module(RECIPE_QUALIFICATION_MODULE)
+    installer = getattr(module, "install_recipe_qualification", None)
+    if not callable(installer):
+        raise TypeError("Recipe qualification entry point is unavailable")
+    installer(main_window, root)

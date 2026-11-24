@@ -712,6 +712,7 @@ def test_windows_core_collects_independent_ui_evidence_after_failure_but_stays_b
     ]
     assert 'if' not in install
     independent = {
+        'Run native Windows recipe flow contracts',
         'Run native Windows report workspace tests',
         'Run native Windows specialist geometry tests',
         'Run native Windows grouping-preview lifecycle tests',
@@ -729,6 +730,8 @@ def test_windows_core_collects_independent_ui_evidence_after_failure_but_stays_b
     assert job['name'] == 'Windows core smoke'
     assert 'continue-on-error' not in job
     assert job['if'] == "${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}"
+    recipes = next(step for step in steps if step['name'] == 'Run native Windows recipe flow contracts')
+    assert 'tests/test_recipe_analytics_publication.py' in recipes['run']
 
 
 def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None:

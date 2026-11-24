@@ -181,3 +181,49 @@ def test_import_cancel_before_apply_is_recorded_as_cancelled(
         BugReportAction.WORKFLOW_MAPPING_IMPORT_CANCELLED,
     ]
     assert "CONFIDENTIAL" not in repr(recorder.snapshot().events)
+
+
+def test_manual_mapping_retry_records_each_transaction_without_payload(
+    monkeypatch, tmp_path, qapplication_session
+):
+    recorder = SafeBugReportRecorder()
+    monkeypatch.setattr(mapping, "_bugreport_recorder", recorder)
+    db_path = str(tmp_path / "CONFIDENTIAL-aliases.db")
+    mapping.ensure_characteristic_alias_schema(db_path)
+    mapping.save_manual_characteristic_alias(
+        db_path,
+        {
+            "alias_name": "CONFIDENTIAL-existing",
+            "canonical_name": "Original",
+            "scope_type": "global",
+            "scope_value": None,
+        },
+    )
+    dialog = mapping.CharacteristicMappingDialog(db_file=db_path)
+
+    def enter_then_retry(editor):
+        editor.alias_input.setCurrentText("CONFIDENTIAL-existing")
+        editor.common_name_input.setCurrentText("CONFIDENTIAL-new-label")
+        editor._validate_and_accept()
+        assert editor.result_payload is None
+        assert "already exists" in editor.save_error_label.text()
+        assert editor.common_name_input.currentText() == "CONFIDENTIAL-new-label"
+
+        editor.alias_input.setCurrentText("CONFIDENTIAL-new")
+        editor._validate_and_accept()
+        assert editor.result_payload["alias_name"] == "CONFIDENTIAL-new"
+        return editor.result()
+
+    monkeypatch.setattr(mapping.CharacteristicAliasEditorDialog, "exec", enter_then_retry)
+    try:
+        dialog.add_mapping()
+        assert dialog.alias_table.rowCount() == 2
+        assert _actions(recorder) == [
+            BugReportAction.WORKFLOW_MAPPING_ADD_STARTED,
+            BugReportAction.WORKFLOW_MAPPING_ADD_FAILED,
+            BugReportAction.WORKFLOW_MAPPING_ADD_STARTED,
+            BugReportAction.WORKFLOW_MAPPING_ADD_COMPLETED,
+        ]
+        assert "CONFIDENTIAL" not in repr(recorder.snapshot().events)
+    finally:
+        dialog.close()

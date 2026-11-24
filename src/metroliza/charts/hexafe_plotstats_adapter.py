@@ -21,6 +21,7 @@ from metroliza.charts.chart_numeric_helpers import finite_float_list as _finite_
 from metroliza.charts.dashboard_plotly_visuals import apply_dashboard_visual_settings
 from metroliza.charts.distribution_iqr_plotly_specs import build_distribution_iqr_plotly_spec
 from metroliza.charts.export_chart_payload_helpers import build_histogram_table_data
+from metroliza.charts.matplotlib_runtime import serialize_matplotlib_render
 from metroliza.charts.plotly_stat_helpers import (
     format_group_statistics_trace_name as _format_group_statistics_trace_name,
     legend_only_reference_trace as _legend_only_reference_trace,
@@ -636,6 +637,7 @@ def normalize_distribution_stat_legend(
     return normalized
 
 
+@serialize_matplotlib_render
 def render_chart_artifact_png(
     payload: Mapping[str, Any],
     *,
@@ -803,6 +805,7 @@ def render_histogram_png(
     )
 
 
+@serialize_matplotlib_render
 def _render_with_hexafe_plotstats(
     values: np.ndarray,
     *,
@@ -854,6 +857,7 @@ def _render_with_hexafe_plotstats(
         _close_plotstats_figure(locals().get("render_result"))
 
 
+@serialize_matplotlib_render
 def _render_with_metroliza_fallback(
     values: np.ndarray,
     *,

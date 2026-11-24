@@ -1715,6 +1715,35 @@
       "residual_risk": "Schema, transaction, ownership, locking, and cleanup behavior remain unaudited."
     },
     {
+      "id": "recipes-runtime",
+      "include": [
+        "src/metroliza/recipes/**"
+      ],
+      "exclude": [],
+      "class": "canonical runtime",
+      "primary_owner": 979,
+      "secondary_owners": [
+        977,
+        978,
+        981,
+        984
+      ],
+      "consequence_tier": "P0",
+      "consequence_tags": [
+        "cancellation",
+        "confidentiality",
+        "data-integrity",
+        "output-atomicity"
+      ],
+      "audit_status": "pending",
+      "terminal_snapshot": null,
+      "baseline_sha": "fcb462942e90aeeb64bba84bfe080d556da0efdb",
+      "evidence_links": [],
+      "finding_links": [],
+      "disposition": null,
+      "residual_risk": "Recipe bindings, ownership, cancellation and publication require source-bound review and Windows qualification under #1232/#1239."
+    },
+    {
       "id": "analytics-runtime",
       "include": [
         "src/metroliza/analytics/**"
@@ -2452,6 +2481,7 @@
         "scripts/build_diagnostic_manifest.py",
         "scripts/qualify_windows_diagnostics.py",
         "scripts/qualify_windows_portable_onefile.py",
+        "scripts/qualify_recipe_package.py",
         "scripts/qualify_windows_compute_workers.py",
         "scripts/qualify_package_identity.py",
         "scripts/windows_native_identity_control.py",

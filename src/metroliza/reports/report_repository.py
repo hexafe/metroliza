@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -180,6 +180,8 @@ class ReportImportPolicy:
     metadata_parsing_mode: str = "complete"
     refreshable_parser_id: str | None = None
     refreshable_parser_version: str | None = None
+    preserve_existing: bool = False
+    on_import_committed: Callable[[int, str], None] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.metadata_parsing_mode not in {"light", "complete"}:
@@ -1636,6 +1638,17 @@ class ReportRepository:
         digest: str,
         policy: ReportImportPolicy,
     ) -> int | None:
+        if policy.preserve_existing:
+            row = cursor.execute(
+                """
+                SELECT pr.id
+                FROM source_files sf
+                JOIN parsed_reports pr ON pr.source_file_id = sf.id
+                WHERE sf.sha256 = ? AND sf.is_active = 1
+                """,
+                (digest,),
+            ).fetchone()
+            return int(row[0]) if row is not None else None
         refreshable_parser_id = policy.refreshable_parser_id
         refreshable_parser_version = policy.refreshable_parser_version
         cursor.execute(
@@ -1687,6 +1700,22 @@ class ReportRepository:
         row = cursor.fetchone()
         return int(row[0]) if row is not None else None
 
+    def _prepare_import_schema_and_digest(self, policy, source_path, digest, verifier):
+        if policy.preserve_existing:
+            if not self._import_schema_is_ready():
+                raise ValueError("The selected database must already have the current Reports schema.")
+            return digest
+
+        if verifier is None or not self._import_schema_is_ready():
+            # Reject stale content before schema creation/migration can commit.
+            # Keep this probe separate from the final verification under the write lock.
+            with measure_persist_stage("pre_schema_hash"):
+                digest = type(self)._verify_import_source_digest.__wrapped__(
+                    source_path, expected_sha256=digest, source_digest_verifier=verifier,
+                )
+        self._ensure_import_schema()
+        return digest
+
     @persist_stage("persist")
     def import_report_if_absent(
         self,
@@ -1724,25 +1753,15 @@ class ReportRepository:
         policy = import_policy or ReportImportPolicy()
         # Content is authoritative after the write lock is acquired, including
         # when BEGIN IMMEDIATE waited and an unchanged file's mtime moved.
-        if source_digest_verifier is None or not self._import_schema_is_ready():
-            # Reject stale content before schema creation/migration can commit.
-            # An inspected import into a ready schema needs only the verification
-            # under the write lock below; schema work requires this extra guard.
-            # Profiled separately from the in-transaction "hash" stage, which must
-            # stay exactly one full read per imported file (#1125/#1136).
-            with measure_persist_stage("pre_schema_hash"):
-                source_sha256 = type(self)._verify_import_source_digest.__wrapped__(
-                    source_path,
-                    expected_sha256=source_sha256,
-                    source_digest_verifier=source_digest_verifier,
-                )
-        self._ensure_import_schema()
+        source_sha256 = self._prepare_import_schema_and_digest(
+            policy, source_path, source_sha256, source_digest_verifier,
+        )
         now = utc_timestamp()
         measurement_values = _freeze_measurements(measurements)
         candidate_values = tuple(candidates)
         warning_values = tuple(warnings)
 
-        def _import(cursor) -> ReportImportDisposition:
+        def _import(cursor) -> tuple[int, str] | None:
             cursor.execute("BEGIN IMMEDIATE")
             verified_digest = self._verify_import_source_digest(
                 source_path,
@@ -1750,7 +1769,7 @@ class ReportRepository:
                 source_digest_verifier=source_digest_verifier,
             )
             if self._accepted_report_id(cursor, verified_digest, policy) is not None:
-                return ReportImportDisposition.ALREADY_PRESENT
+                return None
 
             source_record = self._upsert_source_file_observation(
                 cursor,
@@ -1789,9 +1808,14 @@ class ReportRepository:
                 identity_hash=identity_hash,
                 now=now,
             )
-            return ReportImportDisposition.IMPORTED
+            return report_id, verified_digest
 
-        return run_transaction_with_retry(self.database, _import, connection=self.connection)
+        committed = run_transaction_with_retry(self.database, _import, connection=self.connection)
+        if committed is None:
+            return ReportImportDisposition.ALREADY_PRESENT
+        if policy.on_import_committed is not None:
+            policy.on_import_committed(*committed)
+        return ReportImportDisposition.IMPORTED
 
     def replace_existing_report(self, **report_values: Any) -> int:
         """Deliberately replace a report graph through the compatibility persistence contract."""

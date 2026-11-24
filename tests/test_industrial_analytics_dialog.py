@@ -851,6 +851,189 @@ def test_tabular_analytics_dialog_auto_loads_metrics_after_file_selection(
         _dispose_dialog(dialog)
 
 
+def test_reload_keeps_metric_selection_limits_and_identifies_moved_group_members(tmp_path) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    columns = "Reference ID,Line,Length mm,Width mm\n"
+    rows = ["R01,L1,10,2\n", "R02,L2,11,3\n", "R03,L1,12,4\n"]
+    source.write_text(columns + "".join(rows))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog._apply_metric_selection((ProductionMetricSelection("length_mm"),))
+        dialog.metric_spec_limits = {"length_mm": (9, 13), "width_mm": (None, 6)}
+        dialog.group_field_combo.setCurrentIndex(dialog.group_field_combo.findData("line"))
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [2], "GROUP": ["Linia L2"]}))
+        dialog.set_grouping_applied(True)
+
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert dialog.metrics_summary_label.text() == "1 of 2 metrics selected"
+        assert dialog.group_field_combo.currentData() == "line"
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [2]
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13), "width_mm": (None, 6)}
+        assert "zachowano ustawienia" in dialog.readiness_label.text()
+
+        source.write_text(columns + rows[1] + rows[0] + rows[2])
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [1]
+        assert list(dialog.df_for_grouping["GROUP"]) == ["Linia L2"]
+
+        # Drop the unused metric and grouping field. The reference and metric
+        # value still identify the assigned row even after the schema changed.
+        source.write_text("Reference ID,Length mm\nR02,11\nR01,10\nR03,12\n")
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [1]
+        assert dialog.metrics_summary_label.text() == "1 of 1 metrics selected"
+        assert "width_mm" in dialog.readiness_label.text() and "line" in dialog.readiness_label.text()
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13)}
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_role_change_names_lost_metric_and_limit_before_applying(tmp_path, monkeypatch) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    source.write_text("Reference ID,Length mm,Width mm\nR01,10,2\nR02,11,3\nR03,12,4\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    answers = [QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes]
+    prompts = []
+
+    def answer(_parent, title, text, *_args):
+        prompts.append((title, text))
+        return answers.pop(0)
+
+    monkeypatch.setattr(QMessageBox, "question", answer)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog.metric_spec_limits = {"length_mm": (9, 13), "width_mm": (1, 6)}
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [2], "GROUP": ["Linia L2"]}))
+        dialog.set_grouping_applied(True)
+
+        def change_role():
+            combo = dialog.reference_column_combo
+            combo.setCurrentIndex(combo.findData("length_mm"))
+            assert not dialog.start_button.isEnabled()
+            dialog.handle_load_metrics_clicked()
+            _wait_for_tabular_load(dialog)
+
+        change_role()
+        assert "Length Mm" in prompts[0][1] and "Limity" in prompts[0][1]
+        assert dialog.reference_column_combo.currentData() == "reference_id"
+        assert dialog.metric_spec_limits == {"length_mm": (9, 13), "width_mm": (1, 6)}
+
+        change_role()
+        assert dialog.reference_column_combo.currentData() == "length_mm"
+        assert dialog.metric_spec_limits == {"width_mm": (1, 6)}
+        assert [item.field_name for item in dialog._selected_metrics()] == ["width_mm"]
+        assert list(dialog.df_for_grouping["REPORT_ID"]) == [2]
+        assert not answers
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_column_type_dialog_keyboard_preview_applies_native_conversion(tmp_path, monkeypatch) -> None:
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from metroliza.ui.industrial_analytics_dialog import ColumnTypesDialog
+
+    _app()
+    source = tmp_path / "sample.csv"
+    source.write_text("Batch code,Reading\n00123,3.4\n123,bad\n891,5.6\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert dialog.column_types_button.isEnabled()
+
+        def choose(picker):
+            assert picker.columns.currentText() == "Batch code"
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            assert "00123 → 00123" in picker.examples.text()
+            QTest.keyClick(picker.columns, Qt.Key.Key_Down)
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            QTest.keyClick(picker.kinds, Qt.Key.Key_Down)
+            assert picker.kinds.currentData() == "number"
+            assert "bad → brak poprawnej liczby" in picker.examples.text()
+            assert picker.examples.text().endswith("— 1")
+            return QDialog.DialogCode.Accepted
+
+        monkeypatch.setattr(ColumnTypesDialog, "exec", choose)
+        dialog.open_column_types()
+        _wait_for_tabular_load(dialog)
+        assert dialog.tabular_load_result.column_types == {("Batch code", 1): "text", ("Reading", 1): "number"}
+        assert [item.field_name for item in dialog.metric_candidates] == ["reading"]
+        assert "1 wartości bez poprawnej liczby" in dialog.readiness_label.text()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_tabular_group_rule_is_visible_and_in_the_recipe_request(tmp_path) -> None:
+    _app()
+    source = tmp_path / "measurements.csv"
+    source.write_text("Line,Reading\nA,2\nB,3\nB,4\n")
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert not dialog.group_field_combo.isHidden()
+        index = dialog.group_field_combo.findData("line")
+        assert index > 0 and dialog.group_field_combo.isEnabled()
+        dialog.group_field_combo.setCurrentIndex(index)
+        dialog.group_field_combo.activated.emit(index)
+        assert dialog.grouping_summary_label.text() == "Grupy według kolumny Line"
+        assert not dialog.edit_groups_button.isEnabled()
+        request = dialog._build_analytics_request(require_runnable=True)
+        assert request.aggregation_state.group_fields == ("line",)
+        assert request.grouping_df is None
+        assert dialog.groupstats_checkbox.isEnabled()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_analysis_receipt_uses_source_stamp_captured_before_work_started(tmp_path) -> None:
+    from metroliza.app.analysis_history import capture_source_stamp
+
+    _app()
+    source = tmp_path / "table.csv"
+    source.write_text("Measurement\n3\n4\n")
+    output = tmp_path / "dashboard.html"
+    output.write_text("<html><body>dashboard</body></html>")
+    assets = tmp_path / "dashboard_assets.generation-native"
+    assets.mkdir()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        request = dialog._build_analytics_request(require_runnable=True)
+        dialog._capture_analysis_source(request)
+        original = capture_source_stamp(source)
+        source.write_text("Measurement\n30000\n40000\n")
+
+        receipts = []
+        dialog.analysis_completed.connect(receipts.append)
+        dialog.analytics_thread = types.SimpleNamespace(request=request)
+        try:
+            dialog._emit_analysis_completion((output,), assets)
+        finally:
+            dialog.analytics_thread = None
+        assert receipts[0]["source_stamp"] == original
+        assert receipts[0]["source_stamp"] != capture_source_stamp(source)
+        assert receipts[0]["artifacts"] == [str(output)]
+        assert receipts[0]["assets"] == [str(assets)]
+    finally:
+        _dispose_dialog(dialog)
+
+
 def test_tabular_analytics_dialog_loads_multiple_csv_files(
     tmp_path,
     monkeypatch,
@@ -1404,7 +1587,7 @@ def test_sqlite_grouping_summary_accepts_sparse_row_table_assignments(tmp_path) 
         cleanup_tabular_load_result(loaded)
 
 
-def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
+def test_tabular_clear_filter_keeps_groups_and_assigns_visible_rows_to_population(tmp_path) -> None:
     _app()
     input_file = tmp_path / "table.csv"
     pd.DataFrame(
@@ -1421,8 +1604,9 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
         _wait_for_tabular_load(dialog)
         grouping_df = pd.DataFrame(
             {
-                "REPORT_ID": [1, 2],
-                "GROUP": ["Fixture A", "POPULATION"],
+                "REPORT_ID": [1],
+                "GROUP": ["Fixture A"],
+                "COLOR": ["#204080"],
             }
         )
         dialog.tabular_column_filters = (TabularColumnFilter("tracecode", selected_values=("TC-001",)),)
@@ -1432,18 +1616,213 @@ def test_tabular_clear_controls_reset_filters_and_groups(tmp_path) -> None:
 
         assert dialog.clear_filter_button.isEnabled()
         assert dialog.clear_groups_button.isEnabled()
-        assert dialog.groupstats_checkbox.isChecked()
+        assert not dialog.groupstats_checkbox.isEnabled()
 
-        dialog.clear_tabular_filter_and_groups()
+        dialog.clear_filter_button.click()
 
         assert dialog.tabular_column_filters == ()
         assert dialog.tabular_filter_columns == ()
         assert dialog.tabular_filter_keys == ()
-        assert dialog.df_for_grouping is None
-        assert dialog.grouping_applied is False
+        assert dialog.tabular_filter_expression == ""
+        assert dialog.grouping_applied is True
+        assert dialog.df_for_grouping.to_dict("records") == grouping_df.to_dict("records")
         assert not dialog.clear_filter_button.isEnabled()
+        assert dialog.clear_groups_button.isEnabled()
+        assert dialog.groupstats_checkbox.isEnabled()
+        assert dialog.grouping_summary_label.text() == "Groups: 1 custom + POPULATION"
+        assert dialog.filter_summary_label.text() == "All rows (2)"
+
+        from metroliza.tabular.tabular_analytics_service import TABULAR_GROUP_COLUMN, apply_tabular_grouping
+
+        grouped = apply_tabular_grouping(dialog._filtered_tabular_dataframe(), dialog.df_for_grouping)
+        assert list(grouped.dataframe[TABULAR_GROUP_COLUMN]) == ["Fixture A", "POPULATION"]
+
+        dialog.clear_groups_button.click()
+        assert dialog.df_for_grouping is None
+        assert not dialog.grouping_applied
         assert not dialog.clear_groups_button.isEnabled()
         assert not dialog.groupstats_checkbox.isChecked()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def _finish_analytics(dialog) -> None:
+    deadline = time.monotonic() + 15
+    while dialog.analytics_thread is not None and time.monotonic() < deadline:
+        _app().processEvents()
+        time.sleep(0.01)
+    assert dialog.analytics_thread is None
+
+
+def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=()) -> None:
+    from PyQt6.QtCore import QTimer
+
+    observed = []
+
+    def choose():
+        prompt = _app().activeModalWidget()
+        if not isinstance(prompt, QMessageBox) or prompt.parentWidget() is not dialog:
+            return
+        observed.append((prompt.defaultButton().text(), prompt.text()))
+        if choice == "default":
+            prompt.defaultButton().click()
+        elif choice == "cancel":
+            prompt.escapeButton().click()
+        else:
+            next(button for button in prompt.buttons() if button.text() == "Zastąp").click()
+
+    QTimer.singleShot(0, choose)
+    dialog.start_button.click()
+    assert len(observed) == 1
+    assert observed[0][0] == "Zapisz kopię"
+    assert all(str(path) in observed[0][1] for path in (*expected_copy, *shown_existing))
+
+
+def test_tabular_generate_again_defaults_to_copy_and_scopes_replace_to_one_run(tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    from metroliza.ui import export_dialog
+
+    source = tmp_path / "measurements.csv"
+    source.write_text("id,diameter\nA,10\nB,12\nC,13\n", encoding="utf-8")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    notices, errors = [], []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *args, **kwargs: notices.append(kwargs["artifacts"]))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
+    dashboard = tmp_path / "analysis.html"
+    workbook_folder = tmp_path / "Excel"
+    workbook_folder.mkdir()
+    workbook = workbook_folder / "table.xlsx"
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        dialog.start_button.click()
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (workbook, dashboard)
+        original = (dashboard.read_bytes(), workbook.read_bytes())
+        original_asset_dirs = sorted(tmp_path.glob("*assets*"))
+        assert original_asset_dirs
+        original_assets = {asset: asset.read_bytes() for directory in original_asset_dirs for asset in directory.iterdir()}
+        assert original_assets
+
+        # A workbook-only conflict makes both copied names skip the same ordinal.
+        occupied = workbook_folder / "table (2).xlsx"
+        occupied.write_bytes(b"unrelated workbook")
+        copied_dashboard = tmp_path / "analysis (3).html"
+        copied_workbook = workbook_folder / "table (3).xlsx"
+        dialog.box_checkbox.setChecked(not dialog.box_checkbox.isChecked())
+        _choose_analytics_collision(dialog, "default", (copied_dashboard, copied_workbook))
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (copied_workbook, copied_dashboard)
+        assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+        assert all(path.read_bytes() == content for path, content in original_assets.items())
+        assert occupied.read_bytes() == b"unrelated workbook"
+        copied = (copied_dashboard.read_bytes(), copied_workbook.read_bytes())
+        assert copied[0] != original[0]
+        copied_assets = next(directory for directory in tmp_path.glob("*generation-*") if directory not in original_asset_dirs)
+        assert f'{copied_assets.name}/' in copied[0].decode("utf-8")
+        readback = load_workbook(copied_workbook, read_only=True)
+        try:
+            assert readback.sheetnames
+        finally:
+            readback.close()
+
+        next_copy = (tmp_path / "analysis (4).html", workbook_folder / "table (4).xlsx")
+        _choose_analytics_collision(dialog, "cancel", next_copy)
+        assert dialog.analytics_thread is None
+        assert not any(path.exists() for path in next_copy)
+        assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+        assert len(notices) == 2
+
+        # An unrelated folder sharing the old asset name is never a retirement target.
+        legacy_assets = tmp_path / "analysis_assets"
+        legacy_assets.mkdir()
+        unrelated = legacy_assets / "keep.csv"
+        unrelated.write_bytes(b"unrelated data")
+        _choose_analytics_collision(dialog, "replace", next_copy)
+        _finish_analytics(dialog)
+        assert not errors
+        assert notices[-1] == (workbook, dashboard)
+        assert dashboard.read_bytes() != original[0]
+        assert all(not path.exists() for path in original_asset_dirs)
+        assert (copied_dashboard.read_bytes(), copied_workbook.read_bytes()) == copied
+        assert copied_assets.exists()
+        assert unrelated.read_bytes() == b"unrelated data"
+
+        _choose_analytics_collision(dialog, "cancel", next_copy)
+        assert dialog.analytics_thread is None
+        assert len(notices) == 3
+        assert not list(tmp_path.glob(".mza-*"))
+        assert not list(workbook_folder.glob(".mza-*"))
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_tabular_collision_shows_all_replace_targets_before_asset_generations(tmp_path, monkeypatch):
+    from metroliza.industrial.tabular_output_publication import TabularOutputFiles
+
+    source = tmp_path / "measurements.csv"
+    source.write_text("id,diameter\nA,10\nB,12\nC,13\n", encoding="utf-8")
+    _app()
+    loaded = load_tabular_analytics_file(source)
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    dashboard, workbook = tmp_path / "analysis.html", tmp_path / "analysis.xlsx"
+    dashboard.write_bytes(b"existing dashboard")
+    for number in range(12):
+        (tmp_path / f"analysis_assets.generation-{number}").mkdir()
+
+    capture = TabularOutputFiles.replacement_consents
+
+    def add_workbook_then_capture(outputs):
+        workbook.write_bytes(b"late workbook")
+        return capture(outputs)
+
+    monkeypatch.setattr(TabularOutputFiles, "replacement_consents", add_workbook_then_capture)
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        _choose_analytics_collision(dialog, "cancel", (tmp_path / "analysis (2).html", tmp_path / "analysis (2).xlsx"),
+                                    shown_existing=(dashboard, workbook))
+        assert dialog.analytics_thread is None
+        assert workbook.read_bytes() == b"late workbook"
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize("alias", ["same", "hardlink", "symlink"])
+def test_tabular_generate_rejects_workbook_alias_of_excel_input(tmp_path, monkeypatch, alias):
+    source = tmp_path / "measurements.xlsx"
+    pd.DataFrame({"Part": ["A", "B", "C"], "Value": [1, 2, 3]}).to_excel(source, index=False)
+    target = source if alias == "same" else tmp_path / "output.xlsx"
+    if alias != "same":
+        try:
+            (target.hardlink_to if alias == "hardlink" else target.symlink_to)(source)
+        except OSError as exc:
+            pytest.skip(f"Cannot make a {alias} on this system: {type(exc).__name__}")
+    loaded = load_tabular_analytics_file(source, force_sqlite=True)
+    _app()
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE, input_file=str(source), tabular_load_result=loaded)
+    errors = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: errors.append(args[-1]))
+    before = source.read_bytes()
+    dashboard = tmp_path / "dashboard.html"
+    try:
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(target)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog._sync_ui_state()
+        dialog.start_button.click()
+        assert dialog.analytics_thread is None
+        assert errors and "matches a source file" in errors[0]
+        assert before == source.read_bytes() == target.read_bytes()
+        assert not dashboard.exists()
     finally:
         _dispose_dialog(dialog)
 
@@ -1536,14 +1915,14 @@ def test_metric_selection_dialog_select_all_and_clear_are_in_large_dialog() -> N
 
         dialog.clear_button.click()
         assert dialog.selected_metrics() == ()
-        assert dialog.summary_label.text() == "0 of 2 metrics selected"
+        assert dialog.summary_label.text() == "Zaznaczono 0 z 2 metryk"
 
         dialog.select_all_button.click()
         assert [metric.field_name for metric in dialog.selected_metrics()] == [
             "length_mm",
             "width_mm",
         ]
-        assert dialog.summary_label.text() == "2 of 2 metrics selected"
+        assert dialog.summary_label.text() == "Zaznaczono 2 z 2 metryk"
     finally:
         _dispose_dialog(dialog)
 
@@ -1570,6 +1949,14 @@ def test_metric_selection_dialog_filters_visible_metrics_without_losing_selectio
             "length_mm",
             "cycle_time_s",
         ]
+        assert "Widoczne 1" in dialog.summary_label.text()
+        assert "poza wynikami 1" in dialog.summary_label.text()
+        dialog.clear_button.click()
+        assert [metric.field_name for metric in dialog.selected_metrics()] == ["length_mm"]
+        dialog.select_all_button.click()
+        assert [metric.field_name for metric in dialog.selected_metrics()] == ["length_mm", "cycle_time_s"]
+        dialog.search_field.clear()
+        assert dialog.summary_label.text() == "Zaznaczono 2 z 3 metryk"
     finally:
         _dispose_dialog(dialog)
 

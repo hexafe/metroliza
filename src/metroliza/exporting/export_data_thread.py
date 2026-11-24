@@ -22,7 +22,7 @@ from pathlib import Path
 import time
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
-from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib
+from metroliza.charts.matplotlib_runtime import configure_headless_matplotlib, serialize_matplotlib_render
 
 configure_headless_matplotlib()
 
@@ -62,6 +62,11 @@ from metroliza.exporting.export_outcomes import (
     ExportRunStatus,
     derive_export_run_result,
     export_failure_message,
+)
+from metroliza.exporting.report_export_context import (
+    REPORT_SCOPE_SHEET,
+    report_scope_entries,
+    report_scope_warnings,
 )
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
@@ -135,6 +140,8 @@ from metroliza.reports.report_query_service import (
     INDUSTRIAL_EXPORT_COLUMNS,
     build_industrial_measurement_export_query,
     build_measurement_export_query,
+    build_measurement_filter_query,
+    restrict_to_approved_report_sources,
 )
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.exporting.export_grouping_utils import (
@@ -3641,6 +3648,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         super().__init__()
 
         validated_request = validate_export_request(export_request)
+        self._export_scope_request = validated_request
         self.replace_outputs = validated_request.replace_outputs
         self.copy_output_from = getattr(validated_request, "copy_output_from", None)
         self._summary_render_options = validated_request.options
@@ -3660,11 +3668,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         default_filter_query = build_measurement_export_query(
             include_industrial_context=self.include_industrial_context
         )
-        selected_filter_query = validated_request.filter_query or default_filter_query
+        selected_filter_query = validated_request.filter_query
+        self._existing_database_identity = validated_request.existing_database_identity
+        self._approved_source_digests = validated_request.approved_source_digests
+        self._approved_report_ids = validated_request.approved_report_ids
+        if self._approved_report_ids:
+            selected_filter_query = restrict_to_approved_report_sources(build_measurement_filter_query())
         self.filter_query = (
             build_industrial_measurement_export_query(selected_filter_query)
-            if self.include_industrial_context and validated_request.filter_query
-            else selected_filter_query
+            if self.include_industrial_context and selected_filter_query
+            else selected_filter_query or default_filter_query
         )
         self.df_for_grouping = validated_request.grouping_df
         self.selected_export_type = validated_request.options.export_type
@@ -3957,6 +3970,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
                 plotly_visual_settings=self.dashboard_plotly_visual_settings,
                 dashboard_visual_settings=self.dashboard_visual_settings,
+                report_scope=report_scope_entries(self._export_scope_request),
+                report_warnings=report_scope_warnings(self.completion_metadata),
             )
         except OutputPublicationCanceled:
             raise
@@ -4167,6 +4182,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 self._index_export_snapshot(snapshot_table_name)
                 snapshot_source = prepare_snapshot_partition_source(self._db_connection, snapshot_table_name)
         except Exception:
+            if getattr(self, "_approved_report_ids", ()):
+                raise
             logger.warning(
                 'Export snapshot materialization failed; falling back to live query scope.',
                 exc_info=True,
@@ -4980,10 +4997,21 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     self.update_label.emit(build_three_line_status("Building group analysis...", "Preparing grouped comparisons", "ETA --")),
                     self._run_group_analysis_outputs(excel_writer),
                 ),
+                lambda: self._write_report_scope_sheet(excel_writer),
             ],
             should_cancel=self._check_canceled,
         )
         return ExportStageOutcome.completed() if completed else ExportStageOutcome.canceled()
+
+    def _write_report_scope_sheet(self, excel_writer):
+        rows = []
+        for label, value in report_scope_entries(self._export_scope_request).items():
+            if label == "Filters":
+                rows.extend((label, line) for line in str(value).splitlines())
+            else:
+                rows.append((label, str(value)))
+        rows.extend(("Warning", warning) for warning in report_scope_warnings(self.completion_metadata))
+        self.write_data_to_excel(RowTable(rows=rows, columns=("Setting", "Value")), REPORT_SCOPE_SHEET, excel_writer)
 
     def run_html_dashboard_pipeline(self, dashboard_writer):
         """Build dashboard sections and group analysis without writing an XLSX file."""
@@ -5085,9 +5113,19 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
 
             self._ensure_chart_executor()
-            with sqlite_connection_scope(self.db_file) as connection:
+            identity = getattr(self, "_existing_database_identity", None)
+            if identity is None:
+                database_scope = sqlite_connection_scope(self.db_file)
+            else:
+                from metroliza.reports.report_query_service import sqlite_approved_report_export_scope
+
+                database_scope = sqlite_approved_report_export_scope(
+                    self.db_file, identity, self._approved_source_digests, getattr(self, "_approved_report_ids", ()),
+                )
+            with database_scope as connection:
                 self._db_connection = connection
-                ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
+                if identity is None:
+                    ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
                 self._prepare_export_snapshot()
 
                 self._emit_stage_progress('preparing_query', 0.0)
@@ -5348,6 +5386,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             backend = self._active_backend or self.get_export_backend()
             workbook = backend.get_workbook(excel_writer)
             used_sheet_names = backend.list_sheet_names(excel_writer)
+            if self.export_target != "html_dashboard":
+                used_sheet_names.add(REPORT_SCOPE_SHEET)
 
             formats = create_measurement_formats(workbook)
             column_width = 12
@@ -5723,6 +5763,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         }
 
     @classmethod
+    @serialize_matplotlib_render
     def _render_group_analysis_plot_asset(cls, metric_row, plot_key, *, audience='worksheet'):
         """Build an in-memory chart asset for Group Analysis worksheet insertion."""
         chart_payload = metric_row.get('chart_payload') if isinstance(metric_row, dict) else None
@@ -6387,6 +6428,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         self._summary_sheet_failed = True
 
+    @serialize_matplotlib_render
     def summary_sheet_fill(self, summary_worksheet, header, header_group, col):
         """Handle `summary_sheet_fill` for `ExportDataThread`.
 

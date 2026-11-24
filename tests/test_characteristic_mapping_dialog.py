@@ -1859,3 +1859,33 @@ def test_c2_alias_review_wait_honors_interruption(tmp_path, qapplication_session
         worker.reviewed.set()
         assert worker.wait(5000)
         worker.deleteLater()
+
+
+def test_manual_alias_editor_keeps_conflict_inputs_and_filters_saved_rows(tmp_path, qapplication_session):
+    from metroliza.reports.characteristic_alias_service import save_manual_characteristic_alias
+
+    db_path = str(tmp_path / "aliases.db")
+    ensure_characteristic_alias_schema(db_path)
+    upsert_characteristic_alias(db_path, "Diameter", "Outer diameter", "global")
+    upsert_characteristic_alias(db_path, "Height", "Overall height", "global")
+    dialog = CharacteristicMappingDialog(db_file=db_path)
+    try:
+        dialog.alias_table.selectRow(0)
+        dialog.alias_search_input.setText("Overall height")
+        assert dialog.alias_table.isRowHidden(0)
+        assert not dialog._selected_mapping()
+        assert not dialog.edit_button.isEnabled()
+
+        editor = dialog._build_editor()
+        editor.save_match = lambda payload: save_manual_characteristic_alias(db_path, payload)
+        editor.alias_input.setCurrentText("Diameter")
+        editor.common_name_input.setCurrentText("Different label")
+        editor._validate_and_accept()
+        assert editor.result_payload is None
+        assert "already exists" in editor.save_error_label.text()
+        assert editor.common_name_input.currentText() == "Different label"
+        editor.alias_input.setCurrentText("Width")
+        editor._validate_and_accept()
+        assert editor.result_payload["alias_name"] == "Width"
+    finally:
+        dialog.close()

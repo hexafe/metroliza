@@ -84,6 +84,76 @@ Phases overlap where work is safely parallel, but their exit gates define depend
 example, parser-profile documentation can progress while exact-head CI runs, but a new workspace
 schema should not become stable before the canonical model and compatibility policy are accepted.
 
+### Priorytety obsługi po audycie z 2026-11-22
+
+Audyt dotyczy wersji lokalnej `feature/workflow-top10` (`fcff1b9c`). Odtworzenia wykonano
+w Qt na Linuksie z danymi syntetycznymi. Zgłoszenia sprawdzono na GitHubie. Gałąź integracyjna
+`dev` wskazywała `1b539c75`. Tabele porządkują propozycje pracy na następne pakiety.
+
+#### Top 20 poprawek z audytu
+
+Pozycje 1–10 pochodzą z poprzedniego audytu. Pozycje 11–20 rozszerzają jego zakres.
+#1238 obejmuje dwa różne przypadki tej samej ścieżki receptur CSV.
+
+| # | Oczekiwane zachowanie | Zgłoszenie |
+|---:|---|---|
+| 1 | Receptura CSV zachowuje wszystkie pliki i pokazuje ich liczbę przed startem. | Istniało przed rozszerzeniem [#1238](https://github.com/hexafe/metroliza/issues/1238) |
+| 2 | Ponowny przegląd zachowuje ręczne poprawki niezmienionych raportów czekających na import. | Istniało przed rozszerzeniem [#1246](https://github.com/hexafe/metroliza/issues/1246) |
+| 3 | Odświeżenie tego samego CSV zachowuje metryki i grupy. | Istniało przed rozszerzeniem [#1247](https://github.com/hexafe/metroliza/issues/1247) |
+| 4 | Osobne wybory dla raportów zawierających NOK i tylko pomiarów NOK. | Istniało przed rozszerzeniem [#1248](https://github.com/hexafe/metroliza/issues/1248) |
+| 5 | Receptura wymienia HTML i Excel przed startem oraz wskazuje konkretny plik do zastąpienia. | Istniało przed rozszerzeniem [#1236](https://github.com/hexafe/metroliza/issues/1236) |
+| 6 | Powrót z HTML do Excela przywraca zapisaną w formularzu nazwę i wybór dodatkowego HTML. | Istniało przed rozszerzeniem [#1249](https://github.com/hexafe/metroliza/issues/1249) |
+| 7 | Akcja „Pokaż pomiary” zawęża tabelę do wskazanego raportu. | Istniało przed rozszerzeniem [#1250](https://github.com/hexafe/metroliza/issues/1250) |
+| 8 | Filtr ważności i przejście do starszych otwartych alarmów. | Istniało przed rozszerzeniem [#1245](https://github.com/hexafe/metroliza/issues/1245) |
+| 9 | Wyszukiwanie zapisanych dopasowań według nazwy źródłowej, wspólnej lub referencji. | Istniało przed rozszerzeniem [#1244](https://github.com/hexafe/metroliza/issues/1244) |
+| 10 | Konflikt zapisanej reguły zostawia otwarty formularz z wpisanymi danymi. | Istniało przed rozszerzeniem [#1251](https://github.com/hexafe/metroliza/issues/1251) |
+| 11 | Industrial. Przywróć wyszukiwanie raportu po próbce, referencji i pliku. Po błędzie zablokuj zapis starego zaznaczenia. | Utworzone w rozszerzeniu [#1255](https://github.com/hexafe/metroliza/issues/1255) |
+| 12 | Grupowanie. Szukaj po całym zakresie części, numerów próbek i nazw plików. Limit wyświetlania stosuj po wyszukaniu. | Utworzone w rozszerzeniu [#1256](https://github.com/hexafe/metroliza/issues/1256) |
+| 13 | Biblioteka receptur. Zachowaj sprawne pozycje i wskaż wadliwy plik, gdy jednej receptury nie da się odczytać. | Utworzone w rozszerzeniu [#1253](https://github.com/hexafe/metroliza/issues/1253) |
+| 14 | Daty w recepturach. Sprawdź obie daty i kolejność zakresu przy polu, przed uruchomieniem. | Utworzone w rozszerzeniu [#1252](https://github.com/hexafe/metroliza/issues/1252) |
+| 15 | Wynik receptury CSV. Pokaż „Zakończono”, gdy oba pliki powstały. Przy wyniku częściowym podaj, czego zabrakło. | Istniało przed rozszerzeniem [#1238](https://github.com/hexafe/metroliza/issues/1238) |
+| 16 | Zmiana ról kolumn CSV. Zachowaj zgodne grupy i limity. Przed zmianą wyjaśnij, które ustawienia trzeba poprawić. | Istniało przed rozszerzeniem [#1159](https://github.com/hexafe/metroliza/issues/1159) |
+| 17 | Przegląd raportów. Gdy nic nie jest gotowe, pokaż różne następne kroki dla pustego źródła, błędu odczytu i kompletu duplikatów. | Utworzone w rozszerzeniu [#1257](https://github.com/hexafe/metroliza/issues/1257) |
+| 18 | Wybór metryk CSV. Pokaż liczbę zaznaczonych poza wyszukiwaniem. Dodaj akcje zaznaczania i odznaczania widocznych. | Utworzone w rozszerzeniu [#1254](https://github.com/hexafe/metroliza/issues/1254) |
+| 19 | Opcje wykresów. Wyjaśnij dozwolone wartości i wskaż błąd przy polu przed eksportem. | Utworzone w rozszerzeniu [#1258](https://github.com/hexafe/metroliza/issues/1258) |
+| 20 | Edycja bazy. Pokaż przycisk zbiorczej zmiany nazw i liczbę zaznaczeń ukrytych przez filtr. | Utworzone w rozszerzeniu [#1259](https://github.com/hexafe/metroliza/issues/1259) |
+
+#### 20 innych otwartych zgłoszeń wartych wdrożenia
+
+Każdy wpis wskazuje pierwszy użyteczny zakres z istniejącego zgłoszenia. Pełne kryteria są w zgłoszeniu.
+
+| # | Zgłoszenie | Pierwszy zakres do wdrożenia lub odbioru | Korzyść |
+|---:|---|---|---|
+| 1 | [#930](https://github.com/hexafe/metroliza/issues/930) | Odtwórz sprawdzoną kopię bazy do nowego pliku. | Użytkownik odzyskuje dane bez ruszania aktywnej bazy. |
+| 2 | [#939](https://github.com/hexafe/metroliza/issues/939) | Wybór typu kolumny przed analizą, z podglądem konwersji. | Identyfikatory z zerem na początku zostają tekstem, błędne liczby są widoczne. |
+| 3 | [#931](https://github.com/hexafe/metroliza/issues/931) | Zapisuj i wczytuj często używane zestawy filtrów. | Ustawienie tej samej zmiany albo referencji wymaga jednego wyboru. |
+| 4 | [#932](https://github.com/hexafe/metroliza/issues/932) | Zapisuj reguły grupowania i sprawdzaj je na nowym pliku. | Ta sama reguła działa w następnym tygodniu bez ręcznego przypisywania wierszy. |
+| 5 | [#935](https://github.com/hexafe/metroliza/issues/935) | Pokaż, co zmieni zapisany profil, przed jego zastosowaniem. | Łatwo ponowić eksport i zauważyć brakujące kolumny, filtry lub ustawienia. |
+| 6 | [#954](https://github.com/hexafe/metroliza/issues/954) | Pokaż przed i po zapisaniu zmian w bazie oraz wskaż wyniki do odświeżenia. | Zmiana metadanych nie pozostawia starej analizy wyglądającej na aktualną. |
+| 7 | [#1088](https://github.com/hexafe/metroliza/issues/1088) | Domknij czytelność Reports po zmianie motywu bez restartu. | Pola, zaznaczenia i statusy mają czytelny kontrast w jasnym i ciemnym trybie. |
+| 8 | [#946](https://github.com/hexafe/metroliza/issues/946) | Przejdź import, grupowanie i eksport klawiaturą i czytnikiem ekranu. | Fokus, nazwę przycisku i zmianę statusu można rozpoznać w całej ścieżce. |
+| 9 | [#955](https://github.com/hexafe/metroliza/issues/955) | Daj krótką pomoc przy decyzjach o OCR, parserze i pobraniu całego zbioru. | Wyjaśnienie jest dostępne tam, gdzie trzeba zdecydować. |
+| 10 | [#1239](https://github.com/hexafe/metroliza/issues/1239) | Domknij odbiór receptur w gotowym programie na Windows. | Sprawdź oba szybkie starty z Home, własną recepturę i rzeczywiste wyniki. |
+| 11 | [#1089](https://github.com/hexafe/metroliza/issues/1089) | Sprawdź cały ciąg import → grupowanie → gotowy raport dla zgłoszonego przypadku. | Same zapisane pomiary nie wystarczą. Odbiór obejmuje oczekiwane arkusze, wykresy i HTML. |
+| 12 | [#929](https://github.com/hexafe/metroliza/issues/929) | Przy polu metadanych pokaż, skąd pochodzi sugestia OCR i co wymaga sprawdzenia. | Użytkownik szybciej rozstrzyga wątpliwe odczyty. |
+| 13 | [#928](https://github.com/hexafe/metroliza/issues/928) | Sprawdź nowy profil parsera na próbce przed jego włączeniem i uprość powrót do poprzedniego. | Zmianę formatu raportu można obsłużyć bez ryzykowania dotychczasowego importu. |
+| 14 | [#940](https://github.com/hexafe/metroliza/issues/940) | Pokaż źródło, zakres i aktualność danych z pamięci lokalnej przed analizą. | Użytkownik wie, na jakich danych liczy wynik, nawet gdy połączenie jest niedostępne. |
+| 15 | [#941](https://github.com/hexafe/metroliza/issues/941) | Pokaż stan wznowienia monitora i punkt, od którego idzie dalej. | Po przerwaniu połączenia operator widzi, do którego momentu dane są kompletne. |
+| 16 | [#936](https://github.com/hexafe/metroliza/issues/936) | Dodaj do Excela czytelne zestawienie źródła, zakresu, filtrów i grup. | Po przesłaniu pliku odbiorca rozumie, co zawiera i skąd wzięły się liczby. |
+| 17 | [#937](https://github.com/hexafe/metroliza/issues/937) | Pokaż ostrzeżenia o danych i dostępny zakres na górze raportu HTML offline. | Odbiorca dostaje kontekst zanim otworzy pierwszy wykres. |
+| 18 | [#949](https://github.com/hexafe/metroliza/issues/949) | Dodaj lokalną historię analiz z dostępem do wyników i użytych ustawień. | Wczorajszy wynik można odnaleźć bez szukania po folderach. |
+| 19 | [#926](https://github.com/hexafe/metroliza/issues/926) | Zapisuj stan stanowiska roboczego i pozwól wskazać przeniesione źródło po otwarciu. | Praca między sesjami wraca do tego samego miejsca. |
+| 20 | [#953](https://github.com/hexafe/metroliza/issues/953) | Przygotuj paczkę wyników Excel i HTML z kompletem zasobów do przekazania. | Wysyłka działa offline, z domyślnym wyborem samych wyników. |
+
+#### Zalecana kolejność
+
+1. **Zabezpiecz poprawność wyników i danych.** Zacznij od [#1255](https://github.com/hexafe/metroliza/issues/1255), [#1238](https://github.com/hexafe/metroliza/issues/1238), [#1248](https://github.com/hexafe/metroliza/issues/1248) i [#1246](https://github.com/hexafe/metroliza/issues/1246).
+   Następnie sprawdź domknięcie przypadku [#1089](https://github.com/hexafe/metroliza/issues/1089) od importu po wynik oraz odzyskanie bazy z [#930](https://github.com/hexafe/metroliza/issues/930).
+2. **Skróć powtarzalną pracę.** Usuń utratę ustawień w CSV ([#1247](https://github.com/hexafe/metroliza/issues/1247), [#1159](https://github.com/hexafe/metroliza/issues/1159)) i recepturach ([#1252](https://github.com/hexafe/metroliza/issues/1252), [#1253](https://github.com/hexafe/metroliza/issues/1253)).
+   Następnie przygotuj wąski pakiet [#931](https://github.com/hexafe/metroliza/issues/931), [#932](https://github.com/hexafe/metroliza/issues/932) i [#935](https://github.com/hexafe/metroliza/issues/935) z użyciem wspólnych reguł i profili.
+3. **Domknij obsługę i odbiór.** Wykorzystaj pozostałe poprawki nawigacji, wyszukiwania i komunikatów. [#1239](https://github.com/hexafe/metroliza/issues/1239) oraz [#946](https://github.com/hexafe/metroliza/issues/946)
+   obejmują odbiór na docelowym Windows. [#949](https://github.com/hexafe/metroliza/issues/949) i [#953](https://github.com/hexafe/metroliza/issues/953) korzystają z informacji o pochodzeniu wyników [#936](https://github.com/hexafe/metroliza/issues/936) i [#937](https://github.com/hexafe/metroliza/issues/937).
+
 ### Dependency and phase semantics
 
 Under [#967](https://github.com/hexafe/metroliza/issues/967), an Issue's `## Dependencies` section

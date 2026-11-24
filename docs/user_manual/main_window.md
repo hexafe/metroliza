@@ -9,8 +9,8 @@ The main window groups work into **Home**, **Reports**, the domain workspaces an
 and one recommended next action. Paths are read-only, selectable, and offer **Copy path** in their context menu
 with the full path on hover. After a successful import or opening a database containing
 reports, **Export Workbook** becomes the primary action; **Review / import reports** stays
-available. Otherwise the next action opens Reports and focuses its next available control.
-It does not start an import without a reviewed selection.
+available. When starting with no source, choose a folder or archive directly from Home.
+After you choose it, Reports opens so you can review the files.
 
 **Reports** contains the [report planner](parsing.md): choose the source and database,
 review the files, select ready reports and import exactly that selection. Changing pages
@@ -21,8 +21,9 @@ navigation and cancellation remain available. Open Export and Database editor wi
 their current work; changing their database also waits until Reports is idle. Opening another
 report database in Industrial Data follows the same guard and preserves its current cache.
 The editor
-opened from Reports allows navigation back to the main window. Finish or close a same-database editing/export
-or industrial window before starting another report operation; its work is preserved.
+opened from Reports allows navigation back to the main window. Finish active exports and close database editors or industrial windows using the same
+database before starting another report operation. An idle export form can stay open
+with its current settings.
 Closing the main window requests cancellation and waits for the worker.
 
 **File** opens an existing database or chooses a report folder. Recent databases and
@@ -66,7 +67,7 @@ an approved selection. Export opens the workbook workflow for the selected datab
 Ctrl+D uses the Reports database button while Reports is active (select/create, disabled
 until a source is selected). On Home and other pages it opens an existing database,
 including database-only Export workflows. Ctrl+O always opens an existing database.
-Ctrl+Shift+D invokes the same Reports source chooser, including its archive fallback.
+Ctrl+Shift+D opens the report folder chooser. Use the archive button to select an archive.
 Ctrl+Shift+S cancels the active Reports operation from the main window; Alt+L is secondary.
 Ctrl+I remains a legacy alternative for Import.
 Ctrl+1…5 are the only numbered commands. The keys are displayed beside navigation

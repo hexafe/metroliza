@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from functools import partial
 import sys as _sys
 from pathlib import Path
 import time
@@ -10,6 +11,7 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from metroliza.exporting.output_publication import OutputPublicationCanceled
 from metroliza.industrial.contracts import (
     IndustrialAnalyticsRequest,
     validate_industrial_analytics_request,
@@ -30,6 +32,7 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
     TabularLoadCancelled,
+    cleanup_tabular_load_result,
     load_tabular_analytics_file,
     load_tabular_analytics_files,
 )
@@ -58,6 +61,7 @@ from metroliza.industrial.realtime.realtime_dashboard_html import write_realtime
 from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
 from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
+from metroliza.industrial.tabular_output_publication import TabularOutputPublication, publish_tabular_analysis
 from metroliza.shared.progress_status import diagnostic_progress_message
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
 
@@ -364,6 +368,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         dashboard_visual_settings: dict | None = None,
         dashboard_interactivity_options: object | None = None,
         _grouping_snapshot=None,
+        output_publication: TabularOutputPublication | None = None,
     ):
         super().__init__()
         validated_request = validate_industrial_analytics_request(
@@ -423,6 +428,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         )
         self.dashboard_visual_settings = validated_request.dashboard_visual_settings
         self.dashboard_interactivity_options = validated_request.dashboard_interactivity_options
+        self.output_publication = output_publication
         self._init_cancellation_state()
 
     def _emit_progress_message(self, message: str) -> None:
@@ -437,32 +443,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 except Exception as exc:
                     self.error_occurred.emit(redact_sensitive_text(exc))
                     return
-                result = run_analytics(
-                    input_file=self.input_file,
-                    output_dashboard_file=self.output_dashboard_file,
-                    output_workbook_file=self.output_workbook_file or None,
-                    tabular_load_result=self.tabular_load_result,
-                    metric_selection=self.metric_selection,
-                    sheet_name=self.sheet_name,
-                    timestamp_column=self.timestamp_column,
-                    reference_column=self.reference_column,
-                    tabular_filter_columns=self.tabular_filter_columns,
-                    tabular_filter_keys=self.tabular_filter_keys,
-                    tabular_column_filters=self.tabular_column_filters,
-                    tabular_filter_expression=self.tabular_filter_expression,
-                    dashboard_detail_mode=self.dashboard_detail_mode,
-                    grouping_df=self.grouping_df,
-                    grouping_default_group_label=self.request.grouping_default_group_label,
-                    _grouping_snapshot=self.request._grouping_snapshot,
-                    aggregation_state=self.aggregation_state,
-                    cohort_state=self.cohort_state,
-                    chart_selection=self.chart_selection,
-                    separate_parameter_sheets=self.separate_parameter_sheets,
-                    dashboard_visual_settings=self.dashboard_visual_settings,
-                    dashboard_interactivity_options=self.dashboard_interactivity_options,
-                    cancel_check=self._is_cancelled,
-                    progress_callback=self._emit_progress_message,
-                )
+                result = self._run_tabular_analytics(run_analytics)
             elif self.source_kind == "production_cache":
                 try:
                     run_analytics = workers.run_production_cache_analytics
@@ -486,10 +467,43 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
             else:
                 raise ValueError(f"Unsupported analytics source kind: {self.source_kind}")
             self.result_ready.emit(result)
+        except OutputPublicationCanceled as exc:
+            self.cancelled.emit(redact_sensitive_text(exc))
         except workers.AnalyticsCancelled as exc:
             self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
+
+    def _run_tabular_analytics(self, run_analytics):
+        render = partial(
+            run_analytics,
+            input_file=self.input_file,
+            tabular_load_result=self.tabular_load_result,
+            metric_selection=self.metric_selection,
+            sheet_name=self.sheet_name,
+            timestamp_column=self.timestamp_column,
+            reference_column=self.reference_column,
+            tabular_filter_columns=self.tabular_filter_columns,
+            tabular_filter_keys=self.tabular_filter_keys,
+            tabular_column_filters=self.tabular_column_filters,
+            tabular_filter_expression=self.tabular_filter_expression,
+            dashboard_detail_mode=self.dashboard_detail_mode,
+            grouping_df=self.grouping_df,
+            grouping_default_group_label=self.request.grouping_default_group_label,
+            _grouping_snapshot=self.request._grouping_snapshot,
+            aggregation_state=self.aggregation_state,
+            cohort_state=self.cohort_state,
+            chart_selection=self.chart_selection,
+            separate_parameter_sheets=self.separate_parameter_sheets,
+            dashboard_visual_settings=self.dashboard_visual_settings,
+            dashboard_interactivity_options=self.dashboard_interactivity_options,
+            cancel_check=self._is_cancelled,
+            progress_callback=self._emit_progress_message,
+        )
+        if self.output_publication is not None:
+            return publish_tabular_analysis(render, self.output_publication, should_cancel=self._is_cancelled)
+        return render(output_dashboard_file=self.output_dashboard_file,
+                      output_workbook_file=self.output_workbook_file or None)
 
 
 class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
@@ -508,6 +522,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
         sheet_name: str | int | None = None,
         timestamp_column: str | None = None,
         reference_column: str | None = None,
+        column_types=None,
     ):
         super().__init__()
         self.input_file = input_file
@@ -515,6 +530,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
         self.sheet_name = sheet_name
         self.timestamp_column = timestamp_column
         self.reference_column = reference_column
+        self.column_types = dict(column_types or {})
         self._init_cancellation_state()
 
     def _emit_tabular_load_progress(self, payload: dict[str, Any]) -> None:
@@ -544,6 +560,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
     def run(self):
         try:
             self.update_label.emit("Loading CSV/Excel data...\nReading rows and detecting metrics\nETA --")
+            overrides = {"column_types": self.column_types} if self.column_types else {}
             if self.input_files:
                 result = load_tabular_analytics_files(
                     self.input_files,
@@ -552,6 +569,7 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     reference_column=self.reference_column,
                     progress_callback=self._emit_tabular_load_progress,
                     cancel_check=self._is_cancelled,
+                    **overrides,
                 )
             else:
                 result = load_tabular_analytics_file(
@@ -561,8 +579,10 @@ class TabularAnalyticsLoadThread(WorkerCancellationMixin, QThread):
                     reference_column=self.reference_column,
                     progress_callback=self._emit_tabular_load_progress,
                     cancel_check=self._is_cancelled,
+                    **overrides,
                 )
             if self._is_cancelled():
+                cleanup_tabular_load_result(result)
                 self.cancelled.emit("CSV/Excel loading was canceled.")
                 return
             self.result_ready.emit(result)

@@ -972,6 +972,21 @@ def test_cell_text_tooltips_and_accessible_text():
     assert meta.summarize_rows([row]) == "1 report, 1 edited, all have a reference"
 
 
+def test_ocr_suggestion_describes_candidate_region_and_review_action():
+    selection = make_selection({"reference": ("OCR-REF", "header_exact", 0.72)})
+    selection = replace(selection, candidates=(replace(
+        selection.candidates[0], region_name="page1_header_band_ocr",
+    ),))
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    row.apply_ocr(selection)
+    tooltip = meta.cell_tooltip(row, "one.pdf", "reference")
+    assert "OCR suggests OCR-REF; your value is kept" in tooltip
+    assert "first-page header image (72%)" in tooltip
+    assert "Compare the suggested value with the report" in tooltip
+    assert row.value("reference") == "MANUAL"
+
+
 def test_details_list_value_source_confidence_candidates_and_notes():
     selection = make_selection({"reference": ("R1", "header_exact", 0.99)})
     alternative = selection.candidates[0].__class__(
