@@ -471,4 +471,3 @@ def run_bugreport_checks(root: Path) -> dict:
     if observation['status'] == 'passed':
         _require(all(value == 'passed' for value in observation['facets'].values()), 'unexpected_exception')
     return observation
-
