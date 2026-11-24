@@ -635,7 +635,7 @@ def _run_uiux_slice(child, fixtures, receipt):
     path = child / 'uiux-observation.json'
     _atomic_json(path, record)
     if record['status'] != 'passed':
-        raise ScenarioFailure('uiux_checks_failed')
+        raise ScenarioFailure(record['error_codes'][0])
     receipt['artifacts']['uiux_evidence'] = dict(path=path.name, sha256=_sha256(path))
     receipt['facets'].update(dict.fromkeys(('uiux_reports', 'uiux_tabular', 'uiux_controls', 'uiux_captures'), 'passed'))
 
