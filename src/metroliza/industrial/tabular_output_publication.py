@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
+from hashlib import file_digest
+from html import unescape
 import os
 from pathlib import Path
+import re
 import shutil
 from tempfile import TemporaryDirectory, mkdtemp
 from unicodedata import normalize
@@ -20,6 +23,7 @@ from metroliza.exporting.output_publication import (
 
 _ASSET_OWNER_FILE = ".metroliza-tabular-dashboard"
 _PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
+_LEGACY_DASHBOARD_HEAD_LIMIT = 128 * 1024
 
 
 def _output_entry(path: str) -> Path:
@@ -174,6 +178,7 @@ def _publish_staged(result, staged_assets, staged_workbook, publication, outputs
         publication.check(outputs)
         if staged_workbook is None and outputs.workbook is not None and os.path.lexists(outputs.workbook):
             raise OSError("Could not stage a workbook to replace the prior copy. Existing outputs were kept.")
+        legacy_assets = _approved_legacy_assets(outputs, consents)
         destination_assets.mkdir()
         try:
             for asset in staged_assets.iterdir():
@@ -186,6 +191,8 @@ def _publish_staged(result, staged_assets, staged_workbook, publication, outputs
             raise
         if any(consent.path == outputs.dashboard for consent in consents):
             _retire_owned_assets(outputs, destination_assets, publication.sources)
+            if legacy_assets is not None:
+                _retire_legacy_assets(legacy_assets, publication.sources)
     return destination_assets
 
 
@@ -265,3 +272,58 @@ def _retire_owned_assets(outputs, current_assets, sources):
                 shutil.rmtree(directory)
         except (OSError, RuntimeError, UnicodeError):
             continue
+
+
+def _approved_legacy_assets(outputs, consents):
+    """Find unmarked native assets referenced by the exact approved old HTML."""
+    from metroliza.industrial.industrial_analytics_dashboard import (
+        PLOTLY_ASSET_NAME, resolve_production_dashboard_assets_dir,
+    )
+
+    approved = next((consent for consent in consents if consent.path == outputs.dashboard), None)
+    if approved is None:
+        return None
+    try:
+        with outputs.dashboard.open("rb") as stream:
+            head = stream.read(_LEGACY_DASHBOARD_HEAD_LIMIT).decode("utf-8", errors="replace")
+        if OutputConsent.for_path(outputs.dashboard) != approved:
+            return None
+        source = re.search(r'<script src="([^/"]+)/' + re.escape(PLOTLY_ASSET_NAME) + r'"></script>', head)
+        if source is None:
+            return None
+        name = unescape(source.group(1))
+        base = outputs.assets
+        legacy_name = resolve_production_dashboard_assets_dir(outputs.dashboard).name
+        if name not in {base.name, legacy_name} and not re.fullmatch(
+            re.escape(base.name) + r"\.generation-[0-9a-f]{32}", name,
+        ):
+            return None
+        directory = base.with_name(name)
+        if not directory.is_dir() or directory.is_symlink() or (directory / _ASSET_OWNER_FILE).exists():
+            return None
+        return OutputConsent.for_path(directory)
+    except (OSError, ValueError):
+        return None
+
+
+def _retire_legacy_assets(approved, sources):
+    from metroliza.industrial.industrial_analytics_dashboard import PLOTLY_ASSET_NAME, PLOTLY_ASSET_SOURCE
+
+    directory = approved.path
+    script = directory / PLOTLY_ASSET_NAME
+    try:
+        if directory.is_symlink() or any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
+            return
+        if set(directory.iterdir()) != {script} or script.is_symlink() or not script.is_file():
+            return
+        script_identity = OutputConsent.for_path(script)
+        if script_identity.identity[2] != PLOTLY_ASSET_SOURCE.stat().st_size:
+            return
+        with script.open("rb") as old, PLOTLY_ASSET_SOURCE.open("rb") as bundled:
+            if file_digest(old, "sha256").digest() != file_digest(bundled, "sha256").digest():
+                return
+        if OutputConsent.for_path(directory) == approved and OutputConsent.for_path(script) == script_identity:
+            script.unlink()
+            directory.rmdir()
+    except (OSError, RuntimeError):
+        pass
