@@ -425,7 +425,7 @@ def test_pyinstaller_spec_collects_windows_runtime_and_pdf_parser_dependencies()
     assert 'collect_optional_distribution_metadata("hexafe-plotstats")' in common
     assert 'collect_optional_distribution_metadata("oznak")' in common
     assert 'def collect_optional_vendored_model_data(root_dir: Path)' in common
-    assert 'plotly-2.27.0.min.js' in common
+    assert 'verified_plotly_files(root_dir / "src" / PLOTLY_ASSET_DIRECTORY)' in common
     assert 'THIRD_PARTY_NOTICES.md' in common
     assert 'binaries=COLLECTION["binaries"]' in spec
     assert 'datas=COLLECTION["datas"]' in spec
