@@ -7,6 +7,7 @@ are trapped. The production diagnostic validation/completion flow is unchanged.
 """
 
 from dataclasses import dataclass
+import hashlib
 import json
 import math
 import os
@@ -368,6 +369,111 @@ def test_native_required_setup_propagation(powershell, fixture_repo, mode, flags
         assert "engine_smoke" in text
         if not success:
             assert CANARY not in text
+
+
+@pytest.mark.parametrize(
+    "mode,expected,starts",
+    [
+        ("success", "SHA-256 and Authenticode verified", True),
+        ("reboot", "SHA-256 and Authenticode verified", True),
+        ("installer-exit", "installer failed with exit code 1603", True),
+        ("no-result", "installer returned no exit code", True),
+        ("no-elevation", "with administrator approval", True),
+        ("bad-digest", "SHA-256 verification failed", False),
+        ("unsigned", "Authenticode verification failed", False),
+        ("signed-invalid", "Authenticode verification failed", False),
+        ("wrong-publisher", "Authenticode verification failed", False),
+        ("redirect", "Could not download or read", False),
+        ("download-failure", "Could not download or read", False),
+    ],
+)
+def test_native_vc_redistributable_verifies_before_elevated_launch(powershell, tmp_path, mode, expected, starts):
+    setup, marker, _ = (ROOT / "setup_windows_runtime.ps1").read_text().partition("Push-Location $repoRoot")
+    assert marker
+    payload = b"synthetic-not-an-executable"
+    expected_hash = hashlib.sha256(payload).hexdigest()
+    setup += f"\n$vcRedistSha256 = '{expected_hash}'\n$testMode = '{mode}'\n$testPayload = '{payload.decode('ascii')}'\n"
+    setup += """
+$script:downloadPath = $null
+function Invoke-WebRequest {
+    param([uri]$Uri, [string]$OutFile, [switch]$UseBasicParsing, [int]$MaximumRedirection, [int]$TimeoutSec)
+    if ($Uri.Scheme -ne 'https' -or $Uri.Host -ne 'download.visualstudio.microsoft.com' -or
+        $MaximumRedirection -ne 0 -or $TimeoutSec -le 0 -or -not $UseBasicParsing) {
+        throw 'TEST_FORBIDDEN_DOWNLOAD_POLICY'
+    }
+    $script:downloadPath = $OutFile
+    $ownedDir = Split-Path -Leaf (Split-Path -Parent $OutFile)
+    if ($ownedDir -notmatch '^metroliza-vcredist-[0-9a-f]{32}$' -or (Test-Path -LiteralPath $OutFile)) {
+        throw 'TEST_FORBIDDEN_TEMP_REUSE'
+    }
+    $bytes = if ($testMode -eq 'bad-digest') { 'modified' } else { $testPayload }
+    [IO.File]::WriteAllBytes($OutFile, [Text.Encoding]::ASCII.GetBytes($bytes))
+    Write-Host 'TEST_DOWNLOAD_ATTEMPT'
+    if ($testMode -in @('redirect', 'download-failure')) {
+        throw 'SYNTHETIC_PRIVATE_1002'
+    }
+}
+function Get-AuthenticodeSignature {
+    param([string]$LiteralPath, $ErrorAction)
+    if ($LiteralPath -cne $script:downloadPath -or -not (Test-Path -LiteralPath $LiteralPath)) {
+        throw 'TEST_FORBIDDEN_SIGNATURE_PATH'
+    }
+    Write-Host 'TEST_SIGNATURE_ATTEMPT'
+    if ($testMode -eq 'unsigned') {
+        return [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
+    }
+    $publisher = if ($testMode -eq 'wrong-publisher') { 'Other Publisher' } else { 'Microsoft Corporation' }
+    $status = if ($testMode -eq 'signed-invalid') { 'HashMismatch' } else { 'Valid' }
+    $cert = [pscustomobject]@{ Publisher = $publisher }
+    $cert | Add-Member -MemberType ScriptMethod -Name GetNameInfo -Value { $this.Publisher }
+    return [pscustomobject]@{ Status = $status; SignerCertificate = $cert }
+}
+function Start-Process {
+    param([string]$FilePath, [string[]]$ArgumentList, [string]$Verb, [switch]$Wait, [switch]$PassThru)
+    if ($FilePath -cne $script:downloadPath -or $Verb -ne 'RunAs' -or -not $Wait -or -not $PassThru -or
+        ($ArgumentList -join ' ') -ne '/install /quiet /norestart') {
+        throw 'TEST_FORBIDDEN_LAUNCH_POLICY'
+    }
+    try {
+        [IO.File]::WriteAllText($FilePath, 'attempted replacement')
+        throw 'TEST_FORBIDDEN_UNLOCKED_FILE'
+    }
+    catch [IO.IOException] {
+        Write-Host 'TEST_VERIFIED_BYTES_LOCKED'
+    }
+    Write-Host 'TEST_LAUNCH_ATTEMPT'
+    if ($testMode -eq 'no-elevation') { throw 'SYNTHETIC_PRIVATE_1002' }
+    if ($testMode -eq 'no-result') { return }
+    $code = switch ($testMode) { 'reboot' { 3010 } 'installer-exit' { 1603 } default { 0 } }
+    return [pscustomobject]@{ ExitCode = $code }
+}
+try {
+    Install-VcRedistX64
+}
+finally {
+    if ($null -eq $script:downloadPath -or (Test-Path -LiteralPath (Split-Path -Parent $script:downloadPath))) {
+        throw 'TEST_FORBIDDEN_MISSING_CLEANUP'
+    }
+    Write-Host 'TEST_CLEANUP_COMPLETE'
+}
+"""
+    script = tmp_path / "vc-redistributable-contract.ps1"
+    script.write_text(setup, encoding="utf-8-sig")
+    result = invoke(powershell, tmp_path, script.name)
+    assert_owned_completion(result)
+    output = public_text(result)
+    assert result.returncode == (0 if mode in {"success", "reboot"} else 1), output
+    assert expected in output
+    assert "TEST_FORBIDDEN" not in output
+    assert "TEST_CLEANUP_COMPLETE" in output
+    assert "TEST_DOWNLOAD_ATTEMPT" in output
+    assert ("TEST_SIGNATURE_ATTEMPT" in output) == (mode not in {"bad-digest", "redirect", "download-failure"})
+    assert ("TEST_LAUNCH_ATTEMPT" in output) == starts
+    assert ("TEST_VERIFIED_BYTES_LOCKED" in output) == starts
+    if starts:
+        assert output.index("SHA-256 and Authenticode verified") < output.index("TEST_LAUNCH_ATTEMPT")
+    if result.returncode:
+        assert "latest-supported-vc-redist" in output
 
 
 def test_native_relative_output_uses_one_location(powershell, fixture_repo):
