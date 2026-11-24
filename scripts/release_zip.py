@@ -385,7 +385,7 @@ def _verify_payload(
 
 
 def _source_predates_plotly_notice(source_root: Path, source_sha: str) -> bool:
-    git = ("git", "-C", str(source_root.resolve()))
+    git = ("git", "--no-replace-objects", "-C", str(source_root.resolve()))
     try:
         identity = subprocess.run(
             (*git, "rev-parse", "--show-toplevel", "HEAD"), capture_output=True, text=True, check=True, timeout=5,
