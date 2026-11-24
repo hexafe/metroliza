@@ -5,18 +5,18 @@ from dataclasses import dataclass, fields, is_dataclass, replace
 import json
 import sqlite3
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from threading import Event
 from uuid import uuid4
 
-from metroliza.exporting.output_publication import (
-    OutputPublicationCanceled, conflicting_outputs, publish_output, write_dashboard_safely,
-)
+from metroliza.exporting.output_publication import OutputPublicationCanceled, conflicting_outputs
 from metroliza.recipes.export_service import ExportRecipeService
 from metroliza.industrial.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
 from metroliza.industrial import industrial_analytics_state as state
 from metroliza.industrial.industrial_analytics_workflow import (
     AnalyticsCancelled, run_production_cache_analytics, run_tabular_file_analytics,
+)
+from metroliza.industrial.tabular_output_publication import (
+    TabularOutputFiles, TabularOutputPublication, publish_tabular_analysis,
 )
 from metroliza.recipes.contracts import (
     AnalyticsOutputPaths, DataKind, LocalBinding, ParameterKey, ParameterMode, ParameterSpec, ParameterType,
@@ -464,6 +464,9 @@ class AnalyticsRecipePorts:
         except (AnalyticsCancelled, TabularLoadCancelled, OutputPublicationCanceled):
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
             return StepResult(StepStatus.CANCELLED, ResultCode.CANCELLED)
+        except FileExistsError:
+            cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
+            return StepResult(StepStatus.FAILED, ResultCode.REVIEW_REQUIRED)
         except Exception:
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
             return StepResult(StepStatus.FAILED, ResultCode.EXPORT_FAILED)
@@ -529,7 +532,7 @@ class AnalyticsRecipePorts:
         try:
             approved = self._consents.get(plan.run_id)
             result = self._run(request, self._loaded.get(plan.run_id),
-                               approved.consents if approved else (), cancelled, context)
+                               approved.consents if approved else None, cancelled, context)
             self._results[plan.run_id] = result
             if not ExportRecipeService.verify(Path(result.html_dashboard_path)):
                 return StepResult(StepStatus.FAILED, ResultCode.OUTPUT_MISSING)
@@ -545,57 +548,49 @@ class AnalyticsRecipePorts:
             cleanup_tabular_load_result(self._loaded.pop(plan.run_id, None))
 
     def _run(self, request, loaded, consents, cancelled, context):
-        target = Path(request.output_dashboard_file)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix=".recipe-analytics-", dir=target.parent) as scratch:
-            workbook = Path(scratch) / Path(request.output_workbook_file).name if request.output_workbook_file else None
-            result_holder = []
+        outputs = TabularOutputFiles.from_paths(request.output_dashboard_file, request.output_workbook_file)
+        sources = (request.input_file, request.db_file)
+        if loaded is not None:
+            sources += (loaded.source_file, *loaded.source_files)
+            if loaded.sqlite_store is not None:
+                sources += (loaded.sqlite_store.path,)
+        publication = TabularOutputPublication(
+            outputs, tuple(Path(path) for path in dict.fromkeys(sources) if path),
+            replace_outputs=consents, allow_html_without_workbook=True,
+        )
 
-            def writer(*, output_path, assets_dir):
-                kwargs = dict(output_dashboard_file=str(output_path), output_assets_dir=assets_dir,
-                    output_workbook_file=str(workbook) if workbook else None,
-                    metric_selection=request.metric_selection, aggregation_state=request.aggregation_state,
-                    cohort_state=request.cohort_state, chart_selection=request.chart_selection,
-                    separate_parameter_sheets=request.separate_parameter_sheets,
-                    dashboard_visual_settings=request.dashboard_visual_settings,
-                    cancel_check=cancelled, progress_callback=lambda _text: context.progress(0, 0))
-                if request.source_kind == "tabular_file":
-                    result = run_tabular_file_analytics(
-                        input_file=request.input_file, tabular_load_result=loaded, sheet_name=request.sheet_name,
-                        timestamp_column=request.timestamp_column, reference_column=request.reference_column,
-                        tabular_filter_columns=request.tabular_filter_columns, tabular_filter_keys=request.tabular_filter_keys,
-                        tabular_column_filters=request.tabular_column_filters,
-                        tabular_filter_expression=request.tabular_filter_expression,
-                        dashboard_detail_mode=request.dashboard_detail_mode, grouping_df=request.grouping_df,
-                        grouping_default_group_label=request.grouping_default_group_label,
-                        dashboard_interactivity_options=request.dashboard_interactivity_options, **kwargs)
-                else:
-                    result = run_production_cache_analytics(db_file=request.db_file,
-                                                           filter_state=request.filter_state, **kwargs)
-                result_holder.append(result)
-                return {"html_dashboard_path": result.html_dashboard_path,
-                        "html_dashboard_assets_path": result.html_dashboard_assets_path}
+        def render(*, output_dashboard_file, output_workbook_file, output_assets_dir):
+            result = self._render(request, loaded, cancelled, context, output_dashboard_file,
+                                  output_workbook_file, output_assets_dir)
+            if not ExportRecipeService.verify(Path(result.html_dashboard_path)):
+                raise OSError("Could not verify the staged analytics dashboard.")
+            if output_workbook_file and not ExportRecipeService.verify(Path(output_workbook_file)):
+                return replace(result, workbook_path="", workbook_sheet_names=(), parameter_sheet_count=0)
+            return result
 
-            published = write_dashboard_safely(writer, output_path=target, consents=consents,
-                                               should_cancel=cancelled)
-            workbook_path = ""
-            if workbook:
-                if cancelled():
-                    raise OutputPublicationCanceled()
-                workbook_path = self._publish_workbook(workbook, request.output_workbook_file, consents, cancelled)
-            return replace(result_holder[0], html_dashboard_path=published["html_dashboard_path"],
-                           html_dashboard_assets_path=published["html_dashboard_assets_path"],
-                           workbook_path=workbook_path)
+        return publish_tabular_analysis(render, publication, should_cancel=cancelled)
 
     @staticmethod
-    def _publish_workbook(workbook, target, consents, cancelled):
-        if not ExportRecipeService.verify(workbook):
-            return ""
-        try:
-            publish_output(workbook, target, consents=consents, should_cancel=cancelled)
-        except OSError:
-            return ""
-        return target
+    def _render(request, loaded, cancelled, context, output_dashboard_file,
+                output_workbook_file, output_assets_dir):
+        kwargs = dict(output_dashboard_file=output_dashboard_file, output_assets_dir=output_assets_dir,
+            output_workbook_file=output_workbook_file,
+            metric_selection=request.metric_selection, aggregation_state=request.aggregation_state,
+            cohort_state=request.cohort_state, chart_selection=request.chart_selection,
+            separate_parameter_sheets=request.separate_parameter_sheets,
+            dashboard_visual_settings=request.dashboard_visual_settings,
+            cancel_check=cancelled, progress_callback=lambda _text: context.progress(0, 0))
+        if request.source_kind == "tabular_file":
+            return run_tabular_file_analytics(
+                input_file=request.input_file, tabular_load_result=loaded, sheet_name=request.sheet_name,
+                timestamp_column=request.timestamp_column, reference_column=request.reference_column,
+                tabular_filter_columns=request.tabular_filter_columns, tabular_filter_keys=request.tabular_filter_keys,
+                tabular_column_filters=request.tabular_column_filters,
+                tabular_filter_expression=request.tabular_filter_expression,
+                dashboard_detail_mode=request.dashboard_detail_mode, grouping_df=request.grouping_df,
+                grouping_default_group_label=request.grouping_default_group_label,
+                dashboard_interactivity_options=request.dashboard_interactivity_options, **kwargs)
+        return run_production_cache_analytics(db_file=request.db_file, filter_state=request.filter_state, **kwargs)
 
 
 def create_adapter_ports():

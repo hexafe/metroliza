@@ -101,6 +101,7 @@ class TabularOutputPublication:
     sources: tuple[Path, ...]
     replace_outputs: tuple[OutputConsent, ...] | None = None
     copy_from: TabularOutputFiles | None = None
+    allow_html_without_workbook: bool = False
 
     def check(self, outputs: TabularOutputFiles) -> None:
         outputs.validate_sources(self.sources)
@@ -141,11 +142,15 @@ def _render_and_publish(render, publication, outputs, should_cancel):
             output_workbook_file=str(staged_workbook) if staged_workbook is not None else None,
             output_assets_dir=html_stage / outputs.assets.name,
         )
+        if staged_workbook is not None and result.workbook_path != str(staged_workbook):
+            if not publication.allow_html_without_workbook:
+                raise OSError("Could not verify the staged analytics workbook.")
+            staged_workbook = None
         staged_assets = Path(result.html_dashboard_assets_path)
         (staged_assets / _ASSET_OWNER_FILE).write_text(os.path.normcase(outputs.dashboard.name), encoding="utf-8")
         destination_assets = _publish_staged(result, staged_assets, staged_workbook, publication, outputs, should_cancel)
     return replace(result, html_dashboard_path=str(outputs.dashboard), html_dashboard_assets_path=str(destination_assets),
-                   workbook_path=str(outputs.workbook) if outputs.workbook is not None else "")
+                   workbook_path=str(outputs.workbook) if staged_workbook is not None else "")
 
 
 def _output_lock_order(path: Path):
@@ -166,6 +171,8 @@ def _publish_staged(result, staged_assets, staged_workbook, publication, outputs
             stack.enter_context(_dashboard_publication_lock(path, should_cancel=should_cancel))
         _check_cancelled(should_cancel)
         publication.check(outputs)
+        if staged_workbook is None and outputs.workbook is not None and os.path.lexists(outputs.workbook):
+            raise OSError("Could not stage a workbook to replace the prior copy. Existing outputs were kept.")
         destination_assets.mkdir()
         try:
             for asset in staged_assets.iterdir():
