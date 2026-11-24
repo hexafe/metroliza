@@ -4,13 +4,15 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSignalBlocker, QThread, Qt
 from PyQt6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
     QPushButton, QVBoxLayout,
 )
 
-from metroliza.app.analysis_history import analysis_is_stale, bundle_analysis, recent_analyses, result_still_matches
+from metroliza.app.analysis_history import (
+    analysis_is_stale, bundle_analysis, has_report_folder_revision, recent_analyses, result_still_matches,
+)
 from metroliza.exporting.output_publication import OutputConsent
 from metroliza.ui.local_file_task import LocalFileTask
 from metroliza.ui.result_actions import LastResultRow
@@ -28,6 +30,16 @@ def collect_output_consent(parent, path):
         QMessageBox.StandardButton.No,
     )
     return (existing,) if answer == QMessageBox.StandardButton.Yes else None
+
+
+def _check_report_source(receipt, _generation):
+    return analysis_is_stale(receipt, cancelled=QThread.currentThread().isInterruptionRequested)
+
+
+def _source_status(stale):
+    if stale is None:
+        return "Published · report source freshness not verified"
+    return "Source changed · run again to refresh" if stale else "Published"
 
 
 class AnalysisHistoryDialog(QDialog):
@@ -64,24 +76,30 @@ class AnalysisHistoryDialog(QDialog):
         self.close_button.clicked.connect(self.close)
         self.runs.currentItemChanged.connect(self._selection_changed)
         self._task = None
+        self._source_task = None
+        self._source_pending = None
+        self._source_generation = 0
+        self.finished.connect(self._cancel_source_check)
         self.reload()
 
     def reload(self):
-        self.runs.clear()
-        for run in recent_analyses():
-            at = datetime.fromisoformat(run["at"]).astimezone().strftime("%Y-%m-%d %H:%M")
-            label = {"recipe": "Recipe", "csv": "CSV Summary", "reports": "Reports", "industrial": "Industrial"}.get(
-                run["kind"], run["kind"],
-            )
-            item = QListWidgetItem(f"{at} · {label} · {Path(run['files'][0]).name}")
-            item.setData(Qt.ItemDataRole.UserRole, run)
-            self.runs.addItem(item)
-        self.runs.setCurrentRow(0)
+        with QSignalBlocker(self.runs):
+            self.runs.clear()
+            for run in recent_analyses():
+                at = datetime.fromisoformat(run["at"]).astimezone().strftime("%Y-%m-%d %H:%M")
+                label = {"recipe": "Recipe", "csv": "CSV Summary", "reports": "Reports", "industrial": "Industrial"}.get(
+                    run["kind"], run["kind"],
+                )
+                item = QListWidgetItem(f"{at} · {label} · {Path(run['files'][0]).name}")
+                item.setData(Qt.ItemDataRole.UserRole, run)
+                self.runs.addItem(item)
+            self.runs.setCurrentRow(0)
         self._selection_changed(self.runs.currentItem())
         if not self.runs.count():
             self.status.setPlainText("Completed exports will appear here.")
 
     def _selection_changed(self, current, _previous=None):
+        self._cancel_source_check()
         self.pack.setEnabled(current is not None and self._task is None)
         if current is None:
             self.details.clear()
@@ -91,11 +109,52 @@ class AnalysisHistoryDialog(QDialog):
         self.details.setPlainText(self._describe(run))
         validate = partial(result_still_matches, run)
         available = [path for path in run["files"] if validate(path)]
-        outcome = "Source changed · run again to refresh" if analysis_is_stale(run) else "Published"
+        if len(available) < len(run["files"]):
+            outcome = "One or more output files were moved or replaced."
+            self.pack.setEnabled(False)
+        elif has_report_folder_revision(run):
+            outcome = "Published · checking report sources…"
+            self._source_pending = run
+            self._start_source_check()
+        else:
+            outcome = _source_status(analysis_is_stale(run))
+        self.result.set_result(outcome, available, validate=validate)
+
+    def _cancel_source_check(self):
+        self._source_generation += 1
+        self._source_pending = None
+        if self._source_task is not None:
+            self._source_task.requestInterruption()
+
+    def _start_source_check(self):
+        if self._source_task is not None or self._source_pending is None:
+            return
+        run, self._source_pending = self._source_pending, None
+        self._source_task = LocalFileTask(_check_report_source, run, self._source_generation)
+        self._source_task.succeeded.connect(self._show_source_check)
+        self._source_task.failed.connect(self._source_check_failed)
+        self._source_task.start_owned(self, AnalysisHistoryDialog._source_check_finished)
+
+    def _source_check_failed(self, _error):
+        self._show_source_check(None)
+
+    def _show_source_check(self, stale):
+        task = self.sender()
+        if task is not self._source_task or task.args[1] != self._source_generation:
+            return
+        run = task.args[0]
+        validate = partial(result_still_matches, run)
+        available = [path for path in run["files"] if validate(path)]
+        outcome = _source_status(stale)
         if len(available) < len(run["files"]):
             outcome = "One or more output files were moved or replaced."
             self.pack.setEnabled(False)
         self.result.set_result(outcome, available, validate=validate)
+
+    def _source_check_finished(self, task):
+        self._source_task = None
+        task.deleteLater()
+        self._start_source_check()
 
     def _describe(self, run):
         source = run.get("source")

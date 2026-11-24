@@ -6,6 +6,7 @@ from html.parser import HTMLParser
 from io import TextIOWrapper
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 from urllib.parse import unquote, urlsplit
@@ -68,7 +69,7 @@ def record_analysis(receipt, *, directory=None):
     if not files:
         return None
     source = str(Path(receipt["source"]).absolute()) if receipt.get("source") else None
-    current_stamp = capture_source_stamp(source)
+    current_stamp = None if "report_folder_revision" in receipt else capture_source_stamp(source)
     submitted_stamp = receipt.get("source_stamp", current_stamp)
     timestamp = datetime.now(timezone.utc)
     name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}.json"
@@ -83,6 +84,8 @@ def record_analysis(receipt, *, directory=None):
         "files": [str(path) for path in files],
         "entries": entries,
     }
+    if "report_folder_revision" in receipt:
+        entry["report_folder_revision"] = receipt["report_folder_revision"]
     root = Path(directory) if directory is not None else _history_directory()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = root / name
@@ -131,8 +134,28 @@ def _readable_receipt(receipt):
     )
 
 
-def analysis_is_stale(receipt):
+def has_report_folder_revision(receipt):
+    value = receipt.get("report_folder_revision")
+    return bool(isinstance(receipt.get("source"), str) and receipt["source"]
+                and isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value))
+
+
+def analysis_is_stale(receipt, *, cancelled=lambda: False):
+    """Return True for changed sources, False for current and None for unconfirmed folders."""
     source = receipt.get("source")
+    if "report_folder_revision" in receipt:
+        if not has_report_folder_revision(receipt):
+            return None
+        from metroliza.parsing.report_folder_revision import revision_from_folder
+
+        current = revision_from_folder(source, outputs=receipt["files"], cancelled=cancelled)
+        return None if current is None else current != receipt["report_folder_revision"]
+    if receipt.get("kind") == "recipe" and source:
+        try:
+            if Path(source).is_dir():
+                return None  # Older folder receipts contain only the parent directory stat.
+        except (OSError, TypeError, ValueError):
+            return None
     stored = receipt.get("source_stamp")
     return bool(receipt.get("source_changed_during_run") or (
         source and stored and stored != capture_source_stamp(source)

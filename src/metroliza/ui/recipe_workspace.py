@@ -156,10 +156,11 @@ class RecipeWorkspace(QWidget):
 
     def _capture_analysis_source(self, plan):
         from metroliza.app.analysis_history import capture_source_stamp
-        self._analysis_source_stamp = (plan.flow_id, capture_source_stamp(self._analysis_source(plan)))
+        stamp = None if plan.input_folder else capture_source_stamp(self._analysis_source(plan))
+        self._analysis_source_stamp = (plan.flow_id, stamp)
 
     def _home_result(self, record):
-        from metroliza.recipes.contracts import ParameterKey
+        from metroliza.recipes.contracts import ParameterKey, StepKind
 
         plan = self.controller.plan
         paths = self.quick.set_result(plan, record)
@@ -173,10 +174,16 @@ class RecipeWorkspace(QWidget):
             if any(path.suffix.lower() in {".html", ".htm"} for path in paths):
                 assets = list(dict.fromkeys(step.result.dashboard_assets_path for step in record.steps
                               if step.result.artifact_verified and step.result.dashboard_assets_path))
-            self.analysis_completed.emit({"kind": "recipe", "artifacts": [str(path) for path in paths],
-                                          "source": str(source) if source else None,
-                                          "source_stamp": stamp if flow_id == plan.flow_id else None,
-                                          "settings": settings, "assets": assets})
+            receipt = {"kind": "recipe", "artifacts": [str(path) for path in paths],
+                       "source": str(source) if source else None,
+                       "source_stamp": stamp if flow_id == plan.flow_id else None,
+                       "settings": settings, "assets": assets}
+            if plan.input_folder:
+                receipt["report_folder_revision"] = next(
+                    (step.result.report_folder_revision for step in record.steps if step.kind is StepKind.IMPORT_REPORTS),
+                    None,
+                )
+            self.analysis_completed.emit(receipt)
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)
