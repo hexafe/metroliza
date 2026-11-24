@@ -804,10 +804,18 @@ if ($BundleCredentials) {
     Write-Host '      Credential bundling disabled; OAuth credentials must remain outside the packaged artifact.'
 }
 
+$artifactPath = $OutputName
+if ($isWindowsHost -and [System.IO.Path]::GetExtension($artifactPath) -ine '.exe') {
+    $artifactPath += '.exe'
+}
 if ($Mode -eq 'onefile') {
     $commonArgs += '--onefile'
 } else {
+    $entryName = (Get-Item -LiteralPath $EntryPoint -ErrorAction Stop).Name
+    $standaloneDirectory = [System.IO.Path]::GetFileNameWithoutExtension($entryName) + '.dist'
     $commonArgs += '--standalone'
+    $commonArgs += "--output-folder-name=$standaloneDirectory"
+    $artifactPath = Join-Path $standaloneDirectory $artifactPath
 }
 
 # Section: build execution
@@ -832,11 +840,11 @@ $noticeStageArgs = @(
     '--dist-dir',
     'dist',
     '--artifact',
-    $OutputName
+    $artifactPath
 )
 Invoke-CheckedPythonCommand -Arguments $noticeStageArgs -FailureMessage 'Failed to stage third-party notice sidecars.'
 
 Write-Host 'Done'
-Write-Host "Build output name: $OutputName"
+Write-Host "Build output path: $artifactPath"
 Write-Host 'Dependency report: nuitka-build-report.xml'
 Write-Host 'Note: this build path intentionally avoids MSVC/Visual Studio Build Tools and prefers MinGW-w64 GCC, with Clang as the non-MSVC fallback.'
