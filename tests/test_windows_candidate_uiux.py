@@ -762,6 +762,9 @@ def write_complete_uiux(root, *, source='1' * 40, dpr=1.0):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         value['evidence']['data'][name] = dict(path=uiux.DATA[name], sha256=uiux.sha(path), size=len(content))
+    notice = uiux._plotly_notice_record(uiux.DATA['csv_plotly'])
+    bundled_notice = Path(__file__).resolve().parents[1] / 'src/metroliza/resources/html_dashboard_assets' / uiux.PLOTLY_NOTICE_FILENAME
+    shutil.copyfile(bundled_notice, root / notice['path'])
     for case in 'ABC':
         value['evidence']['reports']['evidence'][case]['preservation']['destination_logical_sha256'] = logical[case]
     for name, record in value['evidence']['captures']['metadata'].items():
@@ -783,10 +786,10 @@ def test_complete_retained_assets_are_independently_read_and_hash_preserved(tmp_
     uiux.verify(tmp_path, value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
                 source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
     assert all((tmp_path / path).read_bytes() == contents for path, contents in before.items())
-    assert len(before) == 17
+    assert len(before) == len(uiux.DATA) + len(uiux.CAPTURES) + 1  # Plotly notice.
 
 
-@pytest.mark.parametrize('defect', ['plotly', 'png', 'workbook', 'database', 'data_path', 'missing_data'])
+@pytest.mark.parametrize('defect', ['plotly', 'plotly_notice', 'png', 'workbook', 'database', 'data_path', 'missing_data'])
 def test_complete_retained_assets_cannot_be_replaced_by_passed_strings(tmp_path, defect):
     value = write_complete_uiux(tmp_path)
     data = value['evidence']['data']
@@ -794,6 +797,9 @@ def test_complete_retained_assets_cannot_be_replaced_by_passed_strings(tmp_path,
         data['csv_html']['path'] = '../analysis.html'
     elif defect == 'missing_data':
         del data['csv_plotly']
+    elif defect == 'plotly_notice':
+        notice = uiux._plotly_notice_record(data['csv_plotly']['path'])
+        (tmp_path / notice['path']).write_bytes(b'X' * notice['size'])
     elif defect == 'png':
         (tmp_path / 'uiux-active-child-modal.png').write_bytes(b'changed')
     else:
@@ -1018,7 +1024,7 @@ def test_completed_component_bytes_survive_failed_host_without_becoming_host_pas
     args = SimpleNamespace(source_checkout=Path(__file__).resolve().parents[1], expected_source_sha='1' * 40, dpi_scale='1.0')
     core._snapshot_failed_uiux(work, args, observation)
     assert observation['uiux_snapshot']['uiux-observation.json'] == original
-    assert len(observation['uiux_snapshot']) == 18  # Exact17assets plus observation, not global artifact keys.
+    assert len(observation['uiux_snapshot']) == len(uiux.DATA) + len(uiux.CAPTURES) + 2  # Plotly notice and observation.
     shutil.rmtree(work)
     output = tmp_path / 'failed'
     output.mkdir()
@@ -1074,7 +1080,7 @@ def test_actual_three_slices_and_independent_retained_assets(qapplication_sessio
     uiux.verify_assets(output, evidence, oracle, dpr=dpr, inert=True)
     snapshot = uiux.snapshot_assets(output, value['evidence']['captures']['metadata'],
                                     value['evidence']['data'], dpr=dpr)
-    assert len(snapshot) == 17
+    assert len(snapshot) == len(uiux.DATA) + len(uiux.CAPTURES) + 1  # Plotly notice.
     snapshot['uiux-observation.json'] = (output / 'uiux-observation.json').read_bytes()
     retained = tmp_path / 'independent-retained'
     retained.mkdir(mode=0o700)

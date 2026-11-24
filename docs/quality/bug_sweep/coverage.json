@@ -2371,7 +2371,8 @@
     {
       "id": "offline-dashboard-asset",
       "include": [
-        "src/metroliza/resources/html_dashboard_assets/*.js"
+        "src/metroliza/resources/html_dashboard_assets/*.js",
+        "src/metroliza/resources/html_dashboard_assets/plotly.min.js.LICENSE.txt"
       ],
       "exclude": [],
       "class": "generated/static asset",
@@ -2472,6 +2473,7 @@
         "scripts/release_only_google_conversion_smoke.py",
         "scripts/release_zip.py",
         "scripts/stage_release_notices.py",
+        "scripts/vendored_plotly.py",
         "scripts/summarize_startup_profile.py",
         "scripts/sync_release_metadata.py",
         "scripts/validate_packaged_pdf_parser.py",

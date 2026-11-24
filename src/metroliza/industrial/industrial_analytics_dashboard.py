@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 from time import perf_counter
 from typing import Any
 from collections.abc import Callable
@@ -59,6 +58,7 @@ from metroliza.charts.hexafe_plotstats_adapter import (
     plotstats_export_charts_enabled,
     render_histogram_png,
 )
+from metroliza.charts.plotly_runtime_assets import copy_plotly_runtime_assets
 from metroliza.charts.plotly_stat_helpers import (
     plotly_spec_variants as _plotly_spec_variants,
     series_labels_from_plotly_spec as _shared_series_labels_from_plotly_spec,
@@ -1545,13 +1545,7 @@ def _resolve_bundled_plotly_js_path() -> Path:
 
 
 def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
-    source_path = _resolve_bundled_plotly_js_path()
-    if not source_path.exists():
-        return None
-    destination_path = asset_directory / PLOTLY_ASSET_NAME
-    if not destination_path.exists():
-        shutil.copy2(source_path, destination_path)
-    return f"{asset_directory.name}/{destination_path.name}"
+    return copy_plotly_runtime_assets(_resolve_bundled_plotly_js_path(), asset_directory)
 
 
 def _copy_manifest_without_plotly_specs(

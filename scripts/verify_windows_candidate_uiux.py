@@ -18,6 +18,8 @@ import stat
 import struct
 import zipfile
 
+from scripts.vendored_plotly import PLOTLY_ASSET_HASHES, PLOTLY_NOTICE_FILENAME
+
 MAX_JSON = 128 * 1024
 MAX_ASSET = 8 * 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
@@ -33,7 +35,10 @@ DATA = {'reports_A': 'reports-uiux/A.sqlite', 'reports_B': 'reports-uiux/B.sqlit
         'reports_C': 'reports-uiux/C.sqlite', 'reports_seed': 'reports-uiux/seed.sqlite',
         'csv_html': 'tabular/analysis.html', 'csv_xlsx': 'tabular/analysis.xlsx',
         'csv_plotly': 'tabular/analysis_assets/plotly-2.27.0.min.js'}
-PLOTLY_SHA = '7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0'
+PLOTLY_FILENAME = PurePosixPath(DATA['csv_plotly']).name
+PLOTLY_SHA = PLOTLY_ASSET_HASHES[PLOTLY_FILENAME]
+PLOTLY_NOTICE_SHA = PLOTLY_ASSET_HASHES[PLOTLY_NOTICE_FILENAME]
+PLOTLY_NOTICE_BYTES = 1110
 PLOTLY_GENERATION = re.compile(r'tabular/analysis_assets\.generation-[0-9a-f]{32}/plotly-2\.27\.0\.min\.js')
 CAPTURES = ('reports-saved-top', 'reports-saved-bottom', 'reports-partial-error',
             'reports-partial-cancel', 'csv-busy', 'csv-resumed', 'grouping-members',
@@ -95,10 +100,18 @@ def _plotly_path(relative):
     return type(relative) is str and (relative == DATA['csv_plotly'] or PLOTLY_GENERATION.fullmatch(relative) is not None)
 
 
+def _plotly_notice_record(script_path):
+    notice_path = str(PurePosixPath(script_path).with_name(PLOTLY_NOTICE_FILENAME))
+    return dict(path=notice_path, sha256=PLOTLY_NOTICE_SHA, size=PLOTLY_NOTICE_BYTES)
+
+
 def allowed_asset_path(relative):
-    return type(relative) is str and (
-        relative in {*DATA.values(), *(f'uiux-{name}.png' for name in CAPTURES)} or _plotly_path(relative)
-    )
+    if type(relative) is not str:
+        return False
+    directory, _, filename = relative.rpartition('/')
+    if filename == PLOTLY_NOTICE_FILENAME:
+        return _plotly_path(f'{directory}/{PLOTLY_FILENAME}')
+    return relative in {*DATA.values(), *(f'uiux-{name}.png' for name in CAPTURES)} or _plotly_path(relative)
 
 
 def asset_path(root, relative):
@@ -476,6 +489,11 @@ def verify_assets(root, evidence, oracle, *, dpr, inert=False):
         require(sha(path) == record['sha256'], 'uiux_asset_hash')
         total += record['size']
         paths[name] = path
+    notice = _plotly_notice_record(data['csv_plotly']['path'])
+    notice_path = asset_path(root, notice['path'])
+    require(regular(notice_path) == notice['size'] and sha(notice_path) == notice['sha256'],
+            'uiux_offline_asset_mismatch')
+    total += notice['size']
     for name, record in captures.items():
         literal(record['path'], 'uiux-' + name + '.png')
         path = asset_path(root, record['path'])
@@ -521,6 +539,9 @@ def manifest(captures, data, *, dpr, diagnostic=False):
         digest(record['sha256'])
         require(type(record['size']) is int and 0 < record['size'] <= MAX_ASSET, 'uiux_asset_size')
         records[relative] = record
+        if name == 'csv_plotly':
+            notice = _plotly_notice_record(relative)
+            records[notice['path']] = notice
     _capture_map(captures, tuple(captures), dpr)
     for record in captures.values():
         require(record['path'] not in records)

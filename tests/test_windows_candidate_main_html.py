@@ -50,6 +50,7 @@ def _png():
 def _protocol_archive(source=SHA, packaged=True):
     files, cases = {}, {}
     plotly = (REPO / 'src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js').read_bytes()
+    notice = (REPO / 'src/metroliza/resources/html_dashboard_assets/plotly.min.js.LICENSE.txt').read_bytes()
     for case in verifier.CASES:
         workbook = case.endswith('xlsx_html')
         dashboard, workbook_name, asset_base = verifier._case_names(case)
@@ -60,6 +61,7 @@ def _protocol_archive(source=SHA, packaged=True):
         contents = {
             case + '/' + stem + '.html': f'<!doctype html><h2>{label} - X</h2><script src="{assets}/plotly-2.27.0.min.js"></script><img src="{assets}/section_001_chart.png"><div data-plotly-spec-light="{spec}"></div>'.encode(),
             case + '/' + assets + '/plotly-2.27.0.min.js': plotly,
+            case + '/' + assets + '/plotly.min.js.LICENSE.txt': notice,
             case + '/' + assets + '/section_001_chart.png': _png(),
         }
         if workbook:
@@ -152,7 +154,7 @@ def test_archive_rejects_previous_schema_even_with_all_six_cases(tmp_path):
 
 @pytest.mark.parametrize('mutation', [
     'missing_case', 'extra_case', 'omission', 'source', 'runtime', 'missing_png',
-    'missing_plotly', 'changed_plotly', 'changed_png', 'label', 'external', 'css_external', 'numeric',
+    'missing_plotly', 'changed_plotly', 'changed_notice', 'changed_png', 'label', 'external', 'css_external', 'numeric',
     'path', 'extra_file', 'hash', 'long_component', 'duplicate_json',
 ])
 def test_archive_rejects_missing_or_false_qualification_evidence(tmp_path, mutation):
@@ -177,6 +179,9 @@ def test_archive_rejects_missing_or_false_qualification_evidence(tmp_path, mutat
         del files[png if mutation == 'missing_png' else script]
     elif mutation == 'changed_plotly':
         files[script] += b'changed'
+    elif mutation == 'changed_notice':
+        notice = next(name for name in record['files'] if name.endswith('.LICENSE.txt'))
+        files[notice] += b'changed'
     elif mutation == 'changed_png':
         files[png] += b'changed'
     elif mutation == 'label':

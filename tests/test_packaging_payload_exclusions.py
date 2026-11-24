@@ -142,6 +142,18 @@ def test_user_collection_does_not_collect_or_import_openvino(monkeypatch, flavor
     assert "openvino" in collection["excludes"]
 
 
+def test_pyinstaller_collection_keeps_plotly_bundle_and_companion_together(monkeypatch):
+    _, collection = _patched_collection(monkeypatch, "user")
+    directory = "metroliza/resources/html_dashboard_assets"
+
+    assert {
+        Path(source) for source, destination in collection["datas"] if destination == directory
+    } == {
+        ROOT / "src" / directory / "plotly-2.27.0.min.js",
+        ROOT / "src" / directory / "plotly.min.js.LICENSE.txt",
+    }
+
+
 def test_benchmark_collection_collects_openvino(monkeypatch):
     collected, collection = _patched_collection(monkeypatch, "benchmark")
 

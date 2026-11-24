@@ -4,7 +4,7 @@ The ZIP holds one folder with exactly:
 
 * the native launcher ``Metroliza-<version>-windows-x64.exe`` (historical archives remain readable);
 * its original ``.provenance.json`` sidecar;
-* its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md`` and
+* its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md``, ``plotly.min.js.LICENSE.txt`` and
   the dependency inventory, nothing else;
 * ``README.txt``: extract everything, then start the EXE.
 
@@ -30,6 +30,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -40,6 +41,8 @@ try:
 except ImportError:  # pragma: no cover - direct ``python scripts/release_zip.py`` execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.stage_release_notices import DEFAULT_INVENTORY, DEFAULT_NOTICE, REPO_ROOT
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, PLOTLY_NOTICE_FILENAME
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from metroliza.app.release_identity import LAUNCHER_NAME, launcher_identity  # noqa: E402
@@ -54,6 +57,7 @@ CHUNK = 1024 * 1024
 REQUIRED_NOTICES = {
     DEFAULT_NOTICE.name: DEFAULT_NOTICE.relative_to(REPO_ROOT),
     DEFAULT_INVENTORY.name: DEFAULT_INVENTORY.relative_to(REPO_ROOT),
+    PLOTLY_NOTICE_FILENAME: Path("src") / PLOTLY_ASSET_DIRECTORY / PLOTLY_NOTICE_FILENAME,
 }
 
 
@@ -256,7 +260,7 @@ def verify(
     source_root: Path | None = None,
     work_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Verify a downloaded release ZIP; return the receipt or raise ``ReleaseZipError``."""
+    """Verify a downloaded ZIP. Pre-companion archives need exact source and EXE pins and their source checkout."""
     with zipfile.ZipFile(zip_path) as archive:
         members = _safe_members(archive)
         tops = {PurePosixPath(info.filename).parts[0] for info in members}
@@ -292,10 +296,9 @@ def verify(
                 names,
                 expected_content_sha256=expected_content_sha256,
                 expected_source_sha=expected_source_sha,
+                expected_exe_sha256=expected_exe_sha256,
                 source_root=source_root,
             )
-            if expected_exe_sha256 is not None and receipt["exe"]["sha256"] != expected_exe_sha256:
-                raise ReleaseZipError("EXE differs from the smoke-tested launcher")
             return receipt | {"zip": {"name": zip_path.name, "sha256": _sha256_file(zip_path), "size_bytes": zip_path.stat().st_size}}
 
 
@@ -318,11 +321,14 @@ def _listed_notices(folder: Path, licenses: str) -> dict[str, str]:
     return notices
 
 
-def _verify_notices(folder: Path, exe_name: str, names: set[str], source_root: Path | None) -> dict[str, str]:
+def _verify_notices(
+    folder: Path, exe_name: str, names: set[str], source_root: Path | None, *, historical: bool
+) -> dict[str, str]:
     """Check the notice directory against its manifest, the exact file set and the source."""
     licenses = f"{exe_name}.licenses"
     notices = _listed_notices(folder, licenses)
-    if set(notices) != set(REQUIRED_NOTICES):
+    legacy_names = set(REQUIRED_NOTICES) - {PLOTLY_NOTICE_FILENAME}
+    if set(notices) != set(REQUIRED_NOTICES) and not (historical and set(notices) == legacy_names):
         raise ReleaseZipError(f"notices must be exactly {sorted(REQUIRED_NOTICES)}, found {sorted(notices)}")
     expected = {README, exe_name, f"{exe_name}.provenance.json", f"{licenses}/{NOTICE_MANIFEST}"}
     expected.update(f"{licenses}/{name}" for name in notices)
@@ -356,9 +362,10 @@ def _verify_provenance(exe: Path, provenance: dict[str, Any], expected_source_sh
     return git_sha
 
 
-def _verify_payload(exe: Path, git_sha: str, expected_content_sha256: str | None) -> dict[str, Any]:
+def _verify_payload(
+    exe: Path, manifest: dict[str, Any], git_sha: str, expected_content_sha256: str | None,
+) -> dict[str, Any]:
     """Check the embedded payload against the provenance commit and the qualified onedir."""
-    manifest = read_payload_manifest(exe)
     payload_sha256 = payload_content_sha256(manifest)
     if manifest.get("git_sha") != git_sha:
         raise ReleaseZipError("embedded payload commit differs from provenance")
@@ -377,6 +384,24 @@ def _verify_payload(exe: Path, git_sha: str, expected_content_sha256: str | None
     }
 
 
+def _source_predates_plotly_notice(source_root: Path, source_sha: str) -> bool:
+    git = ("git", "--no-replace-objects", "-C", str(source_root.resolve()))
+    try:
+        identity = subprocess.run(
+            (*git, "rev-parse", "--show-toplevel", "HEAD"), capture_output=True, text=True, check=True, timeout=5,
+        ).stdout.splitlines()
+        if len(identity) != 2 or Path(identity[0]).resolve() != source_root.resolve() or identity[1] != source_sha:
+            return False
+        companion = REQUIRED_NOTICES[PLOTLY_NOTICE_FILENAME].as_posix()
+        tracked = subprocess.run(
+            (*git, "ls-tree", "--full-tree", "--name-only", source_sha, "--", companion),
+            capture_output=True, check=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return False
+    return not tracked
+
+
 def _verify_extracted(
     folder: Path,
     exe_name: str,
@@ -384,17 +409,29 @@ def _verify_extracted(
     *,
     expected_content_sha256: str | None,
     expected_source_sha: str | None,
+    expected_exe_sha256: str | None,
     source_root: Path | None,
 ) -> dict[str, Any]:
     exe = folder / exe_name
-    notices = _verify_notices(folder, exe_name, names, source_root)
     provenance = _load_json(folder / f"{exe_name}.provenance.json")
     git_sha = _verify_provenance(exe, provenance, expected_source_sha)
+    if expected_exe_sha256 is not None and provenance["artifact"]["sha256"] != expected_exe_sha256:
+        raise ReleaseZipError("EXE differs from the smoke-tested launcher")
+    manifest = read_payload_manifest(exe)
+    historical = (
+        not exe_name.startswith("Metroliza-")
+        and expected_source_sha is not None
+        and expected_exe_sha256 is not None
+        and source_root is not None
+        and all(PurePosixPath(item["path"]).name != PLOTLY_NOTICE_FILENAME for item in manifest["files"])
+        and _source_predates_plotly_notice(source_root, expected_source_sha)
+    )
+    notices = _verify_notices(folder, exe_name, names, source_root, historical=historical)
     return {
         "status": "PASS",
         "exe": {"name": exe_name, "sha256": provenance["artifact"]["sha256"], "size_bytes": exe.stat().st_size},
         "source": {"git_sha": git_sha, "release_label": provenance["release_label"]},
-        "payload": _verify_payload(exe, git_sha, expected_content_sha256),
+        "payload": _verify_payload(exe, manifest, git_sha, expected_content_sha256),
         "notices": notices,
     }
 
