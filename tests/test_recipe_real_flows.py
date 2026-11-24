@@ -209,6 +209,10 @@ def test_append_reports_exports_only_folder_and_refreshes_all_duplicate_run(tmp_
         assert first.state is RunState.COMPLETED, first
         receipt = next(step.result for step in first.steps if step.kind is StepKind.IMPORT_REPORTS)
         assert (receipt.imported_count, receipt.duplicate_count) == (4, 1)
+        from metroliza.parsing.report_folder_revision import revision_from_folder
+
+        expected_revision = revision_from_folder(source)
+        assert expected_revision and receipt.report_folder_revision == expected_revision
         assert sqlite_file_identity(database) == original_identity
 
         with sqlite_readonly_connection_scope(str(database)) as connection:
@@ -237,6 +241,7 @@ def test_append_reports_exports_only_folder_and_refreshes_all_duplicate_run(tmp_
         assert repeat.state is RunState.COMPLETED, repeat
         receipt = next(step.result for step in repeat.steps if step.kind is StepKind.IMPORT_REPORTS)
         assert (receipt.imported_count, receipt.duplicate_count) == (0, 5)
+        assert receipt.report_folder_revision == expected_revision
         assert runner.plan.database_file == database and not output.with_suffix(".db").exists()
 
         assert runner.start(resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding)).state is RunState.REQUIRES_DECISION

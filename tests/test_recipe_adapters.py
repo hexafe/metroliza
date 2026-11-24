@@ -215,28 +215,150 @@ def test_multifile_recipe_roundtrips_every_source_through_native_runner(tmp_path
     assert output.is_file() and output.with_suffix(".xlsx").is_file()
 
 
-def test_workbook_publish_failure_reports_new_excel_missing_and_keeps_previous(tmp_path, monkeypatch):
-    from metroliza.recipes.runner import RecipeRunner, RunState
+@pytest.mark.parametrize("old_dashboard", [None, b"previous complete dashboard"])
+def test_workbook_publish_failure_preserves_prior_output_bytes(tmp_path, monkeypatch, old_dashboard):
+    from pathlib import Path
+
+    from metroliza.exporting.output_publication import publish_output
+    from metroliza.industrial import tabular_output_publication
     from metroliza.recipes import tabular_adapter
+    from metroliza.recipes.runner import RecipeRunner, RunState
 
     path, output = tmp_path / "table.csv", tmp_path / "result.html"
     source(path)
     workbook = output.with_suffix(".xlsx")
-    workbook.write_bytes(b"previous workbook remains")
+    old_workbook = b"previous complete workbook"
+    workbook.write_bytes(old_workbook)
+    if old_dashboard is not None:
+        output.write_bytes(old_dashboard)
     entry = capture(request_for(path, output))
     plan = resolve_plan(entry.definition, entry.binding)
+    attempts = []
 
-    def failed_publication(_file, target, **_kwargs):
-        assert target == str(workbook)
-        raise PermissionError("Excel is holding the file")
+    def failed_publication(staged, target, **kwargs):
+        if Path(target) == workbook:
+            attempts.append(Path(staged).is_file())
+            raise PermissionError("Excel is holding the file")
+        return publish_output(staged, target, **kwargs)
 
-    monkeypatch.setattr(tabular_adapter, "publish_output", failed_publication)
+    monkeypatch.setattr(tabular_adapter, "publish_output", failed_publication, raising=False)
+    monkeypatch.setattr(tabular_output_publication, "publish_output", failed_publication)
     runner = RecipeRunner(AnalyticsRecipePorts())
     assert runner.start(plan).state is RunState.REQUIRES_DECISION
     result = runner.resume("continue")
-    assert (result.state, result.code) == (RunState.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED)
+    assert attempts == [True]
+    assert (output.read_bytes() if output.exists() else None) == old_dashboard
+    assert workbook.read_bytes() == old_workbook
+    assert (result.state, result.code) == (RunState.FAILED, ResultCode.EXPORT_FAILED)
+    assert not list(tmp_path.glob("*generation-*"))
+    assert not list(tmp_path.glob(".mza-*"))
+    assert not list(tmp_path.glob(".metroliza-previous-*"))
+
+
+@pytest.mark.parametrize("late_collision", [False, True])
+def test_recipe_rolls_back_workbook_when_dashboard_cannot_commit(tmp_path, monkeypatch, late_collision):
+    from pathlib import Path
+
+    from metroliza.industrial import tabular_output_publication as publication
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    workbook.write_bytes(b"previous workbook")
+    output.write_bytes(b"previous dashboard")
+    old_assets = tmp_path / "result_assets"
+    old_assets.mkdir()
+    (old_assets / "previous.js").write_bytes(b"previous resources")
+    entry = capture(request_for(path, output))
+    real_publish = publication.publish_output
+    attempts = []
+
+    def failed_dashboard(temporary, target, **kwargs):
+        if Path(target) == output and not attempts:
+            attempts.append(workbook.read_bytes().startswith(b"PK"))
+            if not late_collision:
+                raise PermissionError("Browser is holding the dashboard")
+            output.write_bytes(b"another writer's dashboard")
+        return real_publish(temporary, target, **kwargs)
+
+    monkeypatch.setattr(publication, "publish_output", failed_dashboard)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    assert runner.start(resolve_plan(entry.definition, entry.binding)).state is RunState.REQUIRES_DECISION
+    result = runner.resume("continue")
+    expected = ResultCode.REVIEW_REQUIRED if late_collision else ResultCode.EXPORT_FAILED
+    assert (result.state, result.code) == (RunState.FAILED, expected)
+    assert attempts == [True]
+    assert workbook.read_bytes() == b"previous workbook"
+    assert output.read_bytes() == (b"another writer's dashboard" if late_collision else b"previous dashboard")
+    assert (old_assets / "previous.js").read_bytes() == b"previous resources"
+    assert not list(tmp_path.glob("*generation-*"))
+    assert not list(tmp_path.glob(".mza-*"))
+    assert not list(tmp_path.glob(".metroliza-previous-*"))
+
+    if late_collision:
+        assert runner.start(resolve_plan(entry.definition, entry.binding)).state is RunState.REQUIRES_DECISION
+        assert runner.resume("new_copy").decision == "copy_ready"
+        copied = runner.resume("continue")
+        assert copied.state is RunState.COMPLETED
+        copy = runner.plan.output_file
+        assert copy != output
+        assert copy.is_file() and copy.with_suffix(".xlsx").is_file()
+        assert output.read_bytes() == b"another writer's dashboard"
+        assert workbook.read_bytes() == b"previous workbook"
+
+
+@pytest.mark.parametrize("previous_workbook", [False, True])
+def test_missing_staged_workbook_reports_partial_only_without_prior_counterpart(
+    tmp_path, monkeypatch, previous_workbook,
+):
+    from pathlib import Path
+
+    from metroliza.recipes import tabular_adapter
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    if previous_workbook:
+        workbook.write_bytes(b"previous complete workbook")
+        output.write_bytes(b"previous complete dashboard")
+    entry = capture(request_for(path, output))
+    plan = resolve_plan(entry.definition, entry.binding)
+    native_render = tabular_adapter.run_tabular_file_analytics
+
+    def missing_workbook(**kwargs):
+        result = native_render(**kwargs)
+        Path(result.workbook_path).unlink()
+        return replace(result, workbook_path="")
+
+    monkeypatch.setattr(tabular_adapter, "run_tabular_file_analytics", missing_workbook)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    result = runner.start(plan)
+    if previous_workbook:
+        assert result.state is RunState.REQUIRES_DECISION
+        result = runner.resume("continue")
+        assert (result.state, result.code) == (RunState.FAILED, ResultCode.EXPORT_FAILED)
+        assert output.read_bytes() == b"previous complete dashboard"
+        assert workbook.read_bytes() == b"previous complete workbook"
+    else:
+        assert (result.state, result.code) == (RunState.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED)
+        assert output.is_file() and not workbook.exists()
+
+
+def test_html_only_recipe_does_not_require_or_replace_the_unselected_workbook(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    unrelated = output.with_suffix(".xlsx")
+    unrelated.write_bytes(b"existing unrelated workbook")
+    entry = capture(replace(request_for(path, output), output_workbook_file=""))
+    plan = resolve_plan(entry.definition, entry.binding)
+    result = RecipeRunner(AnalyticsRecipePorts()).start(plan)
+    assert result.state is RunState.COMPLETED and result.code is ResultCode.SUCCESS
     assert output.is_file()
-    assert workbook.read_bytes() == b"previous workbook remains"
+    assert unrelated.read_bytes() == b"existing unrelated workbook"
 
 
 def test_recipe_keeps_explicit_column_types_and_rejects_a_missing_override(tmp_path):

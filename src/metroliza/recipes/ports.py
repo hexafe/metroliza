@@ -65,6 +65,7 @@ class StepResult:
     artifact_verified: bool = False
     duplicate_count: int = 0
     dashboard_assets_path: str = field(default="", repr=False, compare=False)
+    report_folder_revision: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)

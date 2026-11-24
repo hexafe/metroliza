@@ -72,7 +72,7 @@ def _approve_replacement(entry):
 
 @pytest.mark.parametrize("source_kind", ["tabular_file", "production_cache"])
 def test_native_replacement_commits_unique_assets_then_retires_previous_generation(tmp_path, monkeypatch, source_kind):
-    from metroliza.exporting import output_publication
+    from metroliza.industrial import tabular_output_publication as output_publication
     request = _request(tmp_path, source_kind)
     legacy = _legacy_native_result(request)
     target = Path(request.output_dashboard_file)
@@ -90,7 +90,8 @@ def test_native_replacement_commits_unique_assets_then_retires_previous_generati
         transitions = []
 
         def observed_publish(temporary, destination, **kwargs):
-            assert Path(destination) == target
+            if Path(destination) != target:
+                return publish(temporary, destination, **kwargs)
             assert target.read_bytes() == before_html
             assert _asset_bytes(old_assets) == before_assets
             transitions.append("old_complete")
@@ -128,8 +129,11 @@ def test_failed_or_cancelled_native_render_preserves_old_html_assets_and_workboo
     workbook = Path(request.output_workbook_file)
     before = target.read_bytes(), _asset_bytes(assets), workbook.read_bytes()
     assert before[1]
+    with Path(request.input_file).open("a", encoding="utf-8") as source:
+        source.write("2026-11-15 10:04:00,R1,2.0\n")
     ports, plan = _approve_replacement(capture(request))
     render = workflow.write_production_dashboard
+    publication_observations = []
 
     def interrupted_render(*args, **kwargs):
         result = render(*args, **kwargs)  # Complete a real staged native rendering first.
@@ -142,11 +146,14 @@ def test_failed_or_cancelled_native_render_preserves_old_html_assets_and_workboo
         return result
 
     if interruption == "publication":
-        from metroliza.exporting import output_publication
+        from metroliza.industrial import tabular_output_publication as output_publication
 
-        def reject_publication(*_args, **_kwargs):
-            assert target.read_bytes() == before[0]
-            assert _asset_bytes(assets) == before[1]
+        publish = output_publication.publish_output
+
+        def reject_publication(temporary, destination, **kwargs):
+            if Path(destination) != target:
+                return publish(temporary, destination, **kwargs)
+            publication_observations.append((target.read_bytes(), _asset_bytes(assets), workbook.read_bytes()))
             raise RuntimeError("synthetic failure before HTML publication")
 
         monkeypatch.setattr(output_publication, "publish_output", reject_publication)
@@ -154,11 +161,35 @@ def test_failed_or_cancelled_native_render_preserves_old_html_assets_and_workboo
     result = ports.execute(plan.definition.steps[1], plan, _context(plan))
     expected = StepStatus.CANCELLED if interruption == "cancel" else StepStatus.FAILED
     assert result.status is expected
+    if interruption == "publication":
+        (old_html, old_assets, new_workbook), = publication_observations
+        assert (old_html, old_assets) == before[:2]
+        assert new_workbook.startswith(b"PK") and new_workbook != before[2]
     assert (target.read_bytes(), _asset_bytes(assets), workbook.read_bytes()) == before
     assert not tuple(tmp_path.glob(plan.assets_dir.name + ".generation-*"))
     assert not tuple(tmp_path.glob(".metroliza-export-*"))
     assert not tuple(tmp_path.glob(".recipe-analytics-*"))
+    assert not tuple(tmp_path.glob(".mza-*"))
+    assert not tuple(tmp_path.glob(".metroliza-previous-*"))
     ports.finish(plan)
+
+
+
+def test_replacement_leaves_legacy_directory_with_unowned_content(tmp_path):
+    request = _request(tmp_path)
+    legacy = _legacy_native_result(request)
+    assets = Path(legacy.html_dashboard_assets_path)
+    (assets / "user.txt").write_bytes(b"do not delete")
+    before = _asset_bytes(assets)
+
+    ports, plan = _approve_replacement(capture(request))
+    try:
+        result = ports.execute(plan.definition.steps[1], plan, _context(plan))
+        assert result.status is StepStatus.COMPLETED
+        assert _asset_bytes(assets) == before
+        _assert_generation_references(Path(request.output_dashboard_file), Path(result.dashboard_assets_path))
+    finally:
+        ports.finish(plan)
 
 
 @pytest.mark.parametrize("generation", [False, True])

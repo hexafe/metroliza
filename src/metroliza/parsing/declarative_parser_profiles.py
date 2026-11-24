@@ -1408,13 +1408,30 @@ def _matching_profile_backups(plugin_id, *, home):
     return result
 
 
+def _latest_generated_profile_backup(plugin_id, *, home):
+    prefix = f"{plugin_id}-"
+    root = profile_backups_dir(home=home)
+    return max(
+        (path for path in root.glob(f"{prefix}*")
+         if re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}", path.name.removeprefix(prefix))),
+        default=None,
+    )
+
+
 def rollback_profile(plugin_id: str, *, backup_name: str | None = None, home: Path | None = None) -> Path:
     plugin_id = _validate_plugin_id_for_store(plugin_id)
     with parser_profile_store_lock(home=home):
         ensure_profile_store_dirs(home=home)
         candidates = _matching_profile_backups(plugin_id, home=home)
-        if backup_name is not None:
+        if backup_name:
             candidates = [path for path in candidates if path.name == backup_name]
+        else:
+            newest = _latest_generated_profile_backup(plugin_id, home=home)
+            if newest is not None and (not candidates or newest.name > candidates[0].name):
+                raise ValueError(
+                    f"The latest backup for {plugin_id} cannot be verified. "
+                    "Select an older verified backup explicitly."
+                )
         if not candidates:
             raise FileNotFoundError(f"No intact backup is available for {plugin_id}")
         backup_dir = candidates[0]

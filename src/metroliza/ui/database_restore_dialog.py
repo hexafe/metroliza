@@ -7,21 +7,14 @@ from PyQt6.QtWidgets import QDialog, QFileDialog, QFormLayout, QLabel, QPushButt
 
 from metroliza.industrial.industrial_cache_target import publish_verified_database_copy
 from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.report_schema import validate_report_snapshot
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER
 from metroliza.ui import detached_threads
 
 
 def _validate_report_snapshot(path: Path):
     with sqlite_readonly_connection_scope(str(path)) as connection:
-        tables = {row[0].casefold() for row in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table'",
-        )}
-        current = {"parsed_reports", "report_metadata", "report_measurements"}
-        legacy = {"reports", "measurements"}
-        if not (current <= tables or legacy <= tables):
-            raise ValueError("The file is not a recognized Metroliza report database.")
-        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-            raise ValueError("The copy contains a broken link between records.")
+        validate_report_snapshot(connection)
 
 
 class _RestoreThread(QThread):

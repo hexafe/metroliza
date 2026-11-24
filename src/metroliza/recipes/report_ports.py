@@ -18,6 +18,7 @@ from metroliza.parsing.preflight import (
     MAX_IMPORT_REVIEWED_OCR_BYTES, ImportPlan, ParsePreflightService, ParsePreflightStatus,
     ReviewedReportOcr, SelectedReportIdentity,
 )
+from metroliza.parsing.report_folder_revision import revision_from_preflight
 from metroliza.recipes.contracts import ParameterKey, RecipeError, ResolvedRunPlan, StepKind
 from metroliza.recipes.ports import PreparationPhase, PreflightResult, ResultCode, StepContext, StepResult, StepStatus
 from metroliza.reports.report_metadata_review import ReviewRow, build_overrides
@@ -246,7 +247,7 @@ class ReportsRecipeService:
         if step.kind in {StepKind.PREPARE_DATABASE, StepKind.PREPARE_EXISTING_DATABASE}:
             return self._verify_import_source(review, context)
         if step.kind is StepKind.IMPORT_REPORTS:
-            return self._import_reports(review, context)
+            return self._import_reports(review, plan, context)
         if step.kind in (StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML):
             return self._export(step, plan, review, context)
         if step.kind is StepKind.VERIFY_OUTPUT:
@@ -267,7 +268,7 @@ class ReportsRecipeService:
             return StepResult(StepStatus.FAILED, ResultCode.DATABASE_UNAVAILABLE)
         return StepResult(StepStatus.COMPLETED)
 
-    def _import_reports(self, review, context):
+    def _import_reports(self, review, plan, context):
         if review.import_plan is None:
             return StepResult(StepStatus.FAILED, ResultCode.REVIEW_REQUIRED)
         result = (self.import_executor(review.import_plan, context) if review.import_plan.selected_reports
@@ -275,7 +276,7 @@ class ReportsRecipeService:
         failure = self._import_failure(result)
         if failure is not None:
             return failure
-        return self._record_import(review, result)
+        return self._record_import(review, result, plan)
 
     @staticmethod
     def _import_failure(result):
@@ -289,7 +290,7 @@ class ReportsRecipeService:
             return StepResult(StepStatus.FAILED, ResultCode.SOURCE_CHANGED, result.imported, result.changed)
         return None
 
-    def _record_import(self, review, result):
+    def _record_import(self, review, result, plan):
         existing = review.import_plan.existing_database_identity
         duplicate_count = result.duplicates + len(review.retained_digests)
         if existing is not None:
@@ -310,7 +311,9 @@ class ReportsRecipeService:
                for item in review.preflight.files):
             warnings.append(ResultCode.UNSUPPORTED)
         return StepResult(StepStatus.COMPLETED, imported_count=result.imported, warnings=tuple(warnings),
-                          duplicate_count=duplicate_count)
+                          duplicate_count=duplicate_count,
+                          report_folder_revision=revision_from_preflight(
+                              review.preflight.files, self._output_targets(plan)))
 
     @staticmethod
     def _bind_append_export_scope(review, result):

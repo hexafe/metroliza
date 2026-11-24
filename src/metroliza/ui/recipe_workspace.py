@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import QLabel, QMessageBox, QPushButton, QStackedWidget, QV
 from metroliza.ui.recipe_library_page import RecipeLibraryPage, RecipeQuickFlows
 
 
-_FAVORITES_PREF = "presentation/recipes/favorites"
+_LEGACY_FAVORITES_PREF = "presentation/recipes/favorites"
+_FAVORITES_PREF = "presentation/recipes/favorites_v2"
 
 
 def open_capture_editor(parent, module, request, **configuration):
@@ -28,7 +29,11 @@ class RecipeHome(RecipeQuickFlows):
 
         self.store = RecipeStore()
         defaults = [definition.recipe_id for definition in QUICK_REPORT_RECIPES]
-        stored_ids = parent.ui_preferences.get(_FAVORITES_PREF, defaults, expected_type=list)
+        preferences = parent.ui_preferences
+        legacy_pins = preferences.get(_LEGACY_FAVORITES_PREF, [], expected_type=list)
+        # The older preference stored custom pins, while Home displayed the
+        # two built-ins separately. An explicit new list can unpin either.
+        stored_ids = preferences.get(_FAVORITES_PREF, [*defaults, *legacy_pins], expected_type=list)
         self.favorite_ids = list(dict.fromkeys(identity for identity in stored_ids if isinstance(identity, str)))
         super().__init__(entries=self._saved_pins, parent=parent)
         self.set_favorites(self.favorite_ids)
@@ -156,10 +161,11 @@ class RecipeWorkspace(QWidget):
 
     def _capture_analysis_source(self, plan):
         from metroliza.app.analysis_history import capture_source_stamp
-        self._analysis_source_stamp = (plan.flow_id, capture_source_stamp(self._analysis_source(plan)))
+        stamp = None if plan.input_folder else capture_source_stamp(self._analysis_source(plan))
+        self._analysis_source_stamp = (plan.flow_id, stamp)
 
     def _home_result(self, record):
-        from metroliza.recipes.contracts import ParameterKey
+        from metroliza.recipes.contracts import ParameterKey, StepKind
 
         plan = self.controller.plan
         paths = self.quick.set_result(plan, record)
@@ -173,10 +179,16 @@ class RecipeWorkspace(QWidget):
             if any(path.suffix.lower() in {".html", ".htm"} for path in paths):
                 assets = list(dict.fromkeys(step.result.dashboard_assets_path for step in record.steps
                               if step.result.artifact_verified and step.result.dashboard_assets_path))
-            self.analysis_completed.emit({"kind": "recipe", "artifacts": [str(path) for path in paths],
-                                          "source": str(source) if source else None,
-                                          "source_stamp": stamp if flow_id == plan.flow_id else None,
-                                          "settings": settings, "assets": assets})
+            receipt = {"kind": "recipe", "artifacts": [str(path) for path in paths],
+                       "source": str(source) if source else None,
+                       "source_stamp": stamp if flow_id == plan.flow_id else None,
+                       "settings": settings, "assets": assets}
+            if plan.input_folder:
+                receipt["report_folder_revision"] = next(
+                    (step.result.report_folder_revision for step in record.steps if step.kind is StepKind.IMPORT_REPORTS),
+                    None,
+                )
+            self.analysis_completed.emit(receipt)
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)

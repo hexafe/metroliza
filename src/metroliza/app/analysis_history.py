@@ -1,13 +1,18 @@
 """Private successful-run receipts and portable bundles of generated outputs."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from heapq import heappush, heappushpop
 from html.parser import HTMLParser
 from io import TextIOWrapper
 import json
 import os
+import re
 from pathlib import Path
+import stat
 import tempfile
+from time import monotonic
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -18,7 +23,20 @@ from metroliza.shared.local_app_paths import local_metroliza_directory
 
 _OUTPUT_SUFFIXES = {".xlsx", ".html", ".htm"}
 _ASSET_SUFFIXES = {".css", ".js", ".json", ".png", ".svg", ".webp", ".jpg", ".jpeg", ".woff2"}
+_PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
+_PLOTLY_BUNDLE_FILENAME = "plotly-2.27.0.min.js"
 _MAX_RECEIPT_BYTES = 2_000_000
+_RECENT_LIMIT = 100
+_MAX_LIST_ENTRIES = 20_000
+_MAX_LIST_BYTES = 16 * 1024**2
+_MAX_LIST_SECONDS = 3
+# Listing limits never prune saved receipts. Storage retention is tracked by #949.
+
+
+@dataclass(frozen=True)
+class AnalysisListing:
+    receipts: tuple[dict, ...]
+    partial: bool = False
 
 
 def _history_directory():
@@ -48,7 +66,10 @@ def _asset_files(directory, outputs):
     for path in sorted(directory.rglob("*")):
         if path.is_symlink():
             raise ValueError("A dashboard resource points outside the result. Run the analysis again.")
-        if path.is_file() and path.suffix.lower() in _ASSET_SUFFIXES:
+        is_plotly_notice = (
+            path.name == _PLOTLY_NOTICE_FILENAME and path.with_name(_PLOTLY_BUNDLE_FILENAME).is_file()
+        )
+        if path.is_file() and (path.suffix.lower() in _ASSET_SUFFIXES or is_plotly_notice):
             yield path.relative_to(directory.parent).as_posix(), str(path), _file_stamp(path)
 
 
@@ -68,7 +89,7 @@ def record_analysis(receipt, *, directory=None):
     if not files:
         return None
     source = str(Path(receipt["source"]).absolute()) if receipt.get("source") else None
-    current_stamp = capture_source_stamp(source)
+    current_stamp = None if "report_folder_revision" in receipt else capture_source_stamp(source)
     submitted_stamp = receipt.get("source_stamp", current_stamp)
     timestamp = datetime.now(timezone.utc)
     name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}.json"
@@ -83,6 +104,8 @@ def record_analysis(receipt, *, directory=None):
         "files": [str(path) for path in files],
         "entries": entries,
     }
+    if "report_folder_revision" in receipt:
+        entry["report_folder_revision"] = receipt["report_folder_revision"]
     root = Path(directory) if directory is not None else _history_directory()
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = root / name
@@ -103,23 +126,71 @@ def record_analysis(receipt, *, directory=None):
     return entry
 
 
-def recent_analyses(*, directory=None):
+def _recent_receipt_names(root, interrupted):
+    names = []
+    try:
+        with os.scandir(root) as children:
+            for index, item in enumerate(children):
+                if index >= _MAX_LIST_ENTRIES or interrupted():
+                    return names, True
+                if not item.name.endswith(".json") or not item.is_file(follow_symlinks=False):
+                    continue
+                if len(names) < _RECENT_LIMIT:
+                    heappush(names, item.name)
+                else:
+                    heappushpop(names, item.name)
+    except FileNotFoundError:
+        return names, bool(names)
+    except OSError:
+        return names, True
+    return names, False
+
+
+def _read_receipt(path, budget):
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        named = path.lstat()
+        if (not stat.S_ISREG(named.st_mode) or not os.path.samestat(info, named)
+                or info.st_size > _MAX_RECEIPT_BYTES):
+            return b""
+        return stream.read(min(budget, _MAX_RECEIPT_BYTES) + 1)
+
+
+def load_recent_analyses(*, directory=None, cancelled=lambda: False):
+    """List recent receipts within bounded read budgets, retaining all history on disk."""
     root = Path(directory) if directory is not None else _history_directory()
-    for path in sorted(root.glob("*.json"), reverse=True)[:100]:
+    deadline = monotonic() + _MAX_LIST_SECONDS
+
+    def interrupted():
+        return cancelled() or monotonic() >= deadline
+
+    names, partial = _recent_receipt_names(root, interrupted)
+    budget = _MAX_LIST_BYTES
+    receipts = []
+    for name in sorted(names, reverse=True):
+        if interrupted() or budget <= 0:
+            return AnalysisListing(tuple(receipts), partial=True)
         try:
-            if path.is_symlink() or path.stat().st_size > _MAX_RECEIPT_BYTES:
-                continue
-            with path.open("rb") as stream:
-                content = stream.read(_MAX_RECEIPT_BYTES + 1)
-            receipt = json.loads(content) if len(content) <= _MAX_RECEIPT_BYTES else {}
-            if _readable_receipt(receipt):
-                yield receipt
-        except (OSError, ValueError, KeyError, TypeError):
+            content = _read_receipt(root / name, budget)
+            budget -= len(content)
+            if budget < 0:
+                return AnalysisListing(tuple(receipts), partial=True)
+            if 0 < len(content) <= _MAX_RECEIPT_BYTES:
+                receipt = json.loads(content)
+                if _readable_receipt(receipt):
+                    receipts.append(receipt)
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
             continue
+    return AnalysisListing(tuple(receipts), partial or interrupted())
+
+
+def recent_analyses(*, directory=None):
+    yield from load_recent_analyses(directory=directory).receipts
 
 
 def _readable_receipt(receipt):
-    datetime.fromisoformat(receipt["at"])
+    datetime.fromisoformat(receipt["at"]).astimezone()
     return (
         receipt["version"] == 1
         and isinstance(receipt["kind"], str)
@@ -131,8 +202,28 @@ def _readable_receipt(receipt):
     )
 
 
-def analysis_is_stale(receipt):
+def has_report_folder_revision(receipt):
+    value = receipt.get("report_folder_revision")
+    return bool(isinstance(receipt.get("source"), str) and receipt["source"]
+                and isinstance(value, str) and re.fullmatch("[0-9a-f]{64}", value))
+
+
+def analysis_is_stale(receipt, *, cancelled=lambda: False):
+    """Return True for changed sources, False for current and None for unconfirmed folders."""
     source = receipt.get("source")
+    if "report_folder_revision" in receipt:
+        if not has_report_folder_revision(receipt):
+            return None
+        from metroliza.parsing.report_folder_revision import revision_from_folder
+
+        current = revision_from_folder(source, outputs=receipt["files"], cancelled=cancelled)
+        return None if current is None else current != receipt["report_folder_revision"]
+    if receipt.get("kind") == "recipe" and source:
+        try:
+            if Path(source).is_dir():
+                return None  # Older folder receipts contain only the parent directory stat.
+        except (OSError, TypeError, ValueError):
+            return None
     stored = receipt.get("source_stamp")
     return bool(receipt.get("source_changed_during_run") or (
         source and stored and stored != capture_source_stamp(source)

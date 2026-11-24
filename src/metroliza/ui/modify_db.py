@@ -442,6 +442,8 @@ class ModifyDB(QDialog):
 
             for table in (self.reference_table, self.part_number_table, self.header_table):
                 table.itemChanged.connect(lambda item, table=table: self._normalization_item_changed(table, item))
+                if hasattr(table, "installEventFilter"):
+                    table.installEventFilter(self)
             self._connect_shift_range_for_table(self.reference_table)
             self._connect_shift_range_for_table(self.part_number_table)
             self._connect_shift_range_for_table(self.header_table)
@@ -517,6 +519,18 @@ class ModifyDB(QDialog):
                 return
 
         super().keyPressEvent(event)
+
+    def eventFilter(self, watched, event):
+        if (
+            event.type() == QtCore.QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and watched in (self.reference_table, self.part_number_table, self.header_table)
+        ):
+            # The table handles Enter before QDialog receives it. Keep the key
+            # local so it cannot activate the default Apply button.
+            self._rename_normalized(watched)
+            return True
+        return super().eventFilter(watched, event)
 
     def _handle_bulk_rename_shortcut(self):
         target_table = self._focused_table_widget()
