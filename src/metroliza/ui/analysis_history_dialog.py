@@ -6,12 +6,12 @@ from pathlib import Path
 
 from PyQt6.QtCore import QSignalBlocker, QThread, Qt
 from PyQt6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
+    QDialog, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
     QPushButton, QVBoxLayout,
 )
 
 from metroliza.app.analysis_history import (
-    analysis_is_stale, bundle_analysis, has_report_folder_revision, recent_analyses, result_still_matches,
+    analysis_is_stale, bundle_analysis, has_report_folder_revision, load_recent_analyses, result_still_matches,
 )
 from metroliza.exporting.output_publication import OutputConsent
 from metroliza.ui.local_file_task import LocalFileTask
@@ -30,6 +30,10 @@ def collect_output_consent(parent, path):
         QMessageBox.StandardButton.No,
     )
     return (existing,) if answer == QMessageBox.StandardButton.Yes else None
+
+
+def _load_history(_generation):
+    return load_recent_analyses(cancelled=QThread.currentThread().isInterruptionRequested)
 
 
 def _check_report_source(receipt, _generation):
@@ -57,6 +61,10 @@ class AnalysisHistoryDialog(QDialog):
         self.pack = QPushButton("Create ZIP of results…")
         self.reload_button = QPushButton("Refresh list")
         self.close_button = QPushButton("Close")
+        self.listing_notice = QLabel()
+        self.listing_notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.listing_notice.setWordWrap(True)
+        self.listing_notice.setAccessibleName("Saved analyses listing status")
         self.status = QPlainTextEdit()
         self.status.setReadOnly(True)
         self.status.setMaximumHeight(54)
@@ -64,6 +72,7 @@ class AnalysisHistoryDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.runs)
+        layout.addWidget(self.listing_notice)
         layout.addWidget(self.details)
         layout.addWidget(self.result)
         controls = QHBoxLayout()
@@ -76,16 +85,49 @@ class AnalysisHistoryDialog(QDialog):
         self.close_button.clicked.connect(self.close)
         self.runs.currentItemChanged.connect(self._selection_changed)
         self._task = None
+        self._listing_task = None
+        self._listing_generation = 0
+        self._listing_requested = False
         self._source_task = None
         self._source_pending = None
         self._source_generation = 0
         self.finished.connect(self._cancel_source_check)
+        self.finished.connect(self._cancel_listing)
         self.reload()
 
     def reload(self):
+        self._cancel_listing()
+        self._listing_requested = True
         with QSignalBlocker(self.runs):
             self.runs.clear()
-            for run in recent_analyses():
+        self._selection_changed(None)
+        self.listing_notice.setText("Reading saved analyses…")
+        self.listing_notice.show()
+        self._start_listing()
+
+    def _cancel_listing(self):
+        self._listing_generation += 1
+        self._listing_requested = False
+        if self._listing_task is not None:
+            self._listing_task.requestInterruption()
+
+    def _start_listing(self):
+        if self._listing_task is not None or not self._listing_requested:
+            return
+        self._listing_requested = False
+        self._listing_task = LocalFileTask(_load_history, self._listing_generation)
+        self._listing_task.succeeded.connect(self._show_listing)
+        self._listing_task.failed.connect(self._listing_failed)
+        self._listing_task.start_owned(self, AnalysisHistoryDialog._listing_finished)
+
+    def _listing_is_current(self, task):
+        return task is not None and task is self._listing_task and task.args[0] == self._listing_generation
+
+    def _show_listing(self, listing):
+        if not self._listing_is_current(self.sender()):
+            return
+        with QSignalBlocker(self.runs):
+            for run in listing.receipts:
                 at = datetime.fromisoformat(run["at"]).astimezone().strftime("%Y-%m-%d %H:%M")
                 label = {"recipe": "Recipe", "csv": "CSV Summary", "reports": "Reports", "industrial": "Industrial"}.get(
                     run["kind"], run["kind"],
@@ -95,8 +137,21 @@ class AnalysisHistoryDialog(QDialog):
                 self.runs.addItem(item)
             self.runs.setCurrentRow(0)
         self._selection_changed(self.runs.currentItem())
-        if not self.runs.count():
-            self.status.setPlainText("Completed exports will appear here.")
+        if listing.partial:
+            self.listing_notice.setText("Partial history list. Some recent analyses may be missing. Saved receipts are retained.")
+        elif not listing.receipts:
+            self.listing_notice.setText("Completed exports will appear here.")
+        else:
+            self.listing_notice.hide()
+
+    def _listing_failed(self, _error):
+        if self._listing_is_current(self.sender()):
+            self.listing_notice.setText("Could not read the analysis history. Saved receipts are retained.")
+
+    def _listing_finished(self, task):
+        self._listing_task = None
+        task.deleteLater()
+        self._start_listing()
 
     def _selection_changed(self, current, _previous=None):
         self._cancel_source_check()

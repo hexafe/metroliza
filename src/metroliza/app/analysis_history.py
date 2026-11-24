@@ -1,14 +1,18 @@
 """Private successful-run receipts and portable bundles of generated outputs."""
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+from heapq import heappush, heappushpop
 from html.parser import HTMLParser
 from io import TextIOWrapper
 import json
 import os
 import re
 from pathlib import Path
+import stat
 import tempfile
+from time import monotonic
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -22,6 +26,17 @@ _ASSET_SUFFIXES = {".css", ".js", ".json", ".png", ".svg", ".webp", ".jpg", ".jp
 _PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
 _PLOTLY_BUNDLE_FILENAME = "plotly-2.27.0.min.js"
 _MAX_RECEIPT_BYTES = 2_000_000
+_RECENT_LIMIT = 100
+_MAX_LIST_ENTRIES = 20_000
+_MAX_LIST_BYTES = 16 * 1024**2
+_MAX_LIST_SECONDS = 3
+# Listing limits never prune saved receipts. Storage retention is tracked by #949.
+
+
+@dataclass(frozen=True)
+class AnalysisListing:
+    receipts: tuple[dict, ...]
+    partial: bool = False
 
 
 def _history_directory():
@@ -111,23 +126,71 @@ def record_analysis(receipt, *, directory=None):
     return entry
 
 
-def recent_analyses(*, directory=None):
+def _recent_receipt_names(root, interrupted):
+    names = []
+    try:
+        with os.scandir(root) as children:
+            for index, item in enumerate(children):
+                if index >= _MAX_LIST_ENTRIES or interrupted():
+                    return names, True
+                if not item.name.endswith(".json") or not item.is_file(follow_symlinks=False):
+                    continue
+                if len(names) < _RECENT_LIMIT:
+                    heappush(names, item.name)
+                else:
+                    heappushpop(names, item.name)
+    except FileNotFoundError:
+        return names, bool(names)
+    except OSError:
+        return names, True
+    return names, False
+
+
+def _read_receipt(path, budget):
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        named = path.lstat()
+        if (not stat.S_ISREG(named.st_mode) or not os.path.samestat(info, named)
+                or info.st_size > _MAX_RECEIPT_BYTES):
+            return b""
+        return stream.read(min(budget, _MAX_RECEIPT_BYTES) + 1)
+
+
+def load_recent_analyses(*, directory=None, cancelled=lambda: False):
+    """List recent receipts within bounded read budgets, retaining all history on disk."""
     root = Path(directory) if directory is not None else _history_directory()
-    for path in sorted(root.glob("*.json"), reverse=True)[:100]:
+    deadline = monotonic() + _MAX_LIST_SECONDS
+
+    def interrupted():
+        return cancelled() or monotonic() >= deadline
+
+    names, partial = _recent_receipt_names(root, interrupted)
+    budget = _MAX_LIST_BYTES
+    receipts = []
+    for name in sorted(names, reverse=True):
+        if interrupted() or budget <= 0:
+            return AnalysisListing(tuple(receipts), partial=True)
         try:
-            if path.is_symlink() or path.stat().st_size > _MAX_RECEIPT_BYTES:
-                continue
-            with path.open("rb") as stream:
-                content = stream.read(_MAX_RECEIPT_BYTES + 1)
-            receipt = json.loads(content) if len(content) <= _MAX_RECEIPT_BYTES else {}
-            if _readable_receipt(receipt):
-                yield receipt
-        except (OSError, ValueError, KeyError, TypeError):
+            content = _read_receipt(root / name, budget)
+            budget -= len(content)
+            if budget < 0:
+                return AnalysisListing(tuple(receipts), partial=True)
+            if 0 < len(content) <= _MAX_RECEIPT_BYTES:
+                receipt = json.loads(content)
+                if _readable_receipt(receipt):
+                    receipts.append(receipt)
+        except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
             continue
+    return AnalysisListing(tuple(receipts), partial or interrupted())
+
+
+def recent_analyses(*, directory=None):
+    yield from load_recent_analyses(directory=directory).receipts
 
 
 def _readable_receipt(receipt):
-    datetime.fromisoformat(receipt["at"])
+    datetime.fromisoformat(receipt["at"]).astimezone()
     return (
         receipt["version"] == 1
         and isinstance(receipt["kind"], str)
