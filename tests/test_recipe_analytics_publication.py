@@ -1,4 +1,5 @@
 """Real native analytics replacement preserves the last published dashboard."""
+from hashlib import sha256
 import os
 from pathlib import Path
 import shutil
@@ -224,7 +225,7 @@ def test_recipe_asset_retirement_preserves_windows_junction_target(tmp_path, mon
         shutil.copyfile(PLOTLY_ASSET_SOURCE.with_name(asset_name), target / asset_name)
     if owned:
         (target / publication._ASSET_OWNER_FILE).write_text(outputs.dashboard.name, encoding="utf-8")
-    expected = _asset_bytes(target)
+    expected = {name: sha256(content).hexdigest() for name, content in _asset_bytes(target).items()}
     reparse_flag = stat.FILE_ATTRIBUTE_REPARSE_POINT
     if native_windows:
         subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
@@ -252,7 +253,7 @@ def test_recipe_asset_retirement_preserves_windows_junction_target(tmp_path, mon
             # Recheck at retirement even if approval happened while the directory was ordinary.
             publication._retire_legacy_assets(publication.OutputConsent.for_path(junction), ())
             assert approved is None
-        assert _asset_bytes(target) == expected
+        assert {name: sha256(content).hexdigest() for name, content in _asset_bytes(target).items()} == expected
         assert junction.is_dir()
     finally:
         if native_windows and os.path.lexists(junction):
