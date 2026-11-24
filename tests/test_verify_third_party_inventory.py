@@ -94,6 +94,9 @@ def test_cli_writes_receipt_and_generated_inventory_and_fails_on_drift(tmp_path:
     assert verifier.main([
         "--inventory", str(committed_path), "--onedir", str(onedir), "--receipt", str(tmp_path / "missing.json"),
     ]) == 1
+    missing = json.loads((tmp_path / "missing.json").read_text(encoding="utf-8"))
+    assert missing["status"] == "FAIL"
+    assert "companion notice" in missing["problems"][0]
 
 
 def test_default_rust_scope_includes_the_shipped_launcher() -> None:

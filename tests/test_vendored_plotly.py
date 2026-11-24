@@ -6,6 +6,7 @@ import shutil
 
 import pytest
 
+from metroliza.charts import plotly_runtime_assets
 from metroliza.charts.plotly_runtime_assets import copy_plotly_runtime_assets
 from scripts.vendored_plotly import (
     PLOTLY_ASSET_DIRECTORY,
@@ -52,3 +53,27 @@ def test_offline_runtime_needs_notice_and_copies_the_exact_pair(tmp_path):
 
     assert copy_plotly_runtime_assets(source, assets) == f"assets/{bundle_name}"
     assert plotly_inventory(assets) == plotly_inventory(SOURCE_ASSETS)
+
+
+def test_failed_runtime_refresh_keeps_live_dashboard_assets(tmp_path, monkeypatch):
+    source = tmp_path / "plotly-2.27.0.min.js"
+    source.write_bytes(b"new runtime")
+    source.with_name(PLOTLY_NOTICE_FILENAME).write_bytes(b"new notice")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / source.name).write_bytes(b"complete runtime")
+    (assets / PLOTLY_NOTICE_FILENAME).write_bytes(b"complete notice")
+
+    def fail_script_copy(origin, target):
+        if origin == source:
+            target.write_bytes(b"interrupted runtime")
+            raise OSError("simulated interrupted copy")
+        shutil.copyfile(origin, target)
+
+    monkeypatch.setattr(plotly_runtime_assets, "copyfile", fail_script_copy)
+
+    with pytest.raises(OSError, match="interrupted copy"):
+        copy_plotly_runtime_assets(source, assets)
+    assert (assets / source.name).read_bytes() == b"complete runtime"
+    assert (assets / PLOTLY_NOTICE_FILENAME).read_bytes() == b"complete notice"
+    assert {path.name for path in assets.iterdir()} == {source.name, PLOTLY_NOTICE_FILENAME}

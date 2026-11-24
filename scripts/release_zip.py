@@ -259,7 +259,7 @@ def verify(
     source_root: Path | None = None,
     work_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Verify a downloaded release ZIP; return the receipt or raise ``ReleaseZipError``."""
+    """Verify a downloaded ZIP. Pre-companion archives need exact source and EXE pins and their source checkout."""
     with zipfile.ZipFile(zip_path) as archive:
         members = _safe_members(archive)
         tops = {PurePosixPath(info.filename).parts[0] for info in members}
@@ -295,10 +295,9 @@ def verify(
                 names,
                 expected_content_sha256=expected_content_sha256,
                 expected_source_sha=expected_source_sha,
+                expected_exe_sha256=expected_exe_sha256,
                 source_root=source_root,
             )
-            if expected_exe_sha256 is not None and receipt["exe"]["sha256"] != expected_exe_sha256:
-                raise ReleaseZipError("EXE differs from the smoke-tested launcher")
             return receipt | {"zip": {"name": zip_path.name, "sha256": _sha256_file(zip_path), "size_bytes": zip_path.stat().st_size}}
 
 
@@ -321,11 +320,14 @@ def _listed_notices(folder: Path, licenses: str) -> dict[str, str]:
     return notices
 
 
-def _verify_notices(folder: Path, exe_name: str, names: set[str], source_root: Path | None) -> dict[str, str]:
+def _verify_notices(
+    folder: Path, exe_name: str, names: set[str], source_root: Path | None, *, historical: bool
+) -> dict[str, str]:
     """Check the notice directory against its manifest, the exact file set and the source."""
     licenses = f"{exe_name}.licenses"
     notices = _listed_notices(folder, licenses)
-    if set(notices) != set(REQUIRED_NOTICES):
+    legacy_names = set(REQUIRED_NOTICES) - {PLOTLY_NOTICE_FILENAME}
+    if set(notices) != set(REQUIRED_NOTICES) and not (historical and set(notices) == legacy_names):
         raise ReleaseZipError(f"notices must be exactly {sorted(REQUIRED_NOTICES)}, found {sorted(notices)}")
     expected = {README, exe_name, f"{exe_name}.provenance.json", f"{licenses}/{NOTICE_MANIFEST}"}
     expected.update(f"{licenses}/{name}" for name in notices)
@@ -359,9 +361,10 @@ def _verify_provenance(exe: Path, provenance: dict[str, Any], expected_source_sh
     return git_sha
 
 
-def _verify_payload(exe: Path, git_sha: str, expected_content_sha256: str | None) -> dict[str, Any]:
+def _verify_payload(
+    exe: Path, manifest: dict[str, Any], git_sha: str, expected_content_sha256: str | None,
+) -> dict[str, Any]:
     """Check the embedded payload against the provenance commit and the qualified onedir."""
-    manifest = read_payload_manifest(exe)
     payload_sha256 = payload_content_sha256(manifest)
     if manifest.get("git_sha") != git_sha:
         raise ReleaseZipError("embedded payload commit differs from provenance")
@@ -387,17 +390,28 @@ def _verify_extracted(
     *,
     expected_content_sha256: str | None,
     expected_source_sha: str | None,
+    expected_exe_sha256: str | None,
     source_root: Path | None,
 ) -> dict[str, Any]:
     exe = folder / exe_name
-    notices = _verify_notices(folder, exe_name, names, source_root)
     provenance = _load_json(folder / f"{exe_name}.provenance.json")
     git_sha = _verify_provenance(exe, provenance, expected_source_sha)
+    if expected_exe_sha256 is not None and provenance["artifact"]["sha256"] != expected_exe_sha256:
+        raise ReleaseZipError("EXE differs from the smoke-tested launcher")
+    manifest = read_payload_manifest(exe)
+    historical = (
+        expected_source_sha is not None
+        and expected_exe_sha256 is not None
+        and source_root is not None
+        and not (source_root / REQUIRED_NOTICES[PLOTLY_NOTICE_FILENAME]).exists()
+        and all(PurePosixPath(item["path"]).name != PLOTLY_NOTICE_FILENAME for item in manifest["files"])
+    )
+    notices = _verify_notices(folder, exe_name, names, source_root, historical=historical)
     return {
         "status": "PASS",
         "exe": {"name": exe_name, "sha256": provenance["artifact"]["sha256"], "size_bytes": exe.stat().st_size},
         "source": {"git_sha": git_sha, "release_label": provenance["release_label"]},
-        "payload": _verify_payload(exe, git_sha, expected_content_sha256),
+        "payload": _verify_payload(exe, manifest, git_sha, expected_content_sha256),
         "notices": notices,
     }
 

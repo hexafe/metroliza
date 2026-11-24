@@ -316,6 +316,33 @@ def test_notice_manifest_must_list_exactly_the_required_notices(tmp_path: Path) 
         release_zip.verify(zip_path)
 
 
+def test_archived_zip_without_companion_requires_bound_legacy_evidence(tmp_path: Path) -> None:
+    exe = _stage_release(tmp_path)
+    licenses = exe.with_name(f"{exe.name}.licenses")
+    notice_name = release_zip.PLOTLY_NOTICE_FILENAME
+    manifest_path = licenses / release_zip.NOTICE_MANIFEST
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["files"] = [item for item in manifest["files"] if item["name"] != notice_name]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    (licenses / notice_name).unlink()
+    archive = release_zip.assemble(exe, tmp_path / "legacy.zip")
+    source_root = tmp_path / "historic-source"
+    for item in manifest["files"]:
+        name = item["name"]
+        source_file = source_root / release_zip.REQUIRED_NOTICES[name]
+        source_file.parent.mkdir(parents=True, exist_ok=True)
+        source_file.write_bytes((licenses / name).read_bytes())
+
+    pins = {"expected_source_sha": GIT_SHA, "expected_exe_sha256": hashlib.sha256(exe.read_bytes()).hexdigest()}
+    receipt = release_zip.verify(archive, source_root=source_root, **pins)
+    assert receipt["status"] == "PASS"
+    assert set(receipt["notices"]) == set(release_zip.REQUIRED_NOTICES) - {notice_name}
+    with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
+        release_zip.verify(archive, source_root=source_root, expected_source_sha=GIT_SHA)
+    with pytest.raises(release_zip.ReleaseZipError, match="notices must be exactly"):
+        release_zip.verify(archive, source_root=release_zip.REPO_ROOT, **pins)
+
+
 def test_blob_layout_must_tile_the_blob_region(tmp_path: Path) -> None:
     exe = tmp_path / EXE_NAME
     _fake_launcher(exe, ONEDIR_FILES, gap=1)

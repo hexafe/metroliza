@@ -181,11 +181,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: onedir not found: {args.onedir}", file=sys.stderr)
         return 1
     committed = json.loads(args.inventory.read_text(encoding="utf-8"))
+    plotly_problem = None
     try:
         packaged_plotly = plotly_inventory(args.onedir / "_internal" / PLOTLY_ASSET_DIRECTORY)
-    except (OSError, ValueError) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
+    except (OSError, ValueError):
+        packaged_plotly = None
+        plotly_problem = "Packaged Plotly bundle or companion notice is missing, unreadable, or has unexpected bytes"
     generated, bundled = generate_build_inventory(
         onedir=args.onedir,
         requirement_paths=args.requirements or [REPO_ROOT / name for name in DEFAULT_REQUIREMENTS],
@@ -196,6 +197,9 @@ def main(argv: list[str] | None = None) -> int:
         args.generated.parent.mkdir(parents=True, exist_ok=True)
         args.generated.write_text(json.dumps(generated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     receipt = compare_inventories(committed, generated, bundled) | {"inventory": args.inventory.as_posix()}
+    if plotly_problem is not None:
+        receipt["status"] = "FAIL"
+        receipt["problems"].insert(0, plotly_problem)
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for problem in receipt["problems"]:
