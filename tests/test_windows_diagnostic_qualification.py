@@ -3856,6 +3856,7 @@ def _package_receipt() -> dict[str, object]:
         "notice_hashes": {
             "THIRD_PARTY_NOTICES.md": "e" * 64,
             "third_party_inventory.json": "f" * 64,
+            "plotly.min.js.LICENSE.txt": "0" * 64,
         },
         "tested_tree_sha256": "1" * 64,
         "package_manifest_sha256": "2" * 64,

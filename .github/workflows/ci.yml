@@ -565,6 +565,7 @@ jobs:
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/main-html.zip
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png
             ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js
+            ${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly.min.js.LICENSE.txt
           if-no-files-found: warn
 
       - name: Retain accepted engineering package for orchestrator review

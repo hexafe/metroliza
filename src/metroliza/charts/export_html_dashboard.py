@@ -65,6 +65,7 @@ from metroliza.charts.hexafe_plotstats_adapter import (
     normalize_distribution_stat_legend,
     plotstats_export_charts_enabled,
 )
+from metroliza.charts.plotly_runtime_assets import copy_plotly_runtime_assets
 from metroliza.charts.plotly_stat_helpers import (
     legend_only_reference_trace as _legend_only_reference_trace,
     payload_distribution_series as _payload_distribution_series,
@@ -796,13 +797,7 @@ def _coerce_image_bytes(image_buffer: Any) -> bytes:
 
 
 def _copy_plotly_runtime_asset(asset_directory: Path) -> str | None:
-    source_path = _resolve_bundled_plotly_js_path()
-    if not source_path.exists():
-        return None
-
-    destination_path = asset_directory / _PLOTLY_JS_FILENAME
-    destination_path.write_bytes(source_path.read_bytes())
-    return f"{asset_directory.name}/{destination_path.name}"
+    return copy_plotly_runtime_assets(_resolve_bundled_plotly_js_path(), asset_directory)
 
 
 def _bounded_dashboard_output_component(stem: str, *, suffix: str) -> str:
