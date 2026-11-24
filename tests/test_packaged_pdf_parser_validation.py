@@ -376,8 +376,12 @@ def test_build_nuitka_script_defaults_to_release_onefile_and_includes_runtime_pa
     assert 'THIRD_PARTY_NOTICES.md' in script
     assert '--include-data-files=$($resolvedThirdPartyNotices.Path)=THIRD_PARTY_NOTICES.md' in script
     assert '--require-header-ocr' in script
-    assert "src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js" in script
-    assert '--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js' in script
+    assert "$plotlyAssetDirectory = 'metroliza/resources/html_dashboard_assets'" in script
+    assert "Join-Path $repoRoot 'scripts/vendored_plotly.py'" in script
+    assert """foreach ($plotlyAsset in @('plotly-2.27.0.min.js', 'plotly.min.js.LICENSE.txt')) {
+    $resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot "src/$plotlyAssetDirectory/$plotlyAsset") -ErrorAction Stop
+    $commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=$plotlyAssetDirectory/$plotlyAsset"
+}""" in script
     assert 'if ($BundleCredentials)' in script
     assert "Credential bundling disabled; OAuth credentials must remain outside the packaged artifact." in script
     assert "Credential bundling was requested, but '$CredentialsPath' was not found." in script
