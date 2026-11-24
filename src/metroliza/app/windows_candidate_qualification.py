@@ -9,9 +9,12 @@ from __future__ import annotations
 
 
 import hashlib
+from itertools import islice
 import json
 import os
+import re
 import shutil
+import stat
 import sys
 import time
 import uuid
@@ -558,9 +561,10 @@ def _uiux_failure_summary(name, record, allowed):
 
 
 def _uiux_data(child):
-    import stat
     data, total = {}, 0
     for name, relative in UIUX_DATA.items():
+        if name == 'csv_plotly':
+            relative = _uiux_plotly_asset(child, relative)
         path = child / relative
         data[name] = None
         if not path.exists():
@@ -579,6 +583,25 @@ def _uiux_data(child):
             raise ScenarioFailure('uiux_data_failed')
         data[name] = dict(path=relative, sha256=_sha256(path), size=size)
     return data
+
+
+def _uiux_plotly_asset(child, legacy):
+    tabular = child / 'tabular'
+    try:
+        metadata = tabular.lstat()
+    except FileNotFoundError:
+        return legacy
+    if not stat.S_ISDIR(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 0x400:
+        raise ScenarioFailure('uiux_data_failed')
+    entries = tuple(islice(tabular.iterdir(), 33))
+    if len(entries) > 32:
+        raise ScenarioFailure('uiux_data_failed')
+    generations = [path for path in entries if re.fullmatch(r'analysis_assets\.generation-[0-9a-f]{32}', path.name)]
+    if len(generations) > 1 or (generations and (child / legacy).exists()):
+        raise ScenarioFailure('uiux_data_failed')
+    if not generations:
+        return legacy
+    return (generations[0] / Path(legacy).name).relative_to(child).as_posix()
 
 
 def _run_uiux_checks(child, fixtures, dpr, record, started, session_holder):

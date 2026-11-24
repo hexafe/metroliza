@@ -34,6 +34,7 @@ DATA = {'reports_A': 'reports-uiux/A.sqlite', 'reports_B': 'reports-uiux/B.sqlit
         'csv_html': 'tabular/analysis.html', 'csv_xlsx': 'tabular/analysis.xlsx',
         'csv_plotly': 'tabular/analysis_assets/plotly-2.27.0.min.js'}
 PLOTLY_SHA = '7f4930eba8f8541dbec28dca5bd5f787f8eef1cde0369ac9657b70bed230b3e0'
+PLOTLY_GENERATION = re.compile(r'tabular/analysis_assets\.generation-[0-9a-f]{32}/plotly-2\.27\.0\.min\.js')
 CAPTURES = ('reports-saved-top', 'reports-saved-bottom', 'reports-partial-error',
             'reports-partial-cancel', 'csv-busy', 'csv-resumed', 'grouping-members',
             'filter-scope', 'output-summary', 'active-child-modal')
@@ -90,9 +91,18 @@ def regular(path):
     return metadata.st_size
 
 
+def _plotly_path(relative):
+    return type(relative) is str and (relative == DATA['csv_plotly'] or PLOTLY_GENERATION.fullmatch(relative) is not None)
+
+
+def allowed_asset_path(relative):
+    return type(relative) is str and (
+        relative in {*DATA.values(), *(f'uiux-{name}.png' for name in CAPTURES)} or _plotly_path(relative)
+    )
+
+
 def asset_path(root, relative):
-    require(type(relative) is str and relative in {*DATA.values(), *(f'uiux-{name}.png' for name in CAPTURES)},
-            'uiux_unsafe_path')
+    require(allowed_asset_path(relative), 'uiux_unsafe_path')
     path = root
     for part in Path(relative).parts:
         path = path / part
@@ -285,7 +295,7 @@ class _HtmlFacts(HTMLParser):
             self.parts.append(data)
 
 
-def html(path):
+def html(path, *, plotly_relative=DATA['csv_plotly']):
     before = sha(path)
     text = path.read_text(encoding='utf-8')
     require(text.lstrip().lower().startswith('<!doctype html>'), 'uiux_html_mismatch')
@@ -304,7 +314,9 @@ def html(path):
     literal(charts, dict.fromkeys(elements, 1))
     literal({name: facts.tags[name] for name in charts}, elements)
     require(facts.ids.get('dashboard-start') == facts.ids.get('run-notes') == 1, 'uiux_html_mismatch')
-    literal(facts.resources, [('script', 'src', 'analysis_assets/plotly-2.27.0.min.js')])
+    require(_plotly_path(plotly_relative), 'uiux_unsafe_path')
+    script = PurePosixPath(plotly_relative).relative_to('tabular').as_posix()
+    literal(facts.resources, [('script', 'src', script)])
     require(sha(path) == before, 'uiux_asset_changed')
 
 
@@ -455,9 +467,9 @@ def verify_assets(root, evidence, oracle, *, dpr, inert=False):
     data = keys(evidence['data'], DATA)
     captures = keys(evidence['captures']['metadata'], CAPTURES)
     total, paths = 0, {}
-    for name, relative in DATA.items():
+    for name in DATA:
         record = keys(data[name], ('path', 'sha256', 'size'))
-        literal(record['path'], relative)
+        relative = _data_path(name, record)
         digest(record['sha256'])
         path = asset_path(root, relative)
         require(type(record['size']) is int and record['size'] == regular(path), 'uiux_asset_size')
@@ -479,9 +491,19 @@ def verify_assets(root, evidence, oracle, *, dpr, inert=False):
     database(paths['reports_seed'], oracle, names, inert=inert)
     _output_links(evidence)
     workbook(paths['csv_xlsx'])
-    html(paths['csv_html'])
+    html(paths['csv_html'], plotly_relative=data['csv_plotly']['path'])
     require(sha(paths['csv_plotly']) == PLOTLY_SHA, 'uiux_offline_asset_mismatch')
     return paths
+
+
+def _data_path(name, record):
+    relative = record['path']
+    if name == 'csv_plotly':
+        require(_plotly_path(relative), 'uiux_unsafe_path')
+        require(record['sha256'] == PLOTLY_SHA, 'uiux_offline_asset_mismatch')
+    else:
+        literal(relative, DATA[name])
+    return relative
 
 
 def manifest(captures, data, *, dpr, diagnostic=False):
@@ -495,10 +517,10 @@ def manifest(captures, data, *, dpr, diagnostic=False):
             require(diagnostic)
             continue
         keys(record, ('path', 'sha256', 'size'))
-        literal(record['path'], DATA[name])
+        relative = _data_path(name, record)
         digest(record['sha256'])
         require(type(record['size']) is int and 0 < record['size'] <= MAX_ASSET, 'uiux_asset_size')
-        records[record['path']] = record
+        records[relative] = record
     _capture_map(captures, tuple(captures), dpr)
     for record in captures.values():
         require(record['path'] not in records)
