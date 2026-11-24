@@ -86,6 +86,15 @@ runtime reader packages listed below.
 | SQLAlchemy | MIT | https://www.sqlalchemy.org/ |
 | Plotly.js 2.27.0 vendored dashboard asset | MIT | https://github.com/plotly/plotly.js |
 
+Plotly’s published [`plotly.js` 2.27.0 npm tarball](https://registry.npmjs.org/plotly.js/-/plotly.js-2.27.0.tgz)
+has SHA-256 `29610bcb50e4af9c115c75740ec8d1f410dc7e87767c10f8252f63bc3fad6b1b`.
+Extract `package/dist/plotly.min.js` and `package/dist/plotly.min.js.LICENSE.txt`
+from that tarball with `tar -xOf`. The minified JavaScript is byte-for-byte
+identical to the tracked `plotly-2.27.0.min.js`. The companion notice ships as
+`plotly.min.js.LICENSE.txt` with the frozen runtime, release notices and
+interactive offline dashboard assets. Both file digests are recorded in the
+release inventory.
+
 PyQt6 and PyMuPDF are dual-license components with material distribution
 obligations. The release owner must record the applicable license basis and
 legal/compliance approval for the exact artifact before promotion. This notice

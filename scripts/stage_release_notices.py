@@ -7,9 +7,15 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-
+import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if not __package__:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files  # noqa: E402
+
+
 DEFAULT_NOTICE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 DEFAULT_INVENTORY = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
@@ -22,18 +28,14 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _copy_notice_bundle(target_dir: Path, *, notice: Path, inventory: Path) -> Path:
+def _copy_notice_bundle(target_dir: Path, sources: tuple[Path, ...]) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
-    copied_notice = target_dir / notice.name
-    copied_inventory = target_dir / inventory.name
-    shutil.copy2(notice, copied_notice)
-    shutil.copy2(inventory, copied_inventory)
-    manifest = {
-        "files": [
-            {"name": copied_notice.name, "sha256": _sha256(copied_notice)},
-            {"name": copied_inventory.name, "sha256": _sha256(copied_inventory)},
-        ]
-    }
+    records = []
+    for source in sources:
+        destination = target_dir / source.name
+        shutil.copy2(source, destination)
+        records.append({"name": destination.name, "sha256": _sha256(destination)})
+    manifest = {"files": records}
     manifest_path = target_dir / "NOTICE_MANIFEST.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return manifest_path
@@ -66,7 +68,9 @@ def stage_release_notices(
         if not required.is_file():
             raise FileNotFoundError(f"Required release notice input is missing: {required}")
 
-    manifests = [_copy_notice_bundle(dist / "release-notices", notice=notice, inventory=inventory)]
+    _, plotly_notice = verified_plotly_files(REPO_ROOT / "src" / PLOTLY_ASSET_DIRECTORY)
+    sources = (notice, inventory, plotly_notice)
+    manifests = [_copy_notice_bundle(dist / "release-notices", sources)]
     candidates = {Path(path).resolve() for path in artifacts}
     if not candidates:
         candidates.update(discover_release_artifacts(dist))
@@ -74,7 +78,7 @@ def stage_release_notices(
         if not artifact.is_file():
             raise FileNotFoundError(f"Packaged artifact is missing: {artifact}")
         sidecar_dir = artifact.with_name(f"{artifact.name}.licenses")
-        manifests.append(_copy_notice_bundle(sidecar_dir, notice=notice, inventory=inventory))
+        manifests.append(_copy_notice_bundle(sidecar_dir, sources))
     return tuple(manifests)
 
 

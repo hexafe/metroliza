@@ -530,6 +530,7 @@ class TestExportHtmlDashboard(unittest.TestCase):
             self.assertIn('data-visual-palette-index="0"', html_text)
             self.assertNotIn('data-visual-opacity', html_text)
             self.assertIn(f'{generation_name}/plotly-2.27.0.min.js', html_text)
+            self.assertTrue((Path(result['html_dashboard_assets_path']) / 'plotly.min.js.LICENSE.txt').is_file())
             self.assertNotIn('cdn.plot.ly/plotly-2.27.0.min.js', html_text)
             self.assertIn('data-theme-choice="auto"', html_text)
             self.assertIn('data-theme-choice="light"', html_text)

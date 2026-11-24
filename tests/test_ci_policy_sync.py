@@ -81,6 +81,8 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(t
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/uiux-*.png",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly-2.27.0.min.js",
         "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets.generation-*/plotly-2.27.0.min.js",
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets/plotly.min.js.LICENSE.txt",
+        "${{ runner.temp }}/metroliza-candidate-acceptance/**/tabular/analysis_assets.generation-*/plotly.min.js.LICENSE.txt",
     }
     archives = set()
     for run in ('core-dpr-1.0', 'core-dpr-1.25', 'core-dpr-1.5', 'core-native-unavailable'):

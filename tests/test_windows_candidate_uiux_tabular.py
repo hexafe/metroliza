@@ -182,6 +182,13 @@ def test_actual_tabular_journeys_and_real_source_capture_contract(qapplication_s
     verifier.html(tmp_path / data['csv_html']['path'], plotly_relative=plotly['path'])
     snapshot = verifier.snapshot_assets(tmp_path, {}, data, dpr=dpr, diagnostic=True)
     assert hashlib.sha256(snapshot[plotly['path']]).hexdigest() == verifier.PLOTLY_SHA
+    notice = verifier._plotly_notice_record(plotly['path'])
+    assert hashlib.sha256(snapshot[notice['path']]).hexdigest() == verifier.PLOTLY_NOTICE_SHA
+    notice_path = tmp_path / notice['path']
+    notice_path.write_bytes(b'X' * notice['size'])
+    with pytest.raises(verifier.UiuxVerificationFailure, match='uiux_asset_hash'):
+        verifier.snapshot_assets(tmp_path, {}, data, dpr=dpr, diagnostic=True)
+    notice_path.write_bytes(snapshot[notice['path']])
     wrong_digest = data | {'csv_plotly': plotly | {'sha256': '0' * 64}}
     with pytest.raises(verifier.UiuxVerificationFailure, match='uiux_offline_asset_mismatch'):
         verifier.snapshot_assets(tmp_path, {}, wrong_digest, dpr=dpr, diagnostic=True)
