@@ -747,8 +747,8 @@ def _retain_uiux_results(child, output, args):
 
 def _write_uiux_snapshot(output, snapshot):
     verifier = _uiux_verifier()
-    allowed = {*verifier.DATA.values(), *(f'uiux-{name}.png' for name in verifier.CAPTURES), 'uiux-observation.json'}
-    if (set(snapshot) - allowed or sum(len(value) for value in snapshot.values()) > verifier.MAX_TOTAL + verifier.MAX_JSON):
+    if (any(relative != 'uiux-observation.json' and not verifier.allowed_asset_path(relative) for relative in snapshot)
+            or sum(len(value) for value in snapshot.values()) > verifier.MAX_TOTAL + verifier.MAX_JSON):
         raise CandidateFailure('uiux_retention_invalid')
     for relative, content in snapshot.items():
         if type(content) is not bytes or len(content) > (verifier.MAX_JSON if relative.endswith('observation.json') else verifier.MAX_ASSET):

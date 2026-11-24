@@ -520,7 +520,7 @@ def test_g_successful_core_collects_once_before_fresh_reopen(tmp_path, monkeypat
         driver._run_private_core(tmp_path, args=SimpleNamespace(source_checkout=tmp_path, dpi_scale="1.0", native_mode="default"),
                                  diag=diag, artifact=tmp_path, fixtures=tmp_path, output=tmp_path, deadline=0,
                                  before="synthetic", stage={}, failure_observation=observation)
-    assert closed == [False] and capsys.readouterr().out == ""
+    assert closed == [False] and capsys.readouterr().out == "uiux_retention=core_child_count\n"
 
 
 def test_g_inventory_counter_caps_without_allocating_a_million_objects(monkeypatch, tmp_path):
