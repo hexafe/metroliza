@@ -13,7 +13,9 @@ to export from the full database using your usual filters and groups.
 Reopening the export from Home or with **Ctrl+E** keeps the scope you already selected.
 During an export you can open CSV Summary to work on a separate file. Use **Stop export**
 to cancel the running export. If two copies of Metroliza try to replace the same workbook,
-the second must confirm the changed file again. Metroliza keeps a small hidden lock file beside each published workbook, including new files and copies.
+the second must confirm the changed file again. Metroliza keeps a small hidden lock file
+beside each published workbook, HTML report, workspace file or analysis ZIP.
+Keeping the file lets all running copies use the same lock.
 
 For grouped exports, read the HTML dashboard first. Export group analysis is
 **HTML dashboard only**: Metroliza does not add the standard group-analysis report as

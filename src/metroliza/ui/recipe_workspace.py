@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import QLabel, QMessageBox, QPushButton, QStackedWidget, QV
 from metroliza.ui.recipe_library_page import RecipeLibraryPage, RecipeQuickFlows
 
 
-_FAVORITES_PREF = "presentation/recipes/favorites"
+_LEGACY_FAVORITES_PREF = "presentation/recipes/favorites"
+_FAVORITES_PREF = "presentation/recipes/favorites_v2"
 
 
 def open_capture_editor(parent, module, request, **configuration):
@@ -28,7 +29,11 @@ class RecipeHome(RecipeQuickFlows):
 
         self.store = RecipeStore()
         defaults = [definition.recipe_id for definition in QUICK_REPORT_RECIPES]
-        stored_ids = parent.ui_preferences.get(_FAVORITES_PREF, defaults, expected_type=list)
+        preferences = parent.ui_preferences
+        legacy_pins = preferences.get(_LEGACY_FAVORITES_PREF, [], expected_type=list)
+        # The older preference stored custom pins, while Home displayed the
+        # two built-ins separately. An explicit new list can unpin either.
+        stored_ids = preferences.get(_FAVORITES_PREF, [*defaults, *legacy_pins], expected_type=list)
         self.favorite_ids = list(dict.fromkeys(identity for identity in stored_ids if isinstance(identity, str)))
         super().__init__(entries=self._saved_pins, parent=parent)
         self.set_favorites(self.favorite_ids)

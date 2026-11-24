@@ -205,7 +205,7 @@ def _output_lock_path(output_path: Path) -> Path:
     )
 
 
-def _hide_workbook_lock_file(path: Path) -> None:
+def _hide_publication_lock_file(path: Path) -> None:
     from ctypes import windll
     from stat import FILE_ATTRIBUTE_HIDDEN
 
@@ -252,8 +252,8 @@ def _dashboard_publication_lock(dashboard_path: Path, *, should_cancel=None) -> 
             held_paths.append(lock_path)
             _DASHBOARD_PUBLICATION_LOCK_STATE.held_paths = held_paths
             try:
-                if os.name == "nt" and dashboard_path.suffix.lower() == ".xlsx":
-                    _hide_workbook_lock_file(lock_path)
+                if os.name == "nt":
+                    _hide_publication_lock_file(lock_path)
                 yield
             finally:
                 held_paths.pop()

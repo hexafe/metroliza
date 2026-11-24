@@ -15,6 +15,21 @@ import zipfile
 import pytest
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows file attributes")
+@pytest.mark.parametrize("suffix", [".xlsx", ".html", ".metroliza.json", ".zip"])
+def test_publication_lock_sidecar_is_hidden_on_windows(tmp_path, suffix):
+    from stat import FILE_ATTRIBUTE_HIDDEN
+
+    from metroliza.charts.export_html_dashboard import _dashboard_publication_lock, _output_lock_path
+
+    target = tmp_path / f"result{suffix}"
+    with _dashboard_publication_lock(target):
+        pass
+
+    lock_path = _output_lock_path(target)
+    assert lock_path.stat().st_file_attributes & FILE_ATTRIBUTE_HIDDEN
+
+
 def _export_thread(target, *, cancel=False, race=False):
     def pipeline(writer):
         sheet = writer.book.add_worksheet("Measurements")

@@ -153,6 +153,31 @@ def test_builtin_pins_keep_order_after_reopening_and_launch_with_enter(qapplicat
         reopened.close()
 
 
+@pytest.mark.parametrize("legacy_pins", [[], ["legacy-custom"]])
+def test_upgrading_favorites_keeps_quick_flows_until_explicitly_unpinned(
+    qapplication_session, tmp_path, legacy_pins,
+):
+    preferences = UiPreferences(QSettings(str(tmp_path / "favorites.ini"), QSettings.Format.IniFormat))
+    preferences.set("presentation/recipes/favorites", legacy_pins)
+    preferences.set("presentation/navigation/restore_last_page", False)
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert window.recipe_home.favorite_ids == [
+            "reports_excel_main", "reports_dashboard_html", *legacy_pins,
+        ]
+        assert window.recipe_home.favorite_buttons.count() == 2
+        window._ensure_recipe_workspace()._favorites([])
+    finally:
+        window.close()
+
+    reopened = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert reopened.recipe_home.favorite_ids == []
+        assert reopened.recipe_home.favorite_buttons.count() == 0
+    finally:
+        reopened.close()
+
+
 @pytest.mark.parametrize("namespace", ["base", "generation"])
 def test_owned_recipe_vetoes_dangerous_database_rebind_before_inspection_but_allows_safe_context(
         qapplication_session, tmp_path, monkeypatch, namespace):
