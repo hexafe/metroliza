@@ -500,6 +500,7 @@ def _data_path(name, record):
     relative = record['path']
     if name == 'csv_plotly':
         require(_plotly_path(relative), 'uiux_unsafe_path')
+        require(record['sha256'] == PLOTLY_SHA, 'uiux_offline_asset_mismatch')
     else:
         literal(relative, DATA[name])
     return relative

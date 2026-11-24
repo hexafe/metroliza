@@ -576,11 +576,13 @@ def wrapper_observation(source='1' * 40, dpr=1.0):
     tabular, controls = tabular_observation(dpr), controls_observation(dpr)
     tabular['evidence']['captures'] = {name: session['metadata'][name] for name in uiux.CAPTURES[4:9]}
     controls['evidence']['captures'] = {'active-child-modal': session['metadata']['active-child-modal']}
+    data = {name: dict(path=relative, sha256='a' * 64, size=1) for name, relative in uiux.DATA.items()}
+    data['csv_plotly']['sha256'] = uiux.PLOTLY_SHA
     return dict(schema_version=1, status='passed', runtime_context='packaged', error_codes=[],
         facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'passed'),
         evidence=dict(context=dict(source_sha=source, qpa='windows', dpr=dpr), reports=reports,
                       tabular=tabular, controls=controls, captures=session,
-                      data={name: dict(path=relative, sha256='a' * 64, size=1) for name, relative in uiux.DATA.items()}))
+                      data=data))
 
 
 def test_wrapper_schema_requires_all_original_leaf_facts_and_frozen_tab_vectors():

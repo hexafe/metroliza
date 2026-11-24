@@ -593,13 +593,11 @@ def _uiux_plotly_asset(child, legacy):
         return legacy
     if not stat.S_ISDIR(metadata.st_mode) or getattr(metadata, 'st_file_attributes', 0) & 0x400:
         raise ScenarioFailure('uiux_data_failed')
-    if (child / legacy).exists():
-        return legacy
     entries = tuple(islice(tabular.iterdir(), 33))
     if len(entries) > 32:
         raise ScenarioFailure('uiux_data_failed')
     generations = [path for path in entries if re.fullmatch(r'analysis_assets\.generation-[0-9a-f]{32}', path.name)]
-    if len(generations) > 1:
+    if len(generations) > 1 or (generations and (child / legacy).exists()):
         raise ScenarioFailure('uiux_data_failed')
     if not generations:
         return legacy

@@ -172,7 +172,7 @@ def test_actual_tabular_journeys_and_real_source_capture_contract(qapplication_s
                                                           'shared_capture_host_integration': 'NOT_RUN'}, indent=2)+'\n')
     _closed(result)
     assert result['status'] == 'passed', {key: result[key] for key in ('status', 'facets', 'error_codes', 'evidence')}
-    from metroliza.app.windows_candidate_qualification import _uiux_data
+    from metroliza.app.windows_candidate_qualification import ScenarioFailure, UIUX_DATA, _uiux_data
     from scripts import verify_windows_candidate_uiux as verifier
 
     data = _uiux_data(tmp_path)
@@ -182,6 +182,15 @@ def test_actual_tabular_journeys_and_real_source_capture_contract(qapplication_s
     verifier.html(tmp_path / data['csv_html']['path'], plotly_relative=plotly['path'])
     snapshot = verifier.snapshot_assets(tmp_path, {}, data, dpr=dpr, diagnostic=True)
     assert hashlib.sha256(snapshot[plotly['path']]).hexdigest() == verifier.PLOTLY_SHA
+    wrong_digest = data | {'csv_plotly': plotly | {'sha256': '0' * 64}}
+    with pytest.raises(verifier.UiuxVerificationFailure, match='uiux_offline_asset_mismatch'):
+        verifier.snapshot_assets(tmp_path, {}, wrong_digest, dpr=dpr, diagnostic=True)
+
+    legacy_plotly = tmp_path / UIUX_DATA['csv_plotly']
+    legacy_plotly.parent.mkdir()
+    legacy_plotly.write_bytes(snapshot[plotly['path']])
+    with pytest.raises(ScenarioFailure, match='uiux_data_failed'):
+        _uiux_data(tmp_path)
     evidence = result['evidence']
     assert evidence['csv']['source_rows'] == 8 and evidence['csv']['rows'] == 4
     assert evidence['csv']['values'] == [10, 30, 50, 70]
