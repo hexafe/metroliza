@@ -42,11 +42,14 @@ def test_history_keeps_real_settings_and_bundle_resources_and_keeps_source_priva
     source = tmp_path / "private.sqlite"
     source.write_bytes(b"PRIVATE SOURCE DATA")
     dashboard = tmp_path / "Overview.html"
-    dashboard.write_text('<script src="Overview-assets/main.js"></script>', encoding="utf-8")
+    dashboard.write_text('<script src="Overview-assets/plotly-2.27.0.min.js"></script>', encoding="utf-8")
     assets = tmp_path / "Overview-assets"
     assets.mkdir()
-    script = assets / "main.js"
+    script = assets / "plotly-2.27.0.min.js"
     script.write_text("const result = 123;", encoding="utf-8")
+    notice = assets / "plotly.min.js.LICENSE.txt"
+    notice.write_text("SYNTHETIC COMPANION NOTICE", encoding="utf-8")
+    (assets / "private.txt").write_text("UNRELATED TEXT", encoding="utf-8")
     workbook = tmp_path / "Overview.xlsx"
     workbook.write_bytes(b"SYNTHETIC WORKBOOK")
     private = tmp_path / "private-history"
@@ -62,7 +65,8 @@ def test_history_keeps_real_settings_and_bundle_resources_and_keeps_source_priva
     package = tmp_path / "published.zip"
     bundle_analysis(saved, package)
     with ZipFile(package) as archive:
-        expected = {"Overview.html", "Overview.xlsx", "Overview-assets/main.js"}
+        expected = {"Overview.html", "Overview.xlsx",
+                    f"Overview-assets/{script.name}", f"Overview-assets/{notice.name}"}
         assert set(archive.namelist()) == expected | {"metroliza-results.json"}
         manifest = json.loads(archive.read("metroliza-results.json"))["sha256"]
         assert manifest == {name: sha256(archive.read(name)).hexdigest() for name in expected}

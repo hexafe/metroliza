@@ -19,6 +19,8 @@ from metroliza.shared.local_app_paths import local_metroliza_directory
 
 _OUTPUT_SUFFIXES = {".xlsx", ".html", ".htm"}
 _ASSET_SUFFIXES = {".css", ".js", ".json", ".png", ".svg", ".webp", ".jpg", ".jpeg", ".woff2"}
+_PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
+_PLOTLY_BUNDLE_FILENAME = "plotly-2.27.0.min.js"
 _MAX_RECEIPT_BYTES = 2_000_000
 
 
@@ -49,7 +51,10 @@ def _asset_files(directory, outputs):
     for path in sorted(directory.rglob("*")):
         if path.is_symlink():
             raise ValueError("A dashboard resource points outside the result. Run the analysis again.")
-        if path.is_file() and path.suffix.lower() in _ASSET_SUFFIXES:
+        is_plotly_notice = (
+            path.name == _PLOTLY_NOTICE_FILENAME and path.with_name(_PLOTLY_BUNDLE_FILENAME).is_file()
+        )
+        if path.is_file() and (path.suffix.lower() in _ASSET_SUFFIXES or is_plotly_notice):
             yield path.relative_to(directory.parent).as_posix(), str(path), _file_stamp(path)
 
 

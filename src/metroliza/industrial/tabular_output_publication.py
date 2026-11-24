@@ -19,6 +19,7 @@ from metroliza.exporting.output_publication import (
 )
 
 _ASSET_OWNER_FILE = ".metroliza-tabular-dashboard"
+_PLOTLY_NOTICE_FILENAME = "plotly.min.js.LICENSE.txt"
 
 
 def _output_entry(path: str) -> Path:
@@ -257,7 +258,7 @@ def _retire_owned_assets(outputs, current_assets, sources):
             if any(source.resolve().is_relative_to(directory.resolve()) for source in sources):
                 continue
             entries = tuple(directory.iterdir())
-            if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME} and
+            if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME, _PLOTLY_NOTICE_FILENAME} and
                        not entry.is_symlink() and entry.is_file() for entry in entries):
                 continue
             if marker.read_text(encoding="utf-8") == os.path.normcase(outputs.dashboard.name):
