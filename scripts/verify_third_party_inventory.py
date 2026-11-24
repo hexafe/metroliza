@@ -10,7 +10,9 @@ package name or version, or when the onedir bundles metadata of a distribution t
 environment does not explain. ``--generated`` writes the regenerated inventory so a reviewed
 update can be committed; this script never edits the committed file.
 
-Limits: the comparison covers package identities and versions only. Python components shipped
+The two vendored Plotly files are also verified by SHA-256 in the actual onedir.
+
+Limits: for Python and Rust the comparison covers package identities and versions only. Python components shipped
 without ``*.dist-info`` metadata outside the requirement closure (for example the PyInstaller
 bootloader) are not detected, and the dependencies of vendored bundled-only metadata are not
 followed. Rust packages come from ``cargo metadata`` for all targets and
@@ -34,6 +36,9 @@ try:
 except ImportError:  # pragma: no cover - direct ``python scripts/...`` execution
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts import generate_third_party_inventory as generator
+
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -128,6 +133,8 @@ def compare_inventories(
         *(f"python requirement root not installed: {name}" for name in generated["python"]["missing_requirement_roots"]),
         *(f"rust metadata: {warning}" for warning in generated["rust"]["warnings"]),
     ]
+    if committed.get("vendored_plotly") != generated.get("vendored_plotly"):
+        problems.append("vendored Plotly records differ")
     return {
         "status": "FAIL" if problems else "PASS",
         "problems": problems,
@@ -174,11 +181,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: onedir not found: {args.onedir}", file=sys.stderr)
         return 1
     committed = json.loads(args.inventory.read_text(encoding="utf-8"))
+    try:
+        packaged_plotly = plotly_inventory(args.onedir / "_internal" / PLOTLY_ASSET_DIRECTORY)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
     generated, bundled = generate_build_inventory(
         onedir=args.onedir,
         requirement_paths=args.requirements or [REPO_ROOT / name for name in DEFAULT_REQUIREMENTS],
         cargo_manifests=args.cargo_manifest or default_cargo_manifests(),
     )
+    generated["vendored_plotly"] = packaged_plotly
     if args.generated:
         args.generated.parent.mkdir(parents=True, exist_ok=True)
         args.generated.write_text(json.dumps(generated, indent=2, sort_keys=True) + "\n", encoding="utf-8")

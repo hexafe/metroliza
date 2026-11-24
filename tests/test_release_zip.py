@@ -146,6 +146,7 @@ def test_assembled_zip_is_complete_and_verifies(release: tuple[Path, str], tmp_p
         f"metroliza_2026.09rc1_261031/{EXE_NAME}",
         f"metroliza_2026.09rc1_261031/{EXE_NAME}.licenses/NOTICE_MANIFEST.json",
         f"metroliza_2026.09rc1_261031/{EXE_NAME}.licenses/THIRD_PARTY_NOTICES.md",
+        f"metroliza_2026.09rc1_261031/{EXE_NAME}.licenses/plotly.min.js.LICENSE.txt",
         f"metroliza_2026.09rc1_261031/{EXE_NAME}.licenses/{release_zip_inventory_name()}",
         f"metroliza_2026.09rc1_261031/{EXE_NAME}.provenance.json",
     ]
@@ -178,6 +179,7 @@ def test_assembly_refuses_a_launcher_without_notices(tmp_path: Path) -> None:
     [
         ({"drop": ".licenses/"}, "notice directory"),
         ({"drop": "THIRD_PARTY_NOTICES.md"}, "notice listed in NOTICE_MANIFEST.json is missing"),
+        ({"drop": "plotly.min.js.LICENSE.txt"}, "notice listed in NOTICE_MANIFEST.json is missing"),
         ({"replace": {"THIRD_PARTY_NOTICES.md": b"edited"}}, "notice hash differs"),
         ({"drop": ".provenance.json"}, "provenance.json is missing"),
         ({"drop": "README.txt"}, "README.txt is missing"),

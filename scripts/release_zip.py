@@ -4,7 +4,7 @@ The ZIP holds one folder with exactly:
 
 * the native launcher ``Metroliza-<version>-windows-x64.exe`` (historical archives remain readable);
 * its original ``.provenance.json`` sidecar;
-* its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md`` and
+* its visible ``.licenses`` notice directory: ``NOTICE_MANIFEST.json``, ``THIRD_PARTY_NOTICES.md``, ``plotly.min.js.LICENSE.txt`` and
   the dependency inventory, nothing else;
 * ``README.txt``: extract everything, then start the EXE.
 
@@ -41,6 +41,8 @@ except ImportError:  # pragma: no cover - direct ``python scripts/release_zip.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from scripts.stage_release_notices import DEFAULT_INVENTORY, DEFAULT_NOTICE, REPO_ROOT
 
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, PLOTLY_NOTICE_FILENAME
+
 sys.path.insert(0, str(REPO_ROOT / "src"))
 from metroliza.app.release_identity import LAUNCHER_NAME, launcher_identity  # noqa: E402
 
@@ -54,6 +56,7 @@ CHUNK = 1024 * 1024
 REQUIRED_NOTICES = {
     DEFAULT_NOTICE.name: DEFAULT_NOTICE.relative_to(REPO_ROOT),
     DEFAULT_INVENTORY.name: DEFAULT_INVENTORY.relative_to(REPO_ROOT),
+    PLOTLY_NOTICE_FILENAME: Path("src") / PLOTLY_ASSET_DIRECTORY / PLOTLY_NOTICE_FILENAME,
 }
 
 

@@ -23,6 +23,8 @@ from scripts.build_flavor import (  # noqa: E402
     resolve_build_flavor,
 )
 
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files  # noqa: E402
+
 try:
     from PyInstaller.utils.hooks import (
         collect_data_files,
@@ -683,6 +685,7 @@ def collect_optional_vendored_model_data(root_dir: Path) -> list[tuple[str, str]
 
 def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     """Return shared PyInstaller binaries, datas, and hidden imports."""
+    plotly_assets = verified_plotly_files(root_dir / "src" / PLOTLY_ASSET_DIRECTORY)
     build_provenance_manifest = prepare_build_provenance_manifest(root_dir)
     metroliza_hiddenimports = collect_submodules("metroliza")
     pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_required_runtime_assets(
@@ -722,19 +725,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     cv2_datas, cv2_binaries, cv2_hiddenimports = collect_required_runtime_assets("cv2")
     numpy_datas, numpy_binaries, numpy_hiddenimports = collect_required_runtime_assets("numpy")
 
-    html_dashboard_datas = [
-        (
-            str(
-                root_dir
-                / "src"
-                / "metroliza"
-                / "resources"
-                / "html_dashboard_assets"
-                / "plotly-2.27.0.min.js"
-            ),
-            "metroliza/resources/html_dashboard_assets",
-        )
-    ]
+    html_dashboard_datas = [(str(path), PLOTLY_ASSET_DIRECTORY.as_posix()) for path in plotly_assets]
     third_party_notice_datas = [
         (str(root_dir / "THIRD_PARTY_NOTICES.md"), "."),
         (

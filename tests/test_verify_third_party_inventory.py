@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 from scripts import verify_third_party_inventory as verifier
 
@@ -65,8 +66,12 @@ def test_bundled_dist_info_is_read_from_the_onedir(tmp_path: Path) -> None:
 def test_cli_writes_receipt_and_generated_inventory_and_fails_on_drift(tmp_path: Path, monkeypatch) -> None:
     onedir = tmp_path / "onedir"
     _dist_info(onedir, "pluggy", "1.7.0")
+    packaged_assets = onedir / "_internal" / verifier.PLOTLY_ASSET_DIRECTORY
+    shutil.copytree(verifier.REPO_ROOT / "src" / verifier.PLOTLY_ASSET_DIRECTORY, packaged_assets)
     committed_path = tmp_path / "inventory.json"
-    committed_path.write_text(json.dumps(_inventory({"numpy": "2.4.6"}, RUST)), encoding="utf-8")
+    committed = _inventory({"numpy": "2.4.6"}, RUST)
+    committed["vendored_plotly"] = verifier.plotly_inventory(packaged_assets)
+    committed_path.write_text(json.dumps(committed), encoding="utf-8")
     actual = _inventory({"numpy": "2.4.6", "pluggy": "1.7.0"}, RUST)
     monkeypatch.setattr(verifier, "generate_build_inventory", lambda **_kwargs: (actual, {"pluggy": "1.7.0"}))
 
@@ -84,6 +89,11 @@ def test_cli_writes_receipt_and_generated_inventory_and_fails_on_drift(tmp_path:
     assert verifier.main([
         "--inventory", str(committed_path), "--onedir", str(onedir), "--receipt", str(tmp_path / "pass.json"),
     ]) == 0
+
+    (packaged_assets / "plotly.min.js.LICENSE.txt").unlink()
+    assert verifier.main([
+        "--inventory", str(committed_path), "--onedir", str(onedir), "--receipt", str(tmp_path / "missing.json"),
+    ]) == 1
 
 
 def test_default_rust_scope_includes_the_shipped_launcher() -> None:

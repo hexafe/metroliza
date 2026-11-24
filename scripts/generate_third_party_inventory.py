@@ -17,6 +17,11 @@ from packaging.markers import default_environment
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
+if __package__:
+    from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
+else:
+    from vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
@@ -212,6 +217,7 @@ def generate_inventory(
             "missing_requirement_roots": missing_python,
         },
         "rust": {"packages": rust_packages, "warnings": rust_warnings},
+        "vendored_plotly": plotly_inventory(REPO_ROOT / "src" / PLOTLY_ASSET_DIRECTORY),
         "review_status": {
             "metadata_reviewed": False,
             "release_owner_approved": False,

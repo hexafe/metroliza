@@ -22,6 +22,8 @@ import zipfile
 from defusedxml import ElementTree as ET
 from scripts.verify_windows_candidate_uiux import PLOTLY_SHA, keys, literal, png, regular, require
 
+PLOTLY_NOTICE_SHA = "49349c63dd1280d54b6c55d4573c672374bacc380ec192b4904852df083ace34"
+
 CASES = ("normal_html", "normal_xlsx_html", "long_html", "long_xlsx_html",
          "target_html", "target_xlsx_html")
 FACETS = ("main_html_both_presets", "main_html_long_header", "main_html_offline_assets", "main_html_workbook_numeric_parity")
@@ -157,7 +159,10 @@ def _html(files, case, names):
     require(parsed.specs and any(10.02 in trace.get('y', []) or 10.02 in trace.get('x', [])
                                 for spec in parsed.specs for trace in spec.get('data', [])),
             "main_html_plot_data")
-    expected = {dashboard, *resources}
+    notice = posixpath.join(posixpath.dirname(script), "plotly.min.js.LICENSE.txt")
+    require(notice in names and hashlib.sha256(files[notice]).hexdigest() == PLOTLY_NOTICE_SHA,
+            "main_html_plotly_notice")
+    expected = {dashboard, notice, *resources}
     if workbook:
         expected.add(case + '/' + workbook_name)
     require(names == expected, "main_html_case_file_set")

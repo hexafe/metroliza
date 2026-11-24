@@ -765,8 +765,12 @@ foreach ($pattern in $tokenExcludePatterns) {
     $commonArgs += "--noinclude-data-files=$pattern"
 }
 
-$resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot 'src/metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js')
-$commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=metroliza/resources/html_dashboard_assets/plotly-2.27.0.min.js"
+$plotlyAssetDirectory = 'metroliza/resources/html_dashboard_assets'
+Invoke-CheckedPythonCommand -Arguments @((Join-Path $repoRoot 'scripts/vendored_plotly.py')) -FailureMessage 'Plotly distribution assets failed verification.'
+foreach ($plotlyAsset in @('plotly-2.27.0.min.js', 'plotly.min.js.LICENSE.txt')) {
+    $resolvedPlotlyDashboardAsset = Resolve-Path -LiteralPath (Join-Path $repoRoot "src/$plotlyAssetDirectory/$plotlyAsset") -ErrorAction Stop
+    $commonArgs += "--include-data-files=$($resolvedPlotlyDashboardAsset.Path)=$plotlyAssetDirectory/$plotlyAsset"
+}
 
 $resolvedThirdPartyNotices = Resolve-Path -LiteralPath (Join-Path $repoRoot 'THIRD_PARTY_NOTICES.md') -ErrorAction SilentlyContinue
 if ($resolvedThirdPartyNotices) {

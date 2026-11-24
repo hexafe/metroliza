@@ -453,6 +453,7 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert timings["total"] >= timings["html_write"]
     assert html_path.exists()
     assert (assets_path / "plotly-2.27.0.min.js").exists()
+    assert (assets_path / "plotly.min.js.LICENSE.txt").is_file()
 
     html_text = html_path.read_text(encoding="utf-8")
     assert "Production Analytics" in html_text

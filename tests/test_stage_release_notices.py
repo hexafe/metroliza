@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from scripts.stage_release_notices import stage_release_notices
+from scripts.vendored_plotly import PLOTLY_ASSET_HASHES, PLOTLY_NOTICE_FILENAME
 
 
 def test_stage_release_notices_adds_visible_bundle_for_each_artifact(tmp_path: Path) -> None:
@@ -35,7 +36,11 @@ def test_stage_release_notices_adds_visible_bundle_for_each_artifact(tmp_path: P
         assert {entry["name"] for entry in payload["files"]} == {
             "THIRD_PARTY_NOTICES.md",
             "inventory.json",
+            "plotly.min.js.LICENSE.txt",
         }
+        notice_entry = next(entry for entry in payload["files"] if entry["name"] == PLOTLY_NOTICE_FILENAME)
+        assert notice_entry["sha256"] == PLOTLY_ASSET_HASHES[PLOTLY_NOTICE_FILENAME]
+        assert (sidecar / PLOTLY_NOTICE_FILENAME).is_file()
 
 
 def test_stage_release_notices_fails_when_inventory_is_missing(tmp_path: Path) -> None:
