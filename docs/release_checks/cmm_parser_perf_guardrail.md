@@ -12,6 +12,7 @@ The gate uses a fixed synthetic workload and must run with:
 - `--cmm-bench-report-count 120`
 - `--cmm-bench-measurements-per-report 120`
 - `--enforce-cmm-parser-guardrail`
+- `--cmm-native-wheel <path to the freshly built wheel>`
 - `--cmm-native-min-speedup-ratio 1.00`
 - `--cmm-native-min-usage-rate 0.95`
 - `--max-median-regression-pct 12`
@@ -79,3 +80,13 @@ Baseline refresh procedure (required when thresholds or canonical workload confi
 3. Include a compact evidence table in the PR (old baseline median, new median, delta %, absolute delta s) for `cmm_parser_backend_compare`.
 4. Confirm guardrails still hold after refresh: native speedup ratio `>= 1.00`, native usage rate `>= 0.95`, and no trend-regression violation under existing thresholds.
 5. Land threshold updates and `docs/perf_baseline_snapshot.json` changes together in the same dedicated governance PR (no unrelated code changes).
+
+
+Each enforced result includes the wheel and extension SHA-256 hashes in
+`native_guardrails.cmm`. The benchmark checks that the loaded parser function
+comes from the matching native extension. An unavailable parser, incompatible
+wheel or binary mismatch fails the run. Advisory runs record `not_enforced`.
+
+The related histogram benchmark keeps the historical
+`histogram_branch_regression_ratio` for existing trend reports. Its enforced
+ratio is the explicitly named `histogram_native_to_matplotlib_ratio`.

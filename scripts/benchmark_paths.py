@@ -2780,11 +2780,12 @@ def benchmark_population_static_render_probe(
 
 def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
     import matplotlib.pyplot as plt
+    from metroliza.charts.chart_render_spec import build_resolved_histogram_spec, histogram_spec_to_mapping
     from metroliza.charts.chart_renderer import (
         MatplotlibChartRenderer,
         NativeChartRenderer,
         benchmark_histogram_render_runtime,
-        native_chart_backend_available,
+        native_histogram_backend_available,
         build_histogram_native_payload,
     )
 
@@ -2799,16 +2800,20 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
         bin_count=24,
         compact_render=True,
     )
+    payload["resolved_render_spec"] = histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
 
     matplotlib_samples: list[float] = []
     native_samples: list[float] = []
+    native_available = native_histogram_backend_available()
+    sample_count = max(1, iterations)
 
-    for _ in range(max(1, iterations)):
+    for _ in range(sample_count):
         mpl_runtime = benchmark_histogram_render_runtime(MatplotlibChartRenderer(), payload, iterations=1)
         matplotlib_samples.append(float(mpl_runtime.get('median_s', 0.0)))
-        if native_chart_backend_available():
+        if native_available:
             native_runtime = benchmark_histogram_render_runtime(NativeChartRenderer(), payload, iterations=1)
-            native_samples.append(float(native_runtime.get('median_s', 0.0)))
+            if native_runtime["native_results"] == 1:
+                native_samples.append(float(native_runtime.get('median_s', 0.0)))
 
     matplotlib_median = _collect_median(matplotlib_samples)
     native_median = _collect_median(native_samples)
@@ -2822,12 +2827,15 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
             'histogram_matplotlib_median_s': matplotlib_median,
             'histogram_native_median_s': native_median,
             'histogram_branch_regression_ratio': regression_ratio,
+            'histogram_native_to_matplotlib_ratio': (native_median / matplotlib_median) if matplotlib_median > 0 else 0.0,
         },
         input_metrics={
             'rows': int(len(values)),
             'headers': 1,
-            'chart_count': int(max(1, iterations) * (2 if native_chart_backend_available() else 1)),
-            'histogram_native_available': int(native_chart_backend_available()),
+            'chart_count': sample_count * (2 if native_available else 1),
+            'histogram_native_available': int(native_available),
+            'histogram_native_samples': len(native_samples),
+            'histogram_expected_samples': sample_count,
         },
     )
 
@@ -2983,6 +2991,78 @@ def _write_outputs(output_dir: Path, payload: dict[str, Any]) -> tuple[Path, Pat
     return json_path, csv_path
 
 
+def _enforce_chart_render_guardrail(results, threshold):
+    chart_budget = next((item for item in results if item['scenario'] == 'chart_render_budget_path'), None)
+    if chart_budget is None:
+        raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
+    metrics = chart_budget['input_metrics']
+    if metrics['histogram_native_available'] != 1:
+        raise RuntimeError('Chart render guardrail requires the native chart extension')
+    if not (metrics['histogram_native_samples'] == metrics['histogram_expected_samples'] > 0):
+        raise RuntimeError('Chart render guardrail did not measure every requested native render')
+    timings = chart_budget['stage_timings_s']
+    matplotlib_median = float(timings['histogram_matplotlib_median_s'])
+    native_median = float(timings['histogram_native_median_s'])
+    if not (0.0 < matplotlib_median < float('inf') and 0.0 < native_median < float('inf')):
+        raise RuntimeError('Chart render guardrail requires two positive finite timing medians')
+    regression_ratio = native_median / matplotlib_median
+    if regression_ratio > threshold:
+        raise RuntimeError(
+            f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {threshold:.3f}'
+        )
+    print(f"Chart render guardrail passed: histogram_native_to_matplotlib_ratio={regression_ratio:.3f}")
+
+
+def _enforce_cmm_parser_guardrail(results, args, receipt):
+    cmm = next((item for item in results if item["scenario"] == "cmm_parser_backend_compare"), None)
+    if cmm is None:
+        raise RuntimeError("cmm_parser_backend_compare scenario missing from benchmark payload")
+    if int(cmm["input_metrics"].get("native_available", 0)) != 1:
+        raise RuntimeError("CMM parser guardrail requires the native parser extension")
+    if not args.cmm_native_wheel:
+        raise RuntimeError("CMM parser guardrail requires --cmm-native-wheel for backend identity")
+    from scripts.cmm_wheel_identity import verify_cmm_wheel
+
+    receipt["wheel_identity"] = verify_cmm_wheel(args.cmm_native_wheel)
+    speedup_ratio = float(cmm["stage_timings_s"].get("native_speedup_ratio", 0.0))
+    native_usage_rate = float(cmm["input_metrics"].get("native_parse_backend_rate", 0.0))
+    if not args.cmm_native_min_speedup_ratio <= speedup_ratio < float("inf"):
+        raise RuntimeError(
+            f"Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}"
+        )
+    if not args.cmm_native_min_usage_rate <= native_usage_rate <= 1.0:
+        raise RuntimeError(
+            f"Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}"
+        )
+    print(
+        f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
+        f"native_usage_rate={native_usage_rate:.3f}"
+    )
+
+
+def _collect_guardrail_receipts(results, args):
+    status = {"cmm": {"status": "not_enforced"}, "chart": {"status": "not_enforced"}}
+    errors = []
+    if args.enforce_cmm_parser_guardrail:
+        receipt = status["cmm"] = {"status": "failed", "wheel_identity": None}
+        try:
+            _enforce_cmm_parser_guardrail(results, args, receipt)
+        except RuntimeError as error:
+            receipt["reason"] = str(error)
+            errors.append(error)
+        else:
+            receipt["status"] = "passed"
+    if args.enforce_chart_render_guardrail:
+        try:
+            _enforce_chart_render_guardrail(results, args.chart_render_max_median_regression_ratio)
+        except RuntimeError as error:
+            status["chart"] = {"status": "failed", "reason": str(error)}
+            errors.append(error)
+        else:
+            status["chart"] = {"status": "passed"}
+    return status, errors
+
+
 def main() -> int:
     _install_headless_stubs()
 
@@ -3028,7 +3108,8 @@ def main() -> int:
         help='Chart type used by chart_type_native_compare scenario.',
     )
     parser.add_argument('--enforce-chart-render-guardrail', action='store_true')
-    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5)
+    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5,
+                        help='Maximum native median divided by Matplotlib median.')
     parser.add_argument(
         '--cmm-benchmark-mode',
         choices=('parse', 'stages'),
@@ -3036,6 +3117,7 @@ def main() -> int:
         help='CMM backend benchmark mode: parse-only comparison or isolated parse/normalize/persist stages.',
     )
     parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
+    parser.add_argument('--cmm-native-wheel', type=Path, help='Bind enforced CMM timings to this wheel.')
     parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=1.0)
     parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
     parser.add_argument(
@@ -3190,57 +3272,23 @@ def main() -> int:
         temp_path = Path(temp_dir)
         results = [scenario_runners[scenario](temp_path) for scenario in selected_scenarios]
 
+    config = vars(args).copy()
+    if args.cmm_native_wheel:
+        config["cmm_native_wheel"] = args.cmm_native_wheel.name
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'config': vars(args),
+        'config': config,
         'results': [asdict(result) for result in results],
     }
     payload['summary'] = build_benchmark_run_summary(payload['results'])
+    payload['native_guardrails'], guardrail_errors = _collect_guardrail_receipts(payload['results'], args)
     json_path, csv_path = _write_outputs(Path(args.output_dir), payload)
 
     print(f'Benchmark JSON: {json_path}')
     print(f'Benchmark CSV: {csv_path}')
 
-    if args.enforce_cmm_parser_guardrail:
-        cmm = next((item for item in payload['results'] if item['scenario'] == 'cmm_parser_backend_compare'), None)
-        if cmm is None:
-            raise RuntimeError('cmm_parser_backend_compare scenario missing from benchmark payload')
-
-        native_available = int(cmm['input_metrics'].get('native_available', 0)) == 1
-        if native_available:
-            speedup_ratio = float(cmm['stage_timings_s'].get('native_speedup_ratio', 0.0))
-            native_usage_rate = float(cmm['input_metrics'].get('native_parse_backend_rate', 0.0))
-            if speedup_ratio < args.cmm_native_min_speedup_ratio:
-                raise RuntimeError(
-                    f'Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}'
-                )
-            if native_usage_rate < args.cmm_native_min_usage_rate:
-                raise RuntimeError(
-                    f'Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}'
-                )
-            print(
-                f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
-                f"native_usage_rate={native_usage_rate:.3f}"
-            )
-        else:
-            print('CMM parser guardrail skipped: native parser extension unavailable in this environment.')
-
-    if args.enforce_chart_render_guardrail:
-        chart_budget = next((item for item in payload['results'] if item['scenario'] == 'chart_render_budget_path'), None)
-        if chart_budget is None:
-            raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
-        native_available = int(chart_budget['input_metrics'].get('histogram_native_available', 0)) == 1
-        if native_available:
-            regression_ratio = float(chart_budget['stage_timings_s'].get('histogram_branch_regression_ratio', 0.0))
-            if regression_ratio > args.chart_render_max_median_regression_ratio:
-                raise RuntimeError(
-                    f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {args.chart_render_max_median_regression_ratio:.3f}'
-                )
-            print(
-                f"Chart render guardrail passed: histogram_branch_regression_ratio={regression_ratio:.3f}"
-            )
-        else:
-            print('Chart render guardrail skipped: native chart extension unavailable in this environment.')
+    if guardrail_errors:
+        raise guardrail_errors[0]
 
     return 0
 

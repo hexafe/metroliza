@@ -207,6 +207,7 @@ class _SqliteSelectorPreviewThread(QThread):
         self.offset = int(offset)
         self.limit = int(limit)
         self.scope_kwargs = dict(scope_kwargs)
+        self.finish_delivered = False
 
     def run(self) -> None:
         try:
@@ -1776,7 +1777,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
         self._selector_preview_threads.append(thread)
         thread.result_ready.connect(self._on_sqlite_selector_preview_ready)
         thread.error_occurred.connect(self._on_sqlite_selector_preview_error)
-        thread.finished.connect(self._on_sqlite_selector_preview_stopped)
+        thread.finished.connect(self._on_sqlite_selector_preview_finished)
         thread.start()
         self._selector_preview_loading_dialog.show()
 
@@ -1834,10 +1835,19 @@ class TabularAnalyticsGroupingDialog(QDialog):
         set_status_variant(self.selector_preview_label, "danger")
 
     @pyqtSlot()
+    def _on_sqlite_selector_preview_finished(self) -> None:
+        thread = self.sender()
+        if thread in self._selector_preview_threads:
+            thread.finish_delivered = True
+        self._on_sqlite_selector_preview_stopped()
+
+    @pyqtSlot()
     def _on_sqlite_selector_preview_stopped(self) -> None:
         """Keep ownership until native completion, then dispose on the GUI thread."""
         for thread in tuple(self._selector_preview_threads):
-            if not thread.wait(0):
+            # Another worker may finish before this one's queued result is
+            # delivered. Keep each sender alive through its own finished slot.
+            if not thread.finish_delivered or not thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)):
                 continue
             self._selector_preview_threads.remove(thread)
             if thread.request_id == self._selector_preview_request_id:
@@ -1845,7 +1855,7 @@ class TabularAnalyticsGroupingDialog(QDialog):
             thread.deleteLater()
         # QThread.finished can precede thread-local/native cleanup. Never block
         # the GUI or treat the notification as permission to release its DB.
-        if self._selector_preview_threads:
+        if any(thread.finish_delivered for thread in self._selector_preview_threads):
             self._selector_preview_join_timer.start()
         else:
             self._selector_preview_join_timer.stop()
