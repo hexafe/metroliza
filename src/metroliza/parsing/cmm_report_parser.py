@@ -1520,5 +1520,5 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             May update UI state, database rows, or in-memory export context.
         """
 
-        CustomLogger(exception, reraise=False)
+        CustomLogger(exception, reraise=False, logger_name=__name__)
         raise exception

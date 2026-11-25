@@ -1337,7 +1337,10 @@ class TestAliasCsvBaseline(unittest.TestCase):
                     self.assertEqual(events[-1][1], (standin, f'{operation.title()} complete', f'{verb} 17 mapping row(s).'))
                 elif mode in ('error', 'schema_error'):
                     message = 'producer failed' if mode == 'error' else 'schema failed'
-                    self.assertEqual(events[-2][2], {'reraise': False})
+                    self.assertEqual(events[-2][2], {
+                        'reraise': False,
+                        'logger_name': 'metroliza.ui.characteristic_mapping_dialog',
+                    })
                     self.assertEqual(events[-1][1], (standin, f'{operation.title()} error', f'Could not {operation} mappings: {message}'))
 
 

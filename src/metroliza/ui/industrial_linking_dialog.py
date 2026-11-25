@@ -31,6 +31,7 @@ from metroliza.industrial.industrial_join_service import (
     materialize_industrial_report_links,
     set_manual_industrial_report_link,
 )
+from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui import detached_threads
 from metroliza.ui.help_menu import attach_help_menu_to_layout
@@ -430,6 +431,7 @@ class IndustrialLinkingDialog(QDialog):
                 "Select one Metroliza report and one cached production row.",
             )
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_STARTED)
         try:
             with self._database_options() as options:
                 set_manual_industrial_report_link(
@@ -439,8 +441,10 @@ class IndustrialLinkingDialog(QDialog):
                     **options,
                 )
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not save manual link: {exc}")
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FINISHED)
         self.reload_data()
         self.status_label.setText("Manual production link saved.")
         set_status_variant(self.status_label, "success")
@@ -452,12 +456,15 @@ class IndustrialLinkingDialog(QDialog):
         if report_id is None:
             QMessageBox.warning(self, "Production links", "Select one Metroliza report.")
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_STARTED)
         try:
             with self._database_options() as options:
                 removed = clear_manual_industrial_report_link(str(self.db_file), report_id=report_id, **options)
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not clear manual link: {exc}")
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FINISHED)
         self.reload_data()
         self.status_label.setText(
             "Manual production link cleared." if removed else "No manual production link existed."
@@ -470,6 +477,7 @@ class IndustrialLinkingDialog(QDialog):
             return
         if not self.db_file:
             return
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_STARTED)
         if (type(self) is IndustrialLinkingDialog and type(self.db_file) is str
                 and materialize_industrial_report_links is _DEFAULT_MATERIALIZE_LINKS):
             self._start_auto_links(started_at)
@@ -479,11 +487,13 @@ class IndustrialLinkingDialog(QDialog):
             with IndustrialLinkingDialog._database_options(self) as options:
                 summary = materialize_industrial_report_links(str(self.db_file), **options)
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {exc}")
             return
         IndustrialLinkingDialog._apply_auto_link_summary(self, summary)
 
     def _apply_auto_link_summary(self, summary) -> None:
+        _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FINISHED)
         self.reload_data()
         self.status_label.setText(
             "Auto links refreshed: "
@@ -511,6 +521,7 @@ class IndustrialLinkingDialog(QDialog):
             self._auto_link_progress.show()
             thread.start()
         except Exception as exc:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FAILED)
             if thread is None or not thread.isRunning():
                 self._release_auto_links()
                 if thread is not None:
@@ -535,6 +546,7 @@ class IndustrialLinkingDialog(QDialog):
         if thread is None or thread.discard_result or type(self.db_file) is not str or self.db_file != thread.db_file:
             return
         if thread.error is not None:
+            _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {thread.error}")
         else:
             self._apply_auto_link_summary(thread.summary)

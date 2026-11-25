@@ -48,6 +48,9 @@ assert not any(n == 'metroliza.app' or n.startswith('metroliza.app.') for n in s
 
 @pytest.mark.parametrize("label, numeric", [
     ("0.8.0-dev.1", (0, 8, 0, 1)),
+    ("0.8.0-dev.3", (0, 8, 0, 3)),
+    ("0.8.0-dev.4", (0, 8, 0, 4)),
+    ("0.8.0-dev.5", (0, 8, 0, 5)),
     ("0.8.0-rc.1", (0, 8, 0, 20001)),
     ("0.8.0", (0, 8, 0, 65535)),
 ])
@@ -142,9 +145,10 @@ def test_owned_stub_copy_has_actual_full_pe_identity(tmp_path: Path):
     shutil.copy2(sys.executable, source)
     original = source.read_bytes()
     output = tmp_path / "versioned-stub.exe"
-    identity = ReleaseIdentity.parse("0.8.0-dev.1")
+    # Fixed resource-writer fixture, independent of the current product release.
+    identity = ReleaseIdentity.parse("0.8.0-dev.3")
     stamp_stub(source, output, identity)
     assert source.read_bytes() == original
     receipt = verify_pe(output, identity)
     assert receipt["FileVersion"] == receipt["ProductVersion"] == identity.label
-    assert receipt["numeric_version"] == [0, 8, 0, 1]
+    assert receipt["numeric_version"] == [0, 8, 0, 3]

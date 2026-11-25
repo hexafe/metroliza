@@ -74,6 +74,20 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
                 '- Help opens manuals pinned to this build, including the shared keyboard reference<br>',
             ],
         )
+        changelog = sync_release_metadata.CHANGELOG_PATH.read_text(encoding="utf-8")
+        self.assertIn("## 0.8.0-dev.1 — previous development version", changelog)
+        self.assertIn("## 0.8.0-dev.2 — previous diagnostics source version", changelog)
+        dev2_section = changelog.split("## 0.8.0-dev.2 — previous diagnostics source version", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("Generate a local bug report with a bounded activity history and selected options; input data, paths, names and configuration values are excluded.", dev2_section)
+        self.assertIn("Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident.", dev2_section)
+        previous_section = changelog.split("## 0.8.0-dev.1 — previous development version", 1)[1].split("\n## ", 1)[0]
+        for original_point in (
+            "Adopt development package versions `dev.N`, frozen candidates `rc.N`",
+            "Keep earlier `2026.09rc1(261119)` packages, identifiers and receipts as history",
+            "Reserve `1.0.0` for both a complete external-LLM parser authoring package",
+            "This versioning change does not by itself claim new functionality",
+        ):
+            self.assertIn(original_point, previous_section)
         self.assertIn("Version 2026.09rc1 (build 261115)", VersionDate.release_notes)
         self.assertNotIn("261115", current_section)
         self.assertIn("Version 2026.09rc1 (build 261114)", VersionDate.release_notes)

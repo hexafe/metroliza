@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import stat
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from metroliza.industrial.contracts import (
     IndustrialAnalyticsRequest,
@@ -44,6 +45,17 @@ from metroliza.industrial.industrial_analytics_state import (
     ReferenceCohortState,
 )
 from metroliza.shared.progress_status import build_three_line_status, format_progress_duration
+from metroliza.shared.output_verification import (
+    require_nonempty_output_file,
+    verify_published_output,
+)
+from metroliza.shared.safe_bugreport import record_temporary_resource
+from metroliza.shared.safe_bugreport_context import (
+    OutputVerificationKind,
+    TemporaryResourceKind,
+    TemporaryResourcePhase,
+    TemporaryResourceSize,
+)
 from metroliza.shared.dashboard_interactivity import (
     normalize_dashboard_interactivity_mapping,
     summarize_dashboard_population_layer_options,
@@ -1027,23 +1039,25 @@ def _write_dashboard(
         raise AnalyticsCancelled(str(exc)) from exc
     _raise_if_cancelled(cancel_check)
     target_path = _html_output_path(output_dashboard_file)
-    temp_path = _temporary_output_path(target_path)
+    staging = _StagedAnalyticsOutput(target_path, TemporaryResourceKind.ANALYTICS_DASHBOARD_STAGING)
     try:
         dashboard = write_production_dashboard(
             manifest,
-            temp_path,
+            staging.path,
             assets_dir=_render_dashboard_assets(target_path, output_assets_dir),
             dashboard_visual_settings=dashboard_visual_settings,
             dashboard_interactivity_options=dashboard_interactivity_options,
             **cancel_kwargs,
         )
         _raise_if_cancelled(cancel_check)
-        Path(dashboard["html_dashboard_path"]).replace(target_path)
+        require_nonempty_output_file(dashboard["html_dashboard_path"], OutputVerificationKind.ANALYTICS_DASHBOARD_STAGING)
+        staging.transfer(Path(dashboard["html_dashboard_path"]))
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_DASHBOARD)
     except DashboardCancelled as exc:
-        temp_path.unlink(missing_ok=True)
+        staging.remove()
         raise AnalyticsCancelled(str(exc)) from exc
     except Exception:
-        temp_path.unlink(missing_ok=True)
+        staging.remove()
         raise
     dashboard["html_dashboard_path"] = str(target_path)
     return dashboard
@@ -1075,12 +1089,12 @@ def _export_production_workbook_with_temp(
     )
 
     target_path = _workbook_output_path(output_workbook_file)
-    temp_path = _temporary_output_path(target_path)
+    staging = _StagedAnalyticsOutput(target_path, TemporaryResourceKind.ANALYTICS_WORKBOOK_STAGING)
     try:
         workbook = export_production_analytics_workbook(
             dataframe=dataframe,
             metric_selection=metric_selection,
-            output_file=temp_path,
+            output_file=staging.path,
             aggregation_result=aggregation_result,
             groupstats_result=groupstats_result,
             diagnostics=diagnostics,
@@ -1089,9 +1103,11 @@ def _export_production_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
-        Path(workbook.output_file).replace(target_path)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
+        staging.transfer(Path(workbook.output_file))
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:
-        temp_path.unlink(missing_ok=True)
+        staging.remove()
         raise
     return replace(workbook, output_file=str(target_path))
 
@@ -1110,12 +1126,12 @@ def _export_tabular_workbook_with_temp(
     cancel_check: CancelCheck | None,
 ) -> TabularAnalyticsWorkbookResult:
     target_path = _workbook_output_path(output_workbook_file)
-    temp_path = _temporary_output_path(target_path)
+    staging = _StagedAnalyticsOutput(target_path, TemporaryResourceKind.ANALYTICS_WORKBOOK_STAGING)
     try:
         workbook = export_tabular_analytics_workbook(
             dataframe=dataframe,
             metric_candidates=metric_candidates,
-            output_file=temp_path,
+            output_file=staging.path,
             aggregation_result=aggregation_result,
             groupstats_result=groupstats_result,
             diagnostics=diagnostics,
@@ -1124,9 +1140,11 @@ def _export_tabular_workbook_with_temp(
             group_fields=group_fields,
         )
         _raise_if_cancelled(cancel_check)
-        Path(workbook.output_file).replace(target_path)
+        require_nonempty_output_file(workbook.output_file, OutputVerificationKind.ANALYTICS_WORKBOOK_STAGING)
+        staging.transfer(Path(workbook.output_file))
+        verify_published_output(target_path, OutputVerificationKind.ANALYTICS_WORKBOOK)
     except Exception:
-        temp_path.unlink(missing_ok=True)
+        staging.remove()
         raise
     return replace(workbook, output_file=str(target_path))
 
@@ -1150,8 +1168,63 @@ def _workbook_output_path(output_file: str | Path) -> Path:
     return path
 
 
-def _temporary_output_path(target_path: Path) -> Path:
-    return target_path.with_name(f".metroliza-analytics-{uuid4().hex}.tmp{target_path.suffix}")
+class _StagedAnalyticsOutput:
+    """Own one staging path from renderer handoff through transfer or cleanup."""
+
+    def __init__(self, target: Path, kind: TemporaryResourceKind) -> None:
+        self.path = target.with_name(f".metroliza-analytics-{uuid4().hex}.tmp{target.suffix}")
+        self._target = target
+        self._kind = kind
+        self._resource_id: UUID | None = None
+
+    def _observe_size(self) -> TemporaryResourceSize | None:
+        """Bucket only metadata from the owned entry, without following a link."""
+        try:
+            info = self.path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                return TemporaryResourceSize.UNKNOWN
+            if info.st_size == 0:
+                return TemporaryResourceSize.EMPTY
+            if info.st_size < 1 << 20:
+                return TemporaryResourceSize.UNDER_1_MIB
+            if info.st_size < 16 << 20:
+                return TemporaryResourceSize.FROM_1_TO_UNDER_16_MIB
+            return TemporaryResourceSize.AT_LEAST_16_MIB
+        except Exception:
+            # An observation failure leaves existence unknown until a mutation succeeds.
+            return None
+
+    def _record_creation(self) -> None:
+        if self._resource_id is None:
+            self._resource_id = record_temporary_resource(self._kind, TemporaryResourcePhase.CREATED)
+
+    def _record_release(self, phase: TemporaryResourcePhase, size: TemporaryResourceSize | None) -> None:
+        self._record_creation()
+        if self._resource_id is not None:
+            record_temporary_resource(
+                self._kind, phase, size=size or TemporaryResourceSize.UNKNOWN,
+                resource_id=self._resource_id,
+            )
+
+    def transfer(self, output: Path) -> None:
+        if output != self.path:
+            output.replace(self._target)
+            return
+        size = self._observe_size()
+        if size is not None:
+            self._record_creation()
+        output.replace(self._target)
+        self._record_release(TemporaryResourcePhase.TRANSFERRED, size)
+
+    def remove(self) -> None:
+        size = self._observe_size()
+        if size is not None:
+            self._record_creation()
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            return
+        self._record_release(TemporaryResourcePhase.REMOVED, size)
 
 
 def _dashboard_assets_dir(target_path: Path) -> Path:

@@ -331,7 +331,7 @@ the database closed throughout the check. See the script docstring for limits.
 
 Current release highlight (`0.8.0-dev.8`): Multi-file CSV recipes, clearer report scope, and local analysis history.
 
-Build `261119` contains the main Reports HTML export and safe diagnostics correction
+Historical build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
 recorded in the [release status hub](docs/release_checks/release_status.md) and its linked
 issue ledger. Earlier builds retain their original source/package outcomes; a current
@@ -344,8 +344,7 @@ module remains as a compatibility import for existing scripts.
 
 ### Changelog highlights (release `0.8.0-dev.8`)
 
-- Workbook, realtime dashboard, saved-cache and analytics exports use short working filenames while keeping the output name you choose.
-- Main HTML dashboards retain full measurement labels with compact image and asset-directory names.
+- Add detailed local bug reports with operation options, technical build facts, safe failure stages and output-publication checks. Confidential input data and free text remain excluded; reproduction and user acceptance remain separate.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.
 
 Sync docs from release metadata:

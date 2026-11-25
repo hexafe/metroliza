@@ -251,7 +251,44 @@ While enrichment runs, the main window shows progress and a **Cancel** button. I
 
 Opens the local diagnostic viewer when this build includes it. The action is disabled
 when the feature is unavailable. A problem loading an installed viewer produces an error
-message. Diagnostic preview and selected export are provided by that separate viewer.
+message. Select a saved incident to see its safe summary and up to 40 of the latest recorded
+events in their stored order. The viewer shows how many earlier retained events were
+left out of the timeline. Use **Export selected** to save the selected incident locally.
+Use **Capture current state…** to open the same local preview as **Help > Report a
+problem…** with a fresh activity snapshot.
+
+### Help > Report a problem…
+
+Choose a problem category, affected module, symptom, expected behaviour and
+observed behaviour using the closed choices. Unspecified details remain unknown;
+no free-text field collects company information. Use **Copy report** to copy the
+displayed text into a support conversation. The report contains fixed activity
+codes and selected true/false checks across application
+workflows, including reports, database editing, CSV Summary, export, industrial
+data, monitoring and parser profiles. Coverage is selective: not every click,
+option, or failure can be recorded. It does not include input files, worksheet or
+column names, filter values, paths, measurements, exception text, or screenshots.
+It also includes validated technical build facts, relative event timing, explicitly
+correlated workflow stages and error categories where observed, and bounded option
+snapshots captured at selected operation boundaries. Earlier option snapshots can
+survive the recent-activity ring filling up. Missing observations remain unknown.
+It cannot by itself establish that a reported error has been reproduced.
+
+Opening the dialog captures a fixed snapshot. Background operations do not change
+the text you are reviewing. **Refresh snapshot** explicitly captures later activity.
+Changing the problem choices updates the description of that same snapshot. An
+explicit history clear invalidates earlier snapshots before copying.
+
+Recent activity is kept in a bounded local history. Earlier activity may be offered
+after startup; that offer does not mean the previous session crashed. Forced exits
+can lose events still waiting to be saved, and the report marks known lost events.
+If local storage is unavailable, the application can continue with incomplete
+history. The report is not sent automatically.
+
+Use **Clear activity history** to start a fresh local history. Wait for the
+confirmation before repeating the workflow; an unsuccessful clear is reported
+and is not presented as complete. Clearing local history does not erase text you
+already copied to the system clipboard or reports exported elsewhere.
 
 ### Help > About
 

@@ -1365,12 +1365,24 @@ class TestParseHelpers(unittest.TestCase):
         class FakeFuture:
             def __init__(self):
                 self.cancel_called = False
+                self._done = False
+                self._done_callbacks = []
 
             def done(self):
-                return False
+                return self._done
+
+            def add_done_callback(self, callback):
+                if self._done:
+                    callback(self)
+                else:
+                    self._done_callbacks.append(callback)
 
             def cancel(self):
                 self.cancel_called = True
+                self._done = True
+                for callback in self._done_callbacks:
+                    callback(self)
+                self._done_callbacks.clear()
                 return True
 
         class FakeExecutor:
@@ -2581,6 +2593,13 @@ class TestExportHelpers(unittest.TestCase):
         self.assertEqual(logged, ['write failed'])
 
 
+class _SuccessfulWorkbookBackend:
+    def run(self, thread):
+        # Match successful local publication without building workbook contents.
+        Path(thread.excel_file).write_bytes(b'synthetic workbook')
+        return True
+
+
 class TestExportBackendSmoke(unittest.TestCase):
     def _assert_safe_failed_export(self, thread, errors, *, stage, raw_detail):
         from metroliza.exporting.export_outcomes import (
@@ -2705,7 +2724,10 @@ class TestExportBackendSmoke(unittest.TestCase):
 
             class _BackendRunner:
                 def run(self, runner_thread):
-                    return runner_thread.run_export_pipeline(excel_writer=object())
+                    completed = runner_thread.run_export_pipeline(excel_writer=object())
+                    if completed:
+                        _SuccessfulWorkbookBackend().run(runner_thread)
+                    return completed
 
             progress_values = []
             thread.get_export_backend = lambda: _BackendRunner()
@@ -4837,11 +4859,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread = ExportDataThread(request)
             thread._exported_sheet_names = ['MEASUREMENTS']
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             emitted = []
             thread.update_label.connect(lambda text: emitted.append(text))
@@ -4897,11 +4915,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread = ExportDataThread(request)
             thread._exported_sheet_names = ['REF_A', 'REF_A_summary', 'REF_B', 'REF_B_summary', 'MEASUREMENTS']
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             captured = {}
             thread.update_label.connect(lambda *_: None)
@@ -4943,11 +4957,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             emitted = []
             thread.update_label.connect(lambda text: emitted.append(text))
@@ -4994,11 +5004,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             canceled_calls = []
             finished_calls = []
@@ -5034,11 +5040,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             emitted = []
             finished_calls = []
@@ -5079,11 +5081,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             emitted = []
             finished_calls = []
@@ -5125,11 +5123,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread = ExportDataThread(request)
             thread._exported_sheet_names = ['REF_A', 'MEASUREMENTS']
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
 
             emitted = []
             thread.update_label.connect(lambda text: emitted.append(text))
@@ -5172,11 +5166,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)
@@ -5241,11 +5231,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)
@@ -5320,11 +5306,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread = ExportDataThread(request)
             thread._exported_sheet_names = ['REF_A', 'MEASUREMENTS']
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)
@@ -5374,11 +5356,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             thread = ExportDataThread(request)
             thread._exported_sheet_names = ['MEASUREMENTS']
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)
@@ -5413,11 +5391,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)
@@ -5824,11 +5798,7 @@ class TestExportBackendSmoke(unittest.TestCase):
             )
             thread = ExportDataThread(request)
 
-            class _Backend:
-                def run(self, _thread):
-                    return True
-
-            thread.get_export_backend = lambda: _Backend()
+            thread.get_export_backend = lambda: _SuccessfulWorkbookBackend()
             thread.update_label.connect(lambda *_: None)
             thread.update_progress.connect(lambda *_: None)
             thread.completed.connect(lambda: None)

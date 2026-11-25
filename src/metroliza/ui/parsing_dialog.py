@@ -1738,7 +1738,7 @@ class _ReportOperations:
         self.shutdown_ready.emit()
 
     def log_and_exit(self, exception):
-        CustomLogger(exception, reraise=False)
+        CustomLogger(exception, reraise=False, logger_name=__name__)
 
     def changeEvent(self, event):
         super().changeEvent(event)

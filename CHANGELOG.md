@@ -22,6 +22,25 @@
 - Save CSV recipes once their settings are ready and start Realtime Monitor setup from a single primary action.
 - Append to an existing database and export reports from the chosen folder to Excel.
 
+## 0.8.0-dev.5 — previous diagnostics version
+
+- Preserve detailed local bug reports and output-publication checks from the previous diagnostics source version.
+- Qualification update. Analysis and export results retain their existing contract.
+
+## 0.8.0-dev.4 — previous diagnostics source version
+
+- Preview and copy detailed local bug reports with closed request options, technical build facts and safe failure stages.
+- Keep confidential input data and free text excluded. Verify published output presence and preserve the last complete analytics output when staging fails.
+
+## 0.8.0-dev.3 — previous diagnostics source version
+
+- Extend local bug reports to selected, predefined actions across application modules with bounded activity history and boolean options.
+
+## 0.8.0-dev.2 — previous diagnostics source version
+
+- Generate a local bug report with a bounded activity history and selected options; input data, paths, names and configuration values are excluded.
+- Match closed report codes to a predefined scenario and check its workflow with synthetic data; this validates a reference workflow, not the user's incident.
+
 ## 0.8.0-dev.4 — previous recipe version
 
 - Allocate a fresh package identity after the global inventory found an earlier diagnostics package already using `0.8.0-dev.3`.
