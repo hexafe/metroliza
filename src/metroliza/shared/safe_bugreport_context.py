@@ -156,6 +156,25 @@ class OutputVerificationKind(str, Enum):
     ANALYTICS_DASHBOARD_STAGING = "analytics_dashboard_staging"
 
 
+class TemporaryResourceKind(str, Enum):
+    ANALYTICS_DASHBOARD_STAGING = "analytics_dashboard_staging"
+    ANALYTICS_WORKBOOK_STAGING = "analytics_workbook_staging"
+
+
+class TemporaryResourcePhase(str, Enum):
+    CREATED = "created"
+    REMOVED = "removed"
+    TRANSFERRED = "transferred"
+
+
+class TemporaryResourceSize(str, Enum):
+    UNKNOWN = "unknown"
+    EMPTY = "empty"
+    UNDER_1_MIB = "under_1_mib"
+    FROM_1_TO_UNDER_16_MIB = "from_1_to_under_16_mib"
+    AT_LEAST_16_MIB = "at_least_16_mib"
+
+
 def exception_category(exception: object) -> ExceptionCategory:
     """Use static builtin classes only; never inspect a name/message/traceback."""
     for builtin, category in (
@@ -215,6 +234,15 @@ class SafeOutputVerification:
 
 
 @dataclass(frozen=True, slots=True)
+class SafeTemporaryResource:
+    kind: TemporaryResourceKind
+    phase: TemporaryResourcePhase
+    resource_id: uuid.UUID
+    size: TemporaryResourceSize | None
+    operation_id: uuid.UUID | None
+
+
+@dataclass(frozen=True, slots=True)
 class SafeExportFailureContext:
     invocation_id: uuid.UUID
     operation_id: uuid.UUID
@@ -248,6 +276,7 @@ class SafeContextEvent:
     exception_site: ExceptionSite = ExceptionSite.UNKNOWN
     output_verification: SafeOutputVerification | None = None
     export_failure: SafeExportFailureContext | None = None
+    temporary_resource: SafeTemporaryResource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -435,11 +464,38 @@ def _exception_payload(item):
     return result
 
 
+def _temporary_resource_payload(item):
+    if (type(item) is not SafeTemporaryResource or type(item.kind) is not TemporaryResourceKind
+            or type(item.phase) is not TemporaryResourcePhase
+            or item.size is not None and type(item.size) is not TemporaryResourceSize):
+        raise ValueError("invalid_context")
+    return {
+        "kind": item.kind.value, "phase": item.phase.value,
+        "resource_id": _uuid_payload(item.resource_id),
+        "size": None if item.size is None else item.size.value,
+        "operation_id": None if item.operation_id is None else _uuid_payload(item.operation_id),
+    }
+
+
+def _parse_temporary_resource(raw):
+    _keys(raw, "kind phase resource_id size operation_id")
+    phase = _enum(TemporaryResourcePhase, raw["phase"])
+    size = raw["size"]
+    if (phase is TemporaryResourcePhase.CREATED) != (size is None):
+        raise ValueError("invalid_context")
+    token = raw["operation_id"]
+    return SafeTemporaryResource(
+        _enum(TemporaryResourceKind, raw["kind"]), phase, _uuid(raw["resource_id"]),
+        None if size is None else _enum(TemporaryResourceSize, size),
+        None if token is None else _uuid(token),
+    )
+
+
 def _event_payload(item):
     if (type(item) is not SafeContextEvent or type(item.exception_site) is not ExceptionSite
             or sum(value is not None for value in (
                 item.action, item.workflow, item.exception, item.request,
-                item.output_verification, item.export_failure)) != 1
+                item.output_verification, item.export_failure, item.temporary_resource)) != 1
             or item.exception is None and item.exception_site is not ExceptionSite.UNKNOWN
             or item.action is None and item.enabled is not None):
         raise ValueError("invalid_context")
@@ -466,8 +522,10 @@ def _event_payload(item):
             "operation_id": (None if verification.operation_id is None
                              else _uuid_payload(verification.operation_id)),
         })
-    else:
+    elif item.export_failure is not None:
         result.update(kind="export_failure", export_failure=_failure_payload(item.export_failure))
+    else:
+        result.update(kind="temporary_resource", temporary_resource=_temporary_resource_payload(item.temporary_resource))
     return result
 
 
@@ -506,6 +564,9 @@ def _parse_event(raw):
     if kind == "export_failure":
         _keys(raw, base + "export_failure")
         return SafeContextEvent(*_parse_stamp(raw), export_failure=_parse_failure(raw["export_failure"]))
+    if kind == "temporary_resource":
+        _keys(raw, base + "temporary_resource")
+        return SafeContextEvent(*_parse_stamp(raw), temporary_resource=_parse_temporary_resource(raw["temporary_resource"]))
     raise ValueError("invalid_context")
 
 

@@ -9,6 +9,8 @@ values, paths, names, wall-clock timestamps or exception text.
 from __future__ import annotations
 
 from collections import deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 import json
@@ -26,7 +28,8 @@ from metroliza.shared import diagnostic_store as _diagnostic_store
 from metroliza.shared.safe_bugreport_context import (
     MAX_CONTEXT_EVENTS, MAX_OPTION_SNAPSHOTS, MAX_COUNTER, BugReportContextSelection, ContextOperationOutcome,
     ExceptionCategory, ExceptionSite, OutputVerificationKind, SafeBugReportContextSnapshot,
-    SafeContextEvent, SafeOutputVerification, SafeRequestContext, export_failure_context,
+    SafeContextEvent, SafeOutputVerification, SafeRequestContext, SafeTemporaryResource,
+    TemporaryResourceKind, TemporaryResourcePhase, TemporaryResourceSize, export_failure_context,
     SafeWorkflowContext, build_v2_report, context_payload, exception_category,
     option_snapshot, reject_duplicate_keys,
 )
@@ -983,6 +986,9 @@ class SafeBugReportRecorder:
             kind, passed, operation_id,
         ))
 
+    def record_temporary_resource(self, resource: SafeTemporaryResource) -> bool:
+        return self._record_context_detail(temporary_resource=resource)
+
     def record_exception_category(self, category: object,
                                   site: object = ExceptionSite.UNKNOWN) -> bool:
         try:
@@ -1155,6 +1161,41 @@ def build_bug_report_markdown(
 
 
 recorder = SafeBugReportRecorder()
+
+_resource_operation_id: ContextVar[uuid.UUID | None] = ContextVar(
+    "safe_bugreport_resource_operation_id", default=None,
+)
+
+
+@contextmanager
+def temporary_resource_operation_scope(operation_id: object):
+    """Carry the existing request token within the worker that owns its execution."""
+    identifier = operation_id if type(operation_id) is uuid.UUID and operation_id.version == 4 else None
+    token = _resource_operation_id.set(identifier)
+    try:
+        yield
+    finally:
+        _resource_operation_id.reset(token)
+
+
+def record_temporary_resource(
+    kind: TemporaryResourceKind,
+    phase: TemporaryResourcePhase,
+    *,
+    size: TemporaryResourceSize | None = None,
+    resource_id: uuid.UUID | None = None,
+) -> uuid.UUID | None:
+    """Project a closed observation without accepting paths, sizes in bytes or payloads."""
+    try:
+        if resource_id is None:
+            resource_id = uuid.uuid4()
+        recorder.record_temporary_resource(SafeTemporaryResource(
+            kind, phase, resource_id, size, _resource_operation_id.get(),
+        ))
+    except Exception:
+        pass
+    return resource_id
+
 
 _LOG_ERROR_MODULES = {
     "app": BugReportAction.LOG_ERROR_APP,

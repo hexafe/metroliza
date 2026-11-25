@@ -30,6 +30,9 @@ from modules.tabular_analytics_service import (
     cleanup_tabular_load_result,
     load_tabular_analytics_file,
 )
+from metroliza.shared import safe_bugreport
+from metroliza.shared.output_verification import OutputVerificationError
+from metroliza.shared.safe_bugreport_context import TemporaryResourceSize
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
 
 
@@ -1147,7 +1150,17 @@ def test_long_analytics_outputs_use_bounded_owned_components(tmp_path, stem, lon
     assert not list(tmp_path.glob('.metroliza-analytics-*.tmp.*'))
 
 
-def test_analytics_cancel_after_staged_html_preserves_existing_long_output(tmp_path):
+def _temporary_resources(trace):
+    return [
+        event.temporary_resource
+        for event in trace.context_snapshot().events
+        if event.temporary_resource is not None
+    ]
+
+
+def test_analytics_cancel_after_staged_html_preserves_existing_long_output(tmp_path, monkeypatch):
+    trace = safe_bugreport.SafeBugReportRecorder()
+    monkeypatch.setattr(safe_bugreport, "recorder", trace)
     source = tmp_path / 'table.csv'
     pd.DataFrame({'reference': ['A', 'A'], 'value': [10.0, 10.1]}).to_csv(source, index=False)
     target = tmp_path / ('h' * 250 + '.html')
@@ -1159,6 +1172,106 @@ def test_analytics_cancel_after_staged_html_preserves_existing_long_output(tmp_p
             cancel_check=lambda: bool(list(tmp_path.glob('.metroliza-analytics-*.tmp.html'))))
     assert target.read_bytes() == b'previous complete dashboard'
     assert not list(tmp_path.glob('.metroliza-analytics-*.tmp.*'))
+    created, removed = _temporary_resources(trace)
+    assert (created.phase.value, removed.phase.value) == ("created", "removed")
+    assert created.resource_id == removed.resource_id
+    assert removed.operation_id is None
+    assert removed.size is TemporaryResourceSize.UNDER_1_MIB
+
+
+@pytest.mark.parametrize(("failure", "phases", "size"), [
+    ("before_write", (), None),
+    ("empty_output", ("created", "removed"), TemporaryResourceSize.EMPTY),
+    ("partial_output", ("created", "removed"), TemporaryResourceSize.UNDER_1_MIB),
+    ("metadata_error", ("created", "removed"), TemporaryResourceSize.UNKNOWN),
+    ("cleanup_error", ("created",), None),
+])
+def test_failed_analytics_records_only_observed_staging_lifecycle(
+    tmp_path, monkeypatch, failure, phases, size,
+):
+    trace = safe_bugreport.SafeBugReportRecorder()
+    monkeypatch.setattr(safe_bugreport, "recorder", trace)
+    source = tmp_path / "source.csv"
+    source.write_text("value\n10\n20\n", encoding="utf-8")
+    target = tmp_path / "dashboard.html"
+    target.write_bytes(b"previous complete dashboard")
+    stage = None
+
+    def write(_manifest, path, **_kwargs):
+        nonlocal stage
+        stage = path
+        if failure == "empty_output":
+            path.touch()
+            return {"html_dashboard_path": str(path)}
+        if failure != "before_write":
+            path.write_bytes(b"synthetic partial output")
+        raise RuntimeError("synthetic write failure")
+
+    unlink = Path.unlink
+    lstat = Path.lstat
+
+    def fail_cleanup(path, *args, **kwargs):
+        if path == stage:
+            raise PermissionError("synthetic cleanup failure")
+        return unlink(path, *args, **kwargs)
+
+    def fail_metadata(path, *args, **kwargs):
+        if path == stage:
+            raise PermissionError("synthetic metadata failure")
+        return lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(workflow_module, "write_production_dashboard", write)
+    if failure == "cleanup_error":
+        monkeypatch.setattr(Path, "unlink", fail_cleanup)
+    if failure == "metadata_error":
+        monkeypatch.setattr(Path, "lstat", fail_metadata)
+
+    error_type = {
+        "empty_output": OutputVerificationError,
+        "cleanup_error": PermissionError,
+    }.get(failure, RuntimeError)
+    with pytest.raises(error_type):
+        run_tabular_file_analytics(
+            input_file=str(source), output_dashboard_file=str(target),
+            chart_selection=ProductionChartSelection(
+                time_series=False, histogram=False, violin=False, box=False, groupstats=False,
+            ),
+        )
+
+    assert stage is not None
+    assert stage.exists() is (failure == "cleanup_error")
+    assert target.read_bytes() == b"previous complete dashboard"
+    resources = _temporary_resources(trace)
+    assert tuple(item.phase.value for item in resources) == phases
+    if resources:
+        assert len({item.resource_id for item in resources}) == 1
+        assert resources[-1].size is size
+
+
+def test_analytics_diagnostic_recorder_failure_does_not_block_publication(tmp_path, monkeypatch):
+    trace = safe_bugreport.SafeBugReportRecorder()
+    monkeypatch.setattr(safe_bugreport, "recorder", trace)
+    source = tmp_path / "source.csv"
+    source.write_text("value\n10\n20\n", encoding="utf-8")
+    target = tmp_path / "dashboard.html"
+    target.write_bytes(b"previous complete dashboard")
+    seen = []
+
+    def fail_recording(resource):
+        seen.append(resource.phase.value)
+        raise RuntimeError("synthetic recorder failure")
+
+    monkeypatch.setattr(trace, "record_temporary_resource", fail_recording)
+    result = run_tabular_file_analytics(
+        input_file=str(source), output_dashboard_file=str(target),
+        chart_selection=ProductionChartSelection(
+            time_series=False, histogram=False, violin=False, box=False, groupstats=False,
+        ),
+    )
+    assert Path(result.html_dashboard_path) == target
+    assert "Metroliza CSV Summary Dashboard" in target.read_text(encoding="utf-8")
+    assert seen == ["created", "transferred"]
+    assert not list(tmp_path.glob(".metroliza-analytics-*.tmp.*"))
 
 
 @pytest.mark.parametrize("choice", ["copy", "replace"])

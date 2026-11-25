@@ -11,7 +11,8 @@ from metroliza.shared.safe_bugreport_context import (
     BugReportContextSelection, ContextModule, ContextSymptom, ContextBehavior,
     ContextOperationOutcome, ExceptionCategory, ExceptionSite, MAX_CONTEXT_EVENTS,
     MAX_OPTION_SNAPSHOTS, OptionSnapshotKind, OutputVerificationKind,
-    SafeBugReportContextSnapshot, SafeContextEvent, SafeOutputVerification,
+    SafeBugReportContextSnapshot, SafeContextEvent, SafeOutputVerification, SafeTemporaryResource,
+    TemporaryResourceKind, TemporaryResourcePhase, TemporaryResourceSize,
     context_payload, parse_context_payload,
     SafeBugReportProvenance, V2_PREFIX, parse_v2_report,
 )
@@ -86,6 +87,11 @@ def test_context_restart_and_explicit_clear_remove_both_histories(tmp_path):
     assert first.configure_history(root)
     token = first.record_option_snapshot(OptionSnapshotKind.CSV_ANALYSIS, {"workbook": True})
     assert first.record_option_outcome(token, ContextOperationOutcome.FAILED)
+    resource = SafeTemporaryResource(
+        TemporaryResourceKind.ANALYTICS_DASHBOARD_STAGING, TemporaryResourcePhase.REMOVED,
+        uuid.uuid4(), TemporaryResourceSize.EMPTY, token,
+    )
+    assert first.record_temporary_resource(resource)
     assert first.flush(5)
     assert first.close_history(5)
     second = s.SafeBugReportRecorder()
@@ -95,6 +101,9 @@ def test_context_restart_and_explicit_clear_remove_both_histories(tmp_path):
         raw = parse_v2_report(report(second))
         assert raw["context"]["options"][0]["operation_id"] == str(token)
         assert any(e.get("request", {}).get("outcome") == "failed" for e in raw["context"]["events"])
+        restored = parse_context_payload(raw["context"])
+        assert [e.temporary_resource for e in restored.events if e.temporary_resource] == [resource]
+        assert "temporary_resource" not in (root / "activity.json").read_text()
         old_generation = second.context_snapshot().generation
         assert second.clear_history()
         assert second.flush(5)
@@ -404,5 +413,31 @@ def test_new_context_parser_rejects_extra_fields_and_unbounded_os_codes():
         parse_context_payload(raw)
     raw = context_payload(recorder.context_snapshot())
     raw["events"][0]["export_failure"]["exception"] = "SYNTHETIC_PRIVATE"
+    with pytest.raises(ValueError):
+        parse_context_payload(raw)
+
+
+@pytest.mark.parametrize(("changes", "field", "value"), [
+    ({"size": 12_835}, "size", 12_835),
+    ({"size": None}, "size", None),
+    ({"phase": TemporaryResourcePhase.CREATED}, "phase", "created"),
+    ({"phase": "private_phase"}, "phase", "private_phase"),
+    ({"kind": "private_kind"}, "kind", "private_kind"),
+    ({"resource_id": uuid.UUID(int=0)}, "resource_id", str(uuid.UUID(int=0))),
+    ({"operation_id": "private_account"}, "operation_id", "private_account"),
+    ({}, "path", "private_staging_path"),
+])
+def test_temporary_resource_schema_rejects_open_or_inconsistent_fields(changes, field, value):
+    recorder = s.SafeBugReportRecorder()
+    resource = SafeTemporaryResource(
+        TemporaryResourceKind.ANALYTICS_WORKBOOK_STAGING, TemporaryResourcePhase.TRANSFERRED,
+        uuid.uuid4(), TemporaryResourceSize.UNDER_1_MIB, uuid.uuid4(),
+    )
+    if changes:
+        assert not recorder.record_temporary_resource(replace(resource, **changes))
+        assert recorder.context_snapshot().events == ()
+    assert recorder.record_temporary_resource(resource)
+    raw = context_payload(recorder.context_snapshot())
+    raw["events"][0]["temporary_resource"][field] = value
     with pytest.raises(ValueError):
         parse_context_payload(raw)

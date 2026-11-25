@@ -5,6 +5,7 @@ local sequence of source-controlled action codes and selected boolean states.
 The detailed report adds validated build facts, session-relative event timing,
 explicit workflow correlation, closed error categories, retained option snapshots,
 closed source locations for covered exception handlers, output-publication checks,
+temporary analytics output lifecycle,
 and closed user choices describing the symptom and expected/observed behaviour.
 It never includes input documents, worksheets, names, paths, SQL, measurements,
 exception messages or screenshots. It is not uploaded automatically.
@@ -15,7 +16,7 @@ exception messages or screenshots. It is not uploaded automatically.
 | Report import and metadata review | Preflight, review, OCR selection, import outcome, used CMM backend, explicit planner edit/copy/undo/reset/selection | `ui/parser_preflight_worker.py`, `ui/report_planner_model.py`, `ui/metadata_review_worker.py`, `parsing/parse_reports_thread.py`, `shared/workflow_diagnostics.py` |
 | Database and name matching | Edit lifecycle, mapping add/edit/delete and import/export | `ui/modify_db.py`, `ui/characteristic_mapping_dialog.py` |
 | Export, filters, grouping and dashboards | Export lifecycle and selected options, filter/group actions and fixed visual presets | `ui/export_dialog.py`, `ui/filter_dialog.py`, `ui/data_grouping.py`, `ui/dashboard_visual_options_dialog.py` |
-| CSV Summary | Load, filter, grouping, accepted request options including chart types and separate parameter sheets, analysis and selected request/result checks | `ui/industrial_analytics_dialog.py` |
+| CSV Summary | Load, filter, grouping, accepted request options including chart types and separate parameter sheets, analysis, staging file lifecycle and selected request/result checks | `ui/industrial_analytics_dialog.py`, `industrial/industrial_analytics_workflow.py` |
 | Industrial data | Source profiles, sync, SQL preview/recipe operations, linking, analytics and export | `ui/industrial_*_dialog.py` |
 | Real-time monitoring | Source configuration, session and polling state transitions, event review and dashboard | `ui/realtime_industrial_monitoring_dialog.py` |
 | Parser profiles | Validation, installation and enabled state | `ui/parser_plugin_wizard.py` |
@@ -36,8 +37,17 @@ closed check kind, pass/fail and an explicitly supplied operation token, if any.
 A passing check proves publication at that instant, not numerical correctness,
 chart completeness, or that the file remained available afterwards.
 Rejected temporary outputs emit a separate failed staging check, so they cannot
-be confused with failures after publication. Successful staging is not retained
-as a separate event.
+be confused with failures after publication.
+
+The detailed timeline records observed creation, removal and transfer of owned
+analytics HTML and XLSX staging files. Each file gets an independent runtime token
+and shares the current analysis request token when one is available. Removal and
+transfer include a size bucket of empty, under 1 MiB, 1 to under 16 MiB, at least
+16 MiB, or unknown. The recorder reads metadata only from the owned staging path
+and retains no file names, paths or exact sizes. A failed removal leaves any
+observed creation without a removal event. A transfer records the staging file
+leaving its temporary path. The final output checks and CSV Summary publication
+still provide the evidence about completed output.
 
 Export failures additionally retain the validated stage, failure code, backend,
 cause category and bounded operating-system error numbers from the existing

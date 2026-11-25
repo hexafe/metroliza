@@ -63,6 +63,7 @@ from metroliza.industrial.realtime.source_runtime import RealtimeSourceRuntime
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.tabular_output_publication import TabularOutputPublication, publish_tabular_analysis
 from metroliza.shared.progress_status import diagnostic_progress_message
+from metroliza.shared.safe_bugreport import temporary_resource_operation_scope
 from metroliza.shared.worker_cancellation import WorkerCancellationMixin
 
 
@@ -435,6 +436,10 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         self.update_label.emit(message)
 
     def run(self):
+        with temporary_resource_operation_scope(getattr(self, "_bugreport_option_token", None)):
+            self._run_analytics()
+
+    def _run_analytics(self):
         workers = _sys.modules[__name__]
         try:
             if self.source_kind == "tabular_file":
