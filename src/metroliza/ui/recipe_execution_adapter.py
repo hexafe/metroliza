@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt
 from metroliza.exporting.export_data_thread import ExportDataThread
 from metroliza.exporting.export_outcomes import derive_export_run_result
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
+from metroliza.recipes.export_service import RecipeExportResult
 from metroliza.recipes.report_ports import ImportExecutionResult
 from metroliza.shared.workflow_diagnostics import recipe_workflow_scope
 
@@ -73,12 +74,18 @@ class RecipeExecutionAdapter:
                     cancelled=worker.parsing_canceled,
                     enrichment_complete=complete,
                     cleanup_complete=worker._prepare_pool is None,
+                    accepted_occurrences=tuple(receipt.occurrence_id for receipt in worker.last_report_outcomes
+                                               if receipt.state in {"saved", "already_present"}),
                 )
-            return worker.export_run_result or derive_export_run_result(
+            result = worker.export_run_result or derive_export_run_result(
                 excel_file=worker.excel_file, export_target=worker.export_target,
                 completion_metadata=worker.completion_metadata,
                 cancelled=worker.export_canceled,
                 terminal_failure="export_failed" if errors else "export_not_completed",
+            )
+            return RecipeExportResult(
+                result.status, result.artifacts, result.stages, result.diagnostics, result.failure_diagnostic,
+                str(worker.completion_metadata.get("html_dashboard_assets_path") or ""),
             )
         finally:
             with self._lock:

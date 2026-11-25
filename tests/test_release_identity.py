@@ -128,7 +128,7 @@ def test_canonical_and_compatibility_labels_have_no_pseudodate():
     import VersionDate
     from metroliza.app import version
 
-    assert VersionDate.VERSION_LABEL == version.VERSION_LABEL == "0.8.0-dev.4"
+    assert VersionDate.VERSION_LABEL == version.VERSION_LABEL == "0.8.0-dev.8"
     assert version.PUBLIC_VERSION_LABEL == version.RELEASE_VERSION == version.VERSION_LABEL
     assert version.VERSION_DATE == ""  # Deprecated import compatibility, never an artifact identity.
 

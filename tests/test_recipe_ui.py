@@ -53,8 +53,132 @@ def test_micro_form_has_two_prompted_fields_and_preserves_private_plan(qapplicat
     page.fields[ParameterKey.OUTPUT_FILE][0].setText(str(tmp_path / "result.xlsx"))
     assert controller.prepare(page._values())
     assert controller.plan.database_file == tmp_path / "result.db"
+    assert controller.plan.value(ParameterKey.METADATA_MODE) == "light"
     assert "result.db" in page.database.text()
     page.close()
+
+
+def test_run_form_checks_polish_dates_before_start_and_keeps_other_values(qapplication_session, tmp_path, monkeypatch):
+    from metroliza.recipes.editor_service import RecipeEditorService
+    from metroliza.recipes.storage import copy_recipe
+
+    item = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN, str(tmp_path / "input"),
+                     str(tmp_path / "new.xlsx")), name="Daty")
+    service = RecipeEditorService(item)
+    service.configure_reports(dates=True, grouping_columns=(), additional_html=False)
+    service.set_value(ParameterKey.DATE_FROM, "2026-11-20T00:00:00.000")
+    controller = RecipeController(Runner())
+    page = RecipeRunnerPage(controller)
+    assert controller.launch(service.current.definition, service.current.binding)
+    received = []
+    monkeypatch.setattr(controller, "start", lambda: received.append(controller.plan))
+    page.show()
+    try:
+        start = page.fields[ParameterKey.DATE_FROM][0]
+        end = page.fields[ParameterKey.DATE_TO][0]
+        end.setText("31.11.2026")
+        page._start()
+        assert not received
+        assert "poprawną datę" in page.date_hints[ParameterKey.DATE_TO].text()
+        assert page.focusWidget() is end
+
+        end.setText("19.11.2026")
+        page._start()
+        assert not received
+        assert "późniejsza" in page.date_hints[ParameterKey.DATE_TO].text()
+        assert str(tmp_path / "new.xlsx") == page.fields[ParameterKey.OUTPUT_FILE][0].text()
+
+        end.setText("22.11.2026")
+        page._start()
+        assert received[-1].value(ParameterKey.DATE_FROM) == "2026-11-20"
+        assert received[-1].value(ParameterKey.DATE_TO) == "2026-11-22"
+        start.clear()
+        page._start()
+        assert received[-1].value(ParameterKey.DATE_FROM) == ""
+        assert received[-1].value(ParameterKey.DATE_TO) == "2026-11-22"
+    finally:
+        page.close()
+
+
+def test_multifile_run_form_lists_output_pair_and_names_workbook_collision(qapplication_session, tmp_path):
+    from dataclasses import replace
+    from metroliza.recipes.runner import RecipeRunner
+    from metroliza.recipes.tabular_adapter import AnalyticsRecipePorts, capture
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_files
+    from tests.test_recipe_adapters import request_for, source
+
+    first, second = tmp_path / "a,csv.csv", tmp_path / "b.csv"
+    source(first)
+    source(second)
+    output = tmp_path / "wynik.html"
+    workbook = output.with_suffix(".xlsx")
+    workbook.write_bytes(b"existing workbook")
+    loaded = load_tabular_analytics_files((first, second))
+    try:
+        item = capture(replace(request_for(first, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    controller = RecipeController(runner)
+    page = RecipeRunnerPage(controller)
+    try:
+        assert controller.launch(item.definition, item.binding)
+        assert page._values()[ParameterKey.SOURCE_FILES] == (str(first), str(second))
+        assert "Liczba plików źródłowych: 2" in page.database.text()
+        assert str(output) in page.database.text() and str(workbook) in page.database.text()
+        assert controller.prepare(page._values())
+        result = runner.start(controller.plan)
+        page._changed(result)
+        assert result.state is RunState.REQUIRES_DECISION
+        assert str(workbook) in page.scope.text() and str(output) not in page.scope.text()
+        assert page.continue_button.text() == "Zastąp wynik i kontynuuj"
+    finally:
+        runner.cancel()
+        page.close()
+
+
+def test_append_form_uses_home_context_and_stage_is_bound_to_current_run(qapplication_session, tmp_path):
+    from dataclasses import replace
+
+    from metroliza.recipes.ports import PreparationPhase
+    from metroliza.recipes.run_state import RunEvent
+
+    source = tmp_path / "reports"
+    source.mkdir()
+    database = tmp_path / "selected.db"
+    runner = Runner()
+    controller = RecipeController(runner, active_database=lambda: database, source_directory=lambda: source)
+    page = RecipeRunnerPage(controller)
+    try:
+        assert controller.launch("reports_append_excel_main")
+        assert page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert page.fields[ParameterKey.EXISTING_DATABASE][0].text() == str(database)
+        assert "wybranego folderu" in page.database.text()
+        assert not page.repeat_button.isEnabled()
+        page.fields[ParameterKey.OUTPUT_FILE][0].setText(str(tmp_path / "result.xlsx"))
+        page.mode_combo.setCurrentIndex(page.mode_combo.findData("complete"))
+        assert controller.prepare(page._values())
+        runner.plan = controller.plan
+        assert runner.plan.value(ParameterKey.METADATA_MODE) == "complete"
+        record = RunRecord(runner.plan.flow_id, runner.plan.run_id, RunState.RUNNING, ownership=True)
+        controller.event_received.emit(RunEvent(record, "scan", completed=2, total=4,
+                                                phase=PreparationPhase.SCAN))
+        assert "Skanowanie folderu" in page.stage.text() and "2/4" in page.stage.text()
+        assert page.progress.value() == 50 and not page.repeat_button.isEnabled()
+        controller.event_received.emit(RunEvent(record, "scan", phase=PreparationPhase.OCR))
+        assert "OCR" in page.stage.text() and page.progress.maximum() == 0
+        done = replace(record, state=RunState.COMPLETED, ownership=False)
+        controller.event_received.emit(RunEvent(done))
+        controller._returned(done)
+        assert page.progress.value() == 100 and page.repeat_button.isEnabled()
+        assert controller.repeat()
+        assert page.progress.value() == 0 and not page.progress_percent.text() and not page.stage.text()
+        assert controller.last_record == done
+        assert controller.launch("reports_dashboard_html")
+        assert page.progress.value() == 0 and not page.stage.text()
+        assert not page.repeat_button.isEnabled() and page.mode_row.isHidden()
+    finally:
+        page.close()
 
 
 def test_library_and_quick_flow_raise_existing_run_without_duplicate(qapplication_session):
@@ -165,17 +289,18 @@ def test_admitted_controller_cancel_before_worker_start_is_not_lost(qapplication
     assert controller.prepare({ParameterKey.INPUT_FOLDER: str(tmp_path / "input"),
                                ParameterKey.OUTPUT_FILE: str(tmp_path / "result.xlsx")})
     pending = []
+    controller.starting.connect(pending.append)
     monkeypatch.setattr(controller, "_submit", lambda operation: pending.append(operation) or True)
     assert controller.start()
+    assert pending[0] is controller.plan
     controller.cancel()
-    record = pending[0]()
+    record = pending[1]()
     assert record.state is RunState.CANCELLED
     assert not controller.plan.database_file.exists()
 
 
 def test_all_catalog_home_and_favorite_launches_refresh_active_database(qapplication_session, tmp_path):
     from metroliza.ui.recipe_library_page import RecipeQuickFlows
-    from PyQt6.QtWidgets import QPushButton
 
     current = [tmp_path / "first.db"]
     runner = Runner()
@@ -187,7 +312,7 @@ def test_all_catalog_home_and_favorite_launches_refresh_active_database(qapplica
     assert runner.active_database == current[0]
     quick = RecipeQuickFlows(controller, (entry,))
     current[0] = tmp_path / "second.db"
-    quick.findChildren(QPushButton)[0].click()
+    quick.favorite_buttons.itemAt(0).widget().click()
     assert runner.active_database == current[0]
     quick.set_favorites({REPORTS_EXCEL_MAIN.recipe_id})
     current[0] = tmp_path / "third.db"

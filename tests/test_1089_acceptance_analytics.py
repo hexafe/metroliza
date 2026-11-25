@@ -103,6 +103,121 @@ def _workbook_parts(path):
         return sorted(workbook.namelist())
 
 
+def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, monkeypatch, qapplication_session):
+    from pathlib import Path
+    import fitz
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+    from metroliza.app.analysis_history import capture_source_stamp
+    from metroliza.ui import export_dialog
+    from metroliza.ui.parsing_dialog import ParsingDialog
+    from tests.test_report_planner_integration import wait_until
+
+    app = qapplication_session
+    source = tmp_path / "source"
+    source.mkdir()
+    fixture = Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf"
+    for number in (1, 2, 3):
+        with fitz.open(fixture) as document:
+            document.set_metadata({"title": f"Synthetic report {number}"})
+            document.save(source / f"source-{number}.pdf")
+    database = tmp_path / "reports.sqlite"
+    workbook_path = tmp_path / "reports.xlsx"
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: None)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(workbook_path), ""))
+    monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda self: {"selected_preset": "full_report"})
+    monkeypatch.setattr(export_dialog, "save_export_dialog_config", lambda *_args: None)
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **_kwargs: None)
+
+    parser = ParsingDialog(directory=str(source), db_file=str(database))
+    parser.show()
+    export = None
+    try:
+        QTest.keyClick(parser.scan_button, Qt.Key.Key_Space)
+        wait_until(app, parser.pdf_workers_idle)
+        model = parser.report_planner.model
+        assert model.rowCount() == 3
+        reference_column = model.column_for_field("reference")
+        for row, reference in enumerate(("REF-SHARED", "REF-SHARED", "")):
+            assert model.setData(model.index(row, reference_column), reference)
+        QTest.keyClick(parser.parse_button, Qt.Key.Key_Space)
+        wait_until(app, parser.pdf_workers_idle, parse_dialog=parser)
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT count(*) FROM report_measurements").fetchone()[0] == 3
+            assert connection.execute("SELECT COUNT(*) FROM report_metadata WHERE reference IS NULL OR reference = ''").fetchone()[0] == 1
+
+        export = export_dialog.ExportDialog(db_file=str(database))
+        records = []
+        export.analysis_completed.connect(records.append)
+        export.select_excel_file()
+        export.open_filter_window()
+        filters = export.filter_window
+        wait_until(app, lambda: not filters._values_loading)
+        filters.ax_list.findItems("X", Qt.MatchFlag.MatchExactly)[0].setSelected(True)
+        QTest.keyClick(filters.apply_button, Qt.Key.Key_Space)
+        assert export.filter_state.ax_values == ("X",)
+
+        export.open_grouping_window()
+        grouping = export.grouping_window
+        wait_until(app, lambda: not grouping.is_loading_grouping())
+        user_role = Qt.ItemDataRole.UserRole
+        known_reference_row = next(row for row in range(grouping.reference_list.count())
+                                   if grouping.reference_list.item(row).data(user_role) == "REF-SHARED")
+        grouping.reference_list.setCurrentRow(known_reference_row)
+        assert grouping.part_list.count() == 2
+        assert grouping.part_list.accessibleName() == "Parts in selected reference"
+        grouping.part_search_input.setFocus()
+        QTest.keyClick(grouping.part_search_input, Qt.Key.Key_Tab)
+        assert grouping.part_list.hasFocus()
+        for row, name in enumerate(("Batch A", "Batch B")):
+            grouping.part_list.clearSelection()
+            grouping.part_list.item(row).setSelected(True)
+            monkeypatch.setattr(QInputDialog, "getText", lambda *_args, label=name, **_kwargs: (label, True))
+            grouping.create_group()
+        QTest.keyClick(grouping.use_grouping_button, Qt.Key.Key_Space)
+
+        submitted_stamp = capture_source_stamp(database)
+        QTest.keyClick(export.export_button, Qt.Key.Key_Space)
+        wait_until(app, lambda: export.export_thread is None)
+        assert len(records) == 1
+        assert records[0]["source"] == str(database)
+        assert records[0]["source_stamp"] == submitted_stamp
+        assert records[0]["kind"] == "reports"
+        assert records[0]["settings"]["Filters"] == "AX: X"
+        assert "Batch A" in records[0]["settings"]["Grouping"]
+        workbook, dashboard, assets = map(Path, records[0]["artifacts"])
+        assert workbook == workbook_path and dashboard == tmp_path / "reports_dashboard.html"
+        assert assets.is_dir() and assets.parent == dashboard.parent
+
+        result = load_workbook(workbook)
+        try:
+            assert result["MEASUREMENTS"].max_row == 4
+            assert sum(bool(result[sheet]._charts) for sheet in result.sheetnames) >= 2
+            assert any(name.endswith("_summary") for name in result.sheetnames)
+            scope = dict(result["REPORT SCOPE"].values)
+            assert scope["Source database"] == database.name
+            assert scope["Filters"] == "AX: X"
+            assert "Batch B" in scope["Grouping"]
+            assert "without a reference" in scope["Warning"]
+        finally:
+            result.close()
+        content = dashboard.read_text(encoding="utf-8")
+        assert "report-scope-title" in content and "AX: X" in content
+        assert "without a reference" in content and "Group comparison" in content
+        assert "Batch A" in content and "Batch B" in content
+        assert any(assets.glob("*.png"))
+    finally:
+        for worker in (parser.preflight_thread, parser.parse_thread, parser.metadata_thread,
+                       export.export_thread if export is not None else None):
+            if worker is not None:
+                worker.wait(20000)
+        app.processEvents()
+        if export is not None:
+            export.close()
+        parser.close()
+
+
 def test_missing_reference_reports_keep_analytical_workbook_and_dashboard(tmp_path):
     db_path = _fixture_db(tmp_path)
     with closing(sqlite3.connect(db_path)) as connection:

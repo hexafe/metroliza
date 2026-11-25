@@ -133,13 +133,18 @@ def _completion_ready(thread) -> bool:
     if not _is_finished(thread):
         return False
     try:
-        from PyQt6.QtCore import QDeadlineTimer, Qt
-
-        # Qt 6.6.1 maps wait(0) to a sentinel deadline with a negative POSIX tv_nsec.
-        # A real, already-expired instant polls native completion without that invalid timeout.
-        return bool(thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)))
+        return native_thread_done_now(thread)
     except RuntimeError:
         return True
+
+
+def native_thread_done_now(thread) -> bool:
+    """Check whether a native Qt thread has retired without blocking the GUI."""
+    from PyQt6.QtCore import QDeadlineTimer, Qt
+
+    # Qt 6.6.1 maps wait(0) to a sentinel deadline with a negative POSIX tv_nsec.
+    # A real, already-expired instant polls native completion without that invalid timeout.
+    return bool(thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)))
 
 
 def _settled(thread) -> bool:

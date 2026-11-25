@@ -87,7 +87,7 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
 
         assert dialog._selected_value_count(dialog.ax_list) == 1
         assert "Active filters:" in dialog.filter_summary_label.text()
-        assert "NOK only" in dialog.filter_summary_label.text()
+        assert "Reports with at least one NOK" in dialog.filter_summary_label.text()
 
         dialog.select_beginning_of_time()
         dialog.select_today_as_date_to()
@@ -98,6 +98,121 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
         )
     finally:
         dialog.close()
+
+
+def test_named_filter_roundtrip_retains_unavailable_values_until_explicit_apply(monkeypatch, tmp_path):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    class Owner(QDialog):
+        def set_filter_query(self, query):
+            self.query = query
+
+        def set_filter_state(self, state):
+            self.state = state
+
+    app = _app()
+    path = tmp_path / "presets.ini"
+    store = ReportFilterPresets(path)
+    expected = FilterState(header_values=("WIDTH",), status_code_values=("nok",),
+                           date_from="2024-01-01", date_to="2024-01-31")
+    store.save("January NOK", expected)
+    settings = store._settings()
+    settings.setValue("invalid-entry", "not valid JSON")
+    settings.sync()
+    presets, unavailable = ReportFilterPresets(path).load()
+    assert presets == [("January NOK", expected)] and unavailable == 1
+
+    owner = Owner()
+    prior_query = "previous query"
+    owner.query = prior_query
+    dialog = _build_dialog(monkeypatch, parent=owner)
+    dialog.show()
+    try:
+        dialog._load_saved_filter(presets[0][1])
+        assert owner.query == prior_query
+        assert dialog._current_filter_state() == expected
+        assert dialog.measurement_nok_button.isChecked()
+        assert "Unavailable selections" in dialog.filter_summary_label.text()
+        assert dialog.header_list.accessibleName() == "Header choices"
+        app.processEvents()
+        QTest.keyClick(dialog.apply_button, Qt.Key.Key_Space)
+        assert owner.state == expected
+        assert "header IN ('WIDTH')" in owner.query and "status_code IN ('nok')" in owner.query
+    finally:
+        dialog.close()
+        owner.close()
+
+
+def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):
+    from contextlib import closing
+    import sqlite3
+
+    from openpyxl import load_workbook
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.reports.report_query_service import build_grouping_scope_query_from_filter_state
+    from metroliza.shared.filter_state import summarize_filter_state
+    from tests.test_1089_acceptance_analytics import _fixture_db
+
+    class FilterOwner(QDialog):
+        def set_filter_query(self, value):
+            self.query = value
+
+        def set_filter_state(self, value):
+            self.state = value
+
+    database = _fixture_db(tmp_path)
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("UPDATE report_measurements SET header = 'WIDTH', status_code = 'nok', "
+                           "is_nok = 1, outtol = 0.5 WHERE report_id = 1")
+        connection.execute("UPDATE parsed_reports SET has_nok = 1, nok_count = 1, measurement_count = 2 WHERE id = 1")
+        connection.execute("""INSERT INTO report_measurements
+            (report_id, page_number, row_order, header, ax, nominal, tol_plus, tol_minus,
+             meas, dev, outtol, status_code)
+            VALUES (1, 1, 2, 'HEIGHT', 'X', 10, 0.5, -0.5, 10.1, 0.1, 0, 'ok')""")
+
+    _app()
+    owner = FilterOwner()
+    dialog = _build_dialog(monkeypatch, parent=owner, db_file=str(database))
+    try:
+        _select_list_value(dialog.header_list, "HEIGHT")
+        dialog.has_nok_button.setChecked(True)
+        dialog.apply_filters()
+        assert summarize_filter_state(owner.state)[0].endswith("Reports with at least one NOK")
+        assert owner.state.status_code_values == () and owner.state.has_nok_only
+        output = tmp_path / "report-nok.xlsx"
+        for only_measurements in (False, True):
+            if only_measurements:
+                dialog.has_nok_button.setChecked(False)
+                dialog.measurement_nok_button.setChecked(True)
+                dialog.apply_filters()
+                assert summarize_filter_state(owner.state)[0].endswith("Only NOK measurements")
+                assert owner.state.status_code_values == ("nok",) and not owner.state.has_nok_only
+                output = tmp_path / "measurement-nok.xlsx"
+
+            with closing(sqlite3.connect(database)) as connection:
+                report_preview = connection.execute(build_grouping_scope_query_from_filter_state(owner.state)).fetchall()
+            assert len(report_preview) == (0 if only_measurements else 1)
+            worker = ExportDataThread(ExportRequest(
+                paths=AppPaths(db_file=str(database), excel_file=str(output)),
+                options=ExportOptions(), filter_query=owner.query,
+            ))
+            worker.run()
+            workbook = load_workbook(output, read_only=True)
+            try:
+                columns, *measurements = workbook["MEASUREMENTS"].values
+                if only_measurements:
+                    assert measurements == []
+                else:
+                    assert len(measurements) == 1
+                    assert measurements[0][columns.index("HEADER")] == "HEIGHT"
+                    assert measurements[0][columns.index("STATUS_CODE")] == "ok"
+            finally:
+                workbook.close()
+    finally:
+        dialog.close()
+        owner.close()
 
 
 def test_filter_dialog_invalid_expression_and_native_exits_are_transactional(
@@ -676,12 +791,12 @@ def test_date_presets_fill_inclusive_ranges_and_summary(date_preset_dialog, pres
         assert all(day in dialog.filter_summary_label.text() for day in expected)
     assert dialog.apply_filters() is True
     assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from=expected[0], date_to=expected[1],
+        date_from=expected[0] if active else None, date_to=expected[1] if active else None,
     )
     assert not dialog._is_dirty()
 
 
-def test_all_dates_default_and_return_preserve_legacy_query(date_preset_dialog):
+def test_all_dates_default_and_return_include_undated_and_outside_calendar(date_preset_dialog):
     dialog, _clock = date_preset_dialog
     assert dialog.date_range_selector.currentText() == "All dates"
     assert "All dates" in dialog.filter_summary_label.text()
@@ -691,9 +806,15 @@ def test_all_dates_default_and_return_preserve_legacy_query(date_preset_dialog):
     dialog.date_range_selector.setCurrentText("All dates")
     assert dialog._draft_snapshot() == original
     assert dialog.apply_filters() is True
-    assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from="1970-01-01", date_to="2026-03-01",
-    )
+    from contextlib import closing
+    import sqlite3
+    with closing(sqlite3.connect(":memory:")) as connection:
+        from metroliza.reports.report_schema import ensure_report_schema
+        ensure_report_schema(":memory:", connection=connection)
+        connection.execute("CREATE TEMP TABLE vw_measurement_export AS SELECT * FROM main.vw_measurement_export LIMIT 0")
+        dates = [(None,), ("1969-01-01",), ("2099-01-01",)]
+        connection.executemany("INSERT INTO vw_measurement_export(report_date) VALUES (?)", dates)
+        assert connection.execute(f"SELECT DATE FROM ({dialog.filter_query}) ORDER BY DATE").fetchall() == dates
 
 
 @pytest.mark.parametrize("field", ["date_from_calendar", "date_to_calendar"])
@@ -859,9 +980,7 @@ def test_all_dates_refresh_after_midnight(date_preset_dialog, reopen, action):
         assert not dialog._is_dirty()
     getattr(dialog, action)()
     assert _date_pair(dialog) == ("1970-01-01", "2026-03-02")
-    assert dialog.filter_query == filter_dialog.build_measurement_filter_query(
-        date_from="1970-01-01", date_to="2026-03-02",
-    )
+    assert dialog.filter_query == filter_dialog.build_measurement_filter_query()
     assert changes == []
     assert dialog.date_range_selector.currentText() == "All dates"
     assert dialog.filter_summary_label.text() == "No active filters | All dates"

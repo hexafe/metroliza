@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -285,8 +286,11 @@ class IndustrialSyncDialog(QDialog):
         self.limit_spin.setValue(5000)
         self.fetch_all_checkbox = QCheckBox("Fetch all rows")
         self.fetch_all_checkbox.setToolTip(
-            "Fetch every row visible to the configured source and filters after a warning confirmation."
+            "Ignore the row limit and fetch every row matching the current filters or SQL query."
         )
+        self.fetch_all_hint = QLabel("This ignores the row limit. Keep a limit for a first check or a small sample.")
+        self.fetch_all_hint.setWordWrap(True)
+        self.fetch_all_hint.hide()
         self.fetch_all_checkbox.stateChanged.connect(lambda _state: self._sync_limit_controls())
         self.timeout_spin = QSpinBox()
         self.timeout_spin.setRange(1, 3600)
@@ -478,6 +482,7 @@ class IndustrialSyncDialog(QDialog):
         self.limit_row_label = form.labelForField(self.limit_spin)
         form.addRow("", self.fetch_all_checkbox)
         self.fetch_all_row_label = form.labelForField(self.fetch_all_checkbox)
+        form.addRow("", self.fetch_all_hint)
         form.addRow("Query timeout seconds", self.timeout_spin)
         content_layout.addLayout(form)
 
@@ -1719,6 +1724,7 @@ class IndustrialSyncDialog(QDialog):
             )
         if hasattr(self, "fetch_all_checkbox"):
             self.fetch_all_checkbox.setEnabled(not self.access_only)
+            self.fetch_all_hint.setVisible(not self.access_only and self.fetch_all_checkbox.isChecked())
 
     def _format_failed_result_status(self, result: dict[str, Any]) -> str:
         if result.get("status") == "cancelled":

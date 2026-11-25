@@ -1,0 +1,364 @@
+"""Publish a complete CSV Summary dashboard, assets and optional workbook."""
+
+from __future__ import annotations
+
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass, replace
+from hashlib import file_digest
+from html import unescape
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+from tempfile import TemporaryDirectory, mkdtemp
+from unicodedata import normalize
+
+from metroliza.charts.plotly_runtime_assets import PLOTLY_NOTICE_FILENAME
+from metroliza.exporting.output_publication import (
+    OutputConsent,
+    OutputPublicationCanceled,
+    _move_dashboard_assets,
+    conflicting_outputs,
+    publish_output,
+)
+from metroliza.industrial.industrial_cache_target import _is_symlink_or_reparse
+
+_ASSET_OWNER_FILE = ".metroliza-tabular-dashboard"
+_LEGACY_DASHBOARD_HEAD_LIMIT = 128 * 1024
+
+
+def _output_entry(path: str) -> Path:
+    entry = Path(path).expanduser()
+    return entry.parent.resolve() / entry.name
+
+
+def _aliases(first: Path, second: Path) -> bool:
+    if first.resolve() == second.resolve():
+        return True
+    try:
+        return first.samefile(second)
+    except FileNotFoundError:
+        return False
+
+
+@dataclass(frozen=True)
+class TabularOutputFiles:
+    dashboard: Path
+    workbook: Path | None = None
+
+    @classmethod
+    def from_paths(cls, dashboard: str, workbook: str) -> TabularOutputFiles:
+        return cls(_output_entry(dashboard), _output_entry(workbook) if workbook else None)
+
+    @property
+    def paths(self) -> tuple[Path, ...]:
+        return (self.dashboard,) if self.workbook is None else (self.dashboard, self.workbook)
+
+    @property
+    def assets(self) -> Path:
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
+        return resolve_html_dashboard_assets_dir(self.dashboard)
+
+    def conflicts(self) -> tuple[Path, ...]:
+        from metroliza.industrial.industrial_analytics_dashboard import resolve_production_dashboard_assets_dir
+
+        legacy_assets = resolve_production_dashboard_assets_dir(self.dashboard)
+        conflicts = conflicting_outputs(self.paths)
+        if legacy_assets not in conflicts and os.path.lexists(legacy_assets):
+            conflicts += (legacy_assets,)
+        return conflicts
+
+    def validate_sources(self, sources: tuple[Path, ...]) -> None:
+        if self.workbook is not None and _aliases(self.dashboard, self.workbook):
+            raise ValueError("The dashboard and workbook must use different files.")
+        if any(_aliases(output, source) for output in self.paths for source in sources):
+            raise ValueError("An output matches a source file. Choose a different output path.")
+
+    def replacement_consents(self) -> tuple[OutputConsent, ...] | None:
+        consents = []
+        for path in self.paths:
+            if not os.path.lexists(path):
+                continue
+            if path.is_symlink() or not path.is_file():
+                return None
+            consents.append(OutputConsent.for_path(path))
+        return tuple(consents)
+
+    def free_copy(self, sources: tuple[Path, ...]) -> TabularOutputFiles:
+        from metroliza.charts.export_html_dashboard import _bounded_dashboard_output_component
+
+        number = 2
+        while True:
+            paths = tuple(path.with_name(_bounded_dashboard_output_component(
+                path.stem, suffix=f" ({number}){path.suffix}",
+            )) for path in self.paths)
+            candidate = TabularOutputFiles(*paths)
+            if not candidate.conflicts() and not any(
+                _aliases(path, source) for path in paths for source in sources
+            ):
+                return candidate
+            number += 1
+
+
+@dataclass(frozen=True)
+class TabularOutputPublication:
+    outputs: TabularOutputFiles
+    sources: tuple[Path, ...]
+    replace_outputs: tuple[OutputConsent, ...] | None = None
+    copy_from: TabularOutputFiles | None = None
+    allow_html_without_workbook: bool = False
+
+    def check(self, outputs: TabularOutputFiles) -> None:
+        outputs.validate_sources(self.sources)
+        if self.replace_outputs is None:
+            if outputs.conflicts():
+                raise FileExistsError("An analytics output already exists. Generate again to choose what to save.")
+        elif outputs.replacement_consents() != self.replace_outputs:
+            raise FileExistsError("An analytics output changed after confirmation. Generate again to review it.")
+
+
+def publish_tabular_analysis(render, publication: TabularOutputPublication, *, should_cancel):
+    """Render in private folders and publish complete files on their destination filesystems."""
+    outputs = publication.outputs
+    for attempt in range(20):
+        try:
+            _check_cancelled(should_cancel)
+            publication.check(outputs)
+            return _render_and_publish(render, publication, outputs, should_cancel)
+        except FileExistsError:
+            if publication.copy_from is None or attempt == 19:
+                raise
+            outputs = publication.copy_from.free_copy(publication.sources)
+
+
+def _render_and_publish(render, publication, outputs, should_cancel):
+    with ExitStack() as stack:
+        for path in outputs.paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        html_stage = Path(stack.enter_context(TemporaryDirectory(prefix=".mza-", dir=outputs.dashboard.parent)))
+        staged_workbook = None
+        if outputs.workbook is not None:
+            workbook_stage = html_stage
+            if outputs.workbook.parent != outputs.dashboard.parent:
+                workbook_stage = Path(stack.enter_context(TemporaryDirectory(prefix=".mza-", dir=outputs.workbook.parent)))
+            staged_workbook = workbook_stage / "workbook.xlsx"
+        result = render(
+            output_dashboard_file=str(html_stage / "dashboard.html"),
+            output_workbook_file=str(staged_workbook) if staged_workbook is not None else None,
+            output_assets_dir=html_stage / outputs.assets.name,
+        )
+        if staged_workbook is not None and result.workbook_path != str(staged_workbook):
+            if not publication.allow_html_without_workbook:
+                raise OSError("Could not verify the staged analytics workbook.")
+            staged_workbook = None
+        staged_assets = Path(result.html_dashboard_assets_path)
+        (staged_assets / _ASSET_OWNER_FILE).write_text(os.path.normcase(outputs.dashboard.name), encoding="utf-8")
+        destination_assets = _publish_staged(result, staged_assets, staged_workbook, publication, outputs, should_cancel)
+    return replace(result, html_dashboard_path=str(outputs.dashboard), html_dashboard_assets_path=str(destination_assets),
+                   workbook_path=str(outputs.workbook) if staged_workbook is not None else "")
+
+
+def _output_lock_order(path: Path):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
+
+    lock = _output_lock_path(path)
+    # Order the shared locks themselves, including when output spellings differ.
+    return lock.name, normalize("NFC", str(lock.parent).casefold()), lock.parent
+
+
+def _publish_staged(result, staged_assets, staged_workbook, publication, outputs, should_cancel):
+    from metroliza.charts.export_html_dashboard import _dashboard_publication_lock
+
+    destination_assets = outputs.dashboard.parent / staged_assets.name
+    consents = publication.replace_outputs or ()
+    with ExitStack() as stack:
+        for path in sorted(outputs.paths, key=_output_lock_order):
+            stack.enter_context(_dashboard_publication_lock(path, should_cancel=should_cancel))
+        _check_cancelled(should_cancel)
+        publication.check(outputs)
+        if staged_workbook is None and outputs.workbook is not None and os.path.lexists(outputs.workbook):
+            raise OSError("Could not stage a workbook to replace the prior copy. Existing outputs were kept.")
+        legacy_assets = _approved_legacy_assets(outputs, consents)
+        destination_assets.mkdir()
+        try:
+            for asset in staged_assets.iterdir():
+                _move_dashboard_assets(asset, destination_assets / asset.name)
+            with _workbook_publication(staged_workbook, outputs.workbook, consents, should_cancel):
+                _check_cancelled(should_cancel)
+                publish_output(result.html_dashboard_path, outputs.dashboard, consents=consents)
+        except BaseException:
+            shutil.rmtree(destination_assets, ignore_errors=True)
+            raise
+        if any(consent.path == outputs.dashboard for consent in consents):
+            _retire_owned_assets(outputs, destination_assets, publication.sources)
+            if legacy_assets is not None:
+                _retire_legacy_assets(legacy_assets, publication.sources)
+    return destination_assets
+
+
+def _check_cancelled(should_cancel):
+    if should_cancel():
+        raise OutputPublicationCanceled("Analytics generation was canceled.")
+
+
+def _backup_workbook(target):
+    backup = Path(mkdtemp(prefix=".metroliza-previous-", dir=target.parent)) / "workbook.xlsx"
+    try:
+        try:
+            os.link(target, backup)
+        except OSError:
+            shutil.copy2(target, backup)
+    except BaseException:
+        shutil.rmtree(backup.parent, ignore_errors=True)
+        raise
+    return backup
+
+
+@contextmanager
+def _workbook_publication(staged, target, consents, should_cancel):
+    if staged is None:
+        yield
+        return
+    previous = _backup_workbook(target) if any(item.path == target for item in consents) else None
+    preserve_backup = False
+    try:
+        _check_cancelled(should_cancel)
+        published = OutputConsent(target, OutputConsent.for_path(staged).identity)
+        publish_output(staged, target, consents=consents)
+        try:
+            yield
+        except BaseException:
+            try:
+                _restore_workbook(target, published, previous)
+            except OSError as exc:
+                if previous is not None:
+                    preserve_backup = True
+                    raise OSError(f"Could not restore {target}. The previous workbook is in {previous}.") from exc
+                raise
+            raise
+    finally:
+        if previous is not None and not preserve_backup:
+            shutil.rmtree(previous.parent, ignore_errors=True)
+
+
+def _restore_workbook(target, published, previous):
+    if not os.path.lexists(target):
+        if previous is not None:
+            publish_output(previous, target)
+        return
+    if OutputConsent.for_path(target) != published:
+        raise FileExistsError(f"The workbook at {target} changed during publication.")
+    if previous is None:
+        target.unlink()
+    else:
+        publish_output(previous, target, consents=(published,))
+
+
+def _retire_owned_assets(outputs, current_assets, sources):
+    from metroliza.industrial.industrial_analytics_dashboard import PLOTLY_ASSET_NAME
+
+    for directory in outputs.assets.parent.glob(f"{outputs.assets.name}.generation-*"):
+        if directory == current_assets:
+            continue
+        marker = directory / _ASSET_OWNER_FILE
+        try:
+            identity = OutputConsent.for_path(directory)
+            if identity.path != directory or not _same_plain_directory(identity) or any(
+                source.resolve().is_relative_to(directory.resolve()) for source in sources
+            ):
+                continue
+            entries = tuple(directory.iterdir())
+            if not all(entry.name in {_ASSET_OWNER_FILE, PLOTLY_ASSET_NAME, PLOTLY_NOTICE_FILENAME} and
+                       not _is_symlink_or_reparse(entry.lstat()) and entry.is_file() for entry in entries):
+                continue
+            if (marker.read_text(encoding="utf-8") == os.path.normcase(outputs.dashboard.name)
+                    and _same_plain_directory(identity) and OutputConsent.for_path(directory) == identity):
+                shutil.rmtree(directory)
+        except (OSError, RuntimeError, UnicodeError):
+            continue
+
+
+def _approved_legacy_assets(outputs, consents):
+    """Find unmarked native assets referenced by the exact approved old HTML."""
+    from metroliza.industrial.industrial_analytics_dashboard import (
+        PLOTLY_ASSET_NAME, resolve_production_dashboard_assets_dir,
+    )
+
+    approved = next((consent for consent in consents if consent.path == outputs.dashboard), None)
+    if approved is None:
+        return None
+    try:
+        with outputs.dashboard.open("rb") as stream:
+            head = stream.read(_LEGACY_DASHBOARD_HEAD_LIMIT).decode("utf-8", errors="replace")
+        if OutputConsent.for_path(outputs.dashboard) != approved:
+            return None
+        source = re.search(r'<script src="([^/"]+)/' + re.escape(PLOTLY_ASSET_NAME) + r'"></script>', head)
+        if source is None:
+            return None
+        name = unescape(source.group(1))
+        base = outputs.assets
+        legacy_name = resolve_production_dashboard_assets_dir(outputs.dashboard).name
+        if name not in {base.name, legacy_name} and not re.fullmatch(
+            re.escape(base.name) + r"\.generation-[0-9a-f]{32}", name,
+        ):
+            return None
+        directory = base.with_name(name)
+        approval = OutputConsent.for_path(directory)
+        if (approval.path != directory or not _same_plain_directory(approval)
+                or (directory / _ASSET_OWNER_FILE).exists()):
+            return None
+        return approval
+    except (OSError, ValueError):
+        return None
+
+
+def _retire_legacy_assets(approved, sources):
+    from metroliza.industrial.industrial_analytics_dashboard import PLOTLY_ASSET_NAME, PLOTLY_ASSET_SOURCE
+
+    directory = approved.path
+    script = directory / PLOTLY_ASSET_NAME
+    notice = directory / PLOTLY_NOTICE_FILENAME
+    try:
+        if not _same_plain_directory(approved) or any(
+            source.resolve().is_relative_to(directory.resolve()) for source in sources
+        ):
+            return
+        entries = set(directory.iterdir())
+        if entries == {script}:
+            assets = (script,)
+        elif entries == {script, notice}:
+            assets = (script, notice)
+        else:
+            return
+        verified = tuple(_verified_legacy_asset(asset, PLOTLY_ASSET_SOURCE.with_name(asset.name)) for asset in assets)
+        if None in verified or OutputConsent.for_path(directory) != approved:
+            return
+        for asset, identity in zip(assets, verified, strict=True):
+            if (not _same_plain_directory(approved) or _is_symlink_or_reparse(asset.lstat())
+                    or OutputConsent.for_path(asset) != identity):
+                return
+            asset.unlink()
+        if _same_plain_directory(approved):
+            directory.rmdir()
+    except (OSError, RuntimeError):
+        pass
+
+
+def _verified_legacy_asset(asset, bundled):
+    if _is_symlink_or_reparse(asset.lstat()) or not asset.is_file():
+        return None
+    identity = OutputConsent.for_path(asset)
+    if identity.path != asset or identity.identity[2] != bundled.stat().st_size:
+        return None
+    with asset.open("rb") as old, bundled.open("rb") as original:
+        if file_digest(old, "sha256").digest() != file_digest(original, "sha256").digest():
+            return None
+    return identity
+
+
+def _same_plain_directory(consent):
+    metadata = consent.path.lstat()
+    return (stat.S_ISDIR(metadata.st_mode) and not _is_symlink_or_reparse(metadata)
+            and (metadata.st_dev, metadata.st_ino) == consent.identity[:2])

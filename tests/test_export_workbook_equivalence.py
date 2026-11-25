@@ -383,11 +383,19 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
     def tearDownClass(cls):
         cls._tmp.cleanup()
 
+    def _assert_measurements_and_scope_bulk_writes(self, label):
+        calls = self.bulk_calls[label]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0], ('MEASUREMENTS', self.total_reports * 6, True))
+        sheet_name, row_count, accepted = calls[1]
+        self.assertEqual(sheet_name, 'REPORT SCOPE')
+        self.assertGreater(row_count, 0)
+        self.assertTrue(accepted)
+
     def test_optimised_run_used_the_bulk_path_and_reference_run_did_not(self):
         self.assertEqual(self.bulk_calls['reference'], [])
-        expected = [('MEASUREMENTS', self.total_reports * 6, True)]
-        self.assertEqual(self.bulk_calls['candidate'], expected)
-        self.assertEqual(self.bulk_calls['streamed'], expected)
+        self._assert_measurements_and_scope_bulk_writes('candidate')
+        self._assert_measurements_and_scope_bulk_writes('streamed')
         # Only the full run has an export snapshot, so only it streams the raw sheet.
         self.assertEqual(self.stream_calls['candidate'], [])
         self.assertEqual(self.stream_calls['streamed'], [('MEASUREMENTS', self.total_reports * 6)])
@@ -407,7 +415,8 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         optimised = self._export(tmp / 'group_bulk.xlsx', bulk=True, label='group', full_run=True, options=options)
         # Group Analysis needs the whole table later, so the raw sheet is not streamed.
         self.assertEqual(self.stream_calls['group'], [])
-        self.assertEqual(self.bulk_calls['group'], [('MEASUREMENTS', self.total_reports * 6, True)])
+        self.assertEqual(self.bulk_calls['group_classic'], [])
+        self._assert_measurements_and_scope_bulk_writes('group')
         assert_workbooks_equivalent(self, classic, optimised)
 
     def test_full_run_with_and_without_the_bulk_path_is_identical(self):
@@ -415,7 +424,7 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
 
     def test_workbook_structure_is_the_expected_default_export(self):
         view = describe_workbook(self.candidate_path)
-        self.assertEqual(list(view)[-1], 'MEASUREMENTS')
+        self.assertEqual(list(view)[-2:], ['MEASUREMENTS', 'REPORT SCOPE'])
         self.assertGreaterEqual(len(view), 4)
         total_charts = sum(len(sheet['charts']) for sheet in view.values())
         self.assertGreaterEqual(total_charts, 9)
@@ -425,6 +434,16 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
         self.assertTrue(raw['dimensions'].endswith(str(1 + self.total_reports * 6)))
         self.assertEqual(raw['freeze_panes'], 'A2')
         self.assertTrue(raw['auto_filter'].startswith('A1:'))
+        scope = view['REPORT SCOPE']['cells']
+        expected_scope = (
+            ('Setting', 'Value'),
+            ('Source database', self.db_path.name),
+            ('Report scope', 'Selected database'),
+            ('Filters', 'All measurements in the report scope'),
+        )
+        for row, (label, value) in enumerate(expected_scope, 1):
+            self.assertEqual(scope[f'A{row}'][:2], (label, 's'))
+            self.assertEqual(scope[f'B{row}'][:2], (value, 's'))
 
     def test_untrusted_text_stays_literal(self):
         import openpyxl

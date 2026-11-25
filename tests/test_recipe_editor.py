@@ -218,3 +218,48 @@ def test_multi_column_label_roundtrips_normalized_tuple_without_delimiter_ambigu
     label = _group_label(key)
     assert json.loads(label) == list(key)
     assert _group_label(key) == label
+
+
+def test_one_save_commits_visible_report_options_and_polish_labels(qapplication_session, tmp_path):
+    from types import SimpleNamespace
+    from PyQt6.QtWidgets import QPushButton
+    from metroliza.ui.recipe_controller import RecipeController
+    from metroliza.ui.recipe_editor import RecipeEditor
+    from metroliza.ui.recipe_runner_page import RecipeRunnerPage
+    copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN), name="Dzienny raport")
+    store = RecipeStore(tmp_path / "private")
+    editor = RecipeEditor(copied, store)
+    try:
+        spec, mode, field = editor.controls[ParameterKey.OUTPUT_FILE]
+        assert field.accessibleName() == "Plik wynikowy"
+        assert mode.currentText() == "Pytaj przy każdym uruchomieniu"
+        assert mode.currentData() is spec.mode
+        editor.dates.setChecked(True)
+        assert not editor.html.isChecked()
+        editor.groups.setText("Rewizja")
+        assert editor.html.isChecked() and not editor.html.isEnabled()
+        assert "wymagany do grupowania" in editor.html.text()
+        editor.groups.clear()
+        assert editor.html.isEnabled() and not editor.html.isChecked()
+        editor.groups.setText("Rewizja")
+        editor.group_mode.setCurrentIndex(editor.group_mode.findData(ParameterMode.PROMPT))
+        next(b for b in editor.findChildren(QPushButton) if b.text() == "Zapisz recepturę").click()
+        saved = store.load(copied.definition.recipe_id)
+        assert saved.binding.value(ParameterKey.GROUPING_RULES) == ("REVISION",)
+        assert {s.kind for s in saved.definition.steps} >= {
+            StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML, StepKind.FILTER, StepKind.GROUP,
+        }
+        assert editor.status.text() == "Zapisano recepturę. Wyniki: Excel i HTML"
+        assert ParameterKey.DATE_FROM in editor.controls
+        controller = RecipeController(SimpleNamespace())
+        page = RecipeRunnerPage(controller)
+        try:
+            controller.launch(saved.definition, saved.binding)
+            field, _ = page.fields[ParameterKey.GROUPING_RULES]
+            assert field.text() == "Rewizja"
+            field.setText("Nazwa części, Rewizja")
+            assert page._values()[ParameterKey.GROUPING_RULES] == ("PART_NAME", "REVISION")
+        finally:
+            page.close()
+    finally:
+        editor.close()

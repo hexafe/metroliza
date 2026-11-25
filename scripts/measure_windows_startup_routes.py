@@ -205,8 +205,9 @@ def build_environment(
 ) -> dict[str, str]:
     base = dict(os.environ if base is None else base)
     if os.name == "nt":
-        env = {key: base[key] for key in WINDOWS_KEEP if key in base}
-        windows = base.get("SystemRoot") or base.get("WINDIR") or r"C:\Windows"
+        windows_base = {key.upper(): value for key, value in base.items()}
+        env = {key: windows_base[key.upper()] for key in WINDOWS_KEEP if key.upper() in windows_base}
+        windows = env.get("SystemRoot") or env.get("WINDIR") or r"C:\Windows"
         env["PATH"] = str(Path(windows) / "System32") + ";" + windows
     else:
         env = {key: base[key] for key in ("PATH", "HOME", "LANG") if key in base}

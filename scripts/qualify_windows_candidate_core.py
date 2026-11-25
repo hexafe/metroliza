@@ -116,6 +116,7 @@ _CLOSED_CHILD_FAILURES = frozenset({
     "workspace_context_rejected", "zero_selection_guard_failed",
     "closeout_privacy_failed", "closeout_shell_failed", "closeout_lifecycle_failed",
     "uiux_checks_failed", "uiux_observation_size", "uiux_data_failed",
+    "uiux_reports_failed", "uiux_tabular_failed", "uiux_controls_failed", "uiux_deadline", "uiux_unexpected",
     "TypeError", "ValueError", "KeyError", "OSError", "RuntimeError",
     "AssertionError", "OperationalError", "FileNotFoundError", "PermissionError",
 })
@@ -746,8 +747,8 @@ def _retain_uiux_results(child, output, args):
 
 def _write_uiux_snapshot(output, snapshot):
     verifier = _uiux_verifier()
-    allowed = {*verifier.DATA.values(), *(f'uiux-{name}.png' for name in verifier.CAPTURES), 'uiux-observation.json'}
-    if (set(snapshot) - allowed or sum(len(value) for value in snapshot.values()) > verifier.MAX_TOTAL + verifier.MAX_JSON):
+    if (any(relative != 'uiux-observation.json' and not verifier.allowed_asset_path(relative) for relative in snapshot)
+            or sum(len(value) for value in snapshot.values()) > verifier.MAX_TOTAL + verifier.MAX_JSON):
         raise CandidateFailure('uiux_retention_invalid')
     for relative, content in snapshot.items():
         if type(content) is not bytes or len(content) > (verifier.MAX_JSON if relative.endswith('observation.json') else verifier.MAX_ASSET):
@@ -767,9 +768,11 @@ def _snapshot_failed_uiux(work, args, observation):
         from itertools import islice
         children = list(islice(work.iterdir(), 18))
         if len(children) > 17:
+            print('uiux_retention=work_entry_limit')
             return
         children = [p for p in children if re.fullmatch('core-[0-9a-f]{32}', p.name)]
         if len(children) != 1:
+            print('uiux_retention=core_child_count')
             return
         child = children[0]
         _directory(child)
@@ -779,9 +782,11 @@ def _snapshot_failed_uiux(work, args, observation):
         path = child / 'uiux-observation.json'
         content = path.read_bytes()
         if len(content) > verifier.MAX_JSON or verifier.load_json(path) != value:
+            print('uiux_retention=observation_changed_or_oversized')
             return
         snapshot['uiux-observation.json'] = content
         observation['uiux_snapshot'] = snapshot
+        print('uiux_retention=snapshot_complete')
     except Exception:
         # Retention is supplementary: the unchanged closed core failure remains authoritative.
         observation['uiux_snapshot'] = None

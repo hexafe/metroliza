@@ -698,6 +698,39 @@ def apply_characteristic_alias_import(db_path: str, plan: AliasImportPlan, *, re
     return run_transaction_with_retry(db_path, operation)
 
 
+def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:
+    """Commit the checked alias and keep collision detection in the same transaction."""
+    def key(values):
+        scope_type, scope_value = normalize_alias_scope(values["scope_type"], values["scope_value"])
+        return str(values["alias_name"]).strip(), scope_type, scope_value
+
+    target = key(payload)
+    canonical = str(payload["canonical_name"]).strip()
+    if not target[0] or not canonical:
+        raise ValueError("Enter both names before saving.")
+    original = key(previous) if previous is not None else None
+
+    def operation(cursor):
+        cursor.execute("BEGIN IMMEDIATE")
+        matching = "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES WHERE alias_name = ? AND scope_type = ? AND scope_value IS ?"
+        source = cursor.execute(matching, original).fetchone() if original is not None else None
+        if original is not None and (source is None or source[1] != previous["canonical_name"]):
+            raise ValueError("The original match changed. Reopen it before saving.")
+        if target != original and cursor.execute(matching, target).fetchone() is not None:
+            raise ValueError("This name match already exists for the selected scope.")
+        if source is None:
+            cursor.execute(
+                "INSERT INTO CHARACTERISTIC_ALIASES (alias_name, scope_type, scope_value, canonical_name) VALUES (?, ?, ?, ?)",
+                (*target, canonical),
+            )
+        else:
+            cursor.execute(
+                "UPDATE CHARACTERISTIC_ALIASES SET alias_name = ?, scope_type = ?, scope_value = ?, canonical_name = ? WHERE id = ?",
+                (*target, canonical, source[0]),
+            )
+    run_transaction_with_retry(db_path, operation)
+
+
 def upsert_characteristic_alias(
     db_path: str,
     alias_name: str,

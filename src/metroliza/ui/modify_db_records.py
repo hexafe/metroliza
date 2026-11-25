@@ -141,6 +141,7 @@ class RecordTableModel(QAbstractTableModel):
         self._haystack = haystack
         self._edits: dict[int, dict[int, str]] = {}
         self._needle = ""
+        self._report_scope: int | None = None
         self._visible: list[int] | None = None
 
     pendingChanged = pyqtSignal()
@@ -320,10 +321,20 @@ class RecordTableModel(QAbstractTableModel):
         needle = str(text).lower()
         if needle == self._needle:
             return
+        self._apply_scope(needle, self._report_scope)
+
+    def set_report_scope(self, report_id: int | None) -> None:
+        if self._report_scope != report_id:
+            self._apply_scope(self._needle, report_id)
+
+    def _apply_scope(self, needle: str, report_id: int | None) -> None:
         matches = self._matching_rows(needle) if needle else None
+        if report_id is not None:
+            column = next((i for i, spec in enumerate(self._specs) if spec["field"] == "report_id"), None)
+            candidates = range(len(self._rows)) if matches is None else matches
+            matches = [] if column is None else [i for i in candidates if self._rows[i][column] == report_id]
         self.beginResetModel()
-        self._needle = needle
-        self._visible = matches
+        self._needle, self._report_scope, self._visible = needle, report_id, matches
         self.endResetModel()
 
     def _matching_rows(self, needle: str) -> list[int]:

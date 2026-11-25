@@ -661,7 +661,7 @@ def _tabular_dashboard_context(
         "source_label": source_label,
         "sheet_label": sheet_label,
         "filter_label": "Applied" if filtered_applied else "None",
-        "group_label": "Manual groups" if grouped_applied else "None",
+        "group_label": "Manual groups" if grouped_applied else " · ".join(request.aggregation_state.group_fields) or "None",
         "chart_detail": _dashboard_interactivity_label(
             interactivity_options,
             source_row_count=source_row_count,

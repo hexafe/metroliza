@@ -151,9 +151,9 @@ def test_non_utf8_byte_in_foreign_event_keeps_allowlisted_evidence():
 
 
 @pytest.mark.parametrize("raw, reason", [
-    (b"broken <", "invalid_xml"),
-    (b'<!DOCTYPE x [<!ENTITY x "private">]><x>&x;</x>', "invalid_xml"),
-    (b"x" * (faults.MAX_XML_BYTES + 1), "query_too_large"),
+    pytest.param(b"broken <", "invalid_xml", id="malformed"),
+    pytest.param(b'<!DOCTYPE x [<!ENTITY x "private">]><x>&x;</x>', "invalid_xml", id="doctype"),
+    pytest.param(b"x" * (faults.MAX_XML_BYTES + 1), "query_too_large", id="query-too-large"),
 ])
 def test_bad_or_oversized_xml_is_unavailable(raw, reason):
     assert faults.reduce_events(raw, START) == faults._unavailable(reason)

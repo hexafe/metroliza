@@ -98,30 +98,18 @@ class TestParsingDialogSelectionFlow(unittest.TestCase):
         )
         return dialog._build_parse_completion_feedback()
 
-    def test_cancel_directory_and_decline_archive_keeps_selection_empty(self):
+    def test_cancel_directory_keeps_selection_empty_without_another_prompt(self):
         dialog = ParsingDialog(parent=None, directory=None, db_file=None)
 
         with patch('metroliza.ui.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('metroliza.ui.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.No), \
+                patch('metroliza.ui.parsing_dialog.QMessageBox.question') as question, \
                 patch('metroliza.ui.parsing_dialog.QFileDialog.getOpenFileName') as get_open_file_name:
             dialog.select_directory()
 
         self.assertEqual(dialog.directory, None)
         self.assertEqual(dialog.directory_text_label.text(), 'None selected')
+        question.assert_not_called()
         get_open_file_name.assert_not_called()
-
-    def test_cancel_directory_and_accept_archive_opens_archive_dialog(self):
-        parent = _DummyParent()
-        dialog = ParsingDialog(parent=parent, directory=None, db_file=None)
-
-        with patch('metroliza.ui.parsing_dialog.QFileDialog.getExistingDirectory', return_value=''), \
-                patch('metroliza.ui.parsing_dialog.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes), \
-                patch('metroliza.ui.parsing_dialog.QFileDialog.getOpenFileName', return_value=('/tmp/source.zip', '')) as get_open_file_name:
-            dialog.select_directory()
-
-        self.assertEqual(dialog.directory, '/tmp/source.zip')
-        self.assertEqual(dialog.directory_text_label.text(), '/tmp/source.zip')
-        get_open_file_name.assert_called_once()
 
     def test_archive_source_has_direct_browse_action(self):
         parent = _DummyParent()

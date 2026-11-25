@@ -199,6 +199,40 @@ def test_manual_linking_dialog_search_and_auto_refresh(monkeypatch, tmp_path):
     dialog.close()
 
 
+def test_report_search_uses_canonical_source_and_refuses_stale_link(tmp_path, monkeypatch):
+    _app()
+    db_path = _prepare_linking_db(tmp_path)
+    _persist_report(tmp_path, ReportRepository(db_path), reference="MET-456")
+    dialog = IndustrialLinkingDialog(db_file=db_path)
+    try:
+        dialog.report_table.selectRow(0)
+        dialog.production_table.selectRow(0)
+        assert dialog.link_button.isEnabled()
+
+        dialog.report_search_edit.setText("MET-456.pdf")
+        assert dialog.report_table.rowCount() == 1
+        columns = [key for key, _ in industrial_linking_dialog.REPORT_COLUMNS]
+        assert dialog.report_table.item(0, columns.index("sample_number")).text() == "1"
+        assert dialog.report_table.item(0, columns.index("file_name")).text() == "MET-456.pdf"
+        assert dialog.selected_report_id() is None
+        assert dialog.selected_production_record_id() is not None
+        dialog.report_table.selectRow(0)
+        assert dialog.link_button.isEnabled()
+
+        def fail(*args, **kwargs):
+            raise RuntimeError("stale query")
+
+        monkeypatch.setattr(industrial_linking_dialog, "list_reports_for_manual_linking", fail)
+        dialog.report_search_edit.setText("MET-123")
+        assert dialog.report_table.rowCount() == 0
+        assert not dialog.link_button.isEnabled()
+        assert not dialog.clear_button.isEnabled()
+        with sqlite_connection_scope(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM industrial_link_candidates").fetchone()[0] == 0
+    finally:
+        dialog.close()
+
+
 def _wait_auto_links(dialog):
     from PyQt6.QtTest import QTest
 

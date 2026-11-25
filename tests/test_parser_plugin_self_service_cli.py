@@ -2,6 +2,9 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
+from metroliza.parsing.declarative_parser_profiles import approved_profile_backups, rollback_profile
 from metroliza.parsing.pdf_backend import require_pdf_backend
 
 
@@ -15,6 +18,17 @@ def _load_cli_module():
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("command", ["validate", "install", "repair"])
+@pytest.mark.parametrize("sample_paths", [(), ("first.pdf",), ("first.pdf", "second report.pdf")])
+def test_sample_option_collects_explicit_paths_in_order(command, sample_paths):
+    module = _load_cli_module()
+    argv = [command, "profile.yaml"]
+    for sample in sample_paths:
+        argv.extend(("--sample", sample))
+
+    assert module._sample_paths(module.build_parser().parse_args(argv)) == tuple(map(Path, sample_paths))
 
 
 def _profile_yaml(*, version: str = "0.1.0", marker: str = "SUPPLIER TEMPLATE MARKER") -> str:
@@ -332,3 +346,48 @@ def test_install_creates_backup_and_rollback_restores_previous_profile(tmp_path,
     evidence_after = json.loads(capsys.readouterr().out)
     assert evidence_after_result == 0
     assert evidence_after["approval"]["version"] == "0.1.0"
+
+
+def test_rollback_refuses_to_silently_skip_the_latest_damaged_backup(
+    tmp_path, capsys, monkeypatch, qapplication_session,
+):
+    module = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
+    home = tmp_path / "home"
+    install_args = [
+        "--home", str(home), "install", str(profile),
+        "--expected-results", str(expected), "--workspace", str(workspace),
+    ]
+    for version in ("0.1.0", "0.2.0", "0.3.0"):
+        profile.write_text(_profile_yaml(version=version), encoding="utf-8")
+        assert module.main(install_args) == 0
+
+    from metroliza.parsing.declarative_parser_profiles import profile_backups_dir
+
+    newest, earlier = approved_profile_backups("supplier_alpha", home=home)
+    latest_profile = profile_backups_dir(home=home) / newest / "profile.yaml"
+    latest_profile.write_text("# damaged", encoding="utf-8")
+    with pytest.raises(ValueError, match="latest backup.*cannot be verified"):
+        rollback_profile("supplier_alpha", backup_name="", home=home)
+
+    from PyQt6.QtWidgets import QMessageBox
+    from metroliza.ui.parser_plugin_wizard import ParserPluginWizardDialog
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    dialog = ParserPluginWizardDialog(home=home)
+    try:
+        dialog.profile_list.setCurrentRow(0)
+        assert dialog.rollback_button.isEnabled()
+        dialog.rollback_button.click()
+        assert "latest backup" in dialog.manage_status_label.text()
+        assert "cannot be verified" in dialog.manage_status_label.text()
+        assert dialog.manage_status_label.property("statusVariant") == "warning"
+    finally:
+        dialog.close()
+
+    capsys.readouterr()
+    assert module.main(["--home", str(home), "evidence", "supplier_alpha"]) == 0
+    assert json.loads(capsys.readouterr().out)["approval"]["version"] == "0.3.0"
+    rollback_profile("supplier_alpha", backup_name=earlier, home=home)
+    assert module.main(["--home", str(home), "evidence", "supplier_alpha"]) == 0
+    assert json.loads(capsys.readouterr().out)["approval"]["version"] == "0.1.0"

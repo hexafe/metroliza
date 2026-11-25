@@ -30,12 +30,15 @@ def export_result_files(result):
     )
 
 
-def activate_result_file(parent, path, _checked=False, *, reveal=None):
+def activate_result_file(parent, path, _checked=False, *, reveal=None, validate=None):
     """Revalidate at every click; never substitute a different output."""
     path = Path(path)
     try:
         if not path.is_file():
             QMessageBox.warning(parent, "Output unavailable", f"{path}\nThis file was moved or deleted. Locate it or run again.")
+            return
+        if validate is not None and not validate(path):
+            QMessageBox.warning(parent, "Output changed", "This file was replaced after the analysis. Open its newer run or run again.")
             return
         if reveal is not None:
             reveal(path)
@@ -66,21 +69,22 @@ def _reveal(path):
     reveal_file_in_explorer(path)
 
 
-def add_result_actions(parent, paths, add_button):
+def add_result_actions(parent, paths, add_button, *, labels=("Open workbook", "Open dashboard", "Show in folder"),
+                       validate=None):
     """Use the same labels, URLs and safety checks in messages and retained rows."""
     paths = existing_result_files(paths)
-    for suffixes, label in (({".xlsx"}, "Open workbook"), ({".html", ".htm"}, "Open dashboard")):
+    for suffixes, label in (({".xlsx"}, labels[0]), ({".html", ".htm"}, labels[1])):
         for path in paths:
             if path.suffix.lower() in suffixes:
                 button = add_button(label)
                 button.setAccessibleName(label)
                 button.setToolTip(str(path))
-                button.clicked.connect(partial(activate_result_file, parent, path))
+                button.clicked.connect(partial(activate_result_file, parent, path, validate=validate))
     if paths:
-        button = add_button("Show in folder")
-        button.setAccessibleName("Show in folder")
+        button = add_button(labels[2])
+        button.setAccessibleName(labels[2])
         button.setToolTip(str(paths[0]))
-        button.clicked.connect(partial(activate_result_file, parent, paths[0], reveal=_reveal))
+        button.clicked.connect(partial(activate_result_file, parent, paths[0], reveal=_reveal, validate=validate))
 
 
 class LastResultRow(QWidget):
@@ -112,7 +116,13 @@ class LastResultRow(QWidget):
         self.summary.clear()
         self.hide()
 
-    def set_result(self, outcome, paths=(), *, counts=""):
+    def mark_source_changed(self):
+        notice = " · Source changed. Run again to refresh."
+        current = self.summary.text()
+        if current and not current.endswith(notice):
+            self.summary.setText(current + notice)
+
+    def set_result(self, outcome, paths=(), *, counts="", validate=None):
         self.clear()
         paths = existing_result_files(paths)
         parts = [self.label, outcome, datetime.now().strftime("%H:%M")]
@@ -128,6 +138,6 @@ class LastResultRow(QWidget):
             self.actions.addWidget(button)
             return button
 
-        add_result_actions(self.window(), paths, add_button)
+        add_result_actions(self.window(), paths, add_button, validate=validate)
         self.actions.addStretch(1)
         self.show()

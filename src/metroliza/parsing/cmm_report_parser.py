@@ -1,10 +1,11 @@
 """Parse CMM report files and persist report metadata plus flat measurements."""
 
+import json
 import logging
 import os
 import re
 import tempfile
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from time import perf_counter
 from time import strftime
@@ -80,6 +81,29 @@ SUPPORTED_METADATA_PARSING_MODES = {
     METADATA_PARSING_MODE_LIGHT,
     METADATA_PARSING_MODE_COMPLETE,
 }
+MAX_REVIEWED_OCR_HEADER_BYTES = 64 * 1024
+
+
+def _header_ocr_settings() -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((key, value) for key, value in os.environ.items()
+                        if key.startswith("METROLIZA_HEADER_OCR_")))
+
+
+@dataclass(frozen=True, repr=False)
+class ReviewedCmmHeaderOcr:
+    """Private, immutable header evidence retained for one approved import."""
+
+    payload: bytes
+    settings: tuple[tuple[str, str], ...]
+
+    def for_current_settings(self) -> tuple[list[dict], dict] | None:
+        """Decode the captured evidence when the active OCR settings still match."""
+        if self.settings != _header_ocr_settings():
+            return None
+        items, diagnostics = json.loads(self.payload)
+        return items, diagnostics
+
+
 CMM_PROBE_MAX_EXTRACTED_CHARS = 16 * 1024 * 1024
 CMM_PROBE_MIN_CONFIDENCE = 80
 CMM_PROBE_HIGH_CONFIDENCE = 95
@@ -364,6 +388,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         self._prepared_persistence_rows = None
         self._metadata_selection_result = None
         self.metadata_review_override = None
+        self.reviewed_header_ocr: ReviewedCmmHeaderOcr | None = None
         self._metadata_identity_hash = None
         self._page_count = None
         self._first_page_width = None
@@ -805,6 +830,31 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
             return self.open_report()
         return CMMReportParser._open_report(self, metadata_only=True)
 
+    def captured_header_ocr(self) -> ReviewedCmmHeaderOcr | None:
+        """Capture bounded first-page OCR evidence for the approved import."""
+        if self._header_extraction_diagnostics.get("header_extraction_mode") != "ocr":
+            return None
+        try:
+            payload = json.dumps(
+                (self._first_page_header_items, self._header_extraction_diagnostics),
+                separators=(",", ":"), allow_nan=False,
+            ).encode("ascii")
+        except (TypeError, ValueError):
+            return None
+        if len(payload) > MAX_REVIEWED_OCR_HEADER_BYTES:
+            return None
+        return ReviewedCmmHeaderOcr(payload, _header_ocr_settings())
+
+    def _read_first_page_header(self, page, pdf_backend):
+        self._first_page_width, self._first_page_height = self._page_size(page)
+        reviewed = getattr(self, "reviewed_header_ocr", None)
+        header = reviewed.for_current_settings() if reviewed is not None else None
+        if header is None:
+            header = self._extract_first_page_header_items(
+                page, pdf_backend, metadata_parsing_mode=self.metadata_parsing_mode,
+            )
+        self._first_page_header_items, self._header_extraction_diagnostics = header
+
     def _open_report(self, *, metadata_only=False):
         try:
             """
@@ -825,36 +875,16 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
                 self._page_count = self._resolve_page_count(pdf_report)
                 if cached_embedded_lines is not None:
                     if self._page_count:
-                        first_page = pdf_report[0]
-                        self._first_page_width, self._first_page_height = self._page_size(
-                            first_page
-                        )
-                        (
-                            self._first_page_header_items,
-                            self._header_extraction_diagnostics,
-                        ) = self._extract_first_page_header_items(
-                            first_page,
-                            pdf_backend,
-                            metadata_parsing_mode=self.metadata_parsing_mode,
-                        )
+                        CMMReportParser._read_first_page_header(self, pdf_report[0], pdf_backend)
                     self.raw_text.extend(cached_embedded_lines)
                     return
 
                 page_counter = 0
                 for page in pdf_report:
                     page_counter += 1
-                    if page_counter == 1:
-                        self._first_page_width, self._first_page_height = self._page_size(page)
                     page_text = page.get_text().splitlines()
                     if page_counter == 1:
-                        (
-                            self._first_page_header_items,
-                            self._header_extraction_diagnostics,
-                        ) = self._extract_first_page_header_items(
-                            page,
-                            pdf_backend,
-                            metadata_parsing_mode=self.metadata_parsing_mode,
-                        )
+                        CMMReportParser._read_first_page_header(self, page, pdf_backend)
                     for line in page_text:
                         self.raw_text.append(line)
                 if self._page_count is None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+from dataclasses import replace
 import gc
 import importlib
 from pathlib import Path
@@ -133,14 +134,15 @@ def test_export_cancel_and_error_after_terminal_dismissal(qapplication_session, 
     dialog._set_path_field_value(dialog.excel_file_text_label, dialog.excel_file)
     monkeypatch.setattr(dialog, "_refresh_metadata_enrichment_notice", lambda: None)
     monkeypatch.setattr(dialog, "log_and_exit", errors.append)
-    dialog._close_requested = True
     dialog.sort_measurements_combobox.setCurrentText("Date")
     dialog.show_loading_screen()
     thread = dialog.export_thread
     try:
         assert errors == []
-        assert received_requests == [request] and received_requests[0] is request
+        assert received_requests == [replace(request, application_version=module.VERSION_LABEL)]
+        assert thread is not None
         assert _wait_until(qapplication_session, thread.isRunning)
+        dialog._close_requested = True
         dialog.stop_exporting()
         thread.canceled.emit()
         assert dialog.loading_label is None
@@ -153,8 +155,9 @@ def test_export_cancel_and_error_after_terminal_dismissal(qapplication_session, 
             dialog.on_export_error("late cleanup failure")
             assert dialog.export_error_message == "late cleanup failure"
     finally:
-        thread.release()
-        assert thread.wait(1000)
+        if thread is not None:
+            thread.release()
+            assert thread.wait(1000)
         qapplication_session.processEvents()
         dialog._changes_committed = True
         dialog.close()

@@ -82,8 +82,8 @@ class TestUiRevampFoundationLayout(unittest.TestCase):
         self.assertLessEqual(payload["main_size"][0], payload["available"][0])
         self.assertLessEqual(payload["parsing_size"][0], payload["available"][0])
         self.assertEqual(payload["home_actions"], [
-            "Raporty → Excel Main", "Raporty → Dashboard HTML", "Wszystkie receptury",
-            "Choose reports in Reports [Ctrl+2]", "Open Reports [Ctrl+2]",
+            "Wszystkie receptury", "Raporty → Excel Main", "Raporty → Dashboard HTML",
+            "Wybierz folder raportów… [Ctrl+Shift+D]", "Wybierz archiwum…", "Open Reports [Ctrl+2]",
             "Open CSV Summary [Ctrl+3]", "Open Industrial Data [Ctrl+4]",
             "Open Realtime Monitor [Ctrl+5]", "Open Parser Profiles [Ctrl+Shift+F]",
             "Database maintenance tools [Ctrl+Shift+T]",

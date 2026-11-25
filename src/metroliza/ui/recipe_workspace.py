@@ -1,10 +1,14 @@
 """Lazy composition of the shared recipe workspace and existing service engines."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QTimer, pyqtSignal
-from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
-)
+from PyQt6.QtCore import QTimer, Qt, pyqtSignal
+from PyQt6.QtWidgets import QLabel, QMessageBox, QPushButton, QStackedWidget, QVBoxLayout, QWidget
+
+from metroliza.ui.recipe_library_page import RecipeLibraryPage, RecipeQuickFlows
+
+
+_LEGACY_FAVORITES_PREF = "presentation/recipes/favorites"
+_FAVORITES_PREF = "presentation/recipes/favorites_v2"
 
 
 def open_capture_editor(parent, module, request, **configuration):
@@ -18,95 +22,62 @@ def open_capture_editor(parent, module, request, **configuration):
     owner._show_workspace_page("receptury")
 
 
-class RecipeHome(QWidget):
-    launch_requested = pyqtSignal(str)
+class RecipeHome(RecipeQuickFlows):
+    def __init__(self, parent):
+        from metroliza.recipes.builtin_recipes import QUICK_REPORT_RECIPES
+        from metroliza.recipes.storage import RecipeStore
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.addWidget(QLabel("Szybkie flow"))
-        row = QHBoxLayout()
-        for identity, label in (("reports_excel_main", "Raporty → Excel Main"),
-                                ("reports_dashboard_html", "Raporty → Dashboard HTML"),
-                                ("", "Wszystkie receptury")):
-            button = QPushButton(label)
-            button.clicked.connect(lambda _checked=False, selected=identity: self.launch_requested.emit(selected))
-            row.addWidget(button)
-        self.layout.addLayout(row)
-        favorites = parent.ui_preferences.get("presentation/recipes/favorites", [], expected_type=list)
-        if favorites:
-            from metroliza.recipes.storage import RecipeStore
-            self.layout.addWidget(QLabel("Ulubione"))
+        self.store = RecipeStore()
+        defaults = [definition.recipe_id for definition in QUICK_REPORT_RECIPES]
+        preferences = parent.ui_preferences
+        legacy_pins = preferences.get(_LEGACY_FAVORITES_PREF, [], expected_type=list)
+        # The older preference stored custom pins, while Home displayed the
+        # two built-ins separately. An explicit new list can unpin either.
+        stored_ids = preferences.get(_FAVORITES_PREF, [*defaults, *legacy_pins], expected_type=list)
+        self.favorite_ids = list(dict.fromkeys(identity for identity in stored_ids if isinstance(identity, str)))
+        super().__init__(entries=self._saved_pins, parent=parent)
+        self.set_favorites(self.favorite_ids)
+        self.library_requested.connect(lambda: self.launch_requested.emit(""))
+
+    def _saved_pins(self):
+        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
+
+        entries = []
+        for identity in self.favorite_ids:
+            if identity in BUILTIN_LABELS:
+                continue
             try:
-                for stored in RecipeStore().list():
-                    if stored.definition.recipe_id in favorites:
-                        button = QPushButton(stored.binding.name)
-                        button.clicked.connect(lambda _checked=False, identity=stored.definition.recipe_id:
-                                               self.launch_requested.emit(identity))
-                        self.layout.addWidget(button)
+                entries.append(self.store.load(identity))
             except (ValueError, OSError):
-                self.layout.addWidget(QLabel("Sprawdź prywatną bibliotekę receptur."))
-        self.summary = QLabel("")
-        self.summary.setWordWrap(True)
-        self.layout.addWidget(self.summary)
-
-
-class _RecipePorts:
-    def __init__(self, reports, analytics):
-        self.reports, self.analytics = reports, analytics
-
-    def _for(self, plan):
-        from metroliza.recipes.contracts import StepKind
-        return self.analytics if any(
-            step.kind in (StepKind.LOAD_TABULAR, StepKind.LOAD_INDUSTRIAL)
-            for step in plan.definition.steps
-        ) else self.reports
-
-    def preflight(self, plan, context):
-        return self._for(plan).preflight(plan, context)
-
-    def approve(self, plan, decision):
-        return self._for(plan).approve(plan, decision)
-
-    def execute(self, step, plan, context):
-        return self._for(plan).execute(step, plan, context)
-
-    def cancel(self):
-        self.reports.cancel()
-        self.analytics.cancel()
-
-    def finish(self, plan):
-        finish = getattr(self._for(plan), "finish", None)
-        if finish is not None:
-            finish(plan)
+                continue
+        return entries
 
 
 class RecipeWorkspace(QWidget):
     """One persistent controller survives page changes and repeated launch clicks."""
+    analysis_completed = pyqtSignal(object)
+
     def __init__(self, main_window):
         super().__init__(main_window)
-        from metroliza.recipes.report_ports import ReportsRecipeService
         from metroliza.recipes.runner import RecipeRunner
-        from metroliza.recipes.storage import RecipeStore
         from metroliza.ui.recipe_controller import RecipeController
-        from metroliza.ui.recipe_execution_adapter import RecipeExecutionAdapter
-        from metroliza.ui.recipe_library_page import RecipeLibraryPage, RecipeQuickFlows
+        from metroliza.ui.recipe_ports import RecipePorts
         from metroliza.ui.recipe_runner_page import RecipeRunnerPage
-        from metroliza.recipes.tabular_adapter import create_adapter_ports
 
         self.main_window = main_window
-        self.store = RecipeStore()
-        ports = _RecipePorts(
-            ReportsRecipeService(RecipeExecutionAdapter("import"), RecipeExecutionAdapter("export")),
-            create_adapter_ports(),
-        )
+        self.store = main_window.recipe_home.store
+        ports = RecipePorts()
         self.controller = RecipeController(RecipeRunner(ports), self, resolver=self.store.load,
-            active_database=lambda: self.main_window.db_file)
+            active_database=lambda: self.main_window.db_file,
+            source_directory=lambda: self.main_window.directory,
+            append_allowed=main_window._recipe_append_allowed)
+        self.controller.database_appended.connect(main_window._on_recipe_database_appended)
         self._close_requested = False
+        self._analysis_source_stamp = (None, None)
         self._editors = []
         layout = QVBoxLayout(self)
         self.catalog_notice = QLabel()
+        self.catalog_notice.setTextFormat(Qt.TextFormat.PlainText)
         self.catalog_notice.setWordWrap(True)
         layout.addWidget(self.catalog_notice)
         self.stack = QStackedWidget()
@@ -120,50 +91,104 @@ class RecipeWorkspace(QWidget):
         self.stack.addWidget(self.run_page)
         self.controller.view_requested.connect(lambda: self.stack.setCurrentWidget(self.run_page))
         self.controller.view_requested.connect(lambda: main_window._show_workspace_page("receptury"))
-        self.controller.changed.connect(self._changed)
         self.controller.idle.connect(self._idle)
         self.library.copy_requested.connect(self.copy)
         self.library.edit_requested.connect(self.edit)
-        self.quick = RecipeQuickFlows(self.controller, self.entries, main_window.recipe_home)
-        self.quick.library_requested.connect(lambda: main_window._launch_recipe())
-        favorites = main_window.ui_preferences.get("presentation/recipes/favorites", [], expected_type=list)
-        self.library.favorites = set(favorites)
-        self.quick.set_favorites(favorites)
+        self.quick = main_window.recipe_home
+        self.library.set_favorites(self.quick.favorite_ids)
         self.library.favorites_changed.connect(self._favorites)
-        home_layout = main_window.recipe_home.layout
-        for index in range(home_layout.count()):
-            item = home_layout.itemAt(index)
-            if item.widget() is not None:
-                item.widget().hide()
-            elif item.layout() is not None:
-                for child in range(item.layout().count()):
-                    item.layout().itemAt(child).widget().hide()
-        home_layout.insertWidget(0, self.quick)
+        self.quick.return_requested.connect(self.controller.view_requested)
+        self.controller.event_received.connect(self._home_event)
+        self.controller.starting.connect(self._capture_analysis_source)
+        self.controller.changed.connect(self._home_result)
 
     def entries(self):
         from metroliza.recipes.builtin_recipes import BUILTIN_RECIPES, builtin_binding
         from metroliza.recipes.storage import StoredRecipe
         builtins = tuple(StoredRecipe(d, builtin_binding(d)) for d in BUILTIN_RECIPES)
         try:
-            local = self.store.list()
+            local, issues = self.store.scan()
         except (ValueError, OSError):
             self.catalog_notice.setText("Prywatna biblioteka wymaga sprawdzenia formatu lub dostępu do plików.")
+            self.catalog_notice.setToolTip("")
             return builtins
-        self.catalog_notice.clear()
+        filenames = tuple(issue.filename + (" (nowszy format)" if issue.code == "newer_format" else "")
+                          for issue in issues)
+        self.catalog_notice.setToolTip("\n".join(filenames))
+        shown = ", ".join(filenames[:5])
+        if len(filenames) > 5:
+            shown += f" i {len(filenames) - 5} więcej (zobacz podpowiedź)"
+        self.catalog_notice.setText(f"Nie udało się odczytać receptur z plików {shown}." if shown else "")
         return builtins + local
 
     def launch(self, identity=""):
         if not identity:
+            self._refresh_catalog()
             self.stack.setCurrentWidget(self.library)
             return
-        self.controller.launch(identity)
-
-    def _changed(self, record):
-        self.main_window.recipe_home.summary.setText("Flow: " + record.state.value)
+        try:
+            self.controller.launch(identity)
+        except (ValueError, OSError):
+            self.controller.failed.emit("recipe_not_found")
 
     def _favorites(self, identities):
-        self.quick.set_favorites(identities)
-        self.main_window.ui_preferences.set("presentation/recipes/favorites", sorted(identities))
+        ordered = list(identities)
+        self.library.set_favorites(ordered)
+        self.main_window.ui_preferences.set(_FAVORITES_PREF, ordered)
+        self.quick.favorite_ids = ordered
+        self.quick.set_favorites(ordered)
+
+    def _home_event(self, event):
+        from metroliza.recipes.run_state import RunState
+        from metroliza.ui.recipe_labels import STEP_LABELS
+        from metroliza.ui.recipe_runner_page import _PHASE_LABELS, _STATE_LABELS
+
+        if not event.record.ownership or self.controller.plan is None:
+            self.quick.set_active()
+            return
+        stage = _STATE_LABELS[event.record.state]
+        if event.record.state is RunState.RUNNING:
+            stage = STEP_LABELS.get(event.step_kind) or _PHASE_LABELS.get(event.phase) or "Przygotowanie"
+        self.quick.set_active(self.controller.plan.binding.name, stage)
+
+    @staticmethod
+    def _analysis_source(plan):
+        from metroliza.recipes.contracts import ParameterKey
+        sources = plan.value(ParameterKey.SOURCE_FILES, ())
+        if sources:
+            return sources[0] if len(sources) == 1 else None
+        return plan.value(ParameterKey.SOURCE_FILE) or plan.input_folder or plan.database_file
+
+    def _capture_analysis_source(self, plan):
+        from metroliza.app.analysis_history import capture_source_stamp
+        stamp = None if plan.input_folder else capture_source_stamp(self._analysis_source(plan))
+        self._analysis_source_stamp = (plan.flow_id, stamp)
+
+    def _home_result(self, record):
+        from metroliza.recipes.contracts import ParameterKey, StepKind
+
+        plan = self.controller.plan
+        paths = self.quick.set_result(plan, record)
+        if paths:
+            source = self._analysis_source(plan)
+            flow_id, stamp = self._analysis_source_stamp
+            settings = {"recipe": plan.binding.name}
+            settings.update((key.value, plan.value(key)) for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO)
+                            if plan.value(key))
+            assets = []
+            if any(path.suffix.lower() in {".html", ".htm"} for path in paths):
+                assets = list(dict.fromkeys(step.result.dashboard_assets_path for step in record.steps
+                              if step.result.artifact_verified and step.result.dashboard_assets_path))
+            receipt = {"kind": "recipe", "artifacts": [str(path) for path in paths],
+                       "source": str(source) if source else None,
+                       "source_stamp": stamp if flow_id == plan.flow_id else None,
+                       "settings": settings, "assets": assets}
+            if plan.input_folder:
+                receipt["report_folder_revision"] = next(
+                    (step.result.report_folder_revision for step in record.steps if step.kind is StepKind.IMPORT_REPORTS),
+                    None,
+                )
+            self.analysis_completed.emit(receipt)
 
     def database_change_allowed(self, database_file):
         return self.controller.database_change_allowed(database_file)
@@ -191,14 +216,21 @@ class RecipeWorkspace(QWidget):
         from metroliza.ui.recipe_editor import RecipeEditor
         editor = RecipeEditor(stored, self.store, self)
         self._editors.append(editor)
-        editor.saved.connect(self._refresh_catalog)
+        editor.saved.connect(lambda saved: self._recipe_saved(editor, saved))
         editor.finished.connect(self._refresh_catalog)
         editor.finished.connect(lambda _result: self._editors.remove(editor))
         editor.open()
 
     def _refresh_catalog(self, *_args):
         self.library.refresh()
-        self.quick.set_favorites(self.library.favorites)
+        self.quick.set_favorites(self.library.favorite_order)
+
+    def _recipe_saved(self, editor, stored):
+        identity = stored.definition.recipe_id
+        ordered = self.library.favorite_order
+        if editor.pin_on_save.isChecked() and identity not in ordered:
+            self._favorites([*ordered, identity])
+        self._refresh_catalog()
 
     def capture(self, module, request, **configuration):
         try:

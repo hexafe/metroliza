@@ -1,16 +1,15 @@
 # Import reports
 
 Use **Reports** to review report files and import a chosen subset into a local SQLite
-**database file**. The planner lives in the main **Reports** workspace. The recommended
-action on **Home** returns to this same planner and focuses the next available control.
+**database file**. The planner lives in the main **Reports** workspace. From **Home**, choose
+**Wybierz folder raportów…** or **Wybierz archiwum…** to open the planner with that source.
 Moving between Home, Reports and Tools preserves the review, global selection, filters,
 active operation and last outcome during the session.
 
 ## Review and select
 
 1. Choose **Browse folder** or **Browse archive**. Supported report formats are recognized
-   from their contents by the installed parsers. Cancelling the folder picker still offers
-   the existing archive picker.
+   from their contents by the installed parsers. Cancelling either picker keeps the current source.
 2. Choose an existing or new **Database file** with **Browse**. A destination is required
    before review. Existing file names are kept exactly, including `.sqlite`, `.sqlite3`
    and uppercase extensions. Only a new name without an extension receives `.db`.
@@ -22,9 +21,9 @@ active operation and last outcome during the session.
    cannot be selected. An already-imported label records a match seen during review; the
    final import outcome separately reports what the database actually accepted.
 6. Use search, status, parser or **Needs attention** filters to narrow the visible rows.
-   Filtering and sorting never change selection. The counter distinguishes **selected overall**
-   from **visible** rows. **Select all ready** and **Clear selection** always affect the whole
-   review, including hidden rows.
+   The counter shows the total selection and how many selected reports are hidden.
+   To import only matching rows, use **Clear selection**, then click **Zaznacz widoczne (N)**.
+   Adding visible reports preserves any earlier checks outside the filter.
 7. Click **Import N selected reports**. The number includes selected rows hidden by filters.
    An empty selection starts no import and makes no database changes.
 
@@ -48,8 +47,8 @@ are stable member-relative paths, rather than temporary extraction folders.
 
 The progress window shows the current stage and cooperative **Cancel** action while the main
 workspaces remain available. New database workflows wait until the report operation finishes.
-Before starting review/import, finish or close any existing workflow on the same database;
-Metroliza identifies the blocking window and preserves its work. Cancellation
+An idle Export Workbook form can stay open during import. Finish an active export and close
+other workflows that hold the same database before starting a review or import. Cancellation
 waits for the active unit of work to finish safely; reports already committed remain saved.
 Closing the main window while work is active requests cancellation and defers closing until
 the worker stops. Home also shows the active report stage and a cancellation button.
@@ -73,8 +72,8 @@ separate source-relative identities.
 Counters describe results, and **Needs attention**, status, parser and search filters still
 work. Historical rows cannot be checked or edited and contain no approved plan or content
 fingerprints. **Review again** obtains fresh source/parser/database approval before another
-import; changing context clears the prior result table. The existing textual outcome and
-Export Workbook next step remain available.
+import; changing context clears the prior result table. Use **Eksportuj partię (N)** to export the reports saved in that import,
+or **Eksportuj całą bazę** to work with the full database.
 
 Changing the source, destination or metadata detail invalidates the complete review and
 selection. After import, review again before another import. Source content and parser

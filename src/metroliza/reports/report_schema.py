@@ -34,6 +34,11 @@ _LEGACY_TABLE_SELECTS = {
     "REPORTS": 'SELECT * FROM "REPORTS"',
     "MEASUREMENTS": 'SELECT * FROM "MEASUREMENTS"',
 }
+_LEGACY_REPORT_KEY = "id"
+_LEGACY_MEASUREMENT_REPORT_KEY = "report_id"
+_REPORT_SNAPSHOT_TABLES = {"parsed_reports", "report_metadata", "report_measurements"}
+_RESTORE_UNRECOGNIZED = "The file is not a recognized Metroliza report database."
+_RESTORE_LINK_ERROR = "The copy contains a broken link between records."
 
 
 def _quoted_values(values: tuple[str, ...]) -> str:
@@ -526,7 +531,11 @@ def _migrate_legacy_report_tables(cursor) -> None:
 
     report_rows, report_columns = _fetch_table_rows(cursor, "REPORTS")
     measurement_rows, measurement_columns = _fetch_table_rows(cursor, "MEASUREMENTS")
-    if not report_rows or "id" not in report_columns or "report_id" not in measurement_columns:
+    if (
+        not report_rows
+        or _LEGACY_REPORT_KEY not in report_columns
+        or _LEGACY_MEASUREMENT_REPORT_KEY not in measurement_columns
+    ):
         return
 
     measurements_by_report: dict[int, list[tuple]] = defaultdict(list)
@@ -735,6 +744,121 @@ def _migrate_legacy_report_tables(cursor) -> None:
         )
 
 
+def _snapshot_columns(connection, table):
+    return {
+        name.casefold(): (declared_type.upper(), required, default, primary_key, hidden)
+        for name, declared_type, required, default, primary_key, hidden in connection.execute(
+            'SELECT name, type, "notnull", dflt_value, pk, hidden FROM pragma_table_xinfo(?)',
+            (table,),
+        )
+    }
+
+
+def _snapshot_foreign_keys(connection, table):
+    return {row[2:] for row in connection.execute("SELECT * FROM pragma_foreign_key_list(?)", (table,))}
+
+
+def _snapshot_unique_keys(connection, table):
+    indexes = connection.execute(
+        "SELECT name FROM pragma_index_list(?) WHERE origin = 'u'", (table,),
+    )
+    return {
+        tuple(name.casefold() for name, in connection.execute(
+            "SELECT name FROM pragma_index_info(?) ORDER BY seqno", (index,),
+        ))
+        for index, in indexes
+    }
+
+
+def _snapshot_versions(connection, tables):
+    if "app_schema" not in tables:
+        return {}
+    rows = connection.execute(
+        "SELECT key, value FROM app_schema "
+        "WHERE key IN ('schema_version', 'source_location_ownership_version')"
+    ).fetchall()
+    versions = dict(rows)
+    if len(versions) != len(rows):
+        raise ValueError("Unsupported report database schema version.")
+    return versions
+
+
+def _normalized_snapshot_matches(connection, tables, ownership_version):
+    with sqlite_connection_scope(":memory:") as reference:
+        for statement in SCHEMA_TABLE_STATEMENTS:
+            table = statement.split()[5]
+            # Earlier report_metadata_v1 backups predate the separate parse-state projection.
+            if table == "report_parse_state" and table not in tables:
+                continue
+            if table not in tables:
+                return False
+            reference.execute(statement)
+            if _snapshot_columns(connection, table) != _snapshot_columns(reference, table):
+                return False
+            if _snapshot_foreign_keys(connection, table) != _snapshot_foreign_keys(reference, table):
+                return False
+            if _snapshot_unique_keys(connection, table) != _snapshot_unique_keys(reference, table):
+                return False
+    if ownership_version is not None:
+        expected = next(
+            statement for statement in SCHEMA_INDEX_STATEMENTS
+            if "idx_source_file_locations_active_path_unique" in statement
+        )
+        actual = connection.execute(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' "
+            "AND name = 'idx_source_file_locations_active_path_unique'"
+        ).fetchone()
+        return bool(
+            actual and actual[0] and _normalized_schema_sql(actual[0]) == _normalized_schema_sql(expected)
+        )
+    return True
+
+
+def _validate_legacy_snapshot(connection, tables):
+    if not {"reports", "measurements"} <= tables:
+        raise ValueError(_RESTORE_UNRECOGNIZED)
+    reports = _snapshot_columns(connection, "reports")
+    measurements = _snapshot_columns(connection, "measurements")
+    if _LEGACY_REPORT_KEY not in reports or _LEGACY_MEASUREMENT_REPORT_KEY not in measurements:
+        raise ValueError(_RESTORE_UNRECOGNIZED)
+    # Legacy tables may have no declared foreign keys. Check their implicit link.
+    orphan = connection.execute(
+        "SELECT 1 FROM measurements AS m LEFT JOIN reports AS r ON r.id = m.report_id "
+        "WHERE r.id IS NULL LIMIT 1"
+    ).fetchone()
+    if orphan is not None:
+        raise ValueError(_RESTORE_LINK_ERROR)
+
+
+def validate_report_snapshot(connection) -> None:
+    """Verify supported report snapshot shape without initializing or migrating it."""
+    try:
+        tables = {name.casefold() for (name,) in connection.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'table'"
+        )}
+        versions = _snapshot_versions(connection, tables)
+        if versions or _REPORT_SNAPSHOT_TABLES & tables:
+            if not versions:
+                raise ValueError(_RESTORE_UNRECOGNIZED)
+            ownership = versions.get("source_location_ownership_version")
+            if versions.get("schema_version") != SCHEMA_VERSION or ownership not in (
+                None, SOURCE_LOCATION_OWNERSHIP_VERSION,
+            ):
+                raise ValueError("Unsupported report database schema version.")
+            if not _normalized_snapshot_matches(connection, tables, ownership):
+                raise ValueError(_RESTORE_UNRECOGNIZED)
+        else:
+            _validate_legacy_snapshot(connection, tables)
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise ValueError(_RESTORE_LINK_ERROR)
+    except sqlite3.DatabaseError as exc:
+        raise ValueError(_RESTORE_UNRECOGNIZED) from exc
+
+
+def _normalized_schema_sql(statement):
+    return " ".join(statement.lower().replace("if not exists ", "").split())
+
+
 def is_report_schema_ready(connection) -> bool:
     """Read current report schema/migration evidence without creating or repairing it.
 
@@ -762,7 +886,7 @@ def is_report_schema_ready(connection) -> bool:
         ):
             return False
         for statement in SCHEMA_INDEX_STATEMENTS:
-            expected = " ".join(statement.lower().replace("if not exists ", "").split())
+            expected = _normalized_schema_sql(statement)
             name = expected.split("index ", 1)[1].split()[0]
             actual = objects.get(("index", name))
             if not actual or " ".join(actual.lower().split()) != expected:

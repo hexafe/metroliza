@@ -97,6 +97,7 @@ class ReportPlanner(QWidget):
         self._worker_mode = None
         self._ocr_reason = ""
         self._busy = False
+        self._visible_ready_count = 0
         self._status_text = ""
         self._status_variant = "neutral"
         self.model = ReportPlannerModel(self)
@@ -132,9 +133,9 @@ class ReportPlanner(QWidget):
             "a low-confidence value or an OCR conflict."
         )
         self.attention_filter.toggled.connect(self.proxy.set_attention_only)
-        self.select_ready = QPushButton("Select all ready")
-        self.select_ready.setToolTip("Select every ready report, including hidden rows.")
-        self.select_ready.clicked.connect(self.model.select_all_ready)
+        self.select_ready = QPushButton("Zaznacz widoczne (0)")
+        self.select_ready.setToolTip("Select ready reports matching the current filters. Keep existing selections.")
+        self.select_ready.clicked.connect(self._select_visible_ready)
         self.clear = QPushButton("Clear selection")
         self.clear.setToolTip("Clear the selection for all reports, including hidden rows.")
         self.clear.clicked.connect(self.model.clear_selection)
@@ -252,8 +253,7 @@ class ReportPlanner(QWidget):
         self.model.selection_changed.connect(self._selection_updated)
         self.model.metadata_changed.connect(self._metadata_updated)
         self.model.edit_rejected.connect(lambda text: self.set_metadata_status(text, "warning"))
-        self.proxy.rowsInserted.connect(self._update_counts)
-        self.proxy.rowsRemoved.connect(self._update_counts)
+        self.proxy.filter_changed.connect(self._update_counts)
         self.proxy.modelReset.connect(self._update_counts)
         self.refresh_theme()
         self._update_counts()
@@ -325,8 +325,8 @@ class ReportPlanner(QWidget):
     def set_busy(self, busy):
         self._busy = bool(busy)
         self.table.setEnabled(not busy)
-        for control in (self.select_ready, self.clear):
-            control.setEnabled(not busy and self.model.valid)
+        self.clear.setEnabled(not busy and self.model.valid)
+        self.select_ready.setEnabled(not busy and self._visible_ready_count > 0)
         self._update_metadata_actions()
 
     def show_outcome(self, text):
@@ -548,6 +548,12 @@ class ReportPlanner(QWidget):
 
     # -- selection and counts ------------------------------------------------
 
+    def _select_visible_ready(self):
+        if self.proxy.rowCount() == self.model.rowCount():
+            self.model.select_all_ready()
+        else:
+            self.model.select_visible_ready(self._visible_report_ids())
+
     def _selection_updated(self):
         self._update_counts()
         self._update_metadata_actions()
@@ -555,14 +561,24 @@ class ReportPlanner(QWidget):
 
     def _update_counts(self, *_args):
         counts = self.model.counts
+        visible_count = self.proxy.rowCount()
+        hidden_selected = 0
+        visible_ready = len(self.model.selectable_ids)
+        if visible_count < counts["total"] and visible_ready:
+            visible_ids = self._visible_report_ids()
+            visible_ready = len(self.model.selectable_ids & visible_ids)
+            hidden_selected = self.model.hidden_selection_count(visible_ids)
+        self._visible_ready_count = visible_ready
+        self.select_ready.setText(f"Zaznacz widoczne ({visible_ready})")
+        self.select_ready.setEnabled(not self._busy and visible_ready > 0)
         text = (
-            f"{counts['selected']} selected overall · {self.proxy.rowCount()} visible / "
+            f"{counts['selected']} selected ({hidden_selected} hidden) · {visible_count} visible / "
             f"{counts['total']} reviewed · {counts['ready']} ready · "
             f"{counts['excluded']} excluded · {counts['attention']} need attention"
         )
         if self.model.execution_rows:
             results = self.model.execution_counts
-            text = (f"Last import: {self.proxy.rowCount()} visible / {counts['total']} report results · "
+            text = (f"Last import: {visible_count} visible / {counts['total']} report results · "
                     f"{results.get('saved', 0)} saved · {results.get('already_present', 0)} already present · "
                     f"{results.get('skipped', 0)} skipped · {results.get('failed', 0)} failed · "
                     f"{results.get('unknown', 0)} unknown · {counts['attention']} need attention · Review again to import")

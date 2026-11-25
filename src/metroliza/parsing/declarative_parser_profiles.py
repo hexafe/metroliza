@@ -1251,6 +1251,8 @@ def _approval_matches(profile_path: Path, approval_path: Path) -> tuple[bool, st
         payload = json.loads(approval_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return False, f"approval sidecar is not valid JSON: {exc}"
+    if not isinstance(payload, dict):
+        return False, "approval sidecar must be an object"
     if payload.get("schema_version") != PROFILE_APPROVAL_SCHEMA_VERSION:
         return False, "approval schema version is unsupported"
     if payload.get("validation_passed") is not True:
@@ -1381,34 +1383,58 @@ def enable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
     return target_dir
 
 
+def approved_profile_backups(plugin_id: str, *, home: Path | None = None) -> tuple[str, ...]:
+    """Return intact backups that belong to this exact profile."""
+    plugin_id = _validate_plugin_id_for_store(plugin_id)
+    with parser_profile_store_lock(home=home):
+        return tuple(path.name for path in _matching_profile_backups(plugin_id, home=home))
+
+
+def _matching_profile_backups(plugin_id, *, home):
+    result = []
+    for path in sorted(profile_backups_dir(home=home).glob(f"{plugin_id}-*"), reverse=True):
+        if path.is_symlink() or not path.is_dir() or "-rollback-current-" in path.name:
+            continue
+        profile = path / PROFILE_FILE_NAME
+        approval = path / APPROVAL_FILE_NAME
+        if profile.is_symlink() or approval.is_symlink():
+            continue
+        try:
+            accepted, _detail = _approval_matches(profile, approval)
+            if accepted and profile_plugin_id(load_profile_payload(profile)) == plugin_id:
+                result.append(path)
+        except (OSError, ValueError):
+            continue
+    return result
+
+
+def _latest_generated_profile_backup(plugin_id, *, home):
+    prefix = f"{plugin_id}-"
+    root = profile_backups_dir(home=home)
+    return max(
+        (path for path in root.glob(f"{prefix}*")
+         if re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[a-f0-9]{8}", path.name.removeprefix(prefix))),
+        default=None,
+    )
+
+
 def rollback_profile(plugin_id: str, *, backup_name: str | None = None, home: Path | None = None) -> Path:
     plugin_id = _validate_plugin_id_for_store(plugin_id)
     with parser_profile_store_lock(home=home):
         ensure_profile_store_dirs(home=home)
-        backup_root = profile_backups_dir(home=home)
+        candidates = _matching_profile_backups(plugin_id, home=home)
         if backup_name:
-            backup_ref = Path(backup_name)
-            if (
-                backup_ref.is_absolute()
-                or ".." in backup_ref.parts
-                or not backup_name.startswith(f"{plugin_id}-")
-            ):
-                raise ValueError("backup_name must name a backup for the selected plugin")
-            backup_dir = backup_root / backup_name
+            candidates = [path for path in candidates if path.name == backup_name]
         else:
-            candidates = sorted(
-                path
-                for path in backup_root.glob(f"{plugin_id}-*")
-                if "-rollback-current-" not in path.name
-            )
-            if not candidates:
-                raise FileNotFoundError(f"no backup found for {plugin_id}")
-            backup_dir = candidates[-1]
-        backup_profile = backup_dir / PROFILE_FILE_NAME
-        backup_approval = backup_dir / APPROVAL_FILE_NAME
-        approved, detail = _approval_matches(backup_profile, backup_approval)
-        if not approved:
-            raise ValueError(f"backup profile is not approved: {detail}")
+            newest = _latest_generated_profile_backup(plugin_id, home=home)
+            if newest is not None and (not candidates or newest.name > candidates[0].name):
+                raise ValueError(
+                    f"The latest backup for {plugin_id} cannot be verified. "
+                    "Select an older verified backup explicitly."
+                )
+        if not candidates:
+            raise FileNotFoundError(f"No intact backup is available for {plugin_id}")
+        backup_dir = candidates[0]
         target_dir = approved_profiles_dir(home=home) / plugin_id
         current_backup_dir = (
             _new_profile_backup_dir(plugin_id, home=home, label="rollback-current")

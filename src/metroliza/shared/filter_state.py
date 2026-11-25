@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
 
 NOT_APPLIED_LABEL = "Not applied"
-DEFAULT_DATE_FROM = "1970-01-01"
+REPORTS_WITH_NOK_LABEL = "Reports with at least one NOK"
+NOK_MEASUREMENTS_LABEL = "Only NOK measurements"
 
 
 @dataclass(frozen=True)
@@ -41,9 +41,6 @@ def _label_count(label: str, values: tuple[str, ...]) -> str | None:
 def _effective_date_range(filter_state: FilterState) -> str | None:
     date_from = (filter_state.date_from or "").strip()
     date_to = (filter_state.date_to or "").strip()
-    today = date.today().isoformat()
-    if date_from == DEFAULT_DATE_FROM and (not date_to or date_to == today):
-        return None
     if date_from and date_to:
         return f"{date_from} to {date_to}"
     if date_from:
@@ -59,6 +56,7 @@ def summarize_filter_state(filter_state: FilterState | None) -> tuple[str, str]:
 
     summary_parts = []
     detail_parts = []
+    only_nok_measurements = filter_state.status_code_values == ("nok",)
     for label, values in (
         ("AX", filter_state.ax_values),
         ("Reference", filter_state.reference_values),
@@ -69,7 +67,7 @@ def summarize_filter_state(filter_state: FilterState | None) -> tuple[str, str]:
         ("Sample", filter_state.sample_number_values),
         ("Operator", filter_state.operator_name_values),
         ("Sample kind", filter_state.sample_number_kind_values),
-        ("Status", filter_state.status_code_values),
+        ("Measurement status", () if only_nok_measurements else filter_state.status_code_values),
         ("File", filter_state.filename_values),
         ("Parser", filter_state.parser_id_values),
         ("Template family", filter_state.template_family_values),
@@ -80,8 +78,11 @@ def summarize_filter_state(filter_state: FilterState | None) -> tuple[str, str]:
             detail_parts.append(f"{label}: {', '.join(values)}")
 
     if filter_state.has_nok_only:
-        summary_parts.append("NOK only")
-        detail_parts.append("NOK only: enabled")
+        summary_parts.append(REPORTS_WITH_NOK_LABEL)
+        detail_parts.append(REPORTS_WITH_NOK_LABEL)
+    if only_nok_measurements:
+        summary_parts.append(NOK_MEASUREMENTS_LABEL)
+        detail_parts.append(NOK_MEASUREMENTS_LABEL)
 
     expression_text = str(filter_state.expression_text or "").strip()
     if expression_text:

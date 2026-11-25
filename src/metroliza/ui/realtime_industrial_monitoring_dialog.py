@@ -7,7 +7,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
-from PyQt6.QtCore import Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QDesktopServices
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from metroliza.industrial.anomaly.contracts import ANOMALY_SEVERITIES
 from metroliza.industrial.anomaly.event_repository import AnomalyEventStatusConflictError
 from metroliza.industrial.industrial_data_repository import (
     IndustrialDataRepository,
@@ -52,6 +53,7 @@ from metroliza.industrial.realtime.monitor_config import (
     RealtimeMonitorConfig,
     RealtimeMonitorConfigRepository,
 )
+from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.realtime_dashboard_html import write_realtime_dashboard_html
 from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
 from metroliza.ui.private_dashboard_directory import (
@@ -67,6 +69,7 @@ from metroliza.industrial.industrial_workers import (
     RealtimeDashboardWriterThread,
     RealtimeMonitorPollThread,
 )
+from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
 from metroliza.ui.realtime_monitor_presentation import observed_freshness
@@ -83,6 +86,9 @@ from metroliza.ui.ui_foundation import (
     status_chip,
     update_path_field,
 )
+
+
+_EVENT_PAGE_SIZE = 100
 
 
 class RealtimeIndustrialMonitoringDialog(QDialog):
@@ -137,6 +143,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.active_configs: tuple[RealtimeMonitorConfig, ...] = ()
         self._next_poll_due_by_profile_id: dict[int, float] = {}
         self.last_poll_results: tuple[Any, ...] = ()
+        self._saved_poll_offsets = {}
         self.last_dashboard_path: Path | None = None
 
         self.setWindowTitle("Real-time Industrial Monitoring")
@@ -177,6 +184,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.freshness_label.setWordWrap(True)
         self.freshness_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.freshness_label)
+        self.resume_label = status_chip("", "neutral")
+        self.resume_label.setWordWrap(True)
+        self.resume_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.resume_label)
 
         self.workflow_tabs = QTabWidget()
         self.workflow_tabs.setObjectName("realtimeWorkflowTabs")
@@ -249,7 +260,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         # Mirror the original visible control's Enter eligibility. A hidden Stop
         # must not become the default while typing in Setup or Event Review.
         set_button_role(self.next_button, "primary",
-                        default=selected is not None and selected.isVisibleTo(self))
+                        default=selected is not None and (
+                            selected is self.configure_source_button or selected.isVisibleTo(self)))
 
     def _show_setup(self) -> None:
         self.workflow_tabs.setCurrentIndex(1)
@@ -344,6 +356,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             control = self.configure_source_button
             message = self._unready_guidance()
         self._next_control = control
+        first_setup = tab == 0 and not self.profiles and not running
+        self.monitor_content.setVisible(not first_setup)
+        self.configure_source_button.setVisible(control is not self.configure_source_button)
         self.next_button.setText(control.text())
         self.next_button.setEnabled(control.isEnabled())
         self.next_action_label.setText(message)
@@ -351,7 +366,35 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self.last_poll_results, scheduled=self.poll_timer.isActive(),
             poll_owned=self.poll_thread is not None, stopping=self._stop_requested,
         ))
+        self._sync_resume_label()
         self._sync_default_action_for_tab(tab)
+
+    def _sync_resume_label(self):
+        details = []
+        for profile in self.selected_profiles():
+            config = self.configs_by_profile_id.get(profile.id)
+            if config is None:
+                continue
+            offset = self._saved_poll_offsets.get((profile.id, config.stream_key))
+            if offset is None or not offset.cursor_value:
+                state = "No saved position"
+            else:
+                state = "Resumes from saved position"
+                if offset.event_time_watermark:
+                    state += f" · data through {offset.event_time_watermark}"
+            details.append(f"{profile.profile_name}: {state}")
+        self.resume_label.setVisible(bool(details))
+        self.resume_label.setToolTip("\n".join(details))
+        self.resume_label.setText(" | ".join(details[:3]) + (f" · +{len(details) - 3} sources" if len(details) > 3 else ""))
+
+    @staticmethod
+    def _read_saved_poll_offsets(database, configs):
+        with sqlite_readonly_connection_scope(database) as connection:
+            store = StreamOffsetStore(database, connection=connection)
+            return {(config.source_profile_id, config.stream_key):
+                    store.get_offset(source_profile_id=config.source_profile_id,
+                                     stream_key=config.stream_key, _ensure=False)
+                    for config in configs}
 
     def _start_action_message(self) -> str:
         current = self.current_profile()
@@ -365,7 +408,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def _unready_guidance(self) -> str:
         if not self.profiles:
-            return "No sources configured. Configure source opens the existing Setup workflow."
+            return "Configure a source to start monitoring."
         if not any(profile.is_enabled for profile in self.profiles):
             return "Sources are disabled. Configure source to review them in Production Sources."
         if not self.selected_profiles():
@@ -377,7 +420,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
-        layout.addLayout(self._build_monitor_action_row())
+        self.monitor_content = QWidget()
+        content_layout = QVBoxLayout(self.monitor_content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addLayout(self._build_monitor_action_row())
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -387,7 +433,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         body_layout.addWidget(self._build_status_panel(), 2)
         body_layout.addWidget(self._build_diagnostics_panel(), 1)
         scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+        content_layout.addWidget(scroll, 1)
+        layout.addWidget(self.monitor_content, 1)
         return page
 
     def _build_setup_page(self) -> QWidget:
@@ -595,6 +642,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         event_body_layout = QVBoxLayout(event_body)
         event_body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         event_body_layout.addWidget(intro)
+        event_body_layout.addLayout(self._event_filter_row())
 
         self.event_review_table = QTableWidget(0, 8)
         self.event_review_table.setHorizontalHeaderLabels(
@@ -641,7 +689,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.acknowledge_event_button = QPushButton("Acknowledge")
         self.resolve_event_button = QPushButton("Resolve")
         self.false_positive_event_button = QPushButton("Mark false positive")
-        self.refresh_events_button.clicked.connect(self.refresh_event_review)
+        self.refresh_events_button.clicked.connect(self._reset_event_page)
         self.acknowledge_event_button.clicked.connect(
             lambda: self._apply_selected_event_action("acknowledge")
         )
@@ -660,47 +708,113 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self._sync_event_action_buttons()
         return page
 
+    def _event_filter_row(self):
+        self._event_page_starts = [None]
+        self._next_event_page = None
+        self.event_severity_combo = QComboBox()
+        self.event_severity_combo.setAccessibleName("Event severity")
+        self.event_severity_combo.addItem("All severities", None)
+        for severity in ANOMALY_SEVERITIES:
+            self.event_severity_combo.addItem(severity.title(), severity)
+        self.event_signal_search = QLineEdit()
+        self.event_signal_search.setPlaceholderText("Search signal and metric names")
+        self.event_signal_search.setAccessibleName("Filter anomaly events by signal")
+        self.event_newer_button = QPushButton("Newer")
+        self.event_older_button = QPushButton("Older")
+        self.event_page_label = QLabel()
+        self.event_severity_combo.currentIndexChanged.connect(self._reset_event_page)
+        self.event_signal_search.textChanged.connect(self._queue_event_search)
+        self.event_newer_button.clicked.connect(self._show_newer_events)
+        self.event_older_button.clicked.connect(self._show_older_events)
+        self._event_search_timer = QTimer(self)
+        self._event_search_timer.setSingleShot(True)
+        self._event_search_timer.setInterval(250)
+        self._event_search_timer.timeout.connect(self._reset_event_page)
+        row = QHBoxLayout()
+        for widget in (self.event_severity_combo, self.event_signal_search, self.event_page_label,
+                       self.event_newer_button, self.event_older_button):
+            row.addWidget(widget)
+        return row
+
+    def _queue_event_search(self):
+        self.event_review_table.setEnabled(False)
+        self._invalidate_event_selection()
+        self.event_newer_button.setEnabled(False)
+        self.event_older_button.setEnabled(False)
+        self.event_page_label.setText("Searching…")
+        self._event_search_timer.start()
+
+    def _reset_event_page(self):
+        self._event_page_starts = [None]
+        self.refresh_event_review()
+
+    def _show_newer_events(self):
+        if len(self._event_page_starts) > 1:
+            self._event_page_starts.pop()
+            self.refresh_event_review()
+
+    def _show_older_events(self):
+        if self._next_event_page is not None:
+            self._event_page_starts.append(self._next_event_page)
+            self.refresh_event_review()
+
+    def _invalidate_event_selection(self):
+        self.event_review_table.clearSelection()
+        self._sync_event_action_buttons()
+
     def refresh_event_review(self) -> None:
+        if self._event_search_timer.isActive():
+            self._event_page_starts = [None]
+        self._event_search_timer.stop()
+        self._invalidate_event_selection()
+        self._next_event_page = None
+        self.event_older_button.setEnabled(False)
+        self.event_newer_button.setEnabled(len(self._event_page_starts) > 1)
         try:
-            events = RealtimeDashboardService(self.db_file).list_open_anomaly_events(limit=100)
+            events = RealtimeDashboardService(self.db_file).list_open_anomaly_events(
+                limit=_EVENT_PAGE_SIZE + 1, severity=self.event_severity_combo.currentData(),
+                signal_search=self.event_signal_search.text(), older_than=self._event_page_starts[-1],
+            )
         except Exception as exc:
+            self.event_review_table.setRowCount(0)
+            self.event_page_label.clear()
             message = redact_sensitive_text(exc)
             self.event_review_status_label.setText(f"Could not load open events: {message}")
             set_status_variant(self.event_review_status_label, "danger")
             return
 
-        self.event_review_table.setRowCount(len(events))
-        for row, event in enumerate(events):
-            values = (
-                event.event_time,
-                event.profile_name,
-                event.signal_key,
-                event.severity,
-                f"{event.observed_value:g}",
-                event.detector_key,
-                event.explanation,
-                str(event.id),
-            )
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                if column == 7:
-                    item.setData(Qt.ItemDataRole.UserRole, int(event.id))
-                self.event_review_table.setItem(row, column, item)
-        self.event_review_status_label.setText(f"Open events: {len(events)}")
-        set_status_variant(
-            self.event_review_status_label,
-            "warning" if events else "success",
-        )
+        visible_events = events[:_EVENT_PAGE_SIZE]
+        if len(events) > _EVENT_PAGE_SIZE:
+            last = visible_events[-1]
+            self._next_event_page = (last.event_time, last.id)
+            self.event_older_button.setEnabled(True)
+        self._populate_event_review(visible_events)
+        self.event_review_table.setEnabled(True)
+        suffix = " · More older events" if self._next_event_page else ""
+        self.event_page_label.setText(f"Showing {len(visible_events)}{suffix}")
+        self.event_review_status_label.setText(f"Open events on this page: {len(visible_events)}")
+        set_status_variant(self.event_review_status_label, "warning" if visible_events else "neutral")
         self._sync_event_action_buttons()
 
+    def _populate_event_review(self, events):
+        with QSignalBlocker(self.event_review_table):
+            self.event_review_table.setRowCount(len(events))
+            for row, event in enumerate(events):
+                values = (event.event_time, event.profile_name, event.signal_key, event.severity,
+                          f"{event.observed_value:g}", event.detector_key, event.explanation, str(event.id))
+                for column, value in enumerate(values):
+                    item = QTableWidgetItem(str(value))
+                    if column == 7:
+                        item.setData(Qt.ItemDataRole.UserRole, int(event.id))
+                    self.event_review_table.setItem(row, column, item)
+
     def _selected_event_id(self) -> int | None:
-        row = self.event_review_table.currentRow()
-        if row < 0:
+        if not self.event_review_table.isEnabled():
             return None
-        item = self.event_review_table.item(row, 7)
-        if item is None:
+        rows = self.event_review_table.selectionModel().selectedRows(7)
+        if not rows:
             return None
-        value = item.data(Qt.ItemDataRole.UserRole)
+        value = rows[0].data(Qt.ItemDataRole.UserRole)
         return int(value) if value is not None else None
 
     def _sync_event_action_buttons(self) -> None:
@@ -783,10 +897,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         imported = import_source_profiles_to_repository(config_path, source_repository)
         profiles = source_repository.list_source_profiles(include_disabled=True)
         configs = config_repository.list_configs()
-        return config_path, imported, profiles, configs
+        offsets = self._read_saved_poll_offsets(source_repository.database, configs)
+        return config_path, imported, profiles, configs, offsets
 
     def _apply_loaded_database_state(self, state) -> None:
-        config_path, imported, profiles, configs = state
+        config_path, imported, profiles, configs, self._saved_poll_offsets = state
         self.config_path = config_path
         self.profiles = profiles
         self.configs_by_profile_id = {config.source_profile_id: config for config in configs}
@@ -800,7 +915,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         else:
             source_text = "No industrial sources configured"
         self._set_config_status(source_text, "info")
-        self.refresh_event_review()
+        self._reset_event_page()
 
     def _report_database_load_failure(self, exc: Exception) -> None:
         self._append_diagnostic(f"Database load failed; error_type={type(exc).__name__}")
@@ -1273,6 +1388,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if self._closing:
             return
         self.last_poll_results = tuple(results or ())
+        try:
+            self._saved_poll_offsets = self._read_saved_poll_offsets(
+                self.db_file, self.configs_by_profile_id.values(),
+            )
+        except Exception as exc:
+            self._append_diagnostic(f"Saved polling positions could not be read; error_type={type(exc).__name__}")
         self._populate_result_table(self.last_poll_results)
         failed = [result for result in self.last_poll_results if _result_has_actionable_failure(result)]
         inserted = sum(int(getattr(result, "samples_inserted", 0) or 0) for result in self.last_poll_results)

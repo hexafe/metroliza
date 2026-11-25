@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from modules.contracts import (
     AppPaths,
@@ -354,6 +356,24 @@ class TestValidateExportRequest(unittest.TestCase):
         self.assertIsNone(validated.paths.excel_file)
         self.assertEqual(validated.paths.html_dashboard_file, 'dashboard.html')
         self.assertEqual(validated.options.backend_target, 'html')
+
+    def test_refuses_dashboard_replacement_that_could_remove_its_source(self):
+        from metroliza.charts.export_html_dashboard import resolve_html_dashboard_assets_dir
+
+        with TemporaryDirectory() as directory:
+            output = Path(directory) / "analysis.html"
+            asset_base = resolve_html_dashboard_assets_dir(output)
+            for asset_folder in (asset_base, asset_base.with_name(asset_base.name + ".generation-previous")):
+                with self.subTest(asset_folder=asset_folder.name):
+                    asset_folder.mkdir()
+                    source = asset_folder / "source.sqlite"
+                    source.write_bytes(b"existing source")
+                    with self.assertRaisesRegex(ValueError, "overlaps the source database"):
+                        validate_export_request(ExportRequest(
+                            paths=AppPaths(db_file=str(source), html_dashboard_file=str(output)),
+                            options=ExportOptions(export_target="html_dashboard"),
+                        ))
+                    self.assertEqual(source.read_bytes(), b"existing source")
 
 
 class TestValidateIndustrialAnalyticsRequest(unittest.TestCase):

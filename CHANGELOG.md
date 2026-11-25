@@ -1,6 +1,28 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.4 — current version
+## 0.8.0-dev.8 — current version
+
+- Run recipes across several CSV files and see the expected Excel and HTML outputs before starting.
+- Keep compatible CSV settings after a reload and preserve report corrections during another review.
+- Find older alarms, tell when local production data was updated, and see the monitor's saved position.
+- Save and reopen a Reports workspace, restore database copies, and package local analysis results for offline use.
+
+## 0.8.0-dev.7 — previous development version
+
+- Fix explicit sample selection in the parser profile validation, install and repair commands.
+- Keep the Home recipe shortcuts, review layout and progress reset from the previous development build.
+
+## 0.8.0-dev.6 — previous development version
+
+- Pin built-in and saved recipes directly on Home and choose their order.
+- Open recipe forms before loading execution services.
+- Review report metadata in a larger, filterable table that highlights items requiring attention.
+- Use Enter to open the selected recipe and get pointed to missing inputs before starting.
+- Return to the active recipe from Home and open its verified result files or containing folder.
+- Save CSV recipes once their settings are ready and start Realtime Monitor setup from a single primary action.
+- Append to an existing database and export reports from the chosen folder to Excel.
+
+## 0.8.0-dev.4 — previous recipe version
 
 - Allocate a fresh package identity after the global inventory found an earlier diagnostics package already using `0.8.0-dev.3`.
 - Keep the qualified recipe implementation unchanged and retain earlier EXE/ZIP bytes and receipts with their original source identities.

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from contextlib import closing, contextmanager
 from datetime import datetime
+import os
 from pathlib import Path
 import sqlite3
 import warnings
@@ -189,6 +190,32 @@ def test_load_tabular_analytics_file_preserves_identifier_lexemes_and_large_inte
         ]
     finally:
         cleanup_tabular_load_result(result)
+
+
+@pytest.mark.parametrize("suffix", ["csv", "xlsx"])
+def test_type_overrides_preserve_codes_and_report_number_conversion_failures(tmp_path, suffix):
+    from metroliza.tabular.column_types import column_conversion_examples
+
+    rows = [("00123", "1.2"), ("45", "bad"), ("56", "3.4"), ("67", "bad"), ("78", "5.6")]
+    path = tmp_path / f"types.{suffix}"
+    source = pd.DataFrame(rows, columns=["Batch code", "Reading"])
+    if suffix == "csv":
+        source.to_csv(path, index=False)
+    else:
+        source.to_excel(path, sheet_name="Pomiar", index=False)
+    loaded = load_tabular_analytics_file(path, sheet_name="Pomiar" if suffix == "xlsx" else None,
+        column_types={("Batch code", 1): "text", ("Reading", 1): "number"})
+    try:
+        assert set(loaded.inferred_metric_columns) == {"batch_code"}
+        assert {item.field_name for item in loaded.metric_candidates} == {"reading"}
+        assert loaded.dataframe["batch_code"].tolist() == [code for code, _ in rows]
+        assert loaded.dataframe["reading"].dropna().tolist() == [1.2, 3.4, 5.6]
+        examples = column_conversion_examples(loaded, ("Reading", 1), "number")
+        assert examples[:2] == (("1.2", 1.2), ("bad", None))
+        assert loaded.invalid_numeric_counts["reading"] == 2
+        assert any(note.code == "tabular_number_override_invalid_values" for note in loaded.diagnostics)
+    finally:
+        cleanup_tabular_load_result(loaded)
 
 
 def test_tabular_numeric_shadows_preserve_decimal_comma_analytics(tmp_path) -> None:
@@ -625,6 +652,37 @@ def test_sqlite_csv_loading_can_cancel_between_chunks(tmp_path, monkeypatch) -> 
         )
 
     assert [event["stage"] for event in progress_events].count("chunk_loaded") == 1
+
+
+def test_tabular_load_rejects_replacement_after_final_chunk_and_keeps_previous_store(tmp_path, monkeypatch):
+    source = tmp_path / "measurements.csv"
+    replacement = tmp_path / "replacement.csv"
+    source.write_text("Part,Length\nA,10\nB,20\n", encoding="utf-8")
+    replacement.write_text("Part,Length\nB,20\nA,10\n", encoding="utf-8")
+    source_stat = source.stat()
+    os.utime(replacement, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+    monkeypatch.setattr(canonical_tabular_service.tempfile, "tempdir", str(tmp_path))
+    previous = load_tabular_analytics_file(source)
+    fresh = None
+    seen = []
+
+    def replace_after_last_rows(event):
+        if event["stage"] == "chunk_loaded":
+            replacement.replace(source)
+            seen.append(event["rows_loaded"])
+
+    try:
+        with pytest.raises(ValueError, match="source changed while loading"):
+            load_tabular_analytics_file(source, progress_callback=replace_after_last_rows)
+        assert seen == [2]
+        assert set(tmp_path.glob("metroliza_csv_summary_*.sqlite*")) == {Path(previous.sqlite_store.path)}
+        assert tuple(previous.sqlite_store.read_row_table()["part"]) == ("A", "B")
+        fresh = load_tabular_analytics_file(source)
+        assert tuple(fresh.sqlite_store.read_row_table()["part"]) == ("B", "A")
+        assert fresh.source_snapshots != previous.source_snapshots
+    finally:
+        cleanup_tabular_load_result(previous)
+        cleanup_tabular_load_result(fresh)
 
 
 def test_sqlite_group_preview_and_selection_respect_column_filters(tmp_path) -> None:

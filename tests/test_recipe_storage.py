@@ -2,6 +2,7 @@
 from dataclasses import replace
 import json
 import os
+from uuid import uuid4
 
 import pytest
 
@@ -88,3 +89,23 @@ def test_private_store_cannot_live_inside_bound_input_folder(tmp_path):
     with pytest.raises(RecipeError, match="private_location_required"):
         store.save(copied.definition, copied.binding, expected_revision=None)
     assert not store.root.exists()
+
+
+def test_catalog_recovers_each_entry_independently_and_keeps_damaged_bytes(tmp_path):
+    store, saved = seed(tmp_path)
+    corrupt = store.root / f"{uuid4()}.json"
+    newer = store.root / f"{uuid4()}.json"
+    corrupt.write_bytes(b"broken recipe")
+    newer.write_text(json.dumps({"definition": {"format_version": 900, "future_option": True}}))
+    original = corrupt.read_bytes(), newer.read_bytes()
+
+    entries, problems = store.scan()
+
+    assert entries == (saved,) == store.list()
+    assert {problem.filename: problem.code for problem in problems} == {
+        corrupt.name: "invalid_recipe_file", newer.name: "newer_format",
+    }
+    assert (corrupt.read_bytes(), newer.read_bytes()) == original
+    copied = copy_recipe(saved.definition, saved.binding, name="Second recipe")
+    store.save(copied.definition, copied.binding, expected_revision=None)
+    assert {entry.binding.name for entry in store.list()} == {saved.binding.name, "Second recipe"}

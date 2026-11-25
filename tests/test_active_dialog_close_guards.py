@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import time
 from pathlib import Path
 from threading import Event
@@ -222,7 +223,7 @@ def test_export_close_waits_for_active_worker(qapp, monkeypatch, tmp_path):
     dialog.show_loading_screen()
     thread = dialog.export_thread
     try:
-        assert received_requests == [request] and received_requests[0] is request
+        assert received_requests == [replace(request, application_version=export_dialog_module.VERSION_LABEL)]
         assert _wait_until(qapp, thread.isRunning)
 
         assert dialog.close() is False

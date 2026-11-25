@@ -1,4 +1,5 @@
 from metroliza.shared.custom_logger import CustomLogger
+from dataclasses import asdict
 from time import monotonic
 try:
     from metroliza.ui.worker_progress_dialog import (
@@ -52,7 +53,12 @@ except Exception:  # pragma: no cover - fallback for heavily stubbed tests
     ui_foundation = _UiFoundationFallback()
 from metroliza.ui.help_menu import attach_help_menu_to_layout
 from metroliza.ui.shortcuts import apply_dialog_mnemonics, bind_search_shortcut
-from metroliza.shared.filter_state import FilterState, summarize_filter_state
+from metroliza.shared.filter_state import (
+    NOK_MEASUREMENTS_LABEL,
+    REPORTS_WITH_NOK_LABEL,
+    FilterState,
+    summarize_filter_state,
+)
 from metroliza.reports.report_query_service import (
     build_distinct_value_query as _build_distinct_value_query,
     build_measurement_expression_clause as _build_measurement_expression_clause,
@@ -264,7 +270,7 @@ class FilterDialog(QDialog):
             self.sample_number_kind_list = QListWidget()
             self.sample_number_kind_list.setSelectionMode(self._multi_selection_mode())
 
-            self.status_code_label = QLabel("Status code:")
+            self.status_code_label = QLabel("Measurement status:")
             self.status_code_list = QListWidget()
             self.status_code_list.setSelectionMode(self._multi_selection_mode())
 
@@ -284,11 +290,15 @@ class FilterDialog(QDialog):
             self.selected_headers_list = QListWidget()
             self.selected_headers_list.setSelectionMode(self._multi_selection_mode())
 
-            self.has_nok_button = QPushButton("Has NOK only")
+            self.has_nok_button = QPushButton(REPORTS_WITH_NOK_LABEL)
             if hasattr(self.has_nok_button, "setCheckable"):
                 self.has_nok_button.setCheckable(True)
             if hasattr(self.has_nok_button, "setChecked"):
                 self.has_nok_button.setChecked(False)
+            self.has_nok_button.setToolTip("Include every matching measurement from reports that contain at least one NOK.")
+            self.measurement_nok_button = QPushButton(NOK_MEASUREMENTS_LABEL)
+            self.measurement_nok_button.setCheckable(True)
+            self.measurement_nok_button.setToolTip("Set Measurement status to NOK, even if there are no matching measurements.")
 
             self.date_range_label = QLabel("Date &range:")
             self.date_range_selector = QtWidgets.QComboBox()
@@ -397,6 +407,8 @@ class FilterDialog(QDialog):
             self.clear_search_button = QPushButton("Clear searches")
             self.clear_values_button = QPushButton("Clear value selections (All)")
             self.clear_expression_button = QPushButton("Clear expression")
+            self.saved_filters_button = QPushButton("Saved filters…")
+            self.saved_filters_button.setToolTip("Save the current filter as a named draft or load a saved filter.")
             ui_foundation.configure_accessibility(
                 self.expression_input,
                 name="Advanced report filter expression",
@@ -409,6 +421,8 @@ class FilterDialog(QDialog):
             ui_foundation.configure_accessibility(self.reset_button, name="Reset report filter draft")
             ui_foundation.configure_accessibility(self.cancel_button, name="Cancel report filter changes")
             ui_foundation.configure_accessibility(self.apply_button, name="Apply report filters")
+            ui_foundation.configure_accessibility(self.has_nok_button, name=REPORTS_WITH_NOK_LABEL)
+            ui_foundation.configure_accessibility(self.measurement_nok_button, name=NOK_MEASUREMENTS_LABEL)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -426,7 +440,8 @@ class FilterDialog(QDialog):
             search_help.setWordWrap(True)
             self.layout.addWidget(search_help)
             utility = QtWidgets.QHBoxLayout()
-            for button in (self.clear_search_button, self.clear_values_button, self.clear_expression_button):
+            for button in (self.clear_search_button, self.clear_values_button, self.clear_expression_button,
+                           self.saved_filters_button):
                 utility.addWidget(button)
             self.layout.addLayout(utility)
             self._add_filter_tabs(self.layout)
@@ -466,13 +481,17 @@ class FilterDialog(QDialog):
             field_layout.setContentsMargins(0, 0, 0, 0)
             field_layout.setSpacing(4)
 
-            field_layout.addWidget(getattr(self, label_attr))
+            field_label = getattr(self, label_attr)
+            label_text = field_label.text().removesuffix(":")
+            field_layout.addWidget(field_label)
             if search_attr is not None:
                 search_widget = getattr(self, search_attr)
+                ui_foundation.configure_accessibility(search_widget, name=f"Search {label_text.lower()} choices")
                 self._set_widget_size_policy(search_widget, min_width=150)
                 field_layout.addWidget(search_widget)
 
             list_widget = getattr(self, list_attr)
+            ui_foundation.configure_accessibility(list_widget, name=f"{label_text} choices")
             self._set_widget_size_policy(list_widget, min_width=150, min_height=110, expands_vertically=True)
             if list_attr in self._FILTER_LIST_ATTRS:
                 from metroliza.ui.filter_presentation import list_choice_text
@@ -508,6 +527,7 @@ class FilterDialog(QDialog):
         footer_layout.addWidget(self.date_to_label, 3, 0)
         footer_layout.addWidget(self.date_to_calendar, 3, 1)
         footer_layout.addWidget(self.select_today_button, 3, 2)
+        footer_layout.addWidget(self.measurement_nok_button, 3, 3)
         footer_layout.addWidget(self.date_error_label, 4, 0, 1, 3)
         footer_layout.addWidget(self.filter_summary_label, 5, 0, 1, 3)
         self.setTabOrder(self.date_range_selector, self.date_from_calendar)
@@ -597,6 +617,7 @@ class FilterDialog(QDialog):
             self.clear_search_button.clicked.connect(self._clear_searches)
             self.clear_values_button.clicked.connect(self._clear_value_selections)
             self.clear_expression_button.clicked.connect(self.expression_input.clear)
+            self.saved_filters_button.clicked.connect(self._show_saved_filters)
             ui_foundation.configure_dialog_button_roles(
                 primary=self.apply_button,
                 secondary=(self.cancel_button,),
@@ -630,6 +651,7 @@ class FilterDialog(QDialog):
             self.date_range_selector.currentTextChanged.connect(self._apply_date_preset)
             if hasattr(self.has_nok_button, "toggled"):
                 self.has_nok_button.toggled.connect(self._refresh_filter_summary)
+            self.measurement_nok_button.toggled.connect(self._select_only_nok_measurements)
             if hasattr(self.expression_input, "textChanged"):
                 self.expression_input.textChanged.connect(self._refresh_filter_summary)
         except Exception as e:
@@ -642,7 +664,8 @@ class FilterDialog(QDialog):
         self.filter_commands = FilterCommandBindings(self, (
             ("Ctrl+S", self.apply_button), ("Ctrl+Shift+R", self.reset_button), ("Ctrl+W", self.cancel_button),
         ))
-        ordered = [self.clear_search_button, self.clear_values_button, self.clear_expression_button, self.filter_tabs]
+        ordered = [self.clear_search_button, self.clear_values_button, self.clear_expression_button,
+                   self.saved_filters_button, self.filter_tabs]
         for _title, fields in self.FILTER_SECTIONS:
             for _label, search, listing in fields:
                 if search:
@@ -650,7 +673,8 @@ class FilterDialog(QDialog):
                 ordered.append(getattr(self, listing))
         ordered.extend((self.expression_input, self.date_range_selector, self.date_from_calendar,
                         self.date_to_calendar, self.select_beginning_button, self.select_today_button,
-                        self.has_nok_button, self.reset_button, self.cancel_button, self.apply_button))
+                        self.has_nok_button, self.measurement_nok_button,
+                        self.reset_button, self.cancel_button, self.apply_button))
         for first, second in zip(ordered, ordered[1:]):
             self.setTabOrder(first, second)
 
@@ -659,7 +683,9 @@ class FilterDialog(QDialog):
         if label is not None:
             from metroliza.ui.filter_presentation import list_choice_text
 
-            label.setText(list_choice_text(widget, all_marker="SELECT ALL"))
+            text = list_choice_text(widget, all_marker="SELECT ALL")
+            label.setText(text)
+            widget.setAccessibleDescription(text)
 
     def _refresh_draft_presentation(self):
         label = getattr(self, "draft_status_label", None)
@@ -842,9 +868,9 @@ class FilterDialog(QDialog):
     def _restore_draft_snapshot(self, snapshot):
         selections, date_from, date_to, has_nok_only, expression, preset = snapshot
         for attr_name, selected_values in selections:
-            if attr_name == "header_list":
-                self._retain_saved_header_choices(selected_values)
-            self._set_selected_values(getattr(self, attr_name, None), selected_values)
+            widget = getattr(self, attr_name, None)
+            self._retain_saved_choices(widget, selected_values)
+            self._set_selected_values(widget, selected_values)
         if hasattr(self, "date_from_calendar"):
             self.date_from_calendar.setDate(QDate.fromString(date_from, "yyyy-MM-dd"))
         if hasattr(self, "date_to_calendar"):
@@ -859,16 +885,62 @@ class FilterDialog(QDialog):
         self._refresh_filter_summary()
         self.on_reference_selection_changed()
 
-    def _retain_saved_header_choices(self, selected_values):
-        if not selected_values or getattr(self, "header_list", None) is None:
+    @staticmethod
+    def _retain_saved_choices(widget, selected_values):
+        if not selected_values or widget is None:
             return
-        available = {self.header_list.item(row).text() for row in range(self.header_list.count())}
+        available = {widget.item(row).text() for row in range(widget.count())}
         for value in selected_values:
             if value != "SELECT ALL" and value not in available:
                 item = QListWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, "unavailable")
                 item.setToolTip("Unavailable in the loaded choices; retained in the filter")
-                self.header_list.addItem(item)
+                widget.addItem(item)
+
+    def _show_saved_filters(self):
+        from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+        store = ReportFilterPresets()
+        presets, unavailable = store.load()
+        menu = QtWidgets.QMenu(self)
+        save = menu.addAction("Save filter draft as…")
+        save.setEnabled(self.apply_button.isEnabled())
+        save.triggered.connect(lambda: self._save_filter_draft(store, presets))
+        menu.addSeparator()
+        for name, state in presets:
+            label = name.replace("&", "&&")
+            action = menu.addAction(f"Load as draft: {label}")
+            action.setEnabled(not self._values_loading)
+            action.triggered.connect(lambda _checked, value=state: self._load_saved_filter(value))
+        if not presets or unavailable:
+            text = f"{unavailable} saved filters unavailable" if unavailable else "No saved filters"
+            menu.addAction(text).setEnabled(False)
+        menu.exec(self.saved_filters_button.mapToGlobal(self.saved_filters_button.rect().bottomLeft()))
+
+    def _save_filter_draft(self, store, presets):
+        name, accepted = QtWidgets.QInputDialog.getText(self, "Save filter", "Filter name")
+        if not accepted:
+            return
+        name = name.strip()
+        if any(name.casefold() == old_name.casefold() for old_name, _state in presets):
+            replace = QtWidgets.QMessageBox.question(self, "Replace saved filter?", f"Replace the saved filter {name!r}?",
+                         QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                         QtWidgets.QMessageBox.StandardButton.No)
+            if replace != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        try:
+            store.save(name, self._current_filter_state())
+        except (OSError, ValueError):
+            QtWidgets.QMessageBox.warning(self, "Save filter", "Could not save the filter. Check its name and conditions.")
+
+    def _load_saved_filter(self, state):
+        selections = tuple((name, getattr(state, name.removesuffix("_list") + "_values"))
+                           for name in self._FILTER_LIST_ATTRS)
+        date_from = state.date_from or "1970-01-01"
+        date_to = state.date_to or QDate.currentDate().toString("yyyy-MM-dd")
+        preset = "Custom" if (state.date_from or state.date_to) else "All dates"
+        self._restore_draft_snapshot((selections, date_from, date_to, state.has_nok_only,
+                                      state.expression_text, preset))
 
     def _reset_draft(self):
         for attr_name in self._FILTER_LIST_ATTRS:
@@ -1072,6 +1144,7 @@ class FilterDialog(QDialog):
         self._refresh_active_filter_summary(summary_label)
 
     def _refresh_active_filter_summary(self, summary_label):
+        only_nok_measurements = self._sync_measurement_nok_button()
         selected_counts = self._selected_filter_counts()
         active_fields = sum(1 for count in selected_counts.values() if count > 0)
         selected_values = sum(selected_counts.values())
@@ -1080,8 +1153,7 @@ class FilterDialog(QDialog):
             if hasattr(self, "has_nok_button")
             else False
         )
-        if has_nok_only:
-            active_fields += 1
+        active_fields += int(has_nok_only)
         if self._has_custom_date_range():
             active_fields += 1
         expression_text = self._filter_expression_text()
@@ -1104,17 +1176,38 @@ class FilterDialog(QDialog):
         if date_summary:
             summary_text += f" | {date_summary}"
         if has_nok_only:
-            summary_text += " | NOK only"
+            summary_text += f" | {REPORTS_WITH_NOK_LABEL}"
+        if only_nok_measurements:
+            summary_text += f" | {NOK_MEASUREMENTS_LABEL}"
         if expression_text:
             summary_text += " | Advanced expression"
-        unavailable_count = sum(
-            item.data(Qt.ItemDataRole.UserRole) == "unavailable"
-            for item in self.header_list.selectedItems()
-        )
+        unavailable_count = self._unavailable_selection_count()
         if unavailable_count:
-            summary_text += f" | Unavailable headers: {unavailable_count} (may return 0 rows)"
+            summary_text += f" | Unavailable selections: {unavailable_count} (may return 0 rows)"
         summary_label.setText(summary_text)
         ui_foundation.set_status_variant(summary_label, "warning" if unavailable_count else "success")
+
+    def _unavailable_selection_count(self):
+        return sum(item.data(Qt.ItemDataRole.UserRole) == "unavailable"
+                   for name in self._FILTER_LIST_ATTRS for item in getattr(self, name).selectedItems())
+
+    def _select_only_nok_measurements(self, checked):
+        choices = self.status_code_list
+        if checked and not choices.findItems("nok", Qt.MatchFlag.MatchExactly):
+            choices.addItem("nok")
+        self._set_selected_values(choices, ("nok",) if checked else ())
+        self._refresh_filter_summary()
+
+    def _sync_measurement_nok_button(self):
+        button = getattr(self, "measurement_nok_button", None)
+        if button is None:
+            return False
+        values = {item.text() for item in self.status_code_list.selectedItems()}
+        checked = values == {"nok"}
+        previous = button.blockSignals(True)
+        button.setChecked(checked)
+        button.blockSignals(previous)
+        return checked
 
     def _delete_selected_headers(self):
         selected_headers = {item.text() for item in self.selected_headers_list.selectedItems()}
@@ -1231,9 +1324,9 @@ class FilterDialog(QDialog):
             choices += tuple(value for value in selected if value not in available)
             for value in choices:
                 item = QListWidgetItem(value)
-                if attribute == "header_list" and value not in available:
+                if value not in available:
                     item.setData(Qt.ItemDataRole.UserRole, "unavailable")
-                    item.setToolTip("Unavailable for the current reference; retained in the filter")
+                    item.setToolTip("Unavailable in the loaded choices; retained in the filter")
                 widget.addItem(item)
             self._set_selected_values(widget, selected)
             widget.blockSignals(blocked)
@@ -1329,6 +1422,23 @@ class FilterDialog(QDialog):
         except Exception as e:
             self.log_and_exit(e)
 
+    def _current_filter_state(self):
+        values = {}
+        for name in self._FILTER_LIST_ATTRS:
+            selection = tuple(item.text() for item in getattr(self, name).selectedItems())
+            values[name.removesuffix("_list") + "_values"] = () if "SELECT ALL" in selection else selection
+        date_from = date_to = None
+        if self._has_custom_date_range():
+            date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
+            date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
+        return FilterState(
+            **values,
+            has_nok_only=bool(getattr(self.has_nok_button, "isChecked", lambda: False)()),
+            date_from=date_from,
+            date_to=date_to,
+            expression_text=self._filter_expression_text(),
+        )
+
     def apply_filters(self):
         self._reconcile_date_preset()
         if not self._validate_date_range():
@@ -1337,25 +1447,8 @@ class FilterDialog(QDialog):
         if getattr(self, "_values_loading", False) or getattr(self, "_values_error", False):
             return
         try:
-            # Get the selected values from the list widgets and calendars
-            ax_selected_items = [item.text() for item in self.ax_list.selectedItems()]
-            header_selected_items = [item.text() for item in self.header_list.selectedItems()]
-            reference_selected_items = [item.text() for item in self.reference_list.selectedItems()]
-            part_name_selected_items = [item.text() for item in self.part_name_list.selectedItems()]
-            revision_selected_items = [item.text() for item in self.revision_list.selectedItems()]
-            template_variant_selected_items = [item.text() for item in self.template_variant_list.selectedItems()]
-            sample_number_selected_items = [item.text() for item in self.sample_number_list.selectedItems()]
-            operator_name_selected_items = [item.text() for item in self.operator_name_list.selectedItems()]
-            sample_number_kind_selected_items = [item.text() for item in self.sample_number_kind_list.selectedItems()]
-            status_code_selected_items = [item.text() for item in self.status_code_list.selectedItems()]
-            filename_selected_items = [item.text() for item in self.filename_list.selectedItems()]
-            parser_id_selected_items = [item.text() for item in self.parser_id_list.selectedItems()]
-            template_family_selected_items = [item.text() for item in self.template_family_list.selectedItems()]
-            has_nok_only = bool(getattr(self.has_nok_button, "isChecked", lambda: False)())
-            date_from = self.date_from_calendar.date().toString("yyyy-MM-dd")
-            date_to = self.date_to_calendar.date().toString("yyyy-MM-dd")
-            expression_text = self._filter_expression_text()
-            expression_error = self._validate_filter_expression(expression_text)
+            filter_state = self._current_filter_state()
+            expression_error = self._validate_filter_expression(filter_state.expression_text)
             if expression_error:
                 if self.filter_summary_label is not None and hasattr(self.filter_summary_label, "setText"):
                     self.filter_summary_label.setText(f"Invalid expression: {expression_error}")
@@ -1363,60 +1456,7 @@ class FilterDialog(QDialog):
                 self._set_filter_apply_enabled(False)
                 return
 
-            ax_values = [] if "SELECT ALL" in ax_selected_items else ax_selected_items
-            header_values = [] if "SELECT ALL" in header_selected_items else header_selected_items
-            reference_values = [] if "SELECT ALL" in reference_selected_items else reference_selected_items
-            part_name_values = [] if "SELECT ALL" in part_name_selected_items else part_name_selected_items
-            revision_values = [] if "SELECT ALL" in revision_selected_items else revision_selected_items
-            template_variant_values = [] if "SELECT ALL" in template_variant_selected_items else template_variant_selected_items
-            sample_number_values = [] if "SELECT ALL" in sample_number_selected_items else sample_number_selected_items
-            operator_name_values = [] if "SELECT ALL" in operator_name_selected_items else operator_name_selected_items
-            sample_number_kind_values = [] if "SELECT ALL" in sample_number_kind_selected_items else sample_number_kind_selected_items
-            status_code_values = [] if "SELECT ALL" in status_code_selected_items else status_code_selected_items
-            filename_values = [] if "SELECT ALL" in filename_selected_items else filename_selected_items
-            parser_id_values = [] if "SELECT ALL" in parser_id_selected_items else parser_id_selected_items
-            template_family_values = [] if "SELECT ALL" in template_family_selected_items else template_family_selected_items
-
-            query = build_measurement_filter_query(
-                ax_values=ax_values,
-                header_values=header_values,
-                reference_values=reference_values,
-                part_name_values=part_name_values,
-                revision_values=revision_values,
-                template_variant_values=template_variant_values,
-                sample_number_values=sample_number_values,
-                operator_name_values=operator_name_values,
-                sample_number_kind_values=sample_number_kind_values,
-                status_code_values=status_code_values,
-                filename_values=filename_values,
-                parser_id_values=parser_id_values,
-                template_family_values=template_family_values,
-                has_nok_only=has_nok_only,
-                date_from=date_from,
-                date_to=date_to,
-                expression_text=expression_text,
-            )
-
-            self.filter_query = query
-            filter_state = FilterState(
-                ax_values=tuple(ax_values),
-                header_values=tuple(header_values),
-                reference_values=tuple(reference_values),
-                part_name_values=tuple(part_name_values),
-                revision_values=tuple(revision_values),
-                template_variant_values=tuple(template_variant_values),
-                sample_number_values=tuple(sample_number_values),
-                operator_name_values=tuple(operator_name_values),
-                sample_number_kind_values=tuple(sample_number_kind_values),
-                status_code_values=tuple(status_code_values),
-                filename_values=tuple(filename_values),
-                parser_id_values=tuple(parser_id_values),
-                template_family_values=tuple(template_family_values),
-                has_nok_only=has_nok_only,
-                date_from=date_from,
-                date_to=date_to,
-                expression_text=expression_text,
-            )
+            self.filter_query = build_measurement_filter_query(**asdict(filter_state))
 
             parent = self.parent()
             if parent is not None and hasattr(parent, "set_filter_query"):

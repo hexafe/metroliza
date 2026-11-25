@@ -1,5 +1,6 @@
 """Real synthetic PDF → SQLite → workbook/dashboard, with a literal SQL oracle."""
 import pymupdf
+import shutil
 import sqlite3
 import zipfile
 from contextlib import closing
@@ -11,8 +12,10 @@ from PyQt6.QtWidgets import QApplication
 from metroliza.recipes.report_ports import ReportsRecipeService
 from metroliza.recipes.bindings import resolve_plan
 from metroliza.recipes.builtin_recipes import (
-    REPORTS_DASHBOARD_HTML, REPORTS_EXCEL_MAIN, builtin_binding,
+    REPORTS_APPEND_EXCEL_MAIN, REPORTS_DASHBOARD_HTML, REPORTS_EXCEL_MAIN, builtin_binding,
 )
+from metroliza.recipes.contracts import ParameterKey, StepKind
+from metroliza.recipes.ports import PreparationPhase, ResultCode
 from metroliza.recipes.run_state import RunState
 from metroliza.recipes.runner import RecipeRunner
 from metroliza.ui.recipe_execution_adapter import RecipeExecutionAdapter
@@ -37,7 +40,10 @@ def _write_complete_reports(source):
 @pytest.mark.parametrize("definition,suffix", [
     (REPORTS_EXCEL_MAIN, ".xlsx"), (REPORTS_DASHBOARD_HTML, ".html"),
 ])
-def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix):
+def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix, qapplication_session):
+    from metroliza.recipes.contracts import StepKind
+    from metroliza.recipes.diagnostics import safe_run_projection
+
     app = QApplication.instance() or QApplication([])
     source = tmp_path / "reports"
     _write_complete_reports(source)
@@ -65,8 +71,211 @@ def test_real_microflow_numeric_and_output_contract(tmp_path, definition, suffix
             document = output.read_text(encoding="utf-8")
             assert "<html" in document.lower()
             assert "plotly" in document.lower()
+            html = next(step.result for step in record.steps if step.kind is StepKind.EXPORT_HTML)
+            assets = Path(html.dashboard_assets_path)
+            assert assets.is_dir() and assets.parent == output.parent
+            assert assets.name + "/" in document
+            assert assets.name not in str(safe_run_projection(record))
             assert not output.with_suffix(".xlsx").exists()
         assert app is QApplication.instance()
+    finally:
+        runner.cancel()
+
+
+@pytest.mark.parametrize("mode,expected_ocr", [("light", 0), ("complete", 1)])
+def test_reviewed_image_import_uses_one_recheck_and_keeps_metadata(
+        tmp_path, qapplication_session, monkeypatch, mode, expected_ocr):
+    from dataclasses import replace
+    from metroliza.parsing.cmm_report_parser import CMMReportParser
+    from metroliza.parsing.preflight import ParsePreflightService
+    from tests.test_metadata_review_core import FAKE_OCR_ITEMS
+
+    source = tmp_path / "reports"
+    source.mkdir()
+    fixture = Path(__file__).parent / "fixtures/windows_candidate_ocr/image-header-only.pdf"
+    shutil.copyfile(fixture, source / "image.pdf")
+    binding = builtin_binding(REPORTS_EXCEL_MAIN, str(source), str(tmp_path / "result.xlsx"))
+    values = dict(binding.values)
+    values[ParameterKey.METADATA_MODE] = mode
+    plan = resolve_plan(REPORTS_EXCEL_MAIN, replace(binding, values=tuple(values.items())))
+
+    ocr_calls, scans, events = [], [], []
+    scanner = ParsePreflightService()
+    scan_source = scanner.scan_source
+
+    def ocr(_cls, _page, bbox, _backend):
+        ocr_calls.append(bbox)
+        return [dict(item) for item in FAKE_OCR_ITEMS], None
+
+    def scan(**kwargs):
+        scans.append(kwargs["metadata_parsing_mode"])
+        return scan_source(**kwargs)
+
+    monkeypatch.setattr(CMMReportParser, "_ocr_header_items_from_pixmap", classmethod(ocr))
+    monkeypatch.setattr(scanner, "scan_source", scan)
+    runner = RecipeRunner(ReportsRecipeService(
+        RecipeExecutionAdapter("import"), RecipeExecutionAdapter("export"), scanner=scanner,
+    ), on_event=events.append)
+    try:
+        assert runner.start(plan).state is RunState.REQUIRES_DECISION
+        assert scans == [mode] and len(ocr_calls) == expected_ocr
+        assert not plan.database_file.exists()
+        row, = runner.review.review.rows
+        assert row.set_user_value("part_name", "Confirmed part") == (True, None)
+        result = runner.resume("continue")
+        assert result.state is RunState.COMPLETED
+        assert scans == [mode, mode] and len(ocr_calls) == expected_ocr
+        expected_phase = PreparationPhase.METADATA if mode == "light" else PreparationPhase.OCR
+        assert any(event.phase is expected_phase for event in events)
+        assert plan.output_file.is_file()
+        with closing(sqlite3.connect(str(plan.database_file))) as connection:
+            actual = connection.execute("SELECT part_name FROM report_metadata").fetchall()
+            assert actual == [("Confirmed part",)]
+            extraction, = connection.execute("SELECT header_extraction_mode FROM report_parse_state").fetchone()
+            assert (extraction == "ocr") == bool(expected_ocr)
+    finally:
+        runner.cancel()
+
+
+def test_source_change_after_recipe_review_still_stops_before_any_write(
+        tmp_path, qapplication_session, monkeypatch):
+    from metroliza.parsing.preflight import ParsePreflightService
+
+    source = tmp_path / "reports"
+    _write_complete_reports(source)
+    output = tmp_path / "result.xlsx"
+    output.write_bytes(b"previous complete result")
+    plan = resolve_plan(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN, str(source), str(output)))
+    scanner = ParsePreflightService()
+    scans, scan_source = [], scanner.scan_source
+
+    def scan(**kwargs):
+        scans.append(True)
+        return scan_source(**kwargs)
+
+    def unexpected_write(*_args):
+        pytest.fail("The approval was stale before the import step.")
+
+    monkeypatch.setattr(scanner, "scan_source", scan)
+    runner = RecipeRunner(ReportsRecipeService(unexpected_write, unexpected_write, scanner=scanner))
+    try:
+        assert runner.start(plan).state is RunState.REQUIRES_DECISION
+        with next(source.glob("*.pdf")).open("ab") as handle:
+            handle.write(b"\n% changed after approval was offered\n")
+        result = runner.resume("continue")
+        assert result.state is RunState.FAILED and result.code is ResultCode.SOURCE_CHANGED
+        assert len(scans) == 2
+        assert not plan.database_file.exists() and output.read_bytes() == b"previous complete result"
+    finally:
+        runner.cancel()
+
+
+def _seed_append_report(database, source, reference, measured):
+    from metroliza.reports.report_repository import ReportRepository
+
+    ReportRepository(str(database)).persist_parsed_report(
+        source_path=source, parser_id="cmm_pdf", parser_version="old-version",
+        template_family="cmm_pdf_header_box", parse_status="parsed",
+        metadata={"reference": reference, "part_name": "Previously saved",
+                  "report_date": "2024-01-01", "sample_number": "0"},
+        candidates=(), warnings=(), metadata_version="report_metadata_v1",
+        measurements=({"header": "KEPT_FEATURE", "ax": "X", "nominal": 10.0,
+                       "tol_plus": 0.5, "tol_minus": -0.5, "meas": measured,
+                       "dev": measured - 10.0, "outtol": 0, "status_code": "ok"},),
+        identity_hash=reference, metadata_confidence=1.0,
+    )
+
+
+def test_append_reports_exports_only_folder_and_refreshes_all_duplicate_run(tmp_path, qapplication_session):
+    from dataclasses import replace
+    from metroliza.reports.db import sqlite_file_identity, sqlite_readonly_connection_scope
+
+    source = tmp_path / "incoming"
+    _write_complete_reports(source)
+    database, output = tmp_path / "Baza pomiarów.db", tmp_path / "result.xlsx"
+    known = sorted(source.glob("*.pdf"))[0]
+    unrelated = tmp_path / "unrelated.pdf"
+    unrelated.write_bytes(b"existing source outside selected folder")
+    _seed_append_report(database, known, "ABCDE12345", 10.07)
+    _seed_append_report(database, unrelated, "OUT_OF_SCOPE", 9876.5)
+    original_identity = sqlite_file_identity(database)
+    args = (REPORTS_APPEND_EXCEL_MAIN, str(source), str(output))
+    binding = builtin_binding(*args, existing_database=str(database))
+    plan = resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding)
+    runner = RecipeRunner(ReportsRecipeService(
+        RecipeExecutionAdapter("import"), RecipeExecutionAdapter("export")), active_database=database)
+    try:
+        first = runner.start(plan)
+        assert first.state is RunState.COMPLETED, first
+        receipt = next(step.result for step in first.steps if step.kind is StepKind.IMPORT_REPORTS)
+        assert (receipt.imported_count, receipt.duplicate_count) == (4, 1)
+        from metroliza.parsing.report_folder_revision import revision_from_folder
+
+        expected_revision = revision_from_folder(source)
+        assert expected_revision and receipt.report_folder_revision == expected_revision
+        assert sqlite_file_identity(database) == original_identity
+
+        with sqlite_readonly_connection_scope(str(database)) as connection:
+            assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() == (6,)
+            assert connection.execute(
+                "SELECT m.meas FROM report_measurements m JOIN parsed_reports pr ON pr.id=m.report_id "
+                "WHERE pr.parser_version='old-version' ORDER BY m.meas"
+            ).fetchall() == [(10.07,), (9876.5,)]
+        with zipfile.ZipFile(output) as workbook:
+            xml = b"".join(workbook.read(name) for name in workbook.namelist() if name.startswith("xl/"))
+            assert b"KEPT_FEATURE" in xml and b"10.07" in xml and b"10.02" in xml
+            assert b"OUT_OF_SCOPE" not in xml and b"9876.5" not in xml
+
+        def unexpected_parse(*_args):
+            pytest.fail("A duplicate-only refresh must not start the parser.")
+
+        runner.ports.import_executor = unexpected_parse
+        values = dict(binding.values)
+        values[ParameterKey.METADATA_MODE] = "complete"
+        binding = replace(binding, values=tuple(values.items()))
+        pending = runner.start(resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding))
+        assert pending.state is RunState.REQUIRES_DECISION and pending.decision == "review"
+        assert runner.review.review.conflicts == (output,)
+        repeat = runner.resume("continue")
+        assert repeat.state is RunState.COMPLETED, repeat
+        receipt = next(step.result for step in repeat.steps if step.kind is StepKind.IMPORT_REPORTS)
+        assert (receipt.imported_count, receipt.duplicate_count) == (0, 5)
+        assert receipt.report_folder_revision == expected_revision
+        assert runner.plan.database_file == database and not output.with_suffix(".db").exists()
+
+        assert runner.start(resolve_plan(REPORTS_APPEND_EXCEL_MAIN, binding)).state is RunState.REQUIRES_DECISION
+        output.write_bytes(b"another completed result before consent")
+        stale = runner.resume("continue")
+        assert stale.state is RunState.FAILED
+        assert output.read_bytes() == b"another completed result before consent"
+    finally:
+        runner.cancel()
+
+
+def test_append_cannot_recreate_database_lost_after_preflight(tmp_path, qapplication_session):
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    source = tmp_path / "incoming"
+    _write_complete_reports(source)
+    database, output = tmp_path / "selected.db", tmp_path / "result.xlsx"
+    ensure_report_schema(str(database))
+    moved = database.with_name("saved-original.db")
+    importer = RecipeExecutionAdapter("import")
+
+    def remove_destination_before_open(plan, context):
+        database.rename(moved)
+        return importer(plan, context)
+
+    runner = RecipeRunner(ReportsRecipeService(remove_destination_before_open, RecipeExecutionAdapter("export")))
+    plan = resolve_plan(REPORTS_APPEND_EXCEL_MAIN, builtin_binding(
+        REPORTS_APPEND_EXCEL_MAIN, str(source), str(output), existing_database=str(database)))
+    try:
+        result = runner.start(plan)
+        assert result.state is RunState.FAILED and result.code is ResultCode.DATABASE_UNAVAILABLE
+        assert not database.exists() and not output.exists()
+        with closing(sqlite3.connect(str(moved))) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() == (0,)
     finally:
         runner.cancel()
 

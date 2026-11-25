@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from .contracts import StepKind
-from .ports import ResultCode, StepResult
+from .ports import PreparationPhase, ResultCode, StepResult
 
 
 class RunState(str, Enum):
@@ -50,3 +50,4 @@ class RunEvent:
     completed: int = 0
     total: int = 0
     sequence: int = field(default=0)
+    phase: PreparationPhase | None = None

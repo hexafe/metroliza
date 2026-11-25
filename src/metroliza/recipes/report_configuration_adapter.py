@@ -21,8 +21,9 @@ from metroliza.recipes.storage import StoredRecipe
 from metroliza.reports.db import sqlite_query_only_connection_scope
 from metroliza.reports.report_query_service import (
     build_grouping_query, build_measurement_export_query, build_measurement_filter_query,
+    restrict_to_approved_report_sources, sqlite_approved_report_export_scope,
 )
-from metroliza.shared.filter_state import FilterState
+from metroliza.shared.filter_state import FilterState, summarize_filter_state
 from metroliza.tabular.contracts import GroupingAssignment
 
 GROUPING_COLUMNS = frozenset({"REFERENCE", "PART_NAME", "REVISION", "TEMPLATE_VARIANT", "DATE", "SAMPLE_NUMBER"})
@@ -144,14 +145,17 @@ def _group_label(key: tuple[str, ...]) -> str:
     return json.dumps(key, ensure_ascii=False, separators=(", ", ": "))
 
 
-def _grouping(plan: ResolvedRunPlan, query: str):
+def _grouping(plan: ResolvedRunPlan, query: str, *, existing_identity=None, source_digests=()):
     rules = plan.value(ParameterKey.GROUPING_RULES, ())
     if not rules:
         return None
     if plan.database_file is None:
         raise RecipeError("missing_database")
     database = str(plan.database_file)
-    with sqlite_query_only_connection_scope(database, plain_path=database.startswith("\\\\")) as connection:
+    database_scope = (sqlite_query_only_connection_scope(database, plain_path=database.startswith("\\\\"))
+                      if existing_identity is None
+                      else sqlite_approved_report_export_scope(database, existing_identity, source_digests))
+    with database_scope as connection:
         with closing(connection.execute(build_grouping_query(query))) as cursor:
             columns = tuple(item[0] for item in cursor.description)
             if any(rule not in columns for rule in rules) or "REPORT_ID" not in columns:
@@ -169,12 +173,17 @@ def _grouping(plan: ResolvedRunPlan, query: str):
     return tuple(result)
 
 
-def build_export_request(plan: ResolvedRunPlan, step_kind: StepKind, *, consents=()) -> ExportRequest:
+def build_export_request(plan: ResolvedRunPlan, step_kind: StepKind, *, consents=(),
+                         source_digests=(), existing_identity=None) -> ExportRequest:
     validate_report_configuration(plan)
     if plan.database_file is None or plan.output_file is None:
         raise RecipeError("missing_output")
     state = _filter_state(plan)
     query = build_measurement_filter_query(**asdict(state))
+    if plan.appends_to_database:
+        if existing_identity is None or not source_digests:
+            raise RecipeError("missing_append_export_scope")
+        query = restrict_to_approved_report_sources(query)
     options = _options(plan)
     html = step_kind is StepKind.EXPORT_HTML
     if step_kind not in {StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML}:
@@ -186,7 +195,11 @@ def build_export_request(plan: ResolvedRunPlan, step_kind: StepKind, *, consents
     return validate_export_request(ExportRequest(
         AppPaths(str(plan.database_file), excel_file=None if html else str(output),
                  html_dashboard_file=str(output) if html else None), options, query,
-        _grouping(plan, query), tuple(consents),
+        _grouping(plan, query, existing_identity=existing_identity, source_digests=source_digests),
+        tuple(consents),
+        existing_database_identity=existing_identity,
+        approved_source_digests=source_digests,
+        filter_description=summarize_filter_state(state)[1] if state != FilterState() else "",
     ))
 
 

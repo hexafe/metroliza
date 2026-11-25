@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QLabel,
+    QMessageBox,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -28,7 +29,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from metroliza.parsing.declarative_parser_profiles import disable_profile, enable_profile, list_profiles
+from metroliza.parsing.declarative_parser_profiles import (
+    approved_profile_backups, disable_profile, enable_profile, list_profiles, rollback_profile,
+)
 from metroliza.parsing.parser_profile_handoff import (
     HandoffWorkspace,
     create_profile_handoff_workspace,
@@ -173,6 +176,8 @@ class ParserPluginWizardDialog(QDialog):
         self._next_control = self.create_button
         self.enable_button = QPushButton("Enable selected")
         self.disable_button = QPushButton("Disable selected")
+        self.rollback_button = QPushButton("Restore previous version…")
+        self.rollback_button.setEnabled(False)
         self.manage_status_label = status_chip("Select an installed profile to manage its enabled state.", "neutral")
         self.manage_status_label.setWordWrap(True)
         self._set_handoff_actions_enabled(False)
@@ -187,8 +192,11 @@ class ParserPluginWizardDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Parser profiles manual", "parser_profiles")])
         self.task_tabs = _ProfileTaskTabs()
-        manage = QWidget()
-        manage_layout = QVBoxLayout(manage)
+        manage = QScrollArea()
+        manage.setWidgetResizable(True)
+        manage.setFrameShape(QScrollArea.Shape.NoFrame)
+        manage_body = QWidget()
+        manage_layout = QVBoxLayout(manage_body)
         manage_layout.addWidget(section_label("Manage installed profiles"))
         manage_layout.addWidget(self.store_status_label)
         self.store_path_label.setWordWrap(True)
@@ -198,8 +206,10 @@ class ParserPluginWizardDialog(QDialog):
         manage_actions = QGridLayout()
         manage_actions.addWidget(self.enable_button, 0, 0)
         manage_actions.addWidget(self.disable_button, 0, 1)
-        manage_actions.addWidget(self.refresh_button, 1, 0, 1, 2)
+        manage_actions.addWidget(self.rollback_button, 1, 0, 1, 2)
+        manage_actions.addWidget(self.refresh_button, 2, 0, 1, 2)
         manage_layout.addLayout(manage_actions)
+        manage.setWidget(manage_body)
         self.task_tabs.addTab(manage, "Manage installed profiles")
 
         add = QWidget()
@@ -258,10 +268,11 @@ class ParserPluginWizardDialog(QDialog):
         self.install_button.clicked.connect(self.install_handoff_profile)
         self.enable_button.clicked.connect(lambda: self._change_installed_state(True))
         self.disable_button.clicked.connect(lambda: self._change_installed_state(False))
+        self.rollback_button.clicked.connect(self._restore_profile)
         self.profile_list.currentItemChanged.connect(self._sync_manage_actions)
         self.next_button.clicked.connect(lambda: self._next_control.click())
         self.close_button.clicked.connect(self.accept)
-        order = (self.profile_list, self.enable_button, self.disable_button, self.refresh_button,
+        order = (self.profile_list, self.enable_button, self.disable_button, self.rollback_button, self.refresh_button,
                  self.plugin_id_edit, self.display_name_edit, self.source_format_combo, self.create_button,
                  self.open_folder_button, self.copy_path_button, self.check_package_button, self.validate_button,
                  self.install_button, self.diagnose_button, self.repair_button, self.next_button, self.close_button)
@@ -284,7 +295,9 @@ class ParserPluginWizardDialog(QDialog):
         for button in (self.create_button, self.open_folder_button, self.copy_path_button, self.check_package_button,
                        self.validate_button, self.diagnose_button, self.repair_button, self.install_button):
             configure_accessibility(button, name=button.text().split(" [")[0])
-        self.install_button.setToolTip("Install explicitly revalidates current samples and checked results. Earlier PASS is not approval.")
+        self.validate_button.setToolTip("Compare the parser's results with readings you checked by hand from sample reports.")
+        self.install_button.setToolTip("Use Install after reviewing the checked results. It repeats validation on the current samples before enabling the profile.")
+        self.rollback_button.setToolTip("Return to a previously approved version of the selected parser profile.")
 
     def _configure_commands(self):
         commands = (
@@ -339,6 +352,7 @@ class ParserPluginWizardDialog(QDialog):
         profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
         self.enable_button.setEnabled(bool(profile and not profile.enabled and profile.approved))
         self.disable_button.setEnabled(bool(profile and profile.enabled))
+        self.rollback_button.setEnabled(bool(profile and profile.enabled and self._backup_names(profile)))
         if profile is not None:
             self.manage_status_label.setText(
                 f"{profile.plugin_id}: {'enabled' if profile.enabled else 'disabled'}; "
@@ -346,6 +360,35 @@ class ParserPluginWizardDialog(QDialog):
             )
         else:
             self.manage_status_label.setText("Select an installed profile; enable requires valid approval/integrity.")
+
+    def _backup_names(self, profile):
+        try:
+            return approved_profile_backups(profile.plugin_id, home=self.home)
+        except (OSError, ValueError):
+            return ()
+
+    def _restore_profile(self):
+        item = self.profile_list.currentItem()
+        profile = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if profile is None or not self.rollback_button.isEnabled():
+            return
+        answer = QMessageBox.question(
+            self, "Restore parser profile",
+            f"Verify and restore the latest backup of {profile.plugin_id}? The current version is kept as a backup.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            rollback_profile(profile.plugin_id, home=self.home)
+        except (OSError, ValueError) as exc:
+            self.manage_status_label.setText(str(exc))
+            set_status_variant(self.manage_status_label, "warning")
+            return
+        self.refresh_status()
+        self.manage_status_label.setText(f"Restored verified version of {profile.plugin_id}.")
+        set_status_variant(self.manage_status_label, "success")
 
     def _change_installed_state(self, enabled):
         item = self.profile_list.currentItem()

@@ -653,9 +653,8 @@ class ExportRun(Scenario):
         ctx.mark("handler_returned")
 
     def done(self, ctx):
-        thread = getattr(self.export, "export_thread", None)
-        running = thread is not None and thread.isRunning()
-        return "export_finished_end" in ctx.marks and not running
+        # The dialog keeps export ownership through native thread shutdown.
+        return "export_finished_end" in ctx.marks and self.export.export_thread is None
 
     def finish(self, ctx):
         outputs = sorted(p.name for p in ctx.work.iterdir() if p.suffix in {".xlsx", ".html"})

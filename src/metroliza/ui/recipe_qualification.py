@@ -112,10 +112,9 @@ class _Probe:
         editor.dates.setChecked(True)
         editor.groups.setText("REVISION")
         editor.html.setChecked(True)
-        _button(editor, "Apply Reports steps").click()
         saved = []
         editor.saved.connect(saved.append)
-        _button(editor, "Save revision").click()
+        _button(editor, "Zapisz recepturę").click()
         if len(saved) != 1:
             raise ValueError("save_failed")
         editor.close()
@@ -130,9 +129,10 @@ class _Probe:
         self.phase = "home_ready"
 
     def home_ready(self):
-        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS
+        from metroliza.recipes.builtin_recipes import BUILTIN_LABELS, QUICK_REPORT_RECIPES
         try:
-            buttons = [_button(self.workspace.quick, label) for label in BUILTIN_LABELS.values()]
+            buttons = [_button(self.workspace.quick, BUILTIN_LABELS[recipe.recipe_id])
+                       for recipe in QUICK_REPORT_RECIPES]
         except ValueError:
             return  # A normal Qt turn may still be making the Home controls visible.
         if not all(_paint_ready(button, self.window) for button in buttons):

@@ -688,36 +688,12 @@ def test_dim_ax_subrows_d1_d2_d3_parse_with_eight_column_shape():
 
 
 def test_dim_ax_subrows_d1_d2_d3_rows_reach_sqlite_via_to_sqlite(tmp_path):
-    import importlib.machinery
-    import importlib.util
-    import sys
-    import types
-    from pathlib import Path
-
-    custom_logger_stub = types.ModuleType("modules.custom_logger")
-    custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-    sys.modules["modules.custom_logger"] = custom_logger_stub
-
-    fitz_stub = types.ModuleType("fitz")
-    fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
-    sys.modules["fitz"] = fitz_stub
-    pymupdf_stub = types.ModuleType("pymupdf")
-    pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec("pymupdf", loader=None)
-    sys.modules["pymupdf"] = pymupdf_stub
-
-    parser_spec = importlib.util.spec_from_file_location(
-        "_cmm_report_parser_real_for_test", Path("src/metroliza/parsing/cmm_report_parser.py")
-    )
-    assert parser_spec is not None and parser_spec.loader is not None
-    parser_module = importlib.util.module_from_spec(parser_spec)
-    parser_spec.loader.exec_module(parser_module)
-    CMMReportParser = parser_module.CMMReportParser
-
     from modules.db import execute_with_retry
 
+    parser_class = _load_cmm_report_parser_with_test_stubs()
     db_path = str(tmp_path / "cmm.db")
     ensure_cmm_report_schema(db_path)
-    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser = parser_class("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
     parser.pdf_file_name = "REF01_2024-01-02_123.pdf"
@@ -760,34 +736,34 @@ def _load_cmm_report_parser_with_test_stubs():
 
     custom_logger_stub = types.ModuleType("modules.custom_logger")
     custom_logger_stub.CustomLogger = type("CustomLogger", (), {"__init__": lambda self, *args, **kwargs: None})
-    sys.modules["modules.custom_logger"] = custom_logger_stub
-
     fitz_stub = types.ModuleType("fitz")
     fitz_stub.__spec__ = importlib.machinery.ModuleSpec("fitz", loader=None)
-    sys.modules["fitz"] = fitz_stub
     pymupdf_stub = types.ModuleType("pymupdf")
     pymupdf_stub.__spec__ = importlib.machinery.ModuleSpec("pymupdf", loader=None)
-    sys.modules["pymupdf"] = pymupdf_stub
 
     parser_spec = importlib.util.spec_from_file_location(
         "_cmm_report_parser_real_for_pipeline_test", Path("src/metroliza/parsing/cmm_report_parser.py")
     )
     assert parser_spec is not None and parser_spec.loader is not None
     parser_module = importlib.util.module_from_spec(parser_spec)
-    parser_spec.loader.exec_module(parser_module)
+    with pytest.MonkeyPatch.context() as imports:
+        imports.setitem(sys.modules, "modules.custom_logger", custom_logger_stub)
+        imports.setitem(sys.modules, "fitz", fitz_stub)
+        imports.setitem(sys.modules, "pymupdf", pymupdf_stub)
+        parser_spec.loader.exec_module(parser_module)
     return parser_module.CMMReportParser
 
 
 def _assert_tp_pipeline_roundtrip(parsed_blocks, tmp_path):
     from modules.db import execute_with_retry
 
-    CMMReportParser = _load_cmm_report_parser_with_test_stubs()
+    parser_class = _load_cmm_report_parser_with_test_stubs()
 
     assert parsed_blocks[0][1][0] == ["TP", 0.0, 0.2, 0, 0.0, 0.344, 0.344, 0.144]
 
     db_path = str(tmp_path / "tp_pipeline.db")
     ensure_cmm_report_schema(db_path)
-    parser = CMMReportParser("REF01_2024-01-02_123.pdf", db_path)
+    parser = parser_class("REF01_2024-01-02_123.pdf", db_path)
     parser.pdf_reference = "REF01"
     parser.pdf_file_path = "/tmp/reports"
     parser.pdf_file_name = "REF01_2024-01-02_123.pdf"

@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from .bindings import new_output_copy, resolve_plan, validate_plan_paths
 from .contracts import RecipeError, ResolvedRunPlan, StepKind
-from .ports import PreflightResult, ReportsPorts, ResultCode, StepContext, StepResult, StepStatus
+from .ports import PreparationPhase, PreflightResult, ReportsPorts, ResultCode, StepContext, StepResult, StepStatus
 from .run_state import RunEvent, RunRecord, RunState, StepRecord
 from .validation import validate_binding
 
@@ -54,10 +54,11 @@ class RecipeRunner:
 
     def _publish(self, state: RunState | None = None, code: ResultCode | None = None,
                  *, step_id: str | None = None, step_kind: StepKind | None = None,
-                 completed: int = 0, total: int = 0, decision: str = "") -> RunRecord:
+                 completed: int = 0, total: int = 0, decision: str = "",
+                 phase: PreparationPhase | None = None) -> RunRecord:
         with self._state_lock:
             return self._publish_locked(state, code, step_id=step_id, step_kind=step_kind,
-                completed=completed, total=total, decision=decision)
+                completed=completed, total=total, decision=decision, phase=phase)
 
     def _cancelled_state(self, state, code):
         if not self._cancelled.is_set():
@@ -71,7 +72,8 @@ class RecipeRunner:
 
     def _publish_locked(self, state: RunState | None = None, code: ResultCode | None = None,
                  *, step_id: str | None = None, step_kind: StepKind | None = None,
-                 completed: int = 0, total: int = 0, decision: str = "") -> RunRecord:
+                 completed: int = 0, total: int = 0, decision: str = "",
+                 phase: PreparationPhase | None = None) -> RunRecord:
         assert self.record is not None
         state, code = self._cancelled_state(state, code)
         terminal = state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS,
@@ -93,7 +95,7 @@ class RecipeRunner:
         if self.on_event is not None:
             try:
                 self.on_event(RunEvent(self.record, step_id, step_kind,
-                    max(0, completed), max(0, total), self._sequence))
+                    max(0, completed), max(0, total), self._sequence, phase))
             except Exception:
                 # Presentation/telemetry cannot alter a completed effect.
                 pass
@@ -102,9 +104,24 @@ class RecipeRunner:
     def _context(self, kind: StepKind | None = None) -> StepContext:
         assert self.plan is not None
         step_id = str(uuid4())
-        return StepContext(self.plan.flow_id, self.plan.run_id, step_id, self._cancelled.is_set,
-            lambda done, total: self._publish(step_id=step_id, step_kind=kind,
-                                              completed=done, total=total))
+        phase = None
+        last_update = float("-inf")
+
+        def progress(done: int, total: int) -> None:
+            nonlocal last_update
+            now = time.monotonic()
+            if now - last_update >= 0.05 or (total > 0 and done >= total):
+                last_update = now
+                self._publish(step_id=step_id, step_kind=kind, phase=phase,
+                              completed=done, total=total)
+
+        def set_phase(value: PreparationPhase) -> None:
+            nonlocal phase, last_update
+            phase, last_update = value, float("-inf")
+            self._publish(step_id=step_id, step_kind=kind, phase=phase)
+
+        return StepContext(self.plan.flow_id, self.plan.run_id, step_id,
+                           self._cancelled.is_set, progress, set_phase)
 
     @staticmethod
     def _scope(context: StepContext):
@@ -194,10 +211,8 @@ class RecipeRunner:
     def _database_collision(self) -> bool:
         assert self.plan is not None
         # Existing input DB is read explicitly by a plan with no prepare/import.
-        writes_database = any(s.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS}
-                              for s in self.plan.definition.steps)
         database = self.plan.database_file
-        return writes_database and database is not None and any(
+        return self.plan.creates_database and database is not None and any(
             p.exists() or p.is_symlink() for p in
             (database, Path(str(database) + "-wal"), Path(str(database) + "-shm")))
 
@@ -210,6 +225,7 @@ class RecipeRunner:
             self.review = self.ports.preflight(self.plan, context)
         if (not isinstance(self.review, PreflightResult) or type(self.review.ready) is not bool or
                 type(self.review.requires_decision) is not bool or
+                type(self.review.recheck_on_continue) is not bool or
                 not isinstance(self.review.code, ResultCode)):
             return self._publish(RunState.FAILED, ResultCode.INVALID_PLAN)
         if self._cancelled.is_set() or self.review.code is ResultCode.CANCELLED:
@@ -246,11 +262,14 @@ class RecipeRunner:
         if pending == "copy_ready":
             self._publish(RunState.RUNNING, ResultCode.SUCCESS)
             return self._preflight_and_execute()
+        if pending == "partial":
+            self._publish(RunState.RUNNING, ResultCode.SUCCESS)
+            return self._execute()
         if not self.ports.approve(self.plan, decision):
             return self._publish(RunState.REQUIRES_DECISION, ResultCode.REVIEW_REQUIRED,
                                  decision=pending)
         self._publish(RunState.RUNNING, ResultCode.SUCCESS)
-        if pending == "partial":
+        if self.review is not None and not self.review.recheck_on_continue:
             return self._execute()
         return self._preflight_and_execute()
 
@@ -297,12 +316,13 @@ class RecipeRunner:
         return (type(result.warnings) is tuple and len(result.warnings) <= 32 and
                 all(isinstance(w, ResultCode) for w in result.warnings) and
                 all(type(n) is int and n >= 0
-                    for n in (result.imported_count, result.rejected_count)))
+                    for n in (result.imported_count, result.rejected_count, result.duplicate_count)))
 
     @classmethod
     def _valid_result(cls, result: StepResult) -> bool:
         return (isinstance(result, StepResult) and isinstance(result.status, StepStatus) and
                 isinstance(result.code, ResultCode) and type(result.artifact_verified) is bool and
+                type(result.dashboard_assets_path) is str and
                 cls._valid_result_values(result))
 
     def _apply_result(self, kind: StepKind, result: StepResult) -> RunRecord | None:

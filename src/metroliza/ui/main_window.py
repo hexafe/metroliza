@@ -182,6 +182,9 @@ class WorkspaceNavigationCombo(QComboBox):
         super().keyPressEvent(event)
 
 
+_UNCHANGED_WORKSPACE_SOURCE = object()
+
+
 class MainWindow(QMainWindow):
     """A main window class that provides the user interface for the Metroliza application."""
 
@@ -223,6 +226,7 @@ class MainWindow(QMainWindow):
         self.modifydb_dialog = None
         self.characteristic_mapping_dialog = None
         self.export_dialog = None
+        self._last_report_import = None
         self.metadata_enrichment_thread = None
         self.metadata_enrichment_error_message = None
         self.industrial_data_dialog = None
@@ -296,6 +300,9 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.setVisible(False)
         self.parse_button = QPushButton("Parse Reports")
         self.home_next_action = self.parse_button
+        self.home_archive_action = QPushButton("Wybierz archiwum…")
+        self.home_archive_action.setToolTip("Choose an archive of reports to review.")
+        set_button_role(self.home_archive_action, "secondary")
         self.home_review_action = QPushButton("Review / import reports")
         self.home_review_action.setAccessibleName("Review or import reports")
         self.home_review_action.setToolTip("Open Reports and review or import selected reports.")
@@ -305,6 +312,9 @@ class MainWindow(QMainWindow):
         self.home_cancel_report = QPushButton("Cancel report operation")
         self.modifydb_button = QPushButton("Modify Database")
         self.export_button = QPushButton("Export Workbook")
+        self.export_import_batch_button = QPushButton("Export last import")
+        self.export_import_batch_button.setToolTip("Export only the reports saved by the last import.")
+        self.export_import_batch_button.hide()
         self.map_characteristics_button = QPushButton("Match Characteristic Names")
         self.metadata_enrichment_status_label = status_chip("Metadata enrichment idle", "neutral")
         self.metadata_enrichment_progress_bar = QProgressBar()
@@ -516,7 +526,11 @@ class MainWindow(QMainWindow):
         """Set up the menu actions for the main window."""
         self.file_menu = self.menuBar().addMenu("&File")
         self.open_database_action = self.file_menu.addAction("Open database…", self._choose_database)
+        self.file_menu.addAction("Restore database copy…", self._launch_database_restore)
         self.choose_report_folder_action = self.file_menu.addAction("Choose report folder…", self._choose_report_folder)
+        self.save_workspace_action = self.file_menu.addAction("Save workspace…", self._save_workspace_file)
+        self.open_workspace_action = self.file_menu.addAction("Open workspace…", self._open_workspace_file)
+        self.file_menu.addAction("Analysis history…", self._open_analysis_history)
         self.recent_database_menu = self.file_menu.addMenu("Recent databases")
         self.recent_folder_menu = self.file_menu.addMenu("Recent report folders")
         self.clear_recent_action = self.file_menu.addAction("Clear recent lists", self._clear_recent_locations)
@@ -552,6 +566,11 @@ class MainWindow(QMainWindow):
         self.tools_menu.addAction(self.realtime_monitoring_action)
         self.tools_menu.addAction(self.parser_profiles_action)
         self.view_menu = self.menuBar().addMenu("&View")
+        self.restore_last_page_action = self.view_menu.addAction("Open last workspace on startup")
+        self.restore_last_page_action.setCheckable(True)
+        self.restore_last_page_action.triggered.connect(
+            lambda checked: self.ui_preferences.set("presentation/navigation/restore_last_page", checked)
+        )
         self.theme_menu = self.view_menu.addMenu("Theme")
         self.theme_action_group = QActionGroup(self)
         self.theme_action_group.setExclusive(True)
@@ -604,11 +623,11 @@ class MainWindow(QMainWindow):
         self.tools_menu.addSeparator()
         for command, callback in (
             ("report_database", self._choose_context_database),
-            ("choose_source", lambda: self._trigger_report_command("directory_button")),
+            ("choose_source", self._choose_context_report_source),
             ("cancel_reports", self.home_cancel_report.click),
             ("review_reports", lambda: self._trigger_report_command("scan_button")),
             ("import_reports", lambda: self._trigger_report_command("parse_button")),
-            ("export_workbook", self.export_button.click),
+            ("export_workbook", lambda: self.launch_export_dialog()),
         ):
             sequence, label = MAIN_SHORTCUTS[command]
             action = self.tools_menu.addAction(label, callback)
@@ -679,7 +698,27 @@ class MainWindow(QMainWindow):
         busy = reports is not None and not reports.can_change_workspace()
         if self._export_ready and not busy:
             self.launch_export_dialog()
+        elif not self.directory and not busy:
+            self._choose_home_report_source()
         else:
+            self.launch_parsing_dialog()
+
+    def _choose_context_report_source(self):
+        if self.navigation_combo.currentData() == "home":
+            self._choose_home_report_source()
+        else:
+            self._trigger_report_command("directory_button")
+
+    def _choose_home_report_source(self, *, archive=False):
+        if not self._report_context_change_allowed():
+            return
+        if archive:
+            from metroliza.ui.parsing_dialog import choose_report_archive
+
+            source = choose_report_archive(self)
+        else:
+            source = QFileDialog.getExistingDirectory(self, "Choose report folder")
+        if source and self.set_directory(source):
             self.launch_parsing_dialog()
 
     def _choose_context_database(self):
@@ -695,11 +734,76 @@ class MainWindow(QMainWindow):
             if filename:
                 self._open_recent_location("databases", filename)
 
+    def _launch_database_restore(self):
+        from metroliza.ui.database_restore_dialog import DatabaseRestoreDialog
+
+        self._open_coordinated_window(
+            "restore_database", lambda snapshot: DatabaseRestoreDialog(self, snapshot.database_file),
+            context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
+            context_policy=WindowContextPolicy.CLOSE,
+        )
+
     def _choose_report_folder(self):
         if self._report_context_change_allowed():
             folder = QFileDialog.getExistingDirectory(self, "Choose report folder")
             if folder:
                 self._open_recent_location("folders", folder)
+
+    def _workspace_files(self):
+        if getattr(self, "_workspace_file_commands", None) is None:
+            from metroliza.ui.workspace_files import WorkspaceFiles
+
+            self._workspace_file_commands = WorkspaceFiles(self)
+        return self._workspace_file_commands
+
+    def _save_workspace_file(self):
+        self._workspace_files().save()
+
+    def _open_workspace_file(self):
+        self._workspace_files().open()
+
+    def restore_workspace_locations(self, database, source, page):
+        if self.navigation_combo.findData(page) < 0:
+            QMessageBox.warning(self, "Open workspace", "The workspace refers to an unknown page.")
+            return False
+        if database != self.db_file:
+            accepted = self.set_db_file(database, workspace_source=source)
+        else:
+            accepted = self.set_directory(source)
+        if accepted:
+            self._show_workspace_page(page)
+        return accepted
+
+    def _open_analysis_history(self):
+        from metroliza.ui.analysis_history_dialog import AnalysisHistoryDialog
+
+        dialog = self._open_coordinated_window(
+            "analysis_history", lambda _snapshot: AnalysisHistoryDialog(self), context_fields=frozenset(),
+        )
+        dialog.reload()
+
+    def _record_analysis(self, receipt):
+        from metroliza.app.analysis_history import record_analysis
+
+        sender = self.sender()
+        if sender is not None:
+            sender.last_analysis_source = receipt.get("source")
+        try:
+            record_analysis(receipt)
+        except (OSError, ValueError, TypeError) as exc:
+            self.statusBar().showMessage(f"Result saved. Could not add it to analysis history: {exc}", 8000)
+
+    def _connect_analysis_history(self, dialog):
+        completed = getattr(dialog, "analysis_completed", None)
+        if completed is not None:
+            completed.connect(self._record_analysis)
+
+    def _after_database_edit(self, database):
+        dialog = self.export_dialog
+        previous_source = getattr(dialog, "last_analysis_source", None)
+        if previous_source and Path(previous_source).resolve() == Path(database).resolve():
+            dialog.last_result_row.mark_source_changed()
+        self.statusBar().showMessage("Database updated. Run analyses using this database again to refresh their results.", 8000)
 
     def _open_recent_location(self, kind, path):
         if not self._report_context_change_allowed():
@@ -819,7 +923,8 @@ class MainWindow(QMainWindow):
             section_label("Home"), self.context_label, self.source_status_label,
             self.source_path_field, self.database_status_label, self.database_path_field, self.workflow_hint_label,
             self.workflow_next_step_label, self.home_report_progress,
-            self.home_report_result, self.home_next_action, self.home_review_action, self.home_cancel_report,
+            self.home_report_result, self.home_next_action, self.home_archive_action,
+            self.home_review_action, self.home_cancel_report,
         ):
             home_layout.addWidget(widget)
         module_grid = QGridLayout()
@@ -846,9 +951,11 @@ class MainWindow(QMainWindow):
         reports_layout.setSpacing(2)
         downstream_row = QHBoxLayout()
         downstream_row.setSpacing(4)
-        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+        for button in (self.modifydb_button, self.map_characteristics_button,
+                       self.export_import_batch_button, self.export_button):
             downstream_row.addWidget(button)
-        downstream_row.addWidget(secondary_label("Ctrl+E"))
+        self.export_shortcut_hint = secondary_label("Ctrl+E")
+        downstream_row.addWidget(self.export_shortcut_hint)
         reports_layout.addLayout(downstream_row)
         self._add_workspace_page("Reports", self.reports_page)
         for title, description, action, callback in (
@@ -889,10 +996,12 @@ class MainWindow(QMainWindow):
         task_row.addWidget(self.cancel_metadata_enrichment_button)
         self.layout.addLayout(task_row)
         self.home_next_action.clicked.connect(self._launch_home_next_action)
+        self.home_archive_action.clicked.connect(lambda: self._choose_home_report_source(archive=True))
         self.home_review_action.clicked.connect(self.launch_parsing_dialog)
         self.home_cancel_report.clicked.connect(self._cancel_report_operation)
         self.modifydb_button.clicked.connect(self.launch_modifydb_dialog)
-        self.export_button.clicked.connect(self.launch_export_dialog)
+        self.export_button.clicked.connect(self._launch_reports_export)
+        self.export_import_batch_button.clicked.connect(self._launch_last_import_export)
         self.map_characteristics_button.clicked.connect(self.launch_characteristic_mapping_dialog)
         self.cancel_metadata_enrichment_button.clicked.connect(self.stop_metadata_enrichment)
         self.metadata_enrichment_status_label.hide()
@@ -913,6 +1022,7 @@ class MainWindow(QMainWindow):
         if workspace is None:
             from metroliza.ui.recipe_workspace import RecipeWorkspace
             workspace = RecipeWorkspace(self)
+            self._connect_analysis_history(workspace)
             self.recipe_workspace = workspace
             self.recipe_page.layout().addWidget(workspace)
         return workspace
@@ -1014,12 +1124,14 @@ class MainWindow(QMainWindow):
             host.database_change_requested.connect(self.set_db_file)
             host.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
             host.state_changed.connect(self._sync_workflow_next_step)
+            host.import_batch_finished.connect(self._on_report_import_batch_finished)
             host.shutdown_ready.connect(self._on_reports_shutdown_ready)
             self._reports_layout.insertWidget(0, host, 1)
             host.directory_label.setText("Reports directory or archive: [Ctrl+Shift+D]")
             host.database_label.setText("Database file: [Ctrl+D]")
             host.layout.addWidget(secondary_label("Review [Ctrl+R] · Import [Ctrl+S]"), 5, 0, 1, 2)
-            for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
+            for button in (self.modifydb_button, self.map_characteristics_button,
+                           self.export_import_batch_button, self.export_button):
                 button.setStyleSheet(PLANNER_ACTION_STYLE)
             host.apply_workspace_snapshot(self.workspace_context.snapshot)
             self._sync_workflow_next_step()
@@ -1101,6 +1213,8 @@ class MainWindow(QMainWindow):
     def _on_workspace_snapshot_changed(self, current, _previous) -> None:
         self.directory = current.source_directory
         self.db_file = current.database_file
+        if current.database_file != _previous.database_file:
+            self._on_report_import_batch_finished(None)
         if self._reports_workspace is not None:
             self._reports_workspace.apply_workspace_snapshot(current)
         self._sync_context_rows()
@@ -1115,14 +1229,17 @@ class MainWindow(QMainWindow):
             theme_mode = "system"
         self._set_theme_mode(theme_mode, persist=False)
 
-        page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
-        if page_id:
-            self._show_workspace_page("csv_summary" if page_id == "csv_analytics" else page_id)
-        else:
-            # Existing six-page integer preferences retain their original meaning.
-            navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
-            if 0 <= navigation_index < 6:
-                self.navigation_list.setCurrentRow(navigation_index)
+        restore_last = self.ui_preferences.get("presentation/navigation/restore_last_page", True, expected_type=bool)
+        self.restore_last_page_action.setChecked(restore_last)
+        if restore_last:
+            page_id = self.ui_preferences.get("presentation/navigation/page", "", expected_type=str)
+            if page_id:
+                self._show_workspace_page("csv_summary" if page_id == "csv_analytics" else page_id)
+            else:
+                # Existing six-page integer preferences retain their original meaning.
+                navigation_index = self.ui_preferences.get("presentation/navigation/current", 0, expected_type=int)
+                if 0 <= navigation_index < 6:
+                    self.navigation_list.setCurrentRow(navigation_index)
 
         geometry = self.ui_preferences.get(
             "windows/main/geometry",
@@ -1161,6 +1278,10 @@ class MainWindow(QMainWindow):
             return
         reports = self._reports_workspace
         busy = reports is not None and not reports.can_change_workspace()
+        export_active = self._report_export_active()
+        set_report_workspace_busy = getattr(self.export_dialog, "set_report_workspace_busy", None)
+        if set_report_workspace_busy is not None:
+            set_report_workspace_busy(busy)
         if reports is not None:
             if reports.import_succeeded and not self._export_ready and self.db_file and Path(self.db_file).is_file():
                 # A database created by this import becomes a recent location once it exists.
@@ -1169,13 +1290,18 @@ class MainWindow(QMainWindow):
             self._export_ready = self._export_ready or reports.import_succeeded
             reports.set_export_primary(not busy and self._export_ready)
         caption = self._home_next_caption(reports, busy)
-        set_button_role(self.export_button, "primary" if self._export_ready and not busy else "secondary")
-        self.home_next_action.setToolTip("Open Export Workbook." if caption == "Export Workbook"
-                                        else "Open Reports and focus the next available report action.")
+        choosing_source = not self.directory and not busy and not self._export_ready
+        self._sync_reports_export_actions(busy, export_active)
+        tooltip = ("Open Export Workbook." if caption == "Export Workbook" else
+                   "Choose a report folder, then continue in Reports." if choosing_source else
+                   "Open Reports and focus the next available report action.")
+        self.home_next_action.setToolTip(tooltip)
         self.home_review_action.setVisible(self._export_ready)
+        self.home_archive_action.setVisible(choosing_source)
         self.home_next_action.setText(caption)
         self.home_next_action.setAccessibleName(caption)
-        visible_shortcut(self.home_next_action, "Ctrl+E" if caption == "Export Workbook" else "Ctrl+2")
+        shortcut = "Ctrl+E" if caption == "Export Workbook" else MAIN_SHORTCUTS["choose_source"][0] if choosing_source else "Ctrl+2"
+        visible_shortcut(self.home_next_action, shortcut)
         visible_shortcut(self.home_review_action, "Ctrl+2")
         visible_shortcut(self.home_cancel_report, MAIN_SHORTCUTS["cancel_reports"][0])
         set_mnemonic(self.home_next_action, "w" if caption == "Export Workbook" else "a" if busy else "o")
@@ -1201,15 +1327,42 @@ class MainWindow(QMainWindow):
         summary = " · ".join(line for line in outcome.splitlines() if line)[:300]
         self.home_report_result.setText(summary)
         self.home_report_result.setVisible(bool(summary))
-        for button in (self.modifydb_button, self.map_characteristics_button, self.export_button):
-            button.setEnabled(bool(self.db_file) and not busy)
+        for button in (self.modifydb_button, self.map_characteristics_button):
+            button.setEnabled(bool(self.db_file) and not busy and not export_active)
         for button in self._database_workflow_buttons:
-            button.setEnabled(not busy)
-        self.industrial_data_action.setEnabled(not busy)
-        self.realtime_monitoring_action.setEnabled(not busy)
-        self.enrich_metadata_action.setEnabled(self._pdf_execution_available())
+            button.setEnabled(not busy and not export_active)
+        self.industrial_data_action.setEnabled(not busy and not export_active)
+        self.realtime_monitoring_action.setEnabled(not busy and not export_active)
+        self.enrich_metadata_action.setEnabled(self._pdf_execution_available() and not export_active)
         self._sync_shortcuts()
         self._sync_module_launchers()
+
+    def _sync_reports_export_actions(self, busy, export_active):
+        batch = self._last_report_import
+        set_button_role(self.export_button, "primary" if self._export_ready and not busy and batch is None else "secondary")
+        set_button_role(self.export_import_batch_button, "primary" if batch is not None and not busy else "secondary")
+        self.export_import_batch_button.setVisible(batch is not None)
+        self.export_import_batch_button.setEnabled(not busy and not export_active)
+        if batch is not None:
+            self.export_import_batch_button.setText(f"Eksportuj partię ({len(batch.reports)})")
+        self.export_button.setEnabled(bool(self.db_file) and not busy)
+        self.export_button.setText("Eksportuj całą bazę" if batch is not None else "Export Workbook")
+        self.export_button.setAccessibleName(self.export_button.text())
+        set_mnemonic(self.export_button, "e")
+        self.export_shortcut_hint.setVisible(batch is None)
+        self.export_button.setToolTip("Eksportuj raporty z całej bazy." if batch is not None else "Open Export Workbook.")
+        if batch is None:
+            shortcut_tooltip(self.export_button, "export_workbook")
+
+    def _on_report_import_batch_finished(self, batch):
+        self._last_report_import = batch if batch is not None and batch.matches_database(self.db_file) else None
+        update_export = getattr(self.export_dialog, "set_import_batch", None)
+        if update_export is not None:
+            update_export(self._last_report_import)
+        if self._last_report_import is not None and not self._export_ready:
+            self.recent_locations.record("databases", self.db_file)
+            self._refresh_recent_menus()
+            self._export_ready = True
 
     def _home_next_caption(self, reports, busy):
         if busy:
@@ -1217,7 +1370,7 @@ class MainWindow(QMainWindow):
         if self._export_ready:
             return "Export Workbook"
         if not self.directory:
-            return "Choose reports in Reports"
+            return "Wybierz folder raportów…"
         if not self.db_file:
             return "Choose database in Reports"
         if reports is not None and reports.parse_button.isEnabled():
@@ -1573,6 +1726,8 @@ class MainWindow(QMainWindow):
         attribute = self._coordinated_window_attributes.get(window_id)
         if attribute:
             setattr(self, attribute, None)
+        if window_id == "export":
+            self._sync_workflow_next_step()
         if window_id in self._deferred_close_blockers:
             self._deferred_close_blockers.discard(window_id)
             if (
@@ -1634,7 +1789,7 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(ModifyDB):
                 self.modifydb_dialog = self._open_coordinated_window(
                     "modify_database",
-                    lambda snapshot: ModifyDB(self, snapshot.database_file, modal=False),
+                    lambda snapshot: self._create_modify_database_dialog(ModifyDB, snapshot.database_file),
                     context_policy=WindowContextPolicy.CLOSE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -1643,13 +1798,41 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("modifydb_dialog", self.modifydb_dialog)
                 self.modifydb_dialog.show()
 
-            self.modifydb_dialog.database_change_allowed = self._report_context_change_allowed
+            self.modifydb_dialog.database_change_allowed = self._report_database_action_allowed
             self.modifydb_dialog.raise_()
             self.modifydb_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
 
-    def launch_export_dialog(self):
+    def _create_modify_database_dialog(self, factory, database):
+        dialog = factory(self, database, modal=False)
+        edited = getattr(dialog, "database_edited", None)
+        if edited is not None:
+            edited.connect(self._after_database_edit)
+        return dialog
+
+    def _launch_reports_export(self):
+        if self._last_report_import is None:
+            self.launch_export_dialog()
+        else:
+            self.launch_export_dialog(whole_database=True)
+
+    def _launch_last_import_export(self):
+        batch = self._last_report_import
+        if batch is None:
+            return
+        if not batch.matches_database(self.db_file):
+            self._on_report_import_batch_finished(None)
+            self._sync_workflow_next_step()
+            self.statusBar().showMessage("The database changed. Choose an export scope again.", 5000)
+            return
+        self.launch_export_dialog(batch=batch)
+
+    def launch_export_dialog(self, *, batch=None, whole_database=False):
+        if self._report_export_active():
+            self.export_dialog.raise_()
+            self.export_dialog.activateWindow()
+            return
         if not self._report_database_action_allowed():
             return
         try:
@@ -1658,7 +1841,7 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(ExportDialog):
                 self.export_dialog = self._open_coordinated_window(
                     "export",
-                    lambda snapshot: ExportDialog(self, snapshot.database_file),
+                    lambda snapshot: self._create_report_export_dialog(ExportDialog, snapshot.database_file),
                     context_policy=WindowContextPolicy.KEEP,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                 )
@@ -1667,11 +1850,30 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("export_dialog", self.export_dialog)
                 self.export_dialog.show()
 
-            self.export_dialog.database_change_allowed = self._report_context_change_allowed
+            self.export_dialog.database_change_allowed = self._report_database_action_allowed
+            if hasattr(self.export_dialog, "set_import_batch"):
+                explicit_scope = batch is not None or whole_database
+                if explicit_scope and self.export_dialog.db_file != self.db_file and not (
+                    self.export_dialog._update_database_context(self.db_file)
+                ):
+                    return
+                if whole_database:
+                    self.export_dialog.use_whole_database()
+                latest = self._last_report_import
+                if batch is not None and batch is not latest:
+                    self.export_dialog.set_import_batch(None, select=True)
+                self.export_dialog.set_import_batch(latest, select=batch is not None and batch is latest)
             self.export_dialog.raise_()
             self.export_dialog.activateWindow()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _create_report_export_dialog(self, factory, database):
+        dialog = factory(self, database)
+        self._connect_analysis_history(dialog)
+        dialog.operation_start_allowed = self._report_export_start_allowed
+        dialog.operation_state_changed.connect(self._sync_workflow_next_step)
+        return dialog
 
     def open_about_window(self):
         try:
@@ -1698,6 +1900,7 @@ class MainWindow(QMainWindow):
 
             def create_csv(_snapshot):
                 dialog = IndustrialAnalyticsDialog(self, source_kind=SOURCE_TABULAR_FILE)
+                self._connect_analysis_history(dialog)
                 dialog.setModal(False)
                 dialog.setWindowModality(Qt.WindowModality.NonModal)
                 field = getattr(dialog, "input_file_field", None)
@@ -1733,7 +1936,7 @@ class MainWindow(QMainWindow):
                 self._track_modeless_dialog("industrial_data_dialog", self.industrial_data_dialog)
                 self.industrial_data_dialog.show()
 
-            self.industrial_data_dialog.database_change_allowed = self._report_context_change_allowed
+            self.industrial_data_dialog.database_change_allowed = self._report_database_action_allowed
             self.industrial_data_dialog.raise_()
             self.industrial_data_dialog.activateWindow()
         except Exception as e:
@@ -2090,11 +2293,11 @@ class MainWindow(QMainWindow):
                 context_policy=WindowContextPolicy.KEEP,
                 context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
             )
-            self.characteristic_mapping_dialog.database_change_allowed = self._report_context_change_allowed
+            self.characteristic_mapping_dialog.database_change_allowed = self._report_database_action_allowed
         except Exception as e:
             self.log_and_exit(e)
 
-    def set_db_file(self, db_file):
+    def set_db_file(self, db_file, *, workspace_source=_UNCHANGED_WORKSPACE_SOURCE):
         try:
             if not self._report_selection_change_allowed(db_file, self.db_file, database=True):
                 return False
@@ -2106,7 +2309,7 @@ class MainWindow(QMainWindow):
             self.workspace_notice_label.setVisible(False)
             recovery_result = self._recover_abandoned_realtime_staging(db_file)
             self._export_ready = readiness
-            self.workspace_context.set_database_file(db_file)
+            self._apply_database_location(db_file, workspace_source)
             if db_file and Path(db_file).is_file():
                 self.recent_locations.record("databases", db_file)
                 self._refresh_recent_menus()
@@ -2142,6 +2345,15 @@ class MainWindow(QMainWindow):
             return True
         except Exception as e:
             self.log_and_exit(e)
+
+    def _apply_database_location(self, db_file, workspace_source):
+        if workspace_source is _UNCHANGED_WORKSPACE_SOURCE:
+            self.workspace_context.set_database_file(db_file)
+            return
+        self.workspace_context.update(database_file=db_file, source_directory=workspace_source)
+        if workspace_source and Path(workspace_source).is_dir():
+            self.recent_locations.record("folders", workspace_source)
+            self._refresh_recent_menus()
 
     def _show_previous_database_workflows_notice(self, labels):
         notice = self.workspace_notice_label
@@ -2258,6 +2470,9 @@ class MainWindow(QMainWindow):
         return False
 
     def _report_context_change_allowed(self):
+        if self._report_export_active():
+            self.statusBar().showMessage("Finish or stop the report export before changing its workspace context.", 5000)
+            return False
         if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
             return True
         self.workspace_notice_label.setText("Finish or cancel the report operation before changing its source or database.")
@@ -2266,6 +2481,11 @@ class MainWindow(QMainWindow):
         return False
 
     def _report_database_action_allowed(self):
+        if not self._recipe_allows_report_work():
+            return False
+        if self._report_export_active():
+            self.statusBar().showMessage("Finish or stop the report export before starting another database workflow.", 5000)
+            return False
         if self._reports_workspace is None or self._reports_workspace.can_change_workspace():
             return True
         self.workspace_notice_label.setText("Finish or cancel the report operation before starting another database workflow.")
@@ -2273,8 +2493,28 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.show()
         return False
 
+    def _report_export_active(self):
+        is_active = getattr(getattr(self, "export_dialog", None), "is_export_active", None)
+        return bool(is_active is not None and is_active())
+
+    def _report_export_start_allowed(self, database):
+        if not self._recipe_allows_report_work():
+            return False
+        blockers = self._same_database_workflow_labels(database, exclude_export=True)
+        if self.is_metadata_enrichment_active():
+            blockers.append("metadata enrichment")
+        if self._reports_workspace is not None and not self._reports_workspace.can_change_workspace():
+            blockers.append("Reports")
+        if not blockers:
+            return True
+        detail = f"Finish or close {', '.join(blockers)} before exporting from this database."
+        self.statusBar().showMessage(detail, 5000)
+        return False
+
     def _report_start_allowed(self):
         """Keep existing same-database windows safe without closing their work."""
+        if not self._recipe_allows_report_work():
+            return False
         if getattr(self.export_dialog, "database_context_transition_active", False):
             self.statusBar().showMessage(
                 "Report start was blocked during Export database selection.", 5000
@@ -2284,7 +2524,7 @@ class MainWindow(QMainWindow):
         if not self._pdf_execution_available(from_reports=True):
             blockers.append("metadata enrichment")
         if self.db_file:
-            blockers.extend(self._same_database_workflow_labels())
+            blockers.extend(self._same_database_workflow_labels(allow_idle_export=True))
         if not blockers:
             return True
         self.workspace_notice_label.setText(
@@ -2294,8 +2534,29 @@ class MainWindow(QMainWindow):
         self.workspace_notice_label.show()
         return False
 
-    def _same_database_workflow_labels(self):
+    def _recipe_allows_report_work(self):
+        workspace = getattr(self, "recipe_workspace", None)
+        if workspace is None or not workspace.controller.append_in_progress:
+            return True
+        self.workspace_notice_label.setText("Finish or cancel the recipe that is appending reports first.")
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
+        return False
+
+    def _recipe_append_allowed(self, database):
+        return self._pdf_execution_available() and not self._same_database_workflow_labels(database)
+
+    def _on_recipe_database_appended(self, database):
+        from metroliza.recipes.bindings import paths_alias
+
+        if self._reports_workspace is not None and self.db_file and paths_alias(database, Path(self.db_file)):
+            self._reports_workspace.refresh_review_after_append()
+
+    def _same_database_workflow_labels(self, database=None, *, exclude_export=False, allow_idle_export=False):
         """Collect visible workflow owners of this report database or an unknown one."""
+        from metroliza.recipes.bindings import paths_alias
+
+        database = database or self.db_file
         blockers = []
         for label, dialog in (
             ("Export", self.export_dialog), ("Database editor", self.modifydb_dialog),
@@ -2305,6 +2566,11 @@ class MainWindow(QMainWindow):
         ):
             if dialog is None:
                 continue
+            if label == "Export":
+                can_review = getattr(dialog, "has_open_scope_editors", None)
+                if exclude_export or (allow_idle_export and can_review is not None
+                                      and not self._report_export_active() and not can_review()):
+                    continue
             try:
                 if not dialog.isVisible():
                     continue
@@ -2313,7 +2579,7 @@ class MainWindow(QMainWindow):
             databases = tuple(path for path in (
                 getattr(dialog, "db_file", None), getattr(dialog, "report_db_file", None),
             ) if path)
-            if not databases or any(Path(path).resolve() == Path(self.db_file).resolve() for path in databases):
+            if not databases or (database and any(paths_alias(Path(path), Path(database)) for path in databases)):
                 blockers.append(label)
         return blockers
 

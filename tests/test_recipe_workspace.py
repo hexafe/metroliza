@@ -24,11 +24,65 @@ def test_home_and_catalog_share_one_controller_and_keep_context(tmp_path, monkey
         assert window.recipe_workspace is workspace
         assert workspace.controller is controller
         assert controller.definition.recipe_id == "reports_dashboard_html"
+        assert any(entry.definition.recipe_id == "reports_append_excel_main" for entry in workspace.entries())
         assert window.db_file == original_context
         assert WORKSPACE_SHORTCUTS["home"] == "Ctrl+1"
         assert WORKSPACE_SHORTCUTS["reports"] == "Ctrl+2"
         assert window.navigation_combo.findData("receptury") >= 0
         assert app is QApplication.instance()
+    finally:
+        window.close()
+
+
+def test_append_via_qt_controller_owns_reports_and_refreshes_current_database(
+        tmp_path, qapplication_session, monkeypatch):
+    from PyQt6.QtCore import QEventLoop, QTimer
+
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.recipes.run_state import RunState
+    from metroliza.reports.report_schema import ensure_report_schema
+    from tests.test_recipe_real_flows import _write_complete_reports
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    preferences = UiPreferences(QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat))
+    window = MainWindow("test", None, ui_preferences=preferences)
+    source = tmp_path / "input"
+    output, database = tmp_path / "result.xlsx", tmp_path / "existing.db"
+    _write_complete_reports(source)
+    ensure_report_schema(str(database))
+    try:
+        assert window.set_directory(str(source))
+        assert window.set_db_file(str(database))
+        refreshed = []
+        monkeypatch.setattr(window.reports_workspace, "refresh_review_after_append", lambda: refreshed.append(True))
+        window._launch_recipe()
+        workspace = window.recipe_workspace
+        row = next(i for i, entry in enumerate(workspace.entries())
+                   if entry.definition.recipe_id == "reports_append_excel_main")
+        workspace.library.list.setCurrentRow(row)
+        workspace.library.run_button.click()
+        controller = workspace.controller
+        assert workspace.run_page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert workspace.run_page.fields[ParameterKey.EXISTING_DATABASE][0].text() == str(database)
+        assert controller.prepare({ParameterKey.OUTPUT_FILE: str(output)})
+
+        loop = QEventLoop()
+        timeout = QTimer()
+        timeout.setSingleShot(True)
+        timeout.timeout.connect(loop.quit)
+        controller.idle.connect(loop.quit)
+
+        assert controller.start()
+        assert controller.append_in_progress and not window._report_start_allowed()
+        timeout.start(15_000)
+        loop.exec()
+        assert timeout.isActive(), "The native append task did not retire."
+        timeout.stop()
+        assert controller.last_record.state is RunState.COMPLETED
+        assert not controller.busy and output.is_file()
+        assert [workspace.quick.result_actions.itemAt(i).widget().text()
+                for i in range(workspace.quick.result_actions.count())] == ["Otwórz Excel", "Pokaż w folderze"]
+        assert refreshed == [True] and window._report_start_allowed()
     finally:
         window.close()
 
@@ -48,18 +102,17 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         copied = copy_recipe(REPORTS_EXCEL_MAIN, builtin_binding(REPORTS_EXCEL_MAIN,
             str(tmp_path / "input"), str(tmp_path / "first.xlsx")), name="Original favorite")
         first = workspace.store.save(copied.definition, copied.binding, expected_revision=None)
-        workspace.library.favorites = {first.definition.recipe_id}
-        workspace._favorites(workspace.library.favorites)
-        assert workspace.quick.favorite_buttons.itemAt(0).widget().text() == "Original favorite"
+        assert workspace.quick.favorite_buttons.itemAt(0).widget().text() != "Original favorite"
         workspace.edit(first)
         editor = workspace._editors[0]
+        editor.pin_on_save.setChecked(True)
         editor.name.setText("Renamed favorite")
         editor.controls[ParameterKey.OUTPUT_FILE][2].setText(str(tmp_path / "updated.xlsx"))
         next(button for button in editor.findChildren(QPushButton)
-             if button.text() == "Save revision").click()
+             if button.text() == "Zapisz recepturę").click()
         current = workspace.store.load(first.definition.recipe_id)
         assert current.binding.revision == first.binding.revision + 1
-        favorite = workspace.quick.favorite_buttons.itemAt(0).widget()
+        favorite = workspace.quick.favorite_buttons.itemAt(2).widget()
         assert favorite.text() == "Renamed favorite"
         favorite.click()
         assert workspace.controller.binding == current.binding
@@ -67,6 +120,62 @@ def test_saved_favorite_editor_refreshes_name_and_launches_latest_binding(tmp_pa
         assert app is QApplication.instance()
     finally:
         window.close()
+
+
+def test_builtin_pins_keep_order_after_reopening_and_launch_with_enter(qapplication_session, tmp_path):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    preferences = UiPreferences(QSettings(str(tmp_path / "home-ui.ini"), QSettings.Format.IniFormat))
+    preferences.set("presentation/navigation/restore_last_page", False)
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        window._launch_recipe()
+        library = window.recipe_workspace.library
+        library.list.setCurrentRow(1)
+        library.move_up_button.click()
+        QTest.keyClick(library.list, Qt.Key.Key_Return)
+        assert window.recipe_workspace.stack.currentWidget() is window.recipe_workspace.run_page
+    finally:
+        window.close()
+
+    reopened = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert not hasattr(reopened, "recipe_workspace")
+        buttons = reopened.recipe_home.favorite_buttons
+        assert [buttons.itemAt(i).widget().text() for i in range(buttons.count())] == [
+            "Raporty → Dashboard HTML", "Raporty → Excel Main",
+        ]
+        first_view = reopened.recipe_home
+        buttons.itemAt(0).widget().click()
+        assert reopened.recipe_workspace.quick is first_view
+    finally:
+        reopened.close()
+
+
+@pytest.mark.parametrize("legacy_pins", [[], ["legacy-custom"]])
+def test_upgrading_favorites_keeps_quick_flows_until_explicitly_unpinned(
+    qapplication_session, tmp_path, legacy_pins,
+):
+    preferences = UiPreferences(QSettings(str(tmp_path / "favorites.ini"), QSettings.Format.IniFormat))
+    preferences.set("presentation/recipes/favorites", legacy_pins)
+    preferences.set("presentation/navigation/restore_last_page", False)
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert window.recipe_home.favorite_ids == [
+            "reports_excel_main", "reports_dashboard_html", *legacy_pins,
+        ]
+        assert window.recipe_home.favorite_buttons.count() == 2
+        window._ensure_recipe_workspace()._favorites([])
+    finally:
+        window.close()
+
+    reopened = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        assert reopened.recipe_home.favorite_ids == []
+        assert reopened.recipe_home.favorite_buttons.count() == 0
+    finally:
+        reopened.close()
 
 
 @pytest.mark.parametrize("namespace", ["base", "generation"])
@@ -127,4 +236,62 @@ def test_owned_recipe_vetoes_dangerous_database_rebind_before_inspection_but_all
     finally:
         if runner is not None:
             runner.cancel()
+        window.close()
+
+
+def test_pin_resumes_form_and_restart_uses_saved_defaults(qapplication_session, tmp_path):
+    from metroliza.recipes.contracts import ParameterKey
+    preferences = UiPreferences(QSettings(str(tmp_path / "draft.ini"), QSettings.Format.IniFormat))
+    window = MainWindow("test", None, ui_preferences=preferences)
+    try:
+        favorite = window.recipe_home.favorite_buttons.itemAt(0).widget()
+        favorite.click()
+        page = window.recipe_workspace.run_page
+        field = page.fields[ParameterKey.OUTPUT_FILE][0]
+        default = field.text()
+        field.setText(str(tmp_path / "draft.xlsx"))
+        page.mode_combo.setCurrentIndex(1 - page.mode_combo.currentIndex())
+        mode = page.mode_combo.currentData()
+        window._show_workspace_page("home")
+        favorite.click()
+        assert window.recipe_workspace.stack.currentWidget() is page
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == str(tmp_path / "draft.xlsx")
+        assert page.mode_combo.currentData() == mode
+        assert not page.restart_button.isHidden()
+        page.restart_button.click()
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == default
+        assert page.restart_button.isHidden()
+    finally:
+        window.close()
+
+
+def test_home_preserves_append_form_after_start_was_blocked(qapplication_session, tmp_path):
+    from metroliza.recipes.contracts import ParameterKey
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    source = tmp_path / "raporty"
+    source.mkdir()
+    db = tmp_path / "existing.sqlite"
+    ensure_report_schema(str(db))
+    window = MainWindow("test", None, ui_preferences=UiPreferences(
+        QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat)))
+    try:
+        assert window.set_db_file(str(db))
+        window.launch_export_dialog()
+        window._launch_recipe("reports_append_excel_main")
+        workspace = window.recipe_workspace
+        page = workspace.run_page
+        page.fields[ParameterKey.INPUT_FOLDER][0].setText(str(source))
+        output = str(tmp_path / "result.xlsx")
+        page.fields[ParameterKey.OUTPUT_FILE][0].setText(output)
+        failures = []
+        workspace.controller.failed.connect(failures.append)
+        page.start_button.click()
+        assert failures == ["append_busy"] and not workspace.controller.busy
+        window._show_workspace_page("home")
+        window._launch_recipe("reports_append_excel_main")
+        assert page.fields[ParameterKey.INPUT_FOLDER][0].text() == str(source)
+        assert page.fields[ParameterKey.OUTPUT_FILE][0].text() == output
+        assert not page.restart_button.isHidden()
+    finally:
         window.close()

@@ -23,11 +23,26 @@ class ResultCode(str, Enum):
     CANCELLED = "cancelled"
     EXPORT_FAILED = "export_failed"
     OUTPUT_MISSING = "output_missing"
+    WORKBOOK_NOT_PUBLISHED = "workbook_not_published"
+    ANALYTICS_WARNINGS = "analytics_warnings"
+    GROUPING_RULE_UNAVAILABLE = "grouping_rule_unavailable"
+    MANUAL_GROUPING_RECAPTURE_REQUIRED = "manual_grouping_recapture_required"
     UNSUPPORTED = "unsupported"
     INVALID_PLAN = "invalid_plan"
+    DATABASE_UNAVAILABLE = "database_unavailable"
     PARTIAL_IMPORT = "partial_import"
     DUPLICATES = "duplicates"
     BUSY = "busy"
+
+
+class PreparationPhase(str, Enum):
+    SCAN = "scan"
+    METADATA = "metadata"
+    OCR = "ocr"
+
+
+def _ignore_phase(_phase: PreparationPhase) -> None:
+    pass
 
 
 @dataclass(frozen=True)
@@ -37,6 +52,7 @@ class StepContext:
     step_id: str
     cancelled: Callable[[], bool]
     progress: Callable[[int, int], None]
+    set_phase: Callable[[PreparationPhase], None] = _ignore_phase
 
 
 @dataclass(frozen=True)
@@ -47,6 +63,9 @@ class StepResult:
     rejected_count: int = 0
     warnings: tuple[ResultCode, ...] = ()
     artifact_verified: bool = False
+    duplicate_count: int = 0
+    dashboard_assets_path: str = field(default="", repr=False, compare=False)
+    report_folder_revision: str | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -57,6 +76,8 @@ class PreflightResult:
     decision_id: str = ""
     summary: tuple[str, ...] = field(default=(), repr=False)
     review: object | None = field(default=None, repr=False, compare=False)
+    # Reports imports can keep their review because preparation revalidates before writing.
+    recheck_on_continue: bool = True
 
 
 class ReportsPorts(Protocol):

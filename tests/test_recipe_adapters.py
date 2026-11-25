@@ -10,7 +10,7 @@ from metroliza.industrial.industrial_analytics_state import (
 )
 from metroliza.recipes.bindings import resolve_plan
 from metroliza.recipes.contracts import ParameterKey, RecipeError
-from metroliza.recipes.ports import StepContext, StepStatus
+from metroliza.recipes.ports import ResultCode, StepContext, StepStatus
 from metroliza.tabular.contracts import GroupingAssignment
 from metroliza.recipes.tabular_adapter import AnalyticsRecipePorts, capture, resolve
 
@@ -101,6 +101,64 @@ def test_type_drift_and_stale_manual_row_membership_are_rejected(tmp_path):
         resolve(plan)
 
 
+def test_manual_grouping_rejects_same_size_same_mtime_replacement_after_load(tmp_path):
+    import os
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    header = "Label,Length mm\n"
+    path.write_text(header + "AA,1\nBB,2\n")
+    loaded = load_tabular_analytics_file(path)
+    request = replace(request_for(path, output), tabular_load_result=loaded,
+                      grouping_df=(GroupingAssignment(group="A", report_id=1),))
+    try:
+        item = capture(request)
+        plan = resolve_plan(item.definition, item.binding)
+        assert resolve(plan).grouping_df == request.grouping_df
+        before = path.stat()
+        replacement = tmp_path / "replacement.csv"
+        replacement.write_text(header + "BB,2\nAA,1\n")
+        os.utime(replacement, ns=(before.st_atime_ns, before.st_mtime_ns))
+        os.replace(replacement, path)
+        after = path.stat()
+        assert (before.st_size, before.st_mtime_ns) == (after.st_size, after.st_mtime_ns)
+        with pytest.raises(RecipeError, match="stale_manual_grouping"):
+            capture(request)
+        record = RecipeRunner(AnalyticsRecipePorts()).start(plan)
+        assert record.state is RunState.FAILED
+        assert record.code is ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED
+        assert not output.exists()
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_legacy_manual_recipe_is_readable_and_requires_explicit_recapture(tmp_path):
+    import json
+    from metroliza.recipes.storage import RecipeStore
+
+    data = tmp_path / "input"
+    data.mkdir()
+    path, output = data / "table.csv", tmp_path / "result.html"
+    source(path)
+    request = replace(request_for(path, output), grouping_df=(GroupingAssignment(group="A", report_id=1),))
+    item = capture(request)
+    values = dict(item.binding.values)
+    payload = json.loads(values[ParameterKey.ANALYTICS_REQUEST])
+    payload["grouping_source"] = payload["grouping_source"][:3]
+    values[ParameterKey.ANALYTICS_REQUEST] = json.dumps(payload)
+    legacy = replace(item.binding, values=tuple(values.items()))
+    store = RecipeStore(tmp_path / "private")
+    saved = store.save(item.definition, legacy, expected_revision=None)
+    assert store.list() == (saved,)
+    plan = resolve_plan(saved.definition, saved.binding)
+    with pytest.raises(RecipeError, match="manual_grouping_needs_review"):
+        resolve(plan)
+    review = AnalyticsRecipePorts().preflight(plan, ctx(plan))
+    assert not review.ready and review.code is ResultCode.MANUAL_GROUPING_RECAPTURE_REQUIRED
+    assert not output.exists()
+
+
 def test_real_native_tabular_flow_writes_verified_pair_and_retains_numeric_scope(tmp_path):
     path = tmp_path / "table.csv"
     source(path)
@@ -117,6 +175,256 @@ def test_real_native_tabular_flow_writes_verified_pair_and_retains_numeric_scope
     assert verified.artifact_verified
     assert not ports._loaded
     ports.finish(plan)
+
+
+def test_multifile_recipe_roundtrips_every_source_through_native_runner(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.recipes.storage import RecipeStore
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_files
+
+    data = tmp_path / "data"
+    data.mkdir()
+    first, second = data / "day, one.csv", data / "day two.csv"
+    for path in (first, second):
+        source(path)
+    with second.open("a", encoding="utf-8") as stream:
+        stream.write("\n2026-11-15 10:04:00,R2,7.5\n")
+    output = tmp_path / "result.html"
+    loaded = load_tabular_analytics_files((first, second))
+    try:
+        item = capture(replace(request_for(first, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    store = RecipeStore(tmp_path / "private")
+    store.save(item.definition, item.binding, expected_revision=None)
+    saved = store.load(item.definition.recipe_id)
+    assert saved.binding.value(ParameterKey.SOURCE_FILES) == (str(first), str(second))
+
+    class RecordingPorts(AnalyticsRecipePorts):
+        def _run(self, request, loaded, consents, cancelled, context):
+            self.loaded_count = loaded.row_count
+            self.loaded_files = loaded.source_files
+            return super()._run(request, loaded, consents, cancelled, context)
+
+    ports = RecordingPorts()
+    plan = resolve_plan(saved.definition, saved.binding)
+    record = RecipeRunner(ports).start(plan)
+    assert ports.loaded_files == (str(first), str(second))
+    assert ports.loaded_count == 9
+    assert record.state is RunState.COMPLETED
+    assert output.is_file() and output.with_suffix(".xlsx").is_file()
+
+
+@pytest.mark.parametrize("old_dashboard", [None, b"previous complete dashboard"])
+def test_workbook_publish_failure_preserves_prior_output_bytes(tmp_path, monkeypatch, old_dashboard):
+    from pathlib import Path
+
+    from metroliza.exporting.output_publication import publish_output
+    from metroliza.industrial import tabular_output_publication
+    from metroliza.recipes import tabular_adapter
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    old_workbook = b"previous complete workbook"
+    workbook.write_bytes(old_workbook)
+    if old_dashboard is not None:
+        output.write_bytes(old_dashboard)
+    entry = capture(request_for(path, output))
+    plan = resolve_plan(entry.definition, entry.binding)
+    attempts = []
+
+    def failed_publication(staged, target, **kwargs):
+        if Path(target) == workbook:
+            attempts.append(Path(staged).is_file())
+            raise PermissionError("Excel is holding the file")
+        return publish_output(staged, target, **kwargs)
+
+    monkeypatch.setattr(tabular_adapter, "publish_output", failed_publication, raising=False)
+    monkeypatch.setattr(tabular_output_publication, "publish_output", failed_publication)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    assert runner.start(plan).state is RunState.REQUIRES_DECISION
+    result = runner.resume("continue")
+    assert attempts == [True]
+    assert (output.read_bytes() if output.exists() else None) == old_dashboard
+    assert workbook.read_bytes() == old_workbook
+    assert (result.state, result.code) == (RunState.FAILED, ResultCode.EXPORT_FAILED)
+    assert not list(tmp_path.glob("*generation-*"))
+    assert not list(tmp_path.glob(".mza-*"))
+    assert not list(tmp_path.glob(".metroliza-previous-*"))
+
+
+@pytest.mark.parametrize("late_collision", [False, True])
+def test_recipe_rolls_back_workbook_when_dashboard_cannot_commit(tmp_path, monkeypatch, late_collision):
+    from pathlib import Path
+
+    from metroliza.industrial import tabular_output_publication as publication
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    workbook.write_bytes(b"previous workbook")
+    output.write_bytes(b"previous dashboard")
+    old_assets = tmp_path / "result_assets"
+    old_assets.mkdir()
+    (old_assets / "previous.js").write_bytes(b"previous resources")
+    entry = capture(request_for(path, output))
+    real_publish = publication.publish_output
+    attempts = []
+
+    def failed_dashboard(temporary, target, **kwargs):
+        if Path(target) == output and not attempts:
+            attempts.append(workbook.read_bytes().startswith(b"PK"))
+            if not late_collision:
+                raise PermissionError("Browser is holding the dashboard")
+            output.write_bytes(b"another writer's dashboard")
+        return real_publish(temporary, target, **kwargs)
+
+    monkeypatch.setattr(publication, "publish_output", failed_dashboard)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    assert runner.start(resolve_plan(entry.definition, entry.binding)).state is RunState.REQUIRES_DECISION
+    result = runner.resume("continue")
+    expected = ResultCode.REVIEW_REQUIRED if late_collision else ResultCode.EXPORT_FAILED
+    assert (result.state, result.code) == (RunState.FAILED, expected)
+    assert attempts == [True]
+    assert workbook.read_bytes() == b"previous workbook"
+    assert output.read_bytes() == (b"another writer's dashboard" if late_collision else b"previous dashboard")
+    assert (old_assets / "previous.js").read_bytes() == b"previous resources"
+    assert not list(tmp_path.glob("*generation-*"))
+    assert not list(tmp_path.glob(".mza-*"))
+    assert not list(tmp_path.glob(".metroliza-previous-*"))
+
+    if late_collision:
+        assert runner.start(resolve_plan(entry.definition, entry.binding)).state is RunState.REQUIRES_DECISION
+        assert runner.resume("new_copy").decision == "copy_ready"
+        copied = runner.resume("continue")
+        assert copied.state is RunState.COMPLETED
+        copy = runner.plan.output_file
+        assert copy != output
+        assert copy.is_file() and copy.with_suffix(".xlsx").is_file()
+        assert output.read_bytes() == b"another writer's dashboard"
+        assert workbook.read_bytes() == b"previous workbook"
+
+
+@pytest.mark.parametrize("previous_workbook", [False, True])
+def test_missing_staged_workbook_reports_partial_only_without_prior_counterpart(
+    tmp_path, monkeypatch, previous_workbook,
+):
+    from pathlib import Path
+
+    from metroliza.recipes import tabular_adapter
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    workbook = output.with_suffix(".xlsx")
+    if previous_workbook:
+        workbook.write_bytes(b"previous complete workbook")
+        output.write_bytes(b"previous complete dashboard")
+    entry = capture(request_for(path, output))
+    plan = resolve_plan(entry.definition, entry.binding)
+    native_render = tabular_adapter.run_tabular_file_analytics
+
+    def missing_workbook(**kwargs):
+        result = native_render(**kwargs)
+        Path(result.workbook_path).unlink()
+        return replace(result, workbook_path="")
+
+    monkeypatch.setattr(tabular_adapter, "run_tabular_file_analytics", missing_workbook)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    result = runner.start(plan)
+    if previous_workbook:
+        assert result.state is RunState.REQUIRES_DECISION
+        result = runner.resume("continue")
+        assert (result.state, result.code) == (RunState.FAILED, ResultCode.EXPORT_FAILED)
+        assert output.read_bytes() == b"previous complete dashboard"
+        assert workbook.read_bytes() == b"previous complete workbook"
+    else:
+        assert (result.state, result.code) == (RunState.PARTIAL, ResultCode.WORKBOOK_NOT_PUBLISHED)
+        assert output.is_file() and not workbook.exists()
+
+
+def test_html_only_recipe_does_not_require_or_replace_the_unselected_workbook(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+
+    path, output = tmp_path / "table.csv", tmp_path / "result.html"
+    source(path)
+    unrelated = output.with_suffix(".xlsx")
+    unrelated.write_bytes(b"existing unrelated workbook")
+    entry = capture(replace(request_for(path, output), output_workbook_file=""))
+    plan = resolve_plan(entry.definition, entry.binding)
+    result = RecipeRunner(AnalyticsRecipePorts()).start(plan)
+    assert result.state is RunState.COMPLETED and result.code is ResultCode.SUCCESS
+    assert output.is_file()
+    assert unrelated.read_bytes() == b"existing unrelated workbook"
+
+
+def test_recipe_keeps_explicit_column_types_and_rejects_a_missing_override(tmp_path):
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+
+    path, output = tmp_path / "measurements.csv", tmp_path / "result.html"
+    columns = "Batch code,Length mm\n"
+    path.write_text(columns + "00123,1.2\n124,broken\n125,1.3\n", encoding="utf-8")
+    types = {("Batch code", 1): "text", ("Length mm", 1): "number"}
+    loaded = load_tabular_analytics_file(path, column_types=types)
+    try:
+        item = capture(replace(request_for(path, output), tabular_load_result=loaded))
+    finally:
+        cleanup_tabular_load_result(loaded)
+    assert item.binding.value(ParameterKey.COLUMN_TYPES)
+    plan = resolve_plan(item.definition, item.binding)
+    ports = AnalyticsRecipePorts()
+    try:
+        assert ports.preflight(plan, ctx(plan)).ready
+        assert ports.execute(plan.definition.steps[0], plan, ctx(plan)).status is StepStatus.COMPLETED
+        assert ports._loaded[plan.run_id].column_types == types
+    finally:
+        ports.finish(plan)
+
+    path.write_text("Other code,Length mm\n00123,1.2\n124,broken\n125,1.3\n", encoding="utf-8")
+    assert ports.preflight(plan, ctx(plan)).ready
+    assert ports.execute(plan.definition.steps[0], plan, ctx(plan)).code is ResultCode.INVALID_PLAN
+    ports.finish(plan)
+
+
+def test_reusable_grouping_rule_recounts_new_rows_and_requires_explicit_header_mapping(tmp_path):
+    from metroliza.recipes.runner import RecipeRunner, RunState
+    from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result, load_tabular_analytics_file
+    import openpyxl
+
+    first, next_week, renamed = (tmp_path / f"{name}.csv" for name in ("first", "next", "renamed"))
+    first.write_text("Line name,Length mm\nA,1\nB,2\nA,3\n")
+    next_week.write_text("Line name,Length mm\nB,6\nC,10\nB,2\nC,8\n")
+    renamed.write_text("Line-name,Length mm\nB,6\nC,10\nB,2\nC,8\n")
+    loaded = load_tabular_analytics_file(first)
+    try:
+        request = replace(request_for(first, tmp_path / "initial.html"), tabular_load_result=loaded,
+                          aggregation_state=ProductionAggregationState(group_fields=("line_name",)))
+        item = capture(request)
+    finally:
+        cleanup_tabular_load_result(loaded)
+    runner = RecipeRunner(AnalyticsRecipePorts())
+    output = tmp_path / "next.html"
+    record = runner.start(bind_source(item, next_week, output))
+    assert record.state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}
+    workbook = openpyxl.load_workbook(output.with_suffix(".xlsx"), read_only=True)
+    try:
+        header, *rows = list(workbook["Aggregates"].values)
+        by_group = {row[header.index("line_name")]:
+                    (row[header.index("raw_row_count")], row[header.index("length_mm__mean")]) for row in rows}
+        assert by_group == {"B": (2, 4), "C": (2, 9)}
+    finally:
+        workbook.close()
+
+    invalid = tmp_path / "invalid.html"
+    unavailable = runner.start(bind_source(item, renamed, invalid))
+    assert unavailable.state is RunState.FAILED and unavailable.code is ResultCode.GROUPING_RULE_UNAVAILABLE
+    assert not invalid.exists()
+    remapped = runner.start(bind_source(item, renamed, invalid, remapping=("line_name=line_name",)))
+    assert remapped.state in {RunState.COMPLETED, RunState.COMPLETED_WITH_WARNINGS}
+    assert invalid.exists()
 
 
 def test_industrial_uses_only_existing_local_cache_and_preserves_filters(tmp_path):
@@ -263,7 +571,8 @@ def test_analytics_new_copy_reserves_optional_workbook_and_repeat_rechecks_full_
     decision = ports.preflight(plan, ctx(plan))
     assert decision.requires_decision and not decision.ready
     assert ports.approve(plan, "continue")
-    assert ports._consents[plan.run_id][0].path == plan.output_file.with_suffix(".xlsx")
+    assert decision.review.conflicts == (plan.output_file.with_suffix(".xlsx"),)
+    assert ports._consents[plan.run_id].consents[0].path == plan.output_file.with_suffix(".xlsx")
     assert occupied_workbook.read_bytes() == b"previous complete workbook"
     ports.finish(plan)
     without_workbook = capture(replace(request_for(path, tmp_path / "result.html"), output_workbook_file=""))

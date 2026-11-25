@@ -477,6 +477,10 @@ assert owner._edit_thread is None and owner._edit_progress is None
 assert not detached_threads.running_threads()
 assert not detached_threads._DEFERRED
 owner.close()
+# The standalone fixture has no window host. Release its owner synchronously
+# after checking the workers, since Qt's event loop has already stopped.
+sip.delete(owner)
+assert sip.isdeleted(owner)
 print('SAVE GUI CLEANUP AFTER LOOP PASS', destroyed, flush=True)
 '''
     result = subprocess.run([sys.executable, '-c', script, str(tmp_path / 'after-loop.sqlite')],

@@ -1,7 +1,7 @@
 """Typed recipe cards and local parameter controls; no executing editor expressions."""
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QMessageBox, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -9,7 +9,11 @@ from PyQt6.QtWidgets import (
 
 from metroliza.recipes.contracts import ParameterKey, ParameterMode, ParameterType, StepKind
 from metroliza.recipes.editor_service import RecipeEditorService
-from metroliza.recipes.report_configuration_adapter import GROUPING_COLUMNS
+from metroliza.recipes.validation import DATE_KEYS, RecipeDateError, normalize_recipe_dates
+from metroliza.ui.recipe_labels import (
+    CHOICE_LABELS, DATE_HINT, GROUP_LABELS, MODE_LABELS, PARAMETER_LABELS, STEP_LABELS,
+    RecipeSourceFilesEdit, choice_editor, date_error_message, date_hint, format_parameter_list, parse_parameter_list,
+)
 
 
 class RecipeEditor(QDialog):
@@ -18,73 +22,120 @@ class RecipeEditor(QDialog):
     def __init__(self, stored, store, parent=None):
         super().__init__(parent)
         self._widgets_dirty = False
+        self.date_hints = {}
         self.store = store
         self.service = RecipeEditorService(stored)
         if stored.definition.builtin:
             self.service.duplicate()
-        self.setWindowTitle("Recipe editor")
+        self.setWindowTitle("Edytor receptury")
         self.resize(720, 650)
         layout = QVBoxLayout(self)
         self.name = QLineEdit(self.service.current.binding.name)
-        layout.addWidget(QLabel("Private recipe name"))
+        layout.addWidget(QLabel("Nazwa receptury"))
         layout.addWidget(self.name)
         self.status = QLabel()
         layout.addWidget(self.status)
         self.cards = QListWidget()
-        self.cards.setAccessibleName("Typed recipe steps")
+        self.cards.setAccessibleName("Kroki receptury")
         layout.addWidget(self.cards)
-        self.dates = QCheckBox("Filter by dates (ask at start)")
+        self.dates = QCheckBox("Wybieraj zakres dat przy uruchomieniu")
         self.dates.setChecked(any(p.key is ParameterKey.DATE_FROM
                                  for p in self.service.current.definition.parameters))
-        self.html = QCheckBox("Also produce HTML dashboard")
-        self.html.setChecked(any(s.kind is StepKind.EXPORT_HTML for s in stored.definition.steps))
-        self.groups = QLineEdit(", ".join(self.service.current.binding.value(ParameterKey.GROUPING_RULES, ())))
-        self.groups.setPlaceholderText(", ".join(sorted(GROUPING_COLUMNS)))
+        self.html = QCheckBox("Utwórz także raport HTML")
+        self._optional_html = any(s.kind is StepKind.EXPORT_HTML for s in stored.definition.steps)
+        self.groups = QLineEdit()
+        self.groups.setPlaceholderText(", ".join(GROUP_LABELS.values()))
         self.report_controls = QWidget()
         report_layout = QFormLayout(self.report_controls)
         report_layout.addRow(self.dates)
-        report_layout.addRow("Group by columns", self.groups)
+        self.group_mode = QComboBox()
+        for mode in (ParameterMode.FIXED, ParameterMode.PROMPT):
+            self.group_mode.addItem(MODE_LABELS[mode], mode)
+        self.group_mode.setAccessibleName("Kolumny grupowania — sposób ustawiania")
+        group_row = QHBoxLayout()
+        group_row.addWidget(self.groups)
+        group_row.addWidget(self.group_mode)
+        report_layout.addRow("Grupuj według", group_row)
+        self.groups.textChanged.connect(self._update_group_options)
+        self.group_mode.activated.connect(self._mark_modified)
         report_layout.addRow(self.html)
-        configure = QPushButton("Apply Reports steps")
-        configure.clicked.connect(self._configure)
-        report_layout.addRow(configure)
         layout.addWidget(self.report_controls)
-        self.report_controls.setVisible(any(s.kind in {StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE}
-                                           for s in stored.definition.steps))
+        kinds = {step.kind for step in stored.definition.steps}
+        self.report_controls.setVisible(bool(kinds & {StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE}))
+        self._has_excel = StepKind.EXPORT_MAIN in kinds
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         layout.addWidget(self.scroll)
         self.preview_label = QLabel()
         self.preview_label.setWordWrap(True)
         layout.addWidget(self.preview_label)
+        self.pin_on_save = QCheckBox("Przypnij do Home po zapisaniu")
+        layout.addWidget(self.pin_on_save)
         actions = QHBoxLayout()
-        preview = QPushButton("Preview plan")
+        preview = QPushButton("Podgląd")
         preview.clicked.connect(self._preview)
-        save = QPushButton("Save revision")
+        save = QPushButton("Zapisz recepturę")
         save.clicked.connect(self._save)
-        save_new = QPushButton("Save as new")
+        save_new = QPushButton("Zapisz jako nową")
         save_new.clicked.connect(lambda: self._save(as_new=True))
         for button in (preview, save, save_new):
             actions.addWidget(button)
         layout.addLayout(actions)
         self.name.textEdited.connect(self._mark_modified)
         self.dates.toggled.connect(self._mark_modified)
-        self.html.toggled.connect(self._mark_modified)
+        self.html.toggled.connect(self._select_optional_html)
         self.groups.textEdited.connect(self._mark_modified)
         self._refresh()
 
     def _mark_modified(self, *_args):
         self._widgets_dirty = True
-        self.status.setText("Modified — unsaved local changes")
+        self.status.setText("Niezapisane zmiany")
+        for hint in self.date_hints.values():
+            hint.setText(DATE_HINT)
+
+    def _select_optional_html(self, checked):
+        self._optional_html = checked
+        self._mark_modified()
+
+    def _update_group_options(self):
+        grouped = bool(parse_parameter_list(ParameterKey.GROUPING_RULES, self.groups.text()))
+        self.group_mode.setEnabled(grouped)
+        self.html.setEnabled(self._has_excel and not grouped)
+        self.html.setText("Raport HTML jest wymagany do grupowania" if grouped else "Utwórz także raport HTML")
+        with QSignalBlocker(self.html):
+            self.html.setChecked(grouped or not self._has_excel or self._optional_html)
+
+    def _parameter_editor(self, spec, value):
+        if spec.key is ParameterKey.SOURCE_FILES:
+            edit = RecipeSourceFilesEdit(value or ())
+            edit.paths_changed.connect(self._mark_modified)
+        elif spec.key in CHOICE_LABELS:
+            edit = choice_editor(spec.key, value)
+            edit.currentIndexChanged.connect(self._mark_modified)
+        else:
+            edit = QLineEdit(", ".join(value) if type(value) is tuple else str(value))
+            edit.textEdited.connect(self._mark_modified)
+        return edit
 
     def _refresh(self):
         self.cards.clear()
         for step in self.service.current.definition.steps:
-            self.cards.addItem(f"{step.kind.value}: {step.input_kind.value} → {step.output_kind.value}")
+            self.cards.addItem(STEP_LABELS[step.kind])
+        current = self.service.current
+        self.groups.setText(format_parameter_list(
+            ParameterKey.GROUPING_RULES, current.binding.value(ParameterKey.GROUPING_RULES, ()),
+        ))
+        group_mode = next((p.mode for p in current.definition.parameters if p.key is ParameterKey.GROUPING_RULES),
+                          ParameterMode.FIXED)
+        self.group_mode.setCurrentIndex(self.group_mode.findData(group_mode))
+        self._update_group_options()
         widget = QWidget()
         form = QFormLayout(widget)
         self.controls = {}
+        self.date_hints = {}
         for spec in self.service.current.definition.parameters:
+            if spec.key is ParameterKey.GROUPING_RULES and not self.report_controls.isHidden():
+                continue  # Managed by the single report grouping field above.
             row = QWidget()
             line = QHBoxLayout(row)
             mode = QComboBox()
@@ -92,12 +143,12 @@ class RecipeEditor(QDialog):
             if spec.key is ParameterKey.DATABASE_FILE:
                 modes.append(ParameterMode.DERIVED)
             for value in modes:
-                mode.addItem(value.value, value)
+                mode.addItem(MODE_LABELS[value], value)
             mode.setCurrentIndex(modes.index(spec.mode))
             value = self.service.current.binding.value(spec.key, "")
-            edit = QLineEdit(", ".join(value) if type(value) is tuple else str(value))
+            edit = self._parameter_editor(spec, value)
             if spec.key in {ParameterKey.EXPORT_OPTIONS, ParameterKey.FILTER_VALUES,
-                            ParameterKey.ANALYTICS_REQUEST}:
+                            ParameterKey.ANALYTICS_REQUEST, ParameterKey.COLUMN_TYPES}:
                 # Captured typed configuration remains exact; no raw JSON editor.
                 edit.setReadOnly(True)
                 edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -105,13 +156,23 @@ class RecipeEditor(QDialog):
             mode.currentIndexChanged.connect(lambda _index, m=mode, e=edit:
                 e.setEnabled(m.currentData() is not ParameterMode.DERIVED))
             mode.currentIndexChanged.connect(self._mark_modified)
-            edit.textEdited.connect(self._mark_modified)
             line.addWidget(mode)
             line.addWidget(edit)
-            form.addRow(spec.key.value, row)
+            if isinstance(edit, RecipeSourceFilesEdit):
+                browse = QPushButton("Wybierz pliki…")
+                browse.clicked.connect(edit.browse)
+                line.addWidget(browse)
+            form.addRow(PARAMETER_LABELS[spec.key], row)
+            if spec.key in DATE_KEYS:
+                hint = date_hint(edit)
+                self.date_hints[spec.key] = hint
+                form.addRow(hint)
+            mode.setAccessibleName(PARAMETER_LABELS[spec.key] + " — sposób ustawiania")
+            edit.setAccessibleName(PARAMETER_LABELS[spec.key])
             self.controls[spec.key] = (spec, mode, edit)
         self.scroll.setWidget(widget)
-        self.status.setText("Modified" if self.service.modified else "Saved")
+        self.status.setText("Niezapisane zmiany" if self.service.modified or not current.binding.revision
+                            else "Zapisano recepturę")
 
     def _collect(self):
         # Transactional editor changes: a bad control must not retain half an edit.
@@ -120,43 +181,67 @@ class RecipeEditor(QDialog):
             self.service.rename(self.name.text())
             for key, (spec, mode, edit) in self.controls.items():
                 self.service.set_mode(key, mode.currentData())
+                if isinstance(edit, QComboBox):
+                    if edit.currentIndex() >= 0:
+                        self.service.set_value(key, edit.currentData())
+                    continue
+                if isinstance(edit, RecipeSourceFilesEdit):
+                    self.service.set_value(key, edit.paths)
+                    continue
                 if edit.isReadOnly() or mode.currentData() is ParameterMode.DERIVED:
                     continue
-                text = edit.text()
-                if spec.type is ParameterType.STRINGS:
-                    value = tuple(v.strip() for v in text.split(",") if v.strip())
-                elif spec.type is ParameterType.BOOLEAN:
-                    if text.lower() not in {"true", "false"}:
-                        raise ValueError("boolean_required")
-                    value = text.lower() == "true"
-                elif spec.type is ParameterType.INTEGER:
-                    value = int(text)
-                elif spec.type is ParameterType.NUMBER:
-                    value = float(text)
-                else:
-                    value = text
+                self.service.set_value(key, self._field_value(spec.type, edit.text()))
+            if not self.report_controls.isHidden():
+                self._collect_report_options()
+            values = dict(self.service.current.binding.values)
+            original = dict(previous.binding.values)
+            edited = tuple(key for key in DATE_KEYS if values.get(key) != original.get(key))
+            for key, value in normalize_recipe_dates(values, edited=edited).items():
                 self.service.set_value(key, value)
         except Exception:
             self.service.current = previous
             raise
 
-    def _configure(self):
-        try:
-            self._collect()
-            groups = tuple(v.strip().upper() for v in self.groups.text().split(",") if v.strip())
+    @staticmethod
+    def _field_value(kind, text):
+        if kind is ParameterType.STRINGS:
+            return tuple(value.strip() for value in text.split(",") if value.strip())
+        if kind is ParameterType.BOOLEAN:
+            if text.lower() not in {"true", "false"}:
+                raise ValueError("boolean_required")
+            return text.lower() == "true"
+        if kind is ParameterType.INTEGER:
+            return int(text)
+        if kind is ParameterType.NUMBER:
+            return float(text)
+        return text
+
+    def _collect_report_options(self):
+        groups = parse_parameter_list(ParameterKey.GROUPING_RULES, self.groups.text())
+        current = self.service.current
+        dates = any(p.key is ParameterKey.DATE_FROM for p in current.definition.parameters)
+        html = any(s.kind is StepKind.EXPORT_HTML for s in current.definition.steps)
+        if (self.dates.isChecked(), groups, self.html.isChecked()) != (
+                dates, current.binding.value(ParameterKey.GROUPING_RULES, ()), html):
             self.service.configure_reports(dates=self.dates.isChecked(), grouping_columns=groups,
                                            additional_html=self.html.isChecked())
-            self._refresh()
-        except ValueError as error:
-            self._error(error)
+        if groups:
+            self.service.set_mode(ParameterKey.GROUPING_RULES, self.group_mode.currentData())
 
     def _preview(self):
         try:
             self._collect()
+            self._refresh()
             plan = self.service.preview()
-            outputs = [str(plan.database_file), str(plan.output_file)]
-            if any(s.kind is StepKind.EXPORT_HTML for s in plan.definition.steps) and plan.output_file:
+            outputs = [str(path) for path in (plan.database_file, plan.output_file) if path]
+            kinds = {s.kind for s in plan.definition.steps}
+            if {StepKind.EXPORT_MAIN, StepKind.EXPORT_HTML} <= kinds and plan.output_file:
                 outputs.append(str(plan.output_file.with_suffix(".html")))
+            if StepKind.ANALYZE_TABULAR in kinds:
+                from metroliza.recipes.tabular_adapter import analytics_output_family
+                family = analytics_output_family(plan.binding, plan.output_file)
+                if family.workbook is not None:
+                    outputs.append(str(family.workbook))
             self.preview_label.setText("\n".join(outputs))
         except ValueError as error:
             self._error(error)
@@ -166,20 +251,37 @@ class RecipeEditor(QDialog):
             self._collect()
             saved = self.service.save(self.store, as_new=as_new)
             self.saved.emit(saved)
-            self._widgets_dirty = False
             self._refresh()
+            self._widgets_dirty = False
+            if not self.report_controls.isHidden():
+                kinds = {s.kind for s in saved.definition.steps}
+                outputs = [name for kind, name in ((StepKind.EXPORT_MAIN, "Excel"), (StepKind.EXPORT_HTML, "HTML"))
+                           if kind in kinds]
+                self.status.setText("Zapisano recepturę. Wyniki: " + " i ".join(outputs))
+            self.preview_label.clear()
         except (ValueError, OSError) as error:
             self._error(error)
 
     def _error(self, error):
+        if isinstance(error, RecipeDateError) and error.key in self.date_hints:
+            message = date_error_message(error)
+            self.status.setText(message)
+            self.date_hints[error.key].setText(message)
+            self.controls[error.key][2].setFocus()
+            return
         code = getattr(error, "code", "invalid_configuration")
-        QMessageBox.warning(self, "Recipe", f"Cannot apply configuration: {code}")
+        messages = {
+            "unsupported_grouping_rule": "Wpisz nazwę kolumny grupowania z listy podpowiedzi.",
+            "missing_parameter": "Uzupełnij wymagane pola, aby zobaczyć podgląd.",
+            "revision_conflict": "Receptura została zmieniona. Otwórz ją ponownie lub zapisz jako nową.",
+        }
+        QMessageBox.warning(self, "Receptura", messages.get(code, "Sprawdź nazwę, wartości pól i miejsce zapisu."))
 
     def _can_discard(self):
         if not self._widgets_dirty and not self.service.modified:
             return True
-        answer = QMessageBox.question(self, "Unsaved recipe",
-            "Discard unsaved recipe changes?",
+        answer = QMessageBox.question(self, "Niezapisane zmiany",
+            "Odrzucić zmiany w recepturze?",
             QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel)
         if answer == QMessageBox.StandardButton.Discard:

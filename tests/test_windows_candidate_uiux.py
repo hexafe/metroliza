@@ -576,11 +576,13 @@ def wrapper_observation(source='1' * 40, dpr=1.0):
     tabular, controls = tabular_observation(dpr), controls_observation(dpr)
     tabular['evidence']['captures'] = {name: session['metadata'][name] for name in uiux.CAPTURES[4:9]}
     controls['evidence']['captures'] = {'active-child-modal': session['metadata']['active-child-modal']}
+    data = {name: dict(path=relative, sha256='a' * 64, size=1) for name, relative in uiux.DATA.items()}
+    data['csv_plotly']['sha256'] = uiux.PLOTLY_SHA
     return dict(schema_version=1, status='passed', runtime_context='packaged', error_codes=[],
         facets=dict.fromkeys(('reports', 'tabular', 'controls', 'captures'), 'passed'),
         evidence=dict(context=dict(source_sha=source, qpa='windows', dpr=dpr), reports=reports,
                       tabular=tabular, controls=controls, captures=session,
-                      data={name: dict(path=relative, sha256='a' * 64, size=1) for name, relative in uiux.DATA.items()}))
+                      data=data))
 
 
 def test_wrapper_schema_requires_all_original_leaf_facts_and_frozen_tab_vectors():
@@ -690,6 +692,9 @@ def write_complete_uiux(root, *, source='1' * 40, dpr=1.0):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
         value['evidence']['data'][name] = dict(path=uiux.DATA[name], sha256=uiux.sha(path), size=len(content))
+    notice = uiux._plotly_notice_record(uiux.DATA['csv_plotly'])
+    bundled_notice = Path(__file__).resolve().parents[1] / 'src/metroliza/resources/html_dashboard_assets' / uiux.PLOTLY_NOTICE_FILENAME
+    shutil.copyfile(bundled_notice, root / notice['path'])
     for case in 'ABC':
         value['evidence']['reports']['evidence'][case]['preservation']['destination_logical_sha256'] = logical[case]
     for name, record in value['evidence']['captures']['metadata'].items():
@@ -711,10 +716,10 @@ def test_complete_retained_assets_are_independently_read_and_hash_preserved(tmp_
     uiux.verify(tmp_path, value, uiux.load_json(FIXTURES / 'reports/oracles.json'),
                 source='1' * 40, packaged=True, dpr=1.0, qpa='windows')
     assert all((tmp_path / path).read_bytes() == contents for path, contents in before.items())
-    assert len(before) == 17
+    assert len(before) == len(uiux.DATA) + len(uiux.CAPTURES) + 1  # Plotly notice.
 
 
-@pytest.mark.parametrize('defect', ['plotly', 'png', 'workbook', 'database', 'data_path', 'missing_data'])
+@pytest.mark.parametrize('defect', ['plotly', 'plotly_notice', 'png', 'workbook', 'database', 'data_path', 'missing_data'])
 def test_complete_retained_assets_cannot_be_replaced_by_passed_strings(tmp_path, defect):
     value = write_complete_uiux(tmp_path)
     data = value['evidence']['data']
@@ -722,6 +727,9 @@ def test_complete_retained_assets_cannot_be_replaced_by_passed_strings(tmp_path,
         data['csv_html']['path'] = '../analysis.html'
     elif defect == 'missing_data':
         del data['csv_plotly']
+    elif defect == 'plotly_notice':
+        notice = uiux._plotly_notice_record(data['csv_plotly']['path'])
+        (tmp_path / notice['path']).write_bytes(b'X' * notice['size'])
     elif defect == 'png':
         (tmp_path / 'uiux-active-child-modal.png').write_bytes(b'changed')
     else:
@@ -778,7 +786,7 @@ def test_producer_bridge_adds_exact_one_artifact_and_four_facets(monkeypatch, tm
 def test_failed_producer_atomically_retains_closed_phase_and_never_marks_uiux_passed(monkeypatch, tmp_path):
     producer, _value = _producer_protocol(monkeypatch, tmp_path, failed='reports')
     receipt = dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={})
-    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+    with pytest.raises(producer.ScenarioFailure, match='^uiux_reports_failed$'):
         producer._run_uiux_slice(tmp_path, FIXTURES.parent, receipt)
     assert receipt['artifacts'] == receipt['facets'] == {}
     value = uiux.load_json(tmp_path / 'uiux-observation.json')
@@ -901,7 +909,8 @@ def test_producer_unknown_failure_detail_is_closed_without_losing_reached_leaf(m
         def unexpected(*_args, **_kwargs):
             raise OSError('PRIVATE_PATH')
         monkeypatch.setattr(reports, 'run_reports_checks', unexpected)
-    with pytest.raises(producer.ScenarioFailure, match='^uiux_checks_failed$'):
+    failure = 'uiux_unexpected' if change == 'raised' else 'uiux_reports_failed'
+    with pytest.raises(producer.ScenarioFailure, match=f'^{failure}$'):
         producer._run_uiux_slice(tmp_path, FIXTURES.parent, dict(packaged=True, source_sha='1' * 40, artifacts={}, facets={}))
     observed = uiux.load_json(tmp_path / 'uiux-observation.json')
     summary = observed['evidence']['reports']
@@ -922,7 +931,7 @@ def test_completed_component_bytes_survive_failed_host_without_becoming_host_pas
     args = SimpleNamespace(source_checkout=Path(__file__).resolve().parents[1], expected_source_sha='1' * 40, dpi_scale='1.0')
     core._snapshot_failed_uiux(work, args, observation)
     assert observation['uiux_snapshot']['uiux-observation.json'] == original
-    assert len(observation['uiux_snapshot']) == 18  # Exact17assets plus observation, not global artifact keys.
+    assert len(observation['uiux_snapshot']) == len(uiux.DATA) + len(uiux.CAPTURES) + 2  # Plotly notice and observation.
     shutil.rmtree(work)
     output = tmp_path / 'failed'
     output.mkdir()
@@ -978,7 +987,7 @@ def test_actual_three_slices_and_independent_retained_assets(qapplication_sessio
     uiux.verify_assets(output, evidence, oracle, dpr=dpr, inert=True)
     snapshot = uiux.snapshot_assets(output, value['evidence']['captures']['metadata'],
                                     value['evidence']['data'], dpr=dpr)
-    assert len(snapshot) == 17
+    assert len(snapshot) == len(uiux.DATA) + len(uiux.CAPTURES) + 1  # Plotly notice.
     snapshot['uiux-observation.json'] = (output / 'uiux-observation.json').read_bytes()
     retained = tmp_path / 'independent-retained'
     retained.mkdir(mode=0o700)

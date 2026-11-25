@@ -1,15 +1,22 @@
-RELEASE_VERSION = "0.8.0-dev.4"
+RELEASE_VERSION = "0.8.0-dev.8"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Local recipe flows launch Reports to Excel Main or HTML, with private saved configurations, one run view, reusable filters and groups, and CSV/XLSX or Industrial cache adapters.'
+CURRENT_RELEASE_HIGHLIGHT = 'Multi-file CSV recipes, clearer report scope, and local analysis history.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
-    - Start local report flows from Home with a source folder and output file<br>
-    - Copy and edit private recipes; reuse supported analysis settings with explicit compatibility checks<br>
-    - One persistent run view retains progress, decisions and cooperative cancellation across navigation<br>
+    - Run a CSV recipe on several files, see both output names up front, and keep compatible settings after refreshing the input<br>
+    - Keep report corrections after reviewing again and choose between reports containing NOK and only NOK measurements<br>
+    - Reopen a saved workspace, restore a database backup to a new file, and find recent results in analysis history<br>
+    - Share Excel and HTML results together with their offline charts and resources<br>
+    - Pin and reorder recipes on Home and open them directly when the app starts on Home<br>
+    - Open recipe forms immediately and review missing report metadata in a larger table<br>
+    - Return to a running recipe or open its finished Excel workbook, dashboard and folder from Home<br>
+    - Open a recipe with Enter and see which input needs attention before you can start<br>
+    - Append reports to an existing database and export the chosen folder to Excel<br>
+    - Pass one or more sample reports to the parser validation, install and repair commands<br>
     - Main Reports HTML dashboards keep complete long measurement labels while using bounded asset names<br>
     - Export failures identify the affected stage and safe next action without sharing paths or measurement details<br>
     - Open or resume Reports, CSV Summary, Industrial Data and Realtime from the main workspace<br>

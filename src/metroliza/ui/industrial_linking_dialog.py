@@ -5,7 +5,7 @@ from __future__ import annotations
 from time import monotonic
 from typing import Any
 
-from PyQt6.QtCore import QThread, Qt
+from PyQt6.QtCore import QSignalBlocker, QThread, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -68,6 +68,8 @@ REPORT_COLUMNS = (
     ("part_name", "Part"),
     ("revision", "Revision"),
     ("report_date", "Report date"),
+    ("sample_number", "Sample"),
+    ("file_name", "Report file"),
     ("linked_summary", "Current production link"),
 )
 
@@ -91,41 +93,31 @@ def _search_pattern(search_text: str) -> str:
 def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> list[dict[str, Any]]:
     """Return Metroliza reports with their current accepted production link summary."""
 
-    pattern = _search_pattern(search_text)
-    where_clause = ""
-    params: tuple[Any, ...] = ()
-    if str(search_text or "").strip():
-        where_clause = """
-            WHERE COALESCE(rm.reference, '') LIKE ?
-               OR COALESCE(rm.part_name, '') LIKE ?
-               OR COALESCE(rm.revision, '') LIKE ?
-               OR COALESCE(rm.sample_number, '') LIKE ?
-               OR COALESCE(pr.source_file_name, '') LIKE ?
-        """
-        params = (pattern, pattern, pattern, pattern, pattern)
+    search = str(search_text or "").strip()
     with sqlite_connection_scope(db_file) as conn:
         ensure_report_schema(db_file, connection=conn)
         rows = conn.execute(
-            f"""
+            """
             SELECT
-                pr.id AS report_id,
-                COALESCE(rm.reference, '') AS reference,
-                COALESCE(rm.part_name, '') AS part_name,
-                COALESCE(rm.revision, '') AS revision,
-                COALESCE(rm.report_date, '') AS report_date,
+                report.report_id AS report_id,
+                COALESCE(report.reference, '') AS reference,
+                COALESCE(report.part_name, '') AS part_name,
+                COALESCE(report.revision, '') AS revision,
+                COALESCE(report.report_date, '') AS report_date,
+                COALESCE(report.sample_number, '') AS sample_number,
+                COALESCE(report.file_name, '') AS file_name,
                 COALESCE(isp.profile_name, '') AS source_profile,
                 COALESCE(ir.source_record_key, '') AS source_record_key,
                 COALESCE(ir.reference, '') AS production_reference,
                 COALESCE(ir.station, '') AS station,
                 COALESCE(ijr.rule_name, '') AS link_rule
-            FROM parsed_reports pr
-            LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+            FROM vw_report_overview report
             LEFT JOIN industrial_link_candidates ilc ON ilc.id = (
                 SELECT selected_candidate.id
                 FROM industrial_link_candidates selected_candidate
                 LEFT JOIN industrial_join_rules selected_rule
                     ON selected_rule.id = selected_candidate.join_rule_id
-                WHERE selected_candidate.report_id = pr.id
+                WHERE selected_candidate.report_id = report.report_id
                   AND selected_candidate.measurement_id IS NULL
                   AND selected_candidate.status = 'accepted'
                 ORDER BY
@@ -137,15 +129,20 @@ def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> l
             LEFT JOIN industrial_records ir ON ir.id = ilc.industrial_record_id
             LEFT JOIN industrial_source_profiles isp ON isp.id = ir.source_profile_id
             LEFT JOIN industrial_join_rules ijr ON ijr.id = ilc.join_rule_id
-            {where_clause}
-            ORDER BY rm.reference COLLATE NOCASE, pr.id
+            WHERE :search = ''
+               OR instr(lower(report.reference), lower(:search)) > 0
+               OR instr(lower(report.part_name), lower(:search)) > 0
+               OR instr(lower(report.revision), lower(:search)) > 0
+               OR instr(lower(report.sample_number), lower(:search)) > 0
+               OR instr(lower(report.file_name), lower(:search)) > 0
+            ORDER BY report.reference COLLATE NOCASE, report.report_id
             LIMIT 500
             """,
-            params,
+            {"search": search},
         ).fetchall()
     reports: list[dict[str, Any]] = []
     for row in rows:
-        link_parts = [str(item).strip() for item in row[5:10] if str(item or "").strip()]
+        link_parts = [str(item).strip() for item in row[7:12] if str(item or "").strip()]
         reports.append(
             {
                 "report_id": int(row[0]),
@@ -153,6 +150,8 @@ def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> l
                 "part_name": row[2],
                 "revision": row[3],
                 "report_date": row[4],
+                "sample_number": row[5],
+                "file_name": row[6],
                 "linked_summary": " | ".join(link_parts) if link_parts else "",
             }
         )
@@ -226,6 +225,7 @@ class IndustrialLinkingDialog(QDialog):
     def __init__(self, parent=None, *, db_file: str | None = None):
         super().__init__(parent)
         self.db_file = db_file
+        self._loaded_searches = None
         if type(self) is IndustrialLinkingDialog:
             self._auto_link_thread = None
             self._auto_link_progress = None
@@ -314,35 +314,47 @@ class IndustrialLinkingDialog(QDialog):
     def reload_data(self) -> None:
         if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
             return
+        searches = self.report_search_edit.text(), self.production_search_edit.text()
+        previous = self._loaded_searches
+        self._loaded_searches = None
         if not self.db_file:
-            self.status_label.setText("Select a Metroliza report database before linking.")
-            set_status_variant(self.status_label, "warning")
-            self.report_table.setRowCount(0)
-            self.production_table.setRowCount(0)
-            self._sync_button_state()
+            self._invalidate_rows("Select a Metroliza report database before linking.", "warning")
             return
         try:
-            reports = list_reports_for_manual_linking(
-                self.db_file,
-                search_text=self.report_search_edit.text(),
-            )
-            production_rows = list_production_records_for_manual_linking(
-                self.db_file,
-                search_text=self.production_search_edit.text(),
-            )
-        except Exception as exc:
-            self.status_label.setText(f"Could not load cached link data: {exc}")
-            set_status_variant(self.status_label, "danger")
-            self._sync_button_state()
+            reports = list_reports_for_manual_linking(self.db_file, search_text=searches[0])
+            production_rows = list_production_records_for_manual_linking(self.db_file, search_text=searches[1])
+        except Exception:
+            self._invalidate_rows("Could not load link data. Check the database and refresh.", "danger")
             return
 
-        self._populate_table(self.report_table, REPORT_COLUMNS, reports)
-        self._populate_table(self.production_table, PRODUCTION_COLUMNS, production_rows)
+        self._replace_search_rows(self.report_table, REPORT_COLUMNS, reports, previous and previous[0] == searches[0])
+        self._replace_search_rows(
+            self.production_table, PRODUCTION_COLUMNS, production_rows, previous and previous[1] == searches[1],
+        )
+        self._loaded_searches = searches
         self.status_label.setText(
             f"Loaded {len(reports)} report(s) and {len(production_rows)} cached production row(s)."
         )
         set_status_variant(self.status_label, "neutral")
         self._sync_button_state()
+
+    def _invalidate_rows(self, message, variant):
+        self.report_table.setRowCount(0)
+        self.production_table.setRowCount(0)
+        self.status_label.setText(message)
+        set_status_variant(self.status_label, variant)
+        self._sync_button_state()
+
+    def _replace_search_rows(self, table, columns, rows, keep_selection):
+        selected_id = self._selected_id(table) if keep_selection else None
+        with QSignalBlocker(table):
+            table.clearSelection()
+            self._populate_table(table, columns, rows)
+            if selected_id is not None:
+                for index, row in enumerate(rows):
+                    if row[columns[0][0]] == selected_id:
+                        table.selectRow(index)
+                        break
 
     @staticmethod
     def _populate_table(
@@ -380,8 +392,9 @@ class IndustrialLinkingDialog(QDialog):
         has_db = bool(self.db_file) and (type(self) is not IndustrialLinkingDialog or self._auto_link_thread is None)
         has_report = self.selected_report_id() is not None
         has_production = self.selected_production_record_id() is not None
-        self.link_button.setEnabled(has_db and has_report and has_production)
-        self.clear_button.setEnabled(has_db and has_report)
+        has_current_rows = self._loaded_searches is not None
+        self.link_button.setEnabled(has_db and has_current_rows and has_report and has_production)
+        self.clear_button.setEnabled(has_db and has_current_rows and has_report)
         self.auto_link_button.setEnabled(has_db)
 
     def link_selected_records(self) -> None:

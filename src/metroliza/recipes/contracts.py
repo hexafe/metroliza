@@ -45,14 +45,17 @@ class ParameterKey(str, Enum):
     DATABASE_FILE = "database_file"
     EXISTING_DATABASE = "existing_database"
     SOURCE_FILE = "source_file"
+    SOURCE_FILES = "source_files"
     SHEET = "sheet"
     COLUMNS = "columns"
     COLUMN_ROLES = "column_roles"
+    COLUMN_TYPES = "column_types"
     CACHE_REFERENCE = "cache_reference"
     DATE_FROM = "date_from"
     DATE_TO = "date_to"
     FILTER_VALUES = "filter_values"
     GROUPING_RULES = "grouping_rules"
+    METADATA_MODE = "metadata_mode"
     EXPORT_PRESET = "export_preset"
     EXPORT_OPTIONS = "export_options"
     ANALYTICS_REQUEST = "analytics_request"
@@ -70,6 +73,7 @@ class DerivationRule(str, Enum):
 class StepKind(str, Enum):
     OPEN_DATABASE = "open_database"
     PREPARE_DATABASE = "prepare_database"
+    PREPARE_EXISTING_DATABASE = "prepare_existing_database"
     IMPORT_REPORTS = "import_reports"
     FILTER = "filter"
     GROUP = "group"
@@ -149,3 +153,13 @@ class ResolvedRunPlan:
 
     def value(self, key: ParameterKey | str, default: PrivateValue | None = None) -> PrivateValue | None:
         return self.binding.value(key, default)
+
+    @property
+    def appends_to_database(self) -> bool:
+        return self.definition.steps[0].kind is StepKind.PREPARE_EXISTING_DATABASE
+
+    @property
+    def creates_database(self) -> bool:
+        return not self.appends_to_database and any(
+            step.kind in {StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS} for step in self.definition.steps
+        )

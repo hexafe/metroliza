@@ -71,7 +71,8 @@ class RecipeEditorService:
         if not ({StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE} & set(kinds)):
             raise RecipeError("not_reports_recipe")
         prefix = [s for s in self.current.definition.steps if s.kind in {
-            StepKind.PREPARE_DATABASE, StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE}]
+            StepKind.PREPARE_DATABASE, StepKind.PREPARE_EXISTING_DATABASE,
+            StepKind.IMPORT_REPORTS, StepKind.OPEN_DATABASE}]
         params = {p.key: p for p in self.current.definition.parameters}
         values = dict(self.current.binding.values)
         current = DataKind.DATABASE
