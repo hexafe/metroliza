@@ -55,6 +55,36 @@ def test_enforced_guardrail_fails_without_native_backend(tmp_path, monkeypatch, 
     assert benchmark_paths.main() == 0
 
 
+@pytest.mark.parametrize(
+    ("native_median", "native_samples", "error"),
+    [(0.25, 3, None), (2.5, 3, None), (4.0, 3, "exceeded threshold"), (0.0, 3, "positive finite timing"),
+     (float("inf"), 3, "positive finite timing"), (0.25, 2, "did not measure every")],
+)
+def test_chart_guardrail_limits_native_median_relative_to_matplotlib(
+    tmp_path, monkeypatch, native_median, native_samples, error
+):
+    scenario = "chart_render_budget_path"
+    timings = {"histogram_matplotlib_median_s": 1.0, "histogram_native_median_s": native_median}
+    metrics = {
+        "histogram_native_available": 1,
+        "histogram_native_samples": native_samples,
+        "histogram_expected_samples": 3,
+    }
+    monkeypatch.setattr(
+        benchmark_paths, "benchmark_chart_render_budget_path",
+        lambda *_args, **_kwargs: ScenarioResult(scenario, 0.0, timings, metrics),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "benchmark_paths.py", "--output-dir", str(tmp_path), "--scenarios", scenario,
+        "--enforce-chart-render-guardrail",
+    ])
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            benchmark_paths.main()
+    else:
+        assert benchmark_paths.main() == 0
+
+
 def test_build_benchmark_run_summary_includes_contract_keys():
     results = [
         {

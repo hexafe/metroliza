@@ -2780,11 +2780,12 @@ def benchmark_population_static_render_probe(
 
 def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histogram_points: int) -> ScenarioResult:
     import matplotlib.pyplot as plt
+    from metroliza.charts.chart_render_spec import build_resolved_histogram_spec, histogram_spec_to_mapping
     from metroliza.charts.chart_renderer import (
         MatplotlibChartRenderer,
         NativeChartRenderer,
         benchmark_histogram_render_runtime,
-        native_chart_backend_available,
+        native_histogram_backend_available,
         build_histogram_native_payload,
     )
 
@@ -2799,16 +2800,20 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
         bin_count=24,
         compact_render=True,
     )
+    payload["resolved_render_spec"] = histogram_spec_to_mapping(build_resolved_histogram_spec(payload))
 
     matplotlib_samples: list[float] = []
     native_samples: list[float] = []
+    native_available = native_histogram_backend_available()
+    sample_count = max(1, iterations)
 
-    for _ in range(max(1, iterations)):
+    for _ in range(sample_count):
         mpl_runtime = benchmark_histogram_render_runtime(MatplotlibChartRenderer(), payload, iterations=1)
         matplotlib_samples.append(float(mpl_runtime.get('median_s', 0.0)))
-        if native_chart_backend_available():
+        if native_available:
             native_runtime = benchmark_histogram_render_runtime(NativeChartRenderer(), payload, iterations=1)
-            native_samples.append(float(native_runtime.get('median_s', 0.0)))
+            if native_runtime["native_results"] == 1:
+                native_samples.append(float(native_runtime.get('median_s', 0.0)))
 
     matplotlib_median = _collect_median(matplotlib_samples)
     native_median = _collect_median(native_samples)
@@ -2826,8 +2831,10 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
         input_metrics={
             'rows': int(len(values)),
             'headers': 1,
-            'chart_count': int(max(1, iterations) * (2 if native_chart_backend_available() else 1)),
-            'histogram_native_available': int(native_chart_backend_available()),
+            'chart_count': sample_count * (2 if native_available else 1),
+            'histogram_native_available': int(native_available),
+            'histogram_native_samples': len(native_samples),
+            'histogram_expected_samples': sample_count,
         },
     )
 
@@ -2983,6 +2990,28 @@ def _write_outputs(output_dir: Path, payload: dict[str, Any]) -> tuple[Path, Pat
     return json_path, csv_path
 
 
+def _enforce_chart_render_guardrail(results, threshold):
+    chart_budget = next((item for item in results if item['scenario'] == 'chart_render_budget_path'), None)
+    if chart_budget is None:
+        raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
+    metrics = chart_budget['input_metrics']
+    if metrics['histogram_native_available'] != 1:
+        raise RuntimeError('Chart render guardrail requires the native chart extension')
+    if not (metrics['histogram_native_samples'] == metrics['histogram_expected_samples'] > 0):
+        raise RuntimeError('Chart render guardrail did not measure every requested native render')
+    timings = chart_budget['stage_timings_s']
+    matplotlib_median = float(timings['histogram_matplotlib_median_s'])
+    native_median = float(timings['histogram_native_median_s'])
+    if not (0.0 < matplotlib_median < float('inf') and 0.0 < native_median < float('inf')):
+        raise RuntimeError('Chart render guardrail requires two positive finite timing medians')
+    regression_ratio = native_median / matplotlib_median
+    if regression_ratio > threshold:
+        raise RuntimeError(
+            f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {threshold:.3f}'
+        )
+    print(f"Chart render guardrail passed: histogram_native_to_matplotlib_ratio={regression_ratio:.3f}")
+
+
 def main() -> int:
     _install_headless_stubs()
 
@@ -3028,7 +3057,8 @@ def main() -> int:
         help='Chart type used by chart_type_native_compare scenario.',
     )
     parser.add_argument('--enforce-chart-render-guardrail', action='store_true')
-    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5)
+    parser.add_argument('--chart-render-max-median-regression-ratio', type=float, default=2.5,
+                        help='Maximum native median divided by Matplotlib median.')
     parser.add_argument(
         '--cmm-benchmark-mode',
         choices=('parse', 'stages'),
@@ -3226,21 +3256,7 @@ def main() -> int:
             raise RuntimeError('CMM parser guardrail requires the native parser extension')
 
     if args.enforce_chart_render_guardrail:
-        chart_budget = next((item for item in payload['results'] if item['scenario'] == 'chart_render_budget_path'), None)
-        if chart_budget is None:
-            raise RuntimeError('chart_render_budget_path scenario missing from benchmark payload')
-        native_available = int(chart_budget['input_metrics'].get('histogram_native_available', 0)) == 1
-        if native_available:
-            regression_ratio = float(chart_budget['stage_timings_s'].get('histogram_branch_regression_ratio', 0.0))
-            if regression_ratio > args.chart_render_max_median_regression_ratio:
-                raise RuntimeError(
-                    f'Chart render median regression ratio {regression_ratio:.3f} exceeded threshold {args.chart_render_max_median_regression_ratio:.3f}'
-                )
-            print(
-                f"Chart render guardrail passed: histogram_branch_regression_ratio={regression_ratio:.3f}"
-            )
-        else:
-            raise RuntimeError('Chart render guardrail requires the native chart extension')
+        _enforce_chart_render_guardrail(payload['results'], args.chart_render_max_median_regression_ratio)
 
     return 0
 
