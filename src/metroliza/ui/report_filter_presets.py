@@ -8,26 +8,12 @@ from pathlib import Path
 from PyQt6.QtCore import QSettings
 
 from metroliza.reports.report_query_service import build_measurement_filter_query
-from metroliza.shared.filter_state import FilterState
+from metroliza.shared.filter_state import decode_filter_state
 from metroliza.shared.local_app_paths import local_metroliza_directory
 
 
 def _decode_filter(values):
-    if not isinstance(values, dict) or set(values) != set(asdict(FilterState())):
-        raise ValueError("Unknown report filter fields.")
-    decoded = {}
-    for name, value in values.items():
-        if name.endswith("_values"):
-            if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-                raise ValueError("Invalid report filter values.")
-            value = tuple(value)
-        elif name == "has_nok_only":
-            if type(value) is not bool:
-                raise ValueError("Invalid report NOK filter.")
-        elif (value is not None or name == "expression_text") and not isinstance(value, str):
-            raise ValueError("Invalid report filter text.")
-        decoded[name] = value
-    state = FilterState(**decoded)
+    state = decode_filter_state(values)
     build_measurement_filter_query(**asdict(state))
     return state
 
@@ -68,7 +54,7 @@ class ReportFilterPresets:
         if not 1 <= len(name) <= 80:
             raise ValueError("Use a name between 1 and 80 characters.")
         values = asdict(state)
-        build_measurement_filter_query(**values)
+        _decode_filter(values)
         raw = json.dumps({"name": name, "filter": values}, ensure_ascii=False)
         if len(raw) > 131072:
             raise ValueError("This filter has too many values to save as a preset.")

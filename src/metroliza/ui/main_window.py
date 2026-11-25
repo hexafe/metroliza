@@ -2323,6 +2323,8 @@ class MainWindow(QMainWindow):
                     "replaced or merged automatically.",
                 )
                 return False, None
+        from metroliza.shared.sqlite_paths import SQLiteSnapshotNameError
+
         try:
             from metroliza.industrial.industrial_cache_target import (
                 IndustrialCacheTarget,
@@ -2337,6 +2339,11 @@ class MainWindow(QMainWindow):
                 ),
                 destination,
             )
+        except SQLiteSnapshotNameError as exc:
+            QMessageBox.warning(
+                self, "Temporary realtime data", f"{exc} The temporary session data was kept.",
+            )
+            return False, None
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.warning(

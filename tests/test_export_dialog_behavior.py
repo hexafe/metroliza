@@ -190,11 +190,15 @@ def test_preview_then_apply_export_preset_with_keyboard(monkeypatch, tmp_path):
         QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_End)
         assert dialog.preset_combobox.currentText() == "HTML dashboard only"
         assert "no workbook" in dialog.preset_preview_label.accessibleDescription()
+        dialog.summary_plot_scale.setText("0,5")
+        assert "Current chart limits need correction" in dialog.preset_preview_label.text()
         assert dialog.export_type_combobox.currentText() == "Scatter"
         assert not dialog.export_button.isEnabled() and dialog.excel_file == path
         QTest.keyClick(dialog.preset_combobox, Qt.Key.Key_Tab)
         assert dialog.apply_preset_button.hasFocus()
         QTest.keyClick(dialog.apply_preset_button, Qt.Key.Key_Space)
+        assert dialog.summary_plot_scale.text() == "0,5"
+        dialog._use_chart_defaults()
         assert dialog.export_type_combobox.currentText() == "Line"
         assert dialog._selected_export_target() == "html_dashboard"
         assert dialog.select_excel_button.accessibleName() == "Select standalone HTML dashboard"

@@ -10,6 +10,8 @@ import shutil
 import tempfile
 import time
 
+from metroliza.shared.atomic_file import rename_noreplace as _rename_noreplace
+
 _WINDOWS = os.name == "nt"
 
 
@@ -103,28 +105,6 @@ def retry_output_copy(operation, target, *, copy_from=None, html_only=False, das
             if copy_from is None or attempt == 19:
                 raise
             target = free_copy_path(copy_from, html_only=html_only, dashboard=dashboard)
-
-
-_RENAME_NOREPLACE = 1
-_AT_FDCWD = -100
-
-
-def _rename_noreplace(temporary, target):
-    """Linux ``renameat2(RENAME_NOREPLACE)``: atomic and never replaces; False if unsupported."""
-    try:
-        import ctypes
-
-        libc = ctypes.CDLL(None, use_errno=True)
-        renameat2 = libc.renameat2
-    except (AttributeError, OSError):
-        return False
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    if renameat2(_AT_FDCWD, os.fsencode(temporary), _AT_FDCWD, os.fsencode(target), _RENAME_NOREPLACE) == 0:
-        return True
-    error_number = ctypes.get_errno()
-    if error_number in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
-        return False
-    raise OSError(error_number, os.strerror(error_number), str(target))
 
 
 def _rename_without_hardlink(temporary, target):

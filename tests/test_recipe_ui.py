@@ -21,6 +21,43 @@ class Runner:
             self.record = replace(self.record, state=RunState.CANCELLED, ownership=False)
 
 
+def test_recipe_review_explains_the_origin_of_ocr_metadata(qapplication_session):
+    from types import SimpleNamespace
+    from PyQt6.QtCore import Qt
+    from metroliza.reports.report_metadata_review import ORIGIN_OCR, REVIEW_FIELDS, ROW_READY, ReviewRow
+
+    row = ReviewRow("occurrence", "sha256:synthetic", "synthetic.pdf", state=ROW_READY)
+    cell = row.cells["reference"]
+    cell.auto_value = "ABC123"
+    cell.auto_origin = ORIGIN_OCR
+    cell.auto_confidence = 0.45
+    page = RecipeRunnerPage(RecipeController(Runner()))
+    try:
+        page._show_review(SimpleNamespace(review=SimpleNamespace(rows=(row,)), summary=()))
+        item = page.review_table.item(0, 1 + REVIEW_FIELDS.index("reference"))
+        assert item.text() == "ABC123"
+        assert "45%" in item.toolTip() and "OCR" in item.toolTip()
+        assert "Sprawdź odczytaną wartość." in item.toolTip()
+        assert item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == item.toolTip()
+        original_evidence = item.toolTip()
+        item.setText("MANUAL123")
+        assert item.toolTip() == "Ręczna zmiana czeka na zatwierdzenie."
+        assert item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == item.toolTip()
+        assert row.value("reference") == "ABC123"
+        item.setText("ABC123")
+        assert item.toolTip() == original_evidence
+        item.setText("MANUAL123")
+        report_date = page.review_table.item(0, 1 + REVIEW_FIELDS.index("report_date"))
+        report_date.setText("2026-02-30")
+        page._continue()
+        assert row.value("reference") == "MANUAL123"
+        assert "czeka" not in item.toolTip()
+        assert "valid date" in report_date.toolTip()
+        assert report_date.data(Qt.ItemDataRole.AccessibleDescriptionRole) == report_date.toolTip()
+    finally:
+        page.close()
+
+
 def test_controller_keeps_owner_until_native_completion(qapplication_session, monkeypatch):
     from types import SimpleNamespace
     from metroliza.ui import detached_threads

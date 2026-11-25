@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 NOT_APPLIED_LABEL = "Not applied"
 REPORTS_WITH_NOK_LABEL = "Reports with at least one NOK"
@@ -28,6 +28,28 @@ class FilterState:
     date_from: str | None = None
     date_to: str | None = None
     expression_text: str = ""
+
+
+REPORT_FILTER_FIELDS = frozenset(field.name for field in fields(FilterState))
+
+
+def decode_filter_state(values: dict) -> FilterState:
+    """Read the same typed Reports filter from presets and saved configurations."""
+    if type(values) is not dict or values.keys() != REPORT_FILTER_FIELDS:
+        raise ValueError("Unknown report filter fields.")
+    decoded = {}
+    for name, value in values.items():
+        if name.endswith("_values"):
+            if type(value) not in (list, tuple) or any(type(item) is not str for item in value):
+                raise ValueError("Invalid report filter values.")
+            value = tuple(value)
+        elif name == "has_nok_only":
+            if type(value) is not bool:
+                raise ValueError("Invalid report NOK filter.")
+        elif (value is not None or name == "expression_text") and type(value) is not str:
+            raise ValueError("Invalid report filter text.")
+        decoded[name] = value
+    return FilterState(**decoded)
 
 
 def _label_count(label: str, values: tuple[str, ...]) -> str | None:

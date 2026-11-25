@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import errno
 import os
 from pathlib import Path
 import stat
 import tempfile
 
+from metroliza.shared.atomic_file import rename_noreplace
+from metroliza.shared.sqlite_paths import SQLiteSnapshotNameError, sqlite_sidecar_path_problem
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _PRIVATE_DIRECTORY_MODE = 0o700
@@ -76,6 +79,8 @@ def _sidecar_paths(database_path: Path) -> tuple[Path, ...]:
 
 
 def _reject_existing_sidecars(destination_path: Path) -> None:
+    if problem := sqlite_sidecar_path_problem(destination_path):
+        raise SQLiteSnapshotNameError(problem)
     for sidecar_path in _sidecar_paths(destination_path):
         try:
             sidecar_path.lstat()
@@ -130,7 +135,13 @@ def atomic_publish_no_replace(staging_path: Path, destination_path: Path, *, pla
             os.rename(staging_path, destination_path)
         elif platform == "posix":
             # A hard link creates the final name only when it is still absent.
-            os.link(staging_path, destination_path)
+            try:
+                os.link(staging_path, destination_path)
+            except OSError as exc:
+                if exc.errno not in {errno.EPERM, errno.ENOSYS, errno.EOPNOTSUPP, errno.EMLINK}:
+                    raise
+                if not rename_noreplace(staging_path, destination_path):
+                    raise
         else:
             raise RuntimeError("No supported atomic no-replace publication primitive")
     except FileExistsError as exc:
@@ -168,8 +179,8 @@ def publish_database_snapshot(
         raise FileNotFoundError(source_path)
 
     _validate_destination_absent(destination_path, source_path, forbidden_paths)
-    _reject_existing_sidecars(destination_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_existing_sidecars(destination_path)
 
     staging_directory = Path(
         tempfile.mkdtemp(

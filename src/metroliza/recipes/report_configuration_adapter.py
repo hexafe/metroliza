@@ -23,16 +23,15 @@ from metroliza.reports.report_query_service import (
     build_grouping_query, build_measurement_export_query, build_measurement_filter_query,
     restrict_to_approved_report_sources, sqlite_approved_report_export_scope,
 )
-from metroliza.shared.filter_state import FilterState, summarize_filter_state
+from metroliza.shared.filter_state import REPORT_FILTER_FIELDS, FilterState, decode_filter_state, summarize_filter_state
 from metroliza.tabular.contracts import GroupingAssignment
 
 GROUPING_COLUMNS = frozenset({"REFERENCE", "PART_NAME", "REVISION", "TEMPLATE_VARIANT", "DATE", "SAMPLE_NUMBER"})
 MAX_GROUPING_REPORTS = 100_000
-_FILTER_FIELDS = {f.name for f in fields(FilterState)}
 _OPTION_FIELDS = {f.name for f in fields(ExportOptions)}
 
 
-def _json_object(raw: str, allowed: set[str]) -> dict:
+def _json_object(raw: str, allowed: set[str] | frozenset[str]) -> dict:
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -49,34 +48,25 @@ def _json_object(raw: str, allowed: set[str]) -> dict:
     return value
 
 
-def _normalize_filter_values(values: dict) -> dict:
-    for key, value in tuple(values.items()):
-        if key.endswith("_values"):
-            if type(value) not in (list, tuple) or any(type(v) is not str for v in value):
-                raise RecipeError("invalid_filter_configuration")
-            values[key] = tuple(value)
-        elif key == "has_nok_only":
-            if type(value) is not bool:
-                raise RecipeError("invalid_filter_configuration")
-        elif value is not None and type(value) is not str:
-            raise RecipeError("invalid_filter_configuration")
-    return values
-
-
 def _filter_state(plan: ResolvedRunPlan) -> FilterState:
     raw = plan.value(ParameterKey.FILTER_VALUES, ())
     if raw:
         if type(raw) is not tuple or len(raw) != 1:
             raise RecipeError("invalid_filter_configuration")
-        values = _json_object(raw[0], _FILTER_FIELDS)
+        values = _json_object(raw[0], REPORT_FILTER_FIELDS)
+        # Earlier recipes accepted null as an empty expression.
+        if values["expression_text"] is None:
+            values["expression_text"] = ""
     else:
         values = asdict(FilterState())
-    values = _normalize_filter_values(values)
+    try:
+        state = decode_filter_state(values)
+    except ValueError as exc:
+        raise RecipeError("invalid_filter_configuration") from exc
     for key in (ParameterKey.DATE_FROM, ParameterKey.DATE_TO):
         value = plan.value(key)
         if value is not None:
-            values[key.value] = value or None
-    state = FilterState(**values)
+            state = replace(state, **{key.value: value or None})
     # Existing expression parser and date/query validation remain authoritative.
     build_measurement_filter_query(**asdict(state))
     return state
