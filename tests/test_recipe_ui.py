@@ -39,6 +39,13 @@ def test_recipe_review_explains_the_origin_of_ocr_metadata(qapplication_session)
         assert "45%" in item.toolTip() and "OCR" in item.toolTip()
         assert "Sprawdź odczytaną wartość." in item.toolTip()
         assert item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == item.toolTip()
+        original_evidence = item.toolTip()
+        item.setText("MANUAL123")
+        assert item.toolTip() == "Ręczna zmiana czeka na zatwierdzenie."
+        assert item.data(Qt.ItemDataRole.AccessibleDescriptionRole) == item.toolTip()
+        assert row.value("reference") == "ABC123"
+        item.setText("ABC123")
+        assert item.toolTip() == original_evidence
     finally:
         page.close()
 

@@ -160,7 +160,7 @@ def _explain_sqlite_write_open_error(path: Path | None):
         error_code = getattr(exc, "sqlite_errorcode", 0)
         if path is not None and error_code & 0xff == sqlite3.SQLITE_CANTOPEN:
             if problem := sqlite_sidecar_path_problem(path):
-                raise sqlite3.OperationalError(problem) from exc
+                raise sqlite3.OperationalError(f"{exc}. Path check: {problem}") from exc
         raise
 
 

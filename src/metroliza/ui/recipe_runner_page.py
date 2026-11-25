@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from time import monotonic
 
-from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtCore import QSignalBlocker, QTimer, QUrl, Qt
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -104,6 +104,7 @@ class RecipeRunnerPage(QWidget):
         self.only_attention.hide()
         layout.addWidget(self.only_attention)
         self.review_table = QTableWidget()
+        self.review_table.cellChanged.connect(self._review_cell_changed)
         self.review_table.setAccessibleName("Metadane raportów do przeglądu")
         self.review_table.setMinimumHeight(120)
         self.review_table.setVisible(False)
@@ -466,6 +467,13 @@ class RecipeRunnerPage(QWidget):
             summary.append(f"Pliki poza importem: {len(excluded)}")
         self.scope.setText("\n".join(summary))
         self.scope.setToolTip("\n".join(excluded[:20]))
+        with QSignalBlocker(self.review_table):
+            self._populate_review_table()
+        self.only_attention.setVisible(0 < len(self._attention_rows) < len(self._review_rows))
+        self.only_attention.setChecked(bool(self._attention_rows))
+        self._filter_review(self.only_attention.isChecked())
+
+    def _populate_review_table(self):
         self.review_table.setColumnCount(1 + len(REVIEW_FIELDS))
         self.review_table.setHorizontalHeaderLabels(["Raport", *(FIELD_LABELS[f] for f in REVIEW_FIELDS)])
         self.review_table.setRowCount(len(self._review_rows))
@@ -478,19 +486,34 @@ class RecipeRunnerPage(QWidget):
                 if not row.editable:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 note = self._review_field_note(row, field)
-                evidence = cell_tooltip(row, row.display_name, field)
-                detail = f"{note}\n{evidence}" if note else evidence
-                item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, detail)
-                item.setToolTip(detail)
+                self._describe_review_item(item, row, field, note)
                 if note:
                     item.setBackground(self.palette().alternateBase())
                     font = self.review_table.font()
                     font.setBold(True)
                     item.setFont(font)
                 self.review_table.setItem(index, column, item)
-        self.only_attention.setVisible(0 < len(self._attention_rows) < len(self._review_rows))
-        self.only_attention.setChecked(bool(self._attention_rows))
-        self._filter_review(self.only_attention.isChecked())
+
+    def _review_cell_changed(self, index, column):
+        if not (0 < column <= len(REVIEW_FIELDS) and index < len(self._review_rows)):
+            return
+        item = self.review_table.item(index, column)
+        if item is None:
+            return
+        row = self._review_rows[index]
+        field = REVIEW_FIELDS[column - 1]
+        with QSignalBlocker(self.review_table):
+            self._describe_review_item(item, row, field, self._review_field_note(row, field))
+
+    @staticmethod
+    def _describe_review_item(item, row, field, note):
+        if item.text() != (row.value(field) or ""):
+            detail = "Ręczna zmiana czeka na zatwierdzenie."
+        else:
+            evidence = cell_tooltip(row, row.display_name, field)
+            detail = f"{note}\n{evidence}" if note else evidence
+        item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, detail)
+        item.setToolTip(detail)
 
     @staticmethod
     def _review_field_note(row, field):

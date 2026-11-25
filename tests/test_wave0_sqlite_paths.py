@@ -39,6 +39,8 @@ def test_long_database_name_preserves_existing_readable_and_wal_files(tmp_path, 
         with sqlite_connection_scope(str(final)) as connection:
             connection.execute("UPDATE sample SET value = 8")
             connection.commit()
+        with sqlite_connection_scope(str(final)) as connection:
+            assert connection.execute("SELECT value FROM sample").fetchone() == (8,)
     assert list(tmp_path.iterdir()) == [final]
 
 
@@ -54,6 +56,23 @@ def test_new_database_reserves_journal_name_space_before_creating_the_file(tmp_p
         with sqlite_connection_scope(str(final)):
             pytest.fail("the path should be rejected before the database is created")
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(not hasattr(os, "pathconf"), reason="requires a POSIX name-length limit")
+def test_snapshot_reports_long_destination_before_writing(tmp_path):
+    from metroliza.shared.sqlite_snapshot import publish_database_snapshot
+
+    limit = os.pathconf(tmp_path, "PC_NAME_MAX")
+    if limit <= 12:
+        pytest.skip("filesystem does not have a usable component-length limit")
+    source = tmp_path / "source.db"
+    source.touch()
+    destination = tmp_path / ("a" * (limit - 10) + ".db")
+    with pytest.raises(ValueError, match="shorter database filename"):
+        publish_database_snapshot(
+            source, destination, write_snapshot=lambda _: pytest.fail("unexpected write"),
+        )
+    assert list(tmp_path.iterdir()) == [source]
 
 
 @pytest.mark.parametrize("suffix", [".sqlite", ".sqlite3", ".DB", ".db", ""])

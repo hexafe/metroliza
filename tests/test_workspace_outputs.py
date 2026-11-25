@@ -9,9 +9,9 @@ from zipfile import ZipFile
 import pytest
 
 from metroliza.app.analysis_history import (
-    AnalysisListing, AnalysisReceiptReference, analysis_is_stale, bundle_analysis, capture_source_stamp,
+    AnalysisListing, analysis_is_stale, bundle_analysis, capture_source_stamp,
     load_recent_analyses, recent_analyses,
-    record_analysis, remove_analysis, result_still_matches,
+    record_analysis, result_still_matches,
 )
 from metroliza.app.workspace_file import read_workspace, write_workspace
 from metroliza.ui.workspace_context import WorkspaceSnapshot
@@ -297,7 +297,6 @@ def test_history_date_search_finds_receipts_outside_recent_limit(tmp_path, monke
     assert [row["at"] for row in load_recent_analyses(directory=root).receipts] == [newest["at"]]
     listing = load_recent_analyses(directory=root, day=day)
     assert [row["settings"]["order"] for row in listing.receipts] == [1]
-    assert len(listing.references) == 1
     assert listing.partial is False
 
     last = after - timedelta(microseconds=1)
@@ -307,40 +306,10 @@ def test_history_date_search_finds_receipts_outside_recent_limit(tmp_path, monke
     assert load_recent_analyses(directory=root, day=day, cancelled=lambda: True).partial is True
 
 
-def test_history_removal_is_bound_to_one_confirmed_receipt(tmp_path):
-    source = tmp_path / "source.csv"
-    output = tmp_path / "analysis.xlsx"
-    source.write_bytes(b"source")
-    output.write_bytes(b"result")
-    root = tmp_path / "history"
-    record_analysis({"kind": "csv", "source": source, "artifacts": [output]}, directory=root)
-    record_analysis({"kind": "recipe", "source": source, "artifacts": [output]}, directory=root)
-    listing = load_recent_analyses(directory=root)
-    recipe, csv = (
-        next(ref for run, ref in zip(listing.receipts, listing.references) if run["kind"] == kind)
-        for kind in ("recipe", "csv")
-    )
-    recipe_file = root / recipe.name
-    content = recipe_file.read_bytes()
-    recipe_file.write_bytes(content + b" ")
-    with pytest.raises(ValueError, match="entry changed"):
-        remove_analysis(recipe, directory=root)
-    assert recipe_file.read_bytes() == content + b" "
-    with pytest.raises(ValueError, match="cannot be removed"):
-        remove_analysis(AnalysisReceiptReference("../" + recipe.name, recipe.sha256), directory=root)
-
-    assert remove_analysis(csv, directory=root) is True
-    assert remove_analysis(csv, directory=root) is False
-    assert sorted(path.name for path in root.iterdir()) == [recipe.name]
-    assert source.read_bytes() == b"source"
-    assert output.read_bytes() == b"result"
-
-
-def test_history_dialog_filters_and_confirms_single_receipt_removal(
+def test_history_dialog_filters_without_mutating_saved_receipts(
     tmp_path, monkeypatch, qapplication_session,
 ):
-    from PyQt6.QtCore import QDate, QSignalBlocker, QThread
-    from PyQt6.QtWidgets import QMessageBox
+    from PyQt6.QtCore import QDate, QSignalBlocker
 
     from metroliza.app import analysis_history
     from metroliza.ui import analysis_history_dialog as ui
@@ -358,15 +327,6 @@ def test_history_dialog_filters_and_confirms_single_receipt_removal(
     earlier_receipt.write_text(json.dumps({**earlier, "at": timestamp.isoformat()}), encoding="utf-8")
     record_analysis({"kind": "csv", "artifacts": [new]}, directory=root)
     monkeypatch.setattr(analysis_history, "_history_directory", lambda: root)
-    answers = iter((QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes))
-    monkeypatch.setattr(QMessageBox, "question", lambda *_args: next(answers))
-    on_gui = []
-
-    def observe_remove(reference):
-        on_gui.append(QThread.currentThread() is qapplication_session.thread())
-        return remove_analysis(reference)
-
-    monkeypatch.setattr(ui, "remove_analysis", observe_remove)
     dialog = ui.AnalysisHistoryDialog(None)
     try:
         _finish_history_task(dialog._listing_task)
@@ -378,18 +338,8 @@ def test_history_dialog_filters_and_confirms_single_receipt_removal(
         assert dialog.runs.count() == 1
         assert "earlier.xlsx" in dialog.runs.currentItem().text()
 
-        dialog.remove_button.click()
-        assert dialog._task is None and earlier_receipt.exists()
-        dialog.remove_button.click()
-        _finish_history_task(dialog._task)
-        if dialog._listing_task is not None:
-            _finish_history_task(dialog._listing_task)
-        assert on_gui == [False]
-        assert dialog.runs.count() == 0
-        assert "No saved analyses for this date" in dialog.listing_notice.text()
-        assert "History entry removed." in dialog.status.toPlainText()
-        assert not earlier_receipt.exists()
-        assert len(tuple(root.glob("*.json"))) == 1
+        assert earlier_receipt.exists()
+        assert len(tuple(root.glob("*.json"))) == 2
         assert old.exists() and new.exists()
     finally:
         dialog.close()
