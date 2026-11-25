@@ -2827,6 +2827,7 @@ def benchmark_chart_render_budget_path(temp_dir: Path, *, iterations: int, histo
             'histogram_matplotlib_median_s': matplotlib_median,
             'histogram_native_median_s': native_median,
             'histogram_branch_regression_ratio': regression_ratio,
+            'histogram_native_to_matplotlib_ratio': (native_median / matplotlib_median) if matplotlib_median > 0 else 0.0,
         },
         input_metrics={
             'rows': int(len(values)),
@@ -3012,6 +3013,55 @@ def _enforce_chart_render_guardrail(results, threshold):
     print(f"Chart render guardrail passed: histogram_native_to_matplotlib_ratio={regression_ratio:.3f}")
 
 
+def _enforce_cmm_parser_guardrail(results, args, receipt):
+    cmm = next((item for item in results if item["scenario"] == "cmm_parser_backend_compare"), None)
+    if cmm is None:
+        raise RuntimeError("cmm_parser_backend_compare scenario missing from benchmark payload")
+    if int(cmm["input_metrics"].get("native_available", 0)) != 1:
+        raise RuntimeError("CMM parser guardrail requires the native parser extension")
+    if args.cmm_native_wheel:
+        from scripts.cmm_wheel_identity import verify_cmm_wheel
+
+        receipt["wheel_identity"] = verify_cmm_wheel(args.cmm_native_wheel)
+    speedup_ratio = float(cmm["stage_timings_s"].get("native_speedup_ratio", 0.0))
+    native_usage_rate = float(cmm["input_metrics"].get("native_parse_backend_rate", 0.0))
+    if not args.cmm_native_min_speedup_ratio <= speedup_ratio < float("inf"):
+        raise RuntimeError(
+            f"Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}"
+        )
+    if not args.cmm_native_min_usage_rate <= native_usage_rate <= 1.0:
+        raise RuntimeError(
+            f"Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}"
+        )
+    print(
+        f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
+        f"native_usage_rate={native_usage_rate:.3f}"
+    )
+
+
+def _collect_guardrail_receipts(results, args):
+    status = {}
+    errors = []
+    if args.enforce_cmm_parser_guardrail:
+        receipt = status["cmm"] = {"status": "failed", "wheel_identity": None}
+        try:
+            _enforce_cmm_parser_guardrail(results, args, receipt)
+        except RuntimeError as error:
+            receipt["reason"] = str(error)
+            errors.append(error)
+        else:
+            receipt["status"] = "passed"
+    if args.enforce_chart_render_guardrail:
+        try:
+            _enforce_chart_render_guardrail(results, args.chart_render_max_median_regression_ratio)
+        except RuntimeError as error:
+            status["chart"] = {"status": "failed", "reason": str(error)}
+            errors.append(error)
+        else:
+            status["chart"] = {"status": "passed"}
+    return status, errors
+
+
 def main() -> int:
     _install_headless_stubs()
 
@@ -3066,6 +3116,7 @@ def main() -> int:
         help='CMM backend benchmark mode: parse-only comparison or isolated parse/normalize/persist stages.',
     )
     parser.add_argument('--enforce-cmm-parser-guardrail', action='store_true')
+    parser.add_argument('--cmm-native-wheel', type=Path, help='Bind enforced CMM timings to this wheel.')
     parser.add_argument('--cmm-native-min-speedup-ratio', type=float, default=1.0)
     parser.add_argument('--cmm-native-min-usage-rate', type=float, default=0.95)
     parser.add_argument(
@@ -3220,43 +3271,23 @@ def main() -> int:
         temp_path = Path(temp_dir)
         results = [scenario_runners[scenario](temp_path) for scenario in selected_scenarios]
 
+    config = vars(args).copy()
+    if args.cmm_native_wheel:
+        config["cmm_native_wheel"] = args.cmm_native_wheel.name
     payload = {
         'generated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'config': vars(args),
+        'config': config,
         'results': [asdict(result) for result in results],
     }
     payload['summary'] = build_benchmark_run_summary(payload['results'])
+    payload['native_guardrails'], guardrail_errors = _collect_guardrail_receipts(payload['results'], args)
     json_path, csv_path = _write_outputs(Path(args.output_dir), payload)
 
     print(f'Benchmark JSON: {json_path}')
     print(f'Benchmark CSV: {csv_path}')
 
-    if args.enforce_cmm_parser_guardrail:
-        cmm = next((item for item in payload['results'] if item['scenario'] == 'cmm_parser_backend_compare'), None)
-        if cmm is None:
-            raise RuntimeError('cmm_parser_backend_compare scenario missing from benchmark payload')
-
-        native_available = int(cmm['input_metrics'].get('native_available', 0)) == 1
-        if native_available:
-            speedup_ratio = float(cmm['stage_timings_s'].get('native_speedup_ratio', 0.0))
-            native_usage_rate = float(cmm['input_metrics'].get('native_parse_backend_rate', 0.0))
-            if speedup_ratio < args.cmm_native_min_speedup_ratio:
-                raise RuntimeError(
-                    f'Native parser speedup ratio {speedup_ratio:.3f} below threshold {args.cmm_native_min_speedup_ratio:.3f}'
-                )
-            if native_usage_rate < args.cmm_native_min_usage_rate:
-                raise RuntimeError(
-                    f'Native parser usage rate {native_usage_rate:.3f} below threshold {args.cmm_native_min_usage_rate:.3f}'
-                )
-            print(
-                f"CMM parser guardrail passed: native_speedup_ratio={speedup_ratio:.3f}, "
-                f"native_usage_rate={native_usage_rate:.3f}"
-            )
-        else:
-            raise RuntimeError('CMM parser guardrail requires the native parser extension')
-
-    if args.enforce_chart_render_guardrail:
-        _enforce_chart_render_guardrail(payload['results'], args.chart_render_max_median_regression_ratio)
+    if guardrail_errors:
+        raise guardrail_errors[0]
 
     return 0
 
