@@ -303,13 +303,13 @@ def test_running_import_results_remain_bound_to_actual_operation(app, dialog, mo
             else:
                 owner.import_operation.worker = foreign
 
-                def observe_sender():
+                def observe_sender(_receiver):
                     sender_lookups.append(True)
                     return None
 
                 try:
                     with monkeypatch.context() as context:
-                        context.setattr(owner, "sender", observe_sender)
+                        context.setattr(type(owner), "sender", observe_sender)
                         owner.on_parse_finished()
                 finally:
                     owner.import_operation.worker = worker
