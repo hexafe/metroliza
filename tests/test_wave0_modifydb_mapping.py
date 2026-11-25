@@ -1,15 +1,18 @@
 """#1159 Packet C: manual values, one Apply transaction and reviewed alias imports."""
 
 from contextlib import closing
+import hashlib
 import sqlite3
 import threading
 
 import pytest
 from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtWidgets import QDialog, QPlainTextEdit
 
 from metroliza.reports import characteristic_alias_service as aliases
 from metroliza.reports.db import run_transaction_with_retry
 from metroliza.reports.report_edit_service import ReportEditService
+from metroliza.reports.report_metadata_models import MetadataCandidate, MetadataWarning
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.ui.modify_db import ModifyDB
 from metroliza.ui.modify_db_records import RecordTableModel
@@ -273,34 +276,168 @@ def test_f02_gui_error_says_nothing_saved_and_keeps_pending_grid(tmp_path, qappl
     dialog.close()
 
 
+def test_stored_report_review_filters_and_selected_context_are_read_only(tmp_path, qapplication_session):
+    path, repository, report, other, _measurements = _database(tmp_path)
+    repository.replace_metadata_candidates(report, (
+        MetadataCandidate("report_date", "2024-01-01", "2024-01-01", "header_exact", "ocr", 1, "header", None,
+                          "ocr:date", 0.9, None, selected=True),
+    ))
+    ReportEditService(path).apply_changes(
+        storage_flavor="current", normalization_changes={}, report_updates=[(report, {"reference": "MANUAL"})],
+    )
+    repository.replace_metadata_warnings(report, (
+        MetadataWarning("ocr_confidence", "report_date", "warning", "Review the date read from the header."),
+        MetadataWarning("sample_mismatch", "sample_number", "error", "<b>Double-check the sample.</b>"),
+        MetadataWarning("long_note", None, "warning", "x" * 651 + "end-marker"),
+        *(MetadataWarning(f"code_{i}", None, "warning", "Stored review evidence.") for i in range(24)),
+    ))
+    repository.replace_metadata_warnings(other, (MetadataWarning("info_note", None, "info", "Info only."),))
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("UPDATE parsed_reports SET parser_id = 'other_parser' WHERE id = ?", (other,))
+        connection.execute(
+            "UPDATE report_metadata SET metadata_profile_id = 'inspection', metadata_profile_version = '3.1' "
+            "WHERE report_id = ?", (report,),
+        )
+    before = _dump(path)
+    dialog = ModifyDB(db_file=path, modal=False)
+    try:
+        dialog.tab_widget.setCurrentWidget(dialog.report_records_tab)
+        dialog.ensure_record_tables_loaded()
+        model = dialog.report_records_table.model()
+        assert model.rowCount() == 2
+        for text in (str(tmp_path / "report.pdf"), "cmm", "inspection / 3.1", "manual"):
+            dialog.report_filter_edit.setText(text)
+            dialog.flush_record_filters()
+            assert model.rowCount() == 1
+            assert model.index(0, 0).data(Qt.ItemDataRole.UserRole) == report
+
+        dialog.report_filter_edit.setText("other_parser")
+        dialog.flush_record_filters()
+        assert model.index(0, 0).data(Qt.ItemDataRole.UserRole) == other
+        dialog.report_warnings_filter.setChecked(True)
+        dialog.flush_record_filters()
+        assert model.rowCount() == 0
+        dialog.report_filter_edit.clear()
+        dialog.flush_record_filters()
+        assert model.rowCount() == 1
+        assert model.index(0, 0).data(Qt.ItemDataRole.UserRole) == report
+
+        warning_column = dialog._column_index_for_field(model.specs, "review_warning_count")
+        assert model.index(0, warning_column).data(Qt.ItemDataRole.UserRole) == 27
+        source_column = dialog._column_index_for_field(model.specs, "source_file_id")
+        assert dialog.report_records_table.isColumnHidden(source_column)
+        for name in ("absolute_path", "parser_id", "parse_status", "metadata_profile", "review_warning_count"):
+            column = dialog._column_index_for_field(model.specs, name)
+            assert not model.flags(model.index(0, column)) & Qt.ItemFlag.ItemIsEditable
+
+        dialog.report_records_table.setCurrentIndex(model.index(0, 0))
+        dialog.report_details_button.click()
+        detail_window = next(window for window in dialog.findChildren(QDialog)
+                             if window.windowTitle() == f"Report details · #{report}")
+        detail_view = detail_window.findChild(QPlainTextEdit)
+        assert detail_view.isReadOnly()
+        detail = detail_view.toPlainText()
+        assert f"Source path: {tmp_path / 'report.pdf'}" in detail
+        assert f"Source SHA-256: {hashlib.sha256(b'report.pdf-content').hexdigest()}" in detail
+        assert "Metadata profile: inspection / 3.1" in detail
+        assert "Parser: cmm" in detail and "Parser version: 1.0" in detail and "Parse status: parsed" in detail
+        assert "Measurements: 1" in detail and "NOK measurements: 1" in detail
+        assert "Review warnings: 27" in detail and "2 more stored warning(s)." in detail
+        assert "Warning · ocr_confidence · report_date" in detail
+        assert "Error · sample_mismatch · sample_number: <b>Double-check the sample.</b>" in detail
+        assert "end-marker" not in detail and "info_note" not in detail
+        assert "report_date: 2024-01-01 (header_exact / ocr)" in detail
+        assert "reference: MANUAL (Manual /" in detail
+        detail_window.reject()
+        assert not dialog.has_pending_changes() and _dump(path) == before
+    finally:
+        dialog.close()
+
+
+def test_external_record_update_keeps_pending_modify_db_draft(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.ui import modify_db
+    path, _repository, report, _other, _measurements = _database(tmp_path)
+    dialog = ModifyDB(db_file=path, modal=False)
+    messages = []
+    monkeypatch.setattr(modify_db.QMessageBox, "critical", lambda *args: messages.append(args[1:]))
+    monkeypatch.setattr(modify_db.QMessageBox, "information", lambda *args: None)
+    monkeypatch.setattr(modify_db, "CustomLogger", lambda *args, **kwargs: None)
+    try:
+        dialog.ensure_record_tables_loaded()
+        model = dialog.report_records_table.model()
+        column = dialog._column_index_for_field(model.specs, "reference")
+        cell = model.index(0, column)
+        assert model.index(0, 0).data(Qt.ItemDataRole.UserRole) == report
+        assert model.setData(cell, "EDITOR DRAFT")
+        dialog.part_number_table.item(0, 1).setText("NEW SAMPLE")
+        ReportEditService(path).apply_changes(
+            storage_flavor="current", normalization_changes={}, report_updates=[(report, {"reference": "EXTERNAL"})],
+        )
+        external_state = _dump(path)
+        dialog.apply_changes()
+        _wait_edit(dialog)
+        assert len(messages) == 1 and messages[0][0] == "Nothing was saved"
+        assert "database changed" in messages[0][1] and "Pending edits were kept" in messages[0][1]
+        assert not dialog._changes_committed and dialog.has_pending_changes()
+        assert cell.data() == "EDITOR DRAFT" and dialog.part_number_table.item(0, 1).text() == "NEW SAMPLE"
+        assert _dump(path) == external_state
+    finally:
+        dialog._discard_confirmed = True
+        dialog.close()
+
+
 def test_f02_gui_remains_responsive_and_sqlite_owned_by_worker(tmp_path, qapplication_session, monkeypatch):
     from metroliza.ui import modify_db
     from metroliza.reports import db
     path, _repo, _report, _other, _ids = _database(tmp_path)
     dialog = ModifyDB(db_file=path, modal=False)
     dialog.reference_table.item(0, 1).setText('WORKER')
-    original = ReportEditService.apply_update_statements
     gui = threading.get_ident()
-    gate, owners, beats = threading.Event(), [], []
+    write_started, gate = threading.Event(), threading.Event()
+    owners, write_owners, beats, released = [], [], [], []
     connect = db.connect_sqlite
+
+    def hold_normalization_write(statement):
+        if statement.startswith('UPDATE report_metadata SET reference = '):
+            write_owners.append(threading.get_ident())
+            if not write_started.is_set():
+                write_started.set()
+                released.append(gate.wait(5))
 
     def tracked_connect(*args, **kwargs):
         owners.append(threading.get_ident())
-        return connect(*args, **kwargs)
+        connection = connect(*args, **kwargs)
+        connection.set_trace_callback(hold_normalization_write)
+        return connection
 
-    def held(cursor, statements):
-        assert gate.wait(5), 'GUI timer did not release worker'
-        return original(cursor, statements)
+    timer = QTimer()
+
+    def finish_gui_beat():
+        if write_started.is_set():
+            beats.append(threading.get_ident())
+            gate.set()
+            timer.stop()
 
     monkeypatch.setattr(db, 'connect_sqlite', tracked_connect)
-    monkeypatch.setattr(ReportEditService, 'apply_update_statements', staticmethod(held))
     monkeypatch.setattr(modify_db.QMessageBox, 'information', lambda *args: None)
-    QTimer.singleShot(100, lambda: (beats.append(threading.get_ident()), gate.set()))
-    dialog.apply_changes()
-    _wait_edit(dialog)
-    assert beats == [gui] and owners and gui not in owners
-    assert dialog._changes_committed
-    dialog.close()
+    timer.timeout.connect(finish_gui_beat)
+    timer.start(10)
+    try:
+        dialog.apply_changes()
+        _wait_edit(dialog)
+        assert beats == [gui] and owners and gui not in owners
+        assert len(write_owners) == 2 and all(owner in owners for owner in write_owners)
+        assert released == [True]
+        assert dialog._changes_committed
+        with closing(sqlite3.connect(path)) as connection:
+            assert connection.execute(
+                'SELECT reference FROM report_metadata ORDER BY report_id',
+            ).fetchall() == [('WORKER',), ('WORKER',)]
+    finally:
+        timer.stop()
+        gate.set()
+        dialog._discard_confirmed = True
+        dialog.close()
 
 
 def _alias_csv(tmp_path):

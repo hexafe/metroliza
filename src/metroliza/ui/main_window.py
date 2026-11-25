@@ -803,6 +803,9 @@ class MainWindow(QMainWindow):
         previous_source = getattr(dialog, "last_analysis_source", None)
         if previous_source and Path(previous_source).resolve() == Path(database).resolve():
             dialog.last_result_row.mark_source_changed()
+        history = self.window_coordinator.get("analysis_history")
+        if history is not None:
+            history.refresh_database_source(database)
         self.statusBar().showMessage("Database updated. Run analyses using this database again to refresh their results.", 8000)
 
     def _open_recent_location(self, kind, path):

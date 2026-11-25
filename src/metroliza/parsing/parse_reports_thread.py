@@ -27,7 +27,11 @@ from metroliza.shared.progress_status import (
     format_progress_duration,
 )
 from metroliza.reports.report_identity import ImportedReportBatch, build_report_identity_hash
-from metroliza.reports.report_metadata_models import CanonicalReportMetadata
+from metroliza.reports.report_metadata_models import (
+    CanonicalReportMetadata,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
+    USER_SOURCE_TYPE,
+)
 from metroliza.reports.report_repository import (
     ReportEnrichmentApproval,
     ReportImportDisposition,
@@ -1148,13 +1152,15 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
 
     merged_metadata_json = dict(enriched_metadata_json)
     current_manual_overrides = current_metadata_json.get("manual_overrides")
+    preserved_sources = set(preserved_fields)
     if isinstance(current_manual_overrides, dict) and current_manual_overrides:
         merged_metadata_json["manual_overrides"] = current_manual_overrides
+        preserved_sources.update(current_manual_overrides)
 
     field_sources = dict(merged_metadata_json.get("field_sources") or {})
     current_field_sources = current_metadata_json.get("field_sources")
     if isinstance(current_field_sources, dict):
-        for field_name in preserved_fields:
+        for field_name in preserved_sources:
             source = current_field_sources.get(field_name)
             if source is not None:
                 field_sources[field_name] = source
@@ -1165,6 +1171,15 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
         "preserved_fields": sorted(set(preserved_fields)),
         "updated_fields": sorted(set(updated_fields)),
     }
+    warnings = tuple(_metadata_value(enriched_metadata, "warnings") or ())
+    sample_source = field_sources.get("sample_number")
+    if sample_source in ("manual", USER_SOURCE_TYPE, "metadata_review"):
+        merged_map["sample_number_kind"] = "unknown"
+        merged_metadata_json["sample_number_provenance"] = sample_source
+        warnings = tuple(
+            warning for warning in warnings
+            if _metadata_value(warning, "code") != SAMPLE_NUMBER_PROJECTION_WARNING_CODE
+        )
 
     merged_metadata = CanonicalReportMetadata(
         parser_id=_metadata_value(enriched_metadata, "parser_id"),
@@ -1185,7 +1200,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
         comment=merged_map.get("comment"),
         page_count=_metadata_value(enriched_metadata, "page_count"),
         metadata_json=merged_metadata_json,
-        warnings=tuple(_metadata_value(enriched_metadata, "warnings") or ()),
+        warnings=warnings,
     )
     merge_summary = {
         "preserved_fields": sorted(set(preserved_fields)),
@@ -1302,6 +1317,7 @@ def persist_complete_metadata_enrichment(
         identity_hash=build_report_identity_hash(merged_metadata),
         raw_report_json=raw_report_json,
         approval=approval,
+        expected_metadata_json=current_row.get("metadata_json"),
     )
     return merged_metadata, merge_summary
 

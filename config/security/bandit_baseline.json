@@ -652,7 +652,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "fca6c45f3d0e3a8ef8edf1d0a97ca76fda5b8694ef81b7d1e1a6a3082c3f5a9a",
+      "fingerprint": "acc5c78598a0f2a25bf7b65bceb0db78d8ed3bfad11dfba1bd4427c45b80e86a",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_alias_service.py",
       "owner": "Security review",
@@ -706,7 +706,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "64b88993bf3774146e6519dfd73e2a60abaa609043f5bcc7857ef455bfac4605",
+      "fingerprint": "068b0ad0e34b48887b4618e22303b9eca6e0eecaa730dcc9b369a7d07c4ce60e",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_audit.py",
+      "owner": "Security review",
+      "rationale": "Bounded edit audit sample readback. Table and row key names are fixed choices, editable fields resolve through an explicit mapping, and all identifiers are quoted. The record ID and maximum value size are bound. Legacy readback admits only the verified unique INTEGER rowid key. Astra reviewed the exact finding on 2026-11-24 for #954.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "b37005beceab31bb1a5216e4a34cf7cdcb0970103558635fa723fc91eb41e656",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
@@ -715,7 +724,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "677054c7efb7fb11bf5bd10eb6fb3b132b8ccdeea39dc4b17257b862b585af28",
+      "fingerprint": "84324ccf8af658f362aa9d643a01d1f2b99265ba2d161d9d0566e0e5f8e63c55",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
@@ -1264,7 +1273,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "64b7b5eecbf8ff184778e7caafa03725b9013cc18e9f2c262088a7f0d18452c0",
+      "fingerprint": "615e7ebb5667d1122975048a7e3472d253b7bf3a6d4a8443f38a4db737e5a781",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1273,16 +1282,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4d2b6d3a9025c5f1bd5df7100e2f7af05de61e0eae4084a7b3ccae351a076276",
+      "fingerprint": "d2c8bdcb22d4936c76f7d33e023339cf418555ff29e75b4d2256d385c6826f1e",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "_plan_report_records: select_exprs comes from _select_exprs_for_specs on REPORT_RECORD_COLUMNS filtered by schema availability; source names and aliases are escaped with _quote_identifier. order_by is empty or the fixed ORDER BY report_id string; vw_report_overview is fixed.",
+      "rationale": "The selected report columns come from REPORT_RECORD_COLUMNS and are SQLite-quoted. New metadata and warning projections are fixed expressions selected by the known schema shape. The source view and order clause are fixed.",
       "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "96c8c630012513b76cbc7d7bc6222296208f7d07d72ab0ecfc73f2117213fb79",
+      "fingerprint": "6b685d75cc41c48a3d890bd8185060ee48cb04d17e0307386911299f7dfc8395",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1291,7 +1300,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ec2d5b2487df66d22d37a7ea8a753232a2f12df9c24d8c16339c815d0ffe3b41",
+      "fingerprint": "51ca768a63aae4324b3ca7baf59f73f7b5172a088c98e001f0b6d701424e8c87",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1300,7 +1309,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "cf9daf9dfebf2836428977fb165a7d14f33c4c21eb6caa82d5dcd83c91d8bee8",
+      "fingerprint": "ff112cc1cb37e25cb5db27012e8e18f184bab05c359a6057fa52d765bc19a9a2",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1309,7 +1318,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "198794790a6237684e6e142ad7f4bb75b29bdee134bfdc37ac6db7408e203650",
+      "fingerprint": "1cc6b82362632a4df283370606493f77c2d75a86d0b44e7a1b565585bb044ad0",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1495,6 +1504,33 @@
       "owner": "Security review",
       "rationale": "report_selection_from_snapshot: SQL reads a connection-owned TEMP export snapshot. The only interpolated part is its internally generated table identifier, quoted by quote_identifier. Column names and clauses are fixed. The parser display limit is a bound SQL parameter. Source values remain database values and cannot modify SQL.",
       "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "1229f01d1a44ee27f793aa7da3fcc3af927b263dabc2f9d30bf1243031b5f555",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_curation.py",
+      "owner": "Security review",
+      "rationale": "The detail projection contains only fixed report fields, subset-checked against discovered column names and SQLite-quoted, and qualified expressions from fixed schema-dependent choices. The selected report ID remains bound on the local read-only connection.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "3a946fb387f7c473b65a7fe20ad89657afa55400ab9b33a471e836d29572f3e5",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "The count query takes a table and column solely from NORMALIZATION_TARGETS for the validated storage flavor. Both identifiers use SQLite double-quote escaping, and the candidate text is bound as a parameter.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "4348569b5fa1a13e333a292531cbaba12f7ab1de045603680f70d11647c45da3",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "The optimistic guard reuses record_sample_targets. Its tables and keys are fixed choices and supported editable names resolve through explicit field mappings. All identifiers are SQLite-quoted and the record ID is bound.",
+      "expires_on": "2027-01-24"
     }
   ]
 }

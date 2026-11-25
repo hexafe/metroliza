@@ -32,6 +32,8 @@ FETCH_BATCH_SIZE = 5000
 FILTER_DEBOUNCE_MS = 250
 
 _DISPLAY_ROLES = (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole)
+_DEFAULT_EDIT_SERVICE = ReportEditService
+_DEFAULT_EDIT_APPLY = ReportEditService.apply_changes
 
 
 def display_value(value: Any) -> str:
@@ -59,6 +61,7 @@ class _RecordRowBuilder:
 
     def __init__(self, specs: Sequence[dict[str, Any]], *, defer_haystack: bool = False) -> None:
         self._fields = [spec["field"].lower() for spec in specs]
+        self._search_columns = [i for i, spec in enumerate(specs) if not spec.get("internal")]
         # Repeated text (section names, labels, status codes) is stored once per column. Key and float
         # columns are skipped: ids are unique and floats would only grow the lookup tables.
         self._interned: dict[int, dict[Any, Any]] = {
@@ -91,8 +94,8 @@ class _RecordRowBuilder:
         if self.haystack is None:
             return
         displayed = [
-            ["" if value is None else value if value.__class__ is str else str(value) for value in column]
-            for column in aligned
+            ["" if value is None else value if value.__class__ is str else str(value) for value in aligned[i]]
+            for i in self._search_columns
         ]
         self.haystack.extend(map(str.lower, map(FIELD_SEPARATOR.join, zip(*displayed))))
 
@@ -137,11 +140,13 @@ class RecordTableModel(QAbstractTableModel):
     ) -> None:
         super().__init__(parent)
         self._specs = list(specs)
+        self._search_columns = [i for i, spec in enumerate(self._specs) if not spec.get("internal")]
         self._rows = rows if isinstance(rows, list) else list(rows)
         self._haystack = haystack
         self._edits: dict[int, dict[int, str]] = {}
         self._needle = ""
         self._report_scope: int | None = None
+        self._warnings_only = False
         self._visible: list[int] | None = None
 
     pendingChanged = pyqtSignal()
@@ -315,26 +320,32 @@ class RecordTableModel(QAbstractTableModel):
     def filter_text(self) -> str:
         return self._needle
 
-    def set_filter_text(self, text: str) -> None:
+    def set_filter_text(self, text: str, *, warnings_only: bool | None = None) -> None:
         """Show only rows whose current text contains ``text`` (case-insensitive)."""
 
         needle = str(text).lower()
-        if needle == self._needle:
+        if warnings_only is None:
+            warnings_only = self._warnings_only
+        if needle == self._needle and warnings_only == self._warnings_only:
             return
-        self._apply_scope(needle, self._report_scope)
+        self._apply_scope(needle, self._report_scope, warnings_only)
 
     def set_report_scope(self, report_id: int | None) -> None:
         if self._report_scope != report_id:
-            self._apply_scope(self._needle, report_id)
+            self._apply_scope(self._needle, report_id, self._warnings_only)
 
-    def _apply_scope(self, needle: str, report_id: int | None) -> None:
+    def _apply_scope(self, needle: str, report_id: int | None, warnings_only: bool) -> None:
         matches = self._matching_rows(needle) if needle else None
         if report_id is not None:
             column = next((i for i, spec in enumerate(self._specs) if spec["field"] == "report_id"), None)
             candidates = range(len(self._rows)) if matches is None else matches
             matches = [] if column is None else [i for i in candidates if self._rows[i][column] == report_id]
+        if warnings_only:
+            column = next((i for i, spec in enumerate(self._specs) if spec["field"] == "review_warning_count"), None)
+            candidates = range(len(self._rows)) if matches is None else matches
+            matches = [] if column is None else [i for i in candidates if self._rows[i][column]]
         self.beginResetModel()
-        self._needle, self._report_scope, self._visible = needle, report_id, matches
+        self._needle, self._report_scope, self._warnings_only, self._visible = needle, report_id, warnings_only, matches
         self.endResetModel()
 
     def _matching_rows(self, needle: str) -> list[int]:
@@ -345,10 +356,10 @@ class RecordTableModel(QAbstractTableModel):
         return [row for row, text in enumerate(self._haystack) if needle in text]
 
     def _row_cells_contain(self, source_row: int, needle: str) -> bool:
-        return any(needle in self.text_at(source_row, column).lower() for column in range(len(self._specs)))
+        return any(needle in self.text_at(source_row, column).lower() for column in self._search_columns)
 
     def _current_haystack(self, source_row: int) -> str:
-        return row_haystack([self.text_at(source_row, column) for column in range(len(self._specs))])
+        return row_haystack([self.text_at(source_row, column) for column in self._search_columns])
 
 
 class RecordTableView(QTableView):
@@ -389,14 +400,15 @@ class RecordTableView(QTableView):
         if model is not None:
             self.setCurrentIndex(model.index(row, column))
 
-    def try_apply_filter(self, text: str) -> bool:
+    def try_apply_filter(self, text: str, *, warnings_only: bool | None = None) -> bool:
         """Defer model resets until the user accepts or cancels the delegate's cell edit."""
 
         if self.state() == self.State.EditingState:
             return False
         model = self.model()
         if model is not None:
-            model.set_filter_text(text)
+            options = {} if warnings_only is None else {"warnings_only": warnings_only}
+            model.set_filter_text(text, **options)
         return True
 
 
@@ -460,10 +472,16 @@ class RecordSaveThread(QThread):
     def __init__(self, database, payload):
         super().__init__()
         self.database, self.payload, self.error = database, payload, None
+        self.receipt = None
 
     def run(self):
         try:
-            ReportEditService(self.database).apply_changes(**self.payload)
+            service = ReportEditService(self.database)
+            if (type(service) is _DEFAULT_EDIT_SERVICE
+                    and getattr(service.apply_changes, "__func__", None) is _DEFAULT_EDIT_APPLY):
+                self.receipt = service.apply_changes_with_receipt(**self.payload)
+            else:
+                service.apply_changes(**self.payload)
         except Exception as exc:
             # The GUI consumes and clears the error after native completion; keep
             # its worker traceback intact for the diagnostic logger.
