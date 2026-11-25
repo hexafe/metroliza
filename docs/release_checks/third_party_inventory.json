@@ -21,7 +21,7 @@
       "src/metroliza/native/group_stats_coercion/Cargo.toml": "d049f1c4e7e93b0ffba5c6b7916365d8a080274de29a8d9c4dd65c462e0545f3"
     },
     "records_sha256": "23ef628445cde4796c4bccbbcc866ab163d9a0b19ef594e615c2e31151e7b509",
-    "release_label": "0.8.0-dev.9"
+    "release_label": "0.8.0-dev.10"
   },
   "python": {
     "bundled_roots": [

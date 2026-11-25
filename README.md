@@ -329,7 +329,7 @@ the database closed throughout the check. See the script docstring for limits.
 
 ## Release metadata
 
-Current release highlight (`0.8.0-dev.9`): Restores startup feedback while the Windows portable app unpacks.
+Current release highlight (`0.8.0-dev.10`): Restores startup feedback while the Windows portable app unpacks.
 
 Historical build `261119` contains the main Reports HTML export and safe diagnostics correction
 on the unchanged RC1 line. Exact source, CI, Windows package and delivery evidence is
@@ -342,7 +342,7 @@ version label does not change those historical receipts. The current
 Canonical release metadata is in `src/metroliza/app/version.py`. The root `VersionDate.py`
 module remains as a compatibility import for existing scripts.
 
-### Changelog highlights (release `0.8.0-dev.9`)
+### Changelog highlights (release `0.8.0-dev.10`)
 
 - Add detailed local bug reports with operation options, technical build facts, safe failure stages and output-publication checks. Confidential input data and free text remain excluded; reproduction and user acceptance remain separate.
 - See [`CHANGELOG.md`](CHANGELOG.md) for end-user release notes and version history.

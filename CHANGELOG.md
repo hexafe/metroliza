@@ -1,6 +1,6 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.9 — current version
+## 0.8.0-dev.10 — current version
 
 - See the startup splash while the Windows portable EXE unpacks.
 
