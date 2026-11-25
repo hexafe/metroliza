@@ -779,7 +779,14 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     envelope = uploads['windows-supervised-portable-onefile']
     launcher = uploads['windows-supervised-launcher-exe']
     # The envelope upload must never pick up the launcher EXE (and vice versa).
-    assert envelope.endswith('-windows-x64-portable.exe')
+    portable_exe = 'dist/Metroliza-*-windows-x64-portable.exe'
+    assert envelope.splitlines() == [
+        portable_exe,
+        f'{portable_exe}.provenance.json',
+        f'{portable_exe}.licenses/**',
+    ]
+    assert '--require-splash --splash-receipt $splashReceipt' in commands
+    assert uploads['windows-portable-splash-receipt'].endswith('/portable-splash/portable-splash.json')
     assert 'dist/Metroliza-*-windows-x64.exe' in launcher.splitlines()
     assert 'Where-Object { $_.Name -eq $artifactNames.portable }' in commands
     # User-facing EXEs are retained only from a fully qualified run; diagnostic receipts
