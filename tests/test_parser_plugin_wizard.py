@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from threading import Event, get_ident
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -17,9 +18,10 @@ from metroliza.parsing import parser_profile_handoff as handoff_service
 
 try:
     from PyQt6 import sip
-    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtCore import QCoreApplication, QEvent, QPoint, Qt
+    from PyQt6.QtGui import QFont
     from PyQt6.QtTest import QTest
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QMessageBox, QScrollArea
 
     from metroliza.ui.parser_plugin_wizard import (
         ParserPluginWizardDialog,
@@ -400,6 +402,67 @@ print("STARTED -> QUIT -> FINISHED; artifact identical", len(expected), len(beat
             self.assertEqual(summary.enabled, 0)
             self.assertTrue((summary.root / "approved").is_dir())
             self.assertTrue((summary.root / "incoming").is_dir())
+
+    def test_manage_tab_restore_and_refresh_are_separately_clickable(self):
+        profile = SimpleNamespace(plugin_id="supplier_alpha", enabled=True, approved=True, detail="approved")
+        module = "metroliza.ui.parser_plugin_wizard"
+        with tempfile.TemporaryDirectory() as home_dir, patch(
+            f"{module}.list_profiles", return_value=[profile]
+        ) as list_profiles, patch(f"{module}.approved_profile_backups", return_value=("previous",)
+        ), patch(f"{module}.rollback_profile") as rollback, patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ):
+            home = Path(home_dir)
+            dialog = ParserPluginWizardDialog(home=home)
+            try:
+                dialog.show()
+                self.app.processEvents()
+                dialog.profile_list.setCurrentRow(0)
+                self.assertTrue(dialog.rollback_button.isEnabled())
+
+                def click_at_button(button):
+                    center = button.mapTo(dialog, button.rect().center())
+                    target = dialog.childAt(center)
+                    self.assertIs(target, button)
+                    QTest.mouseClick(target, Qt.MouseButton.LeftButton, pos=target.mapFrom(dialog, center))
+
+                refresh_count = list_profiles.call_count
+                click_at_button(dialog.refresh_button)
+                self.assertGreater(list_profiles.call_count, refresh_count)
+                rollback.assert_not_called()
+                dialog.profile_list.setCurrentRow(0)
+                click_at_button(dialog.rollback_button)
+                rollback.assert_called_once_with("supplier_alpha", home=home)
+                self.assertIn("Restored verified version", dialog.manage_status_label.text())
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def test_manage_tab_scrolls_to_complete_button_targets_at_minimum_height(self):
+        with tempfile.TemporaryDirectory() as home_dir:
+            dialog = ParserPluginWizardDialog(home=Path(home_dir))
+            try:
+                dialog.store_path_label.setText("Store: " + ("Profiles and measurements / " * 10).strip())
+                dialog.setFont(QFont("Sans Serif", 14))
+                dialog.resize(560, 480)
+                dialog.show()
+                self.app.processEvents()
+                manage = dialog.task_tabs.currentWidget()
+                self.assertIsInstance(manage, QScrollArea)
+                for button in (dialog.rollback_button, dialog.refresh_button):
+                    manage.ensureWidgetVisible(button)
+                    self.app.processEvents()
+                    x = button.rect().center().x()
+                    for y in (1, button.height() - 2):
+                        point = button.mapTo(dialog, QPoint(x, y))
+                        self.assertIs(dialog.childAt(point), button)
+                self.assertIs(dialog.disable_button.nextInFocusChain(), dialog.rollback_button)
+                self.assertIs(dialog.rollback_button.nextInFocusChain(), dialog.refresh_button)
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_dialog_can_create_handoff_workspace_without_llm_calls(self):
         with tempfile.TemporaryDirectory() as home_dir:
