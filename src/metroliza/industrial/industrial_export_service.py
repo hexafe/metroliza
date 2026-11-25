@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -263,6 +265,7 @@ def export_cached_industrial_workbook(
     include_charts: bool = True,
     include_raw_data: bool = True,
     cancel_check: CancelCheck | None = None,
+    connection=None,
 ) -> dict[str, Any]:
     """Write cached Oznak data, grouped summary, diagnostics, and basic charts."""
 
@@ -275,6 +278,7 @@ def export_cached_industrial_workbook(
         include_charts=include_charts,
         include_raw_data=include_raw_data,
         cancel_check=cancel_check,
+        connection=connection,
     )
 
 
@@ -287,6 +291,7 @@ def _export_cached_industrial_workbook_streaming(
     include_charts: bool,
     include_raw_data: bool,
     cancel_check: CancelCheck | None,
+    connection=None,
 ) -> dict[str, Any]:
     filter_state = filter_state or IndustrialFilterState()
     grouping_state = grouping_state or IndustrialGroupingState()
@@ -300,8 +305,9 @@ def _export_cached_industrial_workbook_streaming(
     row_count = 0
     raw_sheet_rows = 0
 
+    scope = nullcontext(connection) if connection is not None else sqlite_connection_scope(db_file)
     try:
-        with sqlite_connection_scope(db_file) as conn:
+        with scope as conn:
             _raise_if_cancelled(cancel_check)
             row_total = _prepare_cached_export_scope(conn, filter_state=filter_state)
             dynamic_fields = _cached_export_dynamic_fields(conn)

@@ -1044,7 +1044,8 @@ def test_file_menu_recent_acceptance_guards_and_clear(window, tmp_path, monkeypa
     menus = [action.text() for action in window.menuBar().actions()]
     assert menus == ["&File", "&Tools", "&View", "&Help"]
     assert [action.text() for action in window.file_menu.actions()] == [
-        "Open database…", "Restore database copy…", "Choose report folder…", "Save workspace…", "Open workspace…",
+        "Open database…", "Back up Reports database…", "Restore database copy…", "Choose report folder…",
+        "Save workspace…", "Open workspace…",
         "Analysis history…", "Recent databases", "Recent report folders",
         "Clear recent lists", "", "Exit",
     ]
@@ -1221,18 +1222,310 @@ def test_home_paths_and_export_readiness(window, tmp_path, monkeypatch, table):
 
 
 def test_import_success_promotes_export_and_green_status(app, window, reports):
-    host, _, _ = prepare_review(app, window, reports)
+    host, _, database = prepare_review(app, window, reports)
+    assert window._database_source_binding(database).identity is None
     assert plain_text(window.home_next_action.text()) != "Export Workbook [Ctrl+E]"
     host.parse_button.click()
     wait_until(app, workspace_idle(host))
     assert "Import successful" in host.report_planner.outcome.toPlainText()
     assert plain_text(window.home_next_action.text()) == "Export Workbook [Ctrl+E]"
     assert window.recent_locations.paths("databases")[0] == window.db_file
+    binding = window._database_source_binding(database)
+    assert binding.identity == window._last_report_import.database_identity
+    binding.require(database)
     assert window.export_import_batch_button.property("buttonRole") == "primary"
     assert window.export_import_batch_button.text() == "Eksportuj partię (5)"
     assert plain_text(window.export_button.text()) == "Eksportuj całą bazę"
     assert host.scan_button.property("buttonRole") == "secondary"
     assert host.readiness_label.property("statusVariant") == "success"
+
+
+def test_reports_does_not_import_into_a_file_appearing_after_dispatch(app, window, reports, monkeypatch):
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+
+    host, _, database = prepare_review(app, window, reports)
+    before = []
+    real_scope = ParseReportsThread._import_database_scope
+
+    def external_create(worker, append_identity):
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("CREATE TABLE external_data (id INTEGER PRIMARY KEY)")
+            connection.execute("INSERT INTO external_data VALUES (73)")
+        before.append(database.read_bytes())
+        return real_scope(worker, append_identity)
+
+    monkeypatch.setattr(ParseReportsThread, "_import_database_scope", external_create)
+    host.parse_button.click()
+    worker = host.parse_thread
+    wait_until(app, workspace_idle(host))
+
+    assert [database.read_bytes()] == before
+    assert worker.last_import_batch is None
+    assert window._database_source_binding(database).identity is None
+    assert not window._report_export_start_allowed(str(database))
+
+
+@pytest.mark.parametrize("approval", ["absent", "conflicting", "no_append_identity"])
+def test_import_worker_rejects_foreign_file_seen_by_preflight(window, reports, approval):
+    from metroliza.parsing.parse_reports_thread import ParseReportsThread
+    from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+    from metroliza.reports.db import SQLiteFileBinding
+    from metroliza.reports.report_schema import ensure_report_schema
+    from metroliza.shared.parse_contracts import ParseRequest
+
+    source, database = reports
+    if approval != "absent":
+        ensure_report_schema(str(database))
+    assert window.set_db_file(str(database))
+    binding = window._database_source_binding(database)
+    if approval != "absent":
+        database.rename(database.with_name("original.sqlite"))
+    ensure_report_schema(str(database))
+    foreign = SQLiteFileBinding.capture(database)
+    assert foreign.identity != binding.identity
+    before = database.read_bytes()
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light",
+    )
+    plan = ImportPlan.from_preflight(
+        ParseRequest(source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"),
+        review,
+        selected_occurrence_ids=[review.ready_files[0].stable_occurrence_id],
+        existing_database_identity=foreign.identity if approval != "no_append_identity" else None,
+    )
+    worker = ParseReportsThread(plan)
+    worker.selected_database = binding
+
+    worker.run()
+
+    assert database.read_bytes() == before
+    assert worker.last_import_batch is None
+    assert window._database_source_binding(database) == binding
+    assert not window._report_export_start_allowed(str(database))
+
+
+@pytest.mark.parametrize("outcome", ["open_failure", "cancelled", "partial"])
+def test_reports_retries_the_destination_created_by_its_worker(app, window, reports, monkeypatch, outcome):
+    from metroliza.reports import db
+    from metroliza.reports.report_repository import ReportRepository
+
+    host, _, database = prepare_review(app, window, reports)
+    selected = window._database_source_binding(database)
+    streams = _track_database_creation(monkeypatch, database)
+    original_connect = db.connect_sqlite
+    original_import = ReportRepository.import_report_if_absent
+
+    def fail_first_open(path, *args, **kwargs):
+        if str(path) == str(database) and kwargs.get("existing_identity") is not None:
+            raise sqlite3.OperationalError("synthetic open failure after exclusive creation")
+        return original_connect(path, *args, **kwargs)
+
+    def stop_during_import(repository, **kwargs):
+        if outcome == "cancelled":
+            repository._ensure_import_schema()
+            host.parse_thread.stop_parsing()
+            raise ValueError("synthetic cancellation before the first report is persisted")
+        disposition = original_import(repository, **kwargs)
+        host.parse_thread.stop_parsing()
+        return disposition
+
+    with monkeypatch.context() as fault:
+        if outcome == "open_failure":
+            fault.setattr(db, "connect_sqlite", fail_first_open)
+        else:
+            fault.setattr(ReportRepository, "import_report_if_absent", stop_during_import)
+        host.parse_button.click()
+        worker = host.parse_thread
+        wait_until(app, workspace_idle(host))
+
+    [created] = streams
+    assert created.closed and created.close_calls == 1
+    binding = window._database_source_binding(database)
+    assert selected.identity is None and binding.identity is not None
+    binding.require(database)
+    if outcome == "open_failure":
+        assert database.stat().st_size == 0
+    else:
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() == (
+                (1,) if outcome == "partial" else (0,)
+            )
+    assert (worker.last_import_batch is not None) is (outcome == "partial")
+    assert window._export_ready is (outcome == "partial")
+
+    host.scan_button.click()
+    wait_until(app, workspace_idle(host))
+    assert host.report_planner.model.counts["ready"] == (4 if outcome == "partial" else 5)
+    host.parse_button.click()
+    wait_until(app, workspace_idle(host))
+
+    assert window._database_source_binding(database) == binding
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() == (5,)
+
+
+def _track_database_creation(monkeypatch, database):
+    streams = []
+    original_open = Path.open
+
+    class TrackedCreation:
+        def __init__(self, stream):
+            self.stream = stream
+            self.close_calls = 0
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.close()
+
+        def close(self):
+            self.close_calls += 1
+            self.stream.close()
+
+    def track(path, mode="r", *args, **kwargs):
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == database and mode == "xb":
+            stream = TrackedCreation(stream)
+            streams.append(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", track)
+    return streams
+
+
+def test_reports_creation_handle_stays_open_until_accepted(app, window, reports, monkeypatch):
+    from metroliza.reports import db
+
+    host, _, database = prepare_review(app, window, reports)
+    streams = _track_database_creation(monkeypatch, database)
+    original_connect = db.connect_sqlite
+    original_emit = host._emit_import_receipts
+    observed = []
+
+    def observe_sqlite_open(path, *args, **kwargs):
+        if str(path) == str(database) and streams and kwargs.get("existing_identity") is not None:
+            observed.append(("sqlite", streams[0].closed))
+        return original_connect(path, *args, **kwargs)
+
+    def observe_terminal(worker):
+        observed.append(("terminal", streams[0].closed))
+        original_emit(worker)
+
+    monkeypatch.setattr(db, "connect_sqlite", observe_sqlite_open)
+    monkeypatch.setattr(host, "_emit_import_receipts", observe_terminal)
+    host.parse_button.click()
+    wait_until(app, workspace_idle(host))
+
+    assert observed == [("sqlite", False), ("terminal", False)]
+    [created] = streams
+    assert created.closed and created.close_calls == 1
+    assert window._last_report_import is not None and window._export_ready
+
+
+def test_reports_creation_receipt_never_adopts_a_replacement(app, window, reports, monkeypatch):
+    from metroliza.reports.report_schema import ensure_report_schema
+
+    host, _, database = prepare_review(app, window, reports)
+    chosen = window._database_source_binding(database)
+    replacement = database.with_name("foreign.sqlite")
+    ensure_report_schema(str(replacement))
+    before = replacement.read_bytes()
+    streams = _track_database_creation(monkeypatch, database)
+    emit_receipts = host._emit_import_receipts
+    observations = []
+
+    def replace_before_completion(worker):
+        stream = streams[0]
+        observed = {"open": not stream.closed, "replacement": False}
+        observations.append(observed)
+        if not stream.closed:
+            observed["created_inode"] = os.fstat(stream.fileno()).st_ino
+        try:
+            database.unlink()
+        except PermissionError:
+            pass  # Some filesystems forbid unlink while the creation handle is open.
+        else:
+            database.write_bytes(before)
+            observed["replacement"] = True
+            if not stream.closed:
+                observed["pinned_inode"] = os.fstat(stream.fileno()).st_ino
+                observed["unlinked"] = os.fstat(stream.fileno()).st_nlink == 0
+        emit_receipts(worker)
+
+    with monkeypatch.context() as terminal:
+        terminal.setattr(host, "_emit_import_receipts", replace_before_completion)
+        host.parse_button.click()
+        worker = host.parse_thread
+        wait_until(app, workspace_idle(host))
+
+    [observed] = observations
+    [created] = streams
+    assert observed["open"] and created.closed and created.close_calls == 1
+    assert worker.last_import_batch is not None
+    assert observed["created_inode"] == worker.last_import_batch.database_identity[1]
+    if observed["replacement"]:
+        assert observed["unlinked"] and observed["created_inode"] == observed["pinned_inode"]
+        assert database.stat().st_ino != observed["created_inode"]
+        assert window._database_source_binding(database) == chosen
+        assert window._last_report_import is None and not window._export_ready
+        assert database.read_bytes() == before
+    else:
+        assert window._last_report_import is not None
+        assert replacement.read_bytes() == before
+
+
+@pytest.mark.parametrize("cleanup", ["destroy_before_receipt", "destroy_after_worker", "stale_callback"])
+def test_reports_releases_undelivered_creation(app, reports, monkeypatch, cleanup):
+    from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+    from metroliza.reports import db
+    from metroliza.shared.parse_contracts import ParseRequest
+    from metroliza.ui.parsing_dialog import ReportsWorkspace
+
+    source, database = reports
+    streams = _track_database_creation(monkeypatch, database)
+    review = ParsePreflightService().scan_source(
+        source_path=source, database_path=database, metadata_parsing_mode="light",
+    )
+    plan = ImportPlan.from_preflight(
+        ParseRequest(source_directory=str(source), db_file=str(database), metadata_parsing_mode="light"),
+        review, selected_occurrence_ids=[review.ready_files[0].stable_occurrence_id],
+    )
+    host = ReportsWorkspace()
+    host.db_file = str(database)
+    selected = db.SQLiteFileBinding.capture(database)
+    host.database_source_binding = lambda _path: selected
+    worker = host._create_parse_worker(plan)
+    reserve = db._reserve_selected_report_database
+    observed = []
+
+    def destroy_owner():
+        host.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+    def destroy_before_receipt(path, binding):
+        receipt = reserve(path, binding)
+        observed.append(not streams[0].closed)
+        destroy_owner()
+        return receipt
+
+    if cleanup == "destroy_before_receipt":
+        monkeypatch.setattr(db, "_reserve_selected_report_database", destroy_before_receipt)
+    worker.run()  # Do not connect the GUI completion, so the receipt cannot be delivered.
+    if cleanup != "destroy_before_receipt":
+        observed.append(not streams[0].closed)
+        if cleanup == "stale_callback":
+            host._on_parse_thread_stopped(worker)
+        destroy_owner()
+
+    [created] = streams
+    assert sip.isdeleted(host)
+    assert observed == [True] and created.closed and created.close_calls == 1
+    assert worker.created_database is None
+    assert worker.last_import_batch is not None
 
 
 def test_home_source_actions_choose_independently_and_cancel_in_place(window, monkeypatch, tmp_path):
@@ -1449,7 +1742,7 @@ def test_recent_single_entry_survives_reload_from_ini(tmp_path):
     assert reloaded.paths("databases") == ["/data/a.db"]
 
 
-def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp_path, monkeypatch):
+def test_database_inspection_uses_read_only_path_and_keeps_active_database_when_busy(window, tmp_path, monkeypatch):
     database = tmp_path / "reports.db"
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
@@ -1457,37 +1750,60 @@ def test_database_inspection_uses_plain_path_and_keeps_busy_database(window, tmp
         connection.commit()
     warnings, calls = [], []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args))
-    from metroliza.reports.db import sqlite_query_only_connection_scope
+    from metroliza.reports.db import sqlite_readonly_connection_scope
 
-    real_scope = sqlite_query_only_connection_scope
+    real_scope = sqlite_readonly_connection_scope
 
     def recording_scope(*args, **kwargs):
         calls.append((args, kwargs))
         return real_scope(*args, **kwargs)
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", recording_scope)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_readonly_connection_scope", recording_scope)
     assert window.set_db_file(str(database))
-    # No file: URI (SQLite rejects URI authorities such as UNC hosts).
-    assert calls and calls[0] == ((str(database),), {"plain_path": True, "timeout_s": 0.1})
+    # Retain the requested drive path in the read-only SQLite URI.
+    assert calls and calls[0] == ((str(database),), {"resolve_path": False, "timeout_s": 0.1})
     assert plain_text(window.home_next_action.text()) == "Export Workbook [Ctrl+E]"
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", real_scope)
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_readonly_connection_scope", real_scope)
     other = tmp_path / "busy.db"
     other.write_bytes(database.read_bytes())
-    # Busy/locked (another process writing): not export-ready, but not rejected.
+    # An unreadable selection must not reach the startup writers.
     def busy_scope(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", busy_scope)
-    assert window._inspect_database(str(other)) is False
-    monkeypatch.setattr("metroliza.ui.main_window.sqlite_query_only_connection_scope", real_scope)
-    assert warnings == []
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_readonly_connection_scope", busy_scope)
+    assert not window.set_db_file(str(other))
+    assert window.db_file == str(database)
+    assert len(warnings) == 1 and "Try again when it is available" in warnings[0][2]
+    warnings.clear()
+    monkeypatch.setattr("metroliza.ui.main_window.sqlite_readonly_connection_scope", real_scope)
     assert window._inspect_database(str(other)) is True
 
     broken = tmp_path / "not-sqlite.db"
     broken.write_bytes(b"not a database" * 100)
     assert window.set_db_file(str(broken)) is False
     assert window.db_file == str(database) and len(warnings) == 1
+
+
+def test_open_future_reports_schema_retains_the_active_database(window, tmp_path, monkeypatch):
+    active = tmp_path / "active.db"
+    with closing(sqlite3.connect(active)) as connection, connection:
+        connection.execute("CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY)")
+        connection.execute("INSERT INTO REPORTS VALUES (1)")
+    assert window.set_db_file(str(active))
+    future = tmp_path / "future.db"
+    with closing(sqlite3.connect(future)) as connection, connection:
+        connection.execute("CREATE TABLE parsed_reports (id INTEGER)")
+        connection.execute("INSERT INTO parsed_reports VALUES (1)")
+        connection.execute("CREATE TABLE app_schema (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO app_schema VALUES ('schema_version', 'future')")
+    before = future.read_bytes()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _owner, title, text: warnings.append((title, text)))
+    assert not window.set_db_file(str(future))
+    assert window.db_file == str(active)
+    assert len(warnings) == 1 and "Unsupported report database schema version" in warnings[0][1]
+    assert future.read_bytes() == before
 
 
 # Wave 1 P5a keyboard and shared path-menu regressions.

@@ -211,6 +211,20 @@ If you have typed edits but have not clicked **Apply changes**, those edits are 
 
 ## Recovery and validation
 
+### Back up or restore a Reports database
+
+1. Open the Reports database you want to protect. Check its name in the main window.
+2. Choose **File > Back up Reports database…**. Confirm the source shown in the dialog and choose a new backup file.
+3. Click **Verify and back up** and wait for confirmation. The backup contains committed database changes. Apply any edits you want to keep before starting the backup.
+
+To recover, choose **File > Restore database copy…**. Select the saved backup and an unused destination, then click **Verify and restore**. After verification succeeds, use **File > Open database…** to inspect the restored copy before returning to work. The backup and the currently open database remain available throughout the restore.
+
+If verification fails or the destination already exists, keep the original files and read the error shown in the dialog. Retry with a verified Reports backup and a new filename. Keep Industrial cache backups in the Industrial workflow.
+
+To open a supported older Reports database, choose **File > Restore database copy…**. Select the older database or its backup, check **Upgrade to the current Reports schema**, and choose a new destination. The copy includes committed changes still in the original database's write-ahead log. When verification succeeds, use **File > Open database…** to open the upgraded copy. Use the same restore dialog with the checkbox clear when you need a copy in the older database format.
+
+If a Reports operation upgrades an older database in place, Metroliza first saves a verified copy in the same folder. Look for `metroliza-reports-pre-migration-<id>.sqlite`. If verification or the upgrade fails, keep the original files and use the verified recovery copy with **File > Restore database copy…**.
+
 ### I selected the wrong database
 
 Click **Select DB file** and choose the correct `.db` file. Check that the values in the tables match the reports you meant to edit before applying changes.

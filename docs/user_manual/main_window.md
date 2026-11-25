@@ -194,10 +194,11 @@ Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly
 
 Opens or raises the
 [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog using the local realtime sample/event store. Selecting a Metroliza report
-database first is optional. If no database is selected, Metroliza creates a temporary
-session SQLite store so the dashboard and future monitoring setup can open without
-changing a report database. Select or create a persistent database only when you want
-the realtime samples and anomaly events to remain available after the session.
+database first is optional. Metroliza uses a temporary session store until you open
+an existing database or import into a new one in Reports. After an import creates
+a new database, open or reopen Industrial Data or Realtime Monitor to use it. You
+can still use temporary storage and save a separate copy of your realtime session
+when switching databases or closing Metroliza.
 
 Use the **SQL query** tab only when guided filters are not enough or when IT/MES support gives you a reviewed read-only query. **Preview SQL** reads a small sample first; the default preview is `5` rows. Use **Open recipe...** and **Save recipe...** for reusable SQL queries such as a shift, station, work order, or date range.
 

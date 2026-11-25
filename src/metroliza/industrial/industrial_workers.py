@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import nullcontext
 from functools import partial
 import sys as _sys
 from pathlib import Path
@@ -119,13 +120,16 @@ class IndustrialLinkRefreshThread(QThread):
     summary_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, db_file: str):
+    def __init__(self, db_file: str, *, connection_scope=nullcontext):
         super().__init__()
         self.db_file = db_file
+        self._connection_scope = connection_scope
 
     def run(self):
         try:
-            self.summary_ready.emit(materialize_industrial_report_links(self.db_file))
+            with self._connection_scope() as connection:
+                options = {"connection": connection} if connection is not None else {}
+                self.summary_ready.emit(materialize_industrial_report_links(self.db_file, **options))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
 
@@ -144,11 +148,13 @@ class RealtimeMonitorPollThread(WorkerCancellationMixin, QThread):
         db_file: str,
         configs: tuple[RealtimeMonitorConfig | RealtimePollConfig, ...],
         adapter: SourceDbAdapter | None = None,
+        connection_scope=nullcontext,
     ):
         super().__init__()
         self.db_file = db_file
         self.configs = tuple(configs or ())
         self.adapter = adapter
+        self._connection_scope = connection_scope
         self.cancellation_token = None
         self._init_cancellation_state()
 
@@ -175,13 +181,15 @@ class RealtimeMonitorPollThread(WorkerCancellationMixin, QThread):
             if self._is_cancelled():
                 self.cancelled.emit("Realtime industrial polling was cancelled.")
                 return
-            runtime = RealtimeSourceRuntime(
-                database=self.db_file,
-                configs=self._poll_configs(),
-                adapter=self.adapter or self._default_adapter(),
-            )
-            self.update_label.emit("Polling realtime industrial sources...")
-            results = runtime.poll_once()
+            with self._connection_scope() as connection:
+                runtime = RealtimeSourceRuntime(
+                    database=self.db_file,
+                    configs=self._poll_configs(),
+                    adapter=self.adapter or self._default_adapter(),
+                    connection=connection,
+                )
+                self.update_label.emit("Polling realtime industrial sources...")
+                results = runtime.poll_once()
             if self._is_cancelled():
                 self.cancelled.emit("Realtime industrial polling was cancelled.")
                 return
@@ -199,16 +207,19 @@ class RealtimeDashboardWriterThread(QThread):
     result_ready = pyqtSignal(object)
     error_occurred = pyqtSignal(str)
 
-    def __init__(self, *, db_file: str, output_file: str):
+    def __init__(self, *, db_file: str, output_file: str, connection_scope=nullcontext):
         super().__init__()
         self.db_file = db_file
         self.output_file = output_file
+        self._connection_scope = connection_scope
 
     def run(self):
         try:
             output_path = Path(self.output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            with self._connection_scope() as connection:
+                service = RealtimeDashboardService(self.db_file, connection=connection)
+                snapshot = service.dashboard_snapshot()
             self.result_ready.emit(write_realtime_dashboard_html(snapshot, output_path))
         except Exception as exc:
             self.error_occurred.emit(redact_sensitive_text(exc))
@@ -230,6 +241,7 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         grouping_state: IndustrialGroupingState,
         include_charts: bool,
         include_raw_data: bool = True,
+        connection_scope=nullcontext,
     ):
         super().__init__()
         self.db_file = db_file
@@ -238,21 +250,25 @@ class IndustrialExportThread(WorkerCancellationMixin, QThread):
         self.grouping_state = grouping_state
         self.include_charts = include_charts
         self.include_raw_data = include_raw_data
+        self._connection_scope = connection_scope
         self._init_cancellation_state()
 
     def run(self):
         try:
-            self.result_ready.emit(
-                export_cached_industrial_workbook(
-                    db_file=self.db_file,
-                    output_file=self.output_file,
-                    filter_state=self.filter_state,
-                    grouping_state=self.grouping_state,
-                    include_charts=self.include_charts,
-                    include_raw_data=self.include_raw_data,
-                    cancel_check=self._is_cancelled,
+            with self._connection_scope() as connection:
+                options = {"connection": connection} if connection is not None else {}
+                self.result_ready.emit(
+                    export_cached_industrial_workbook(
+                        db_file=self.db_file,
+                        output_file=self.output_file,
+                        filter_state=self.filter_state,
+                        grouping_state=self.grouping_state,
+                        include_charts=self.include_charts,
+                        include_raw_data=self.include_raw_data,
+                        cancel_check=self._is_cancelled,
+                        **options,
+                    )
                 )
-            )
         except IndustrialExportCancelled as exc:
             self.cancelled.emit(redact_sensitive_text(exc))
         except Exception as exc:
@@ -616,6 +632,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         test_only: bool,
         fetch_state: IndustrialFetchState | None = None,
         report_db_file: str | None = None,
+        connection_scope=nullcontext,
     ):
         super().__init__()
         self.db_file = db_file
@@ -628,12 +645,21 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
         self.reference_values = reference_values
         self.fetch_state = fetch_state
         self.report_db_file = report_db_file
+        self._connection_scope = connection_scope
         self.test_only = test_only
         self.cancellation_token = None
         self._init_cancellation_state()
 
     def run(self):
-        repository = IndustrialDataRepository(self.db_file)
+        try:
+            with self._connection_scope() as connection:
+                self._run_sync(connection)
+        except Exception as exc:
+            self.error_occurred.emit(redact_sensitive_text(exc))
+
+    def _run_sync(self, connection):
+        options = {"connection": connection} if connection is not None else {}
+        repository = IndustrialDataRepository(self.db_file, **options)
         sync_run_id: int | None = None
         sync_run_terminal_persisted = False
         try:
@@ -836,7 +862,7 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 if self.report_db_file:
                     self.progress_message.emit("Refreshing industrial report links...")
                     try:
-                        link_summary = materialize_industrial_report_links(self.report_db_file)
+                        link_summary = self._materialize_report_links(connection)
                     except Exception as exc:
                         post_persist_warnings.append(
                             f"Industrial report-link refresh failed: {redact_sensitive_text(exc)}"
@@ -915,6 +941,11 @@ class IndustrialOznakSyncThread(WorkerCancellationMixin, QThread):
                 except Exception:
                     pass
             self.error_occurred.emit(sanitized_error)
+
+    def _materialize_report_links(self, connection):
+        if connection is not None and self.report_db_file == self.db_file:
+            return materialize_industrial_report_links(self.report_db_file, connection=connection)
+        return materialize_industrial_report_links(self.report_db_file)
 
     def _emit_progress_from_diagnostic(self, diagnostic: Any) -> None:
         self.progress_message.emit(redact_sensitive_text(diagnostic_progress_message(diagnostic)))

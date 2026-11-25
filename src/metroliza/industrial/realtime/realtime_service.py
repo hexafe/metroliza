@@ -85,11 +85,12 @@ def run_polling_cycle(
     adapter: SourceDbAdapter,
     detector_runner: DetectorRunner | None = None,
     stop_check: Callable[[], bool] | None = None,
+    connection=None,
 ) -> PollingCycleResult:
     """Poll bounded chunks until exhausted, stopped, or the per-cycle catch-up cap is reached."""
 
     validated = config.validated()
-    offset_store = StreamOffsetStore(database)
+    offset_store = StreamOffsetStore(database, connection=connection)
     previous_offset = offset_store.get_offset(
         source_profile_id=validated.source_profile_id,
         stream_key=validated.stream_key,
@@ -114,6 +115,7 @@ def run_polling_cycle(
             adapter=adapter,
             detector_runner=detector_runner,
             stop_check=stop_check,
+            connection=connection,
         )
         chunk_results.append(result)
         if result.status in {"failed", "cancelled"}:
@@ -168,13 +170,14 @@ def _run_polling_chunk(
     adapter: SourceDbAdapter,
     detector_runner: DetectorRunner | None = None,
     stop_check: Callable[[], bool] | None = None,
+    connection=None,
 ) -> PollingCycleResult:
     """Fetch and atomically persist one bounded realtime source chunk."""
 
     validated = config.validated()
-    sample_repository = RealtimeSampleRepository(database)
-    offset_store = StreamOffsetStore(database)
-    stream_repository = RealtimeEventStreamRepository(database)
+    sample_repository = RealtimeSampleRepository(database, connection=connection)
+    offset_store = StreamOffsetStore(database, connection=connection)
+    stream_repository = RealtimeEventStreamRepository(database, connection=connection)
     existing_offset = offset_store.get_offset(
         source_profile_id=validated.source_profile_id,
         stream_key=validated.stream_key,
@@ -514,7 +517,7 @@ def _commit_mapped_chunk(
         return batch_result, stream_append_result, saved_offset
 
     try:
-        return run_transaction_with_retry(database, _commit)
+        return run_transaction_with_retry(database, _commit, connection=sample_repository.connection)
     except Exception as exc:
         raise PollChunkPersistenceError(stage, exc) from exc
 

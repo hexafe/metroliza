@@ -156,11 +156,15 @@ def test_report_bootstrap_preserves_industrial_timestamp_migration(tmp_path: Pat
 
         report_schema.ensure_report_schema(db_path, connection=connection)
 
+        assert connection.in_transaction
+        with closing(sqlite3.connect(db_path)) as reader:
+            assert reader.execute("SELECT COUNT(*) FROM industrial_source_profiles").fetchone() == (0,)
         created_at = connection.execute(
             "SELECT created_at FROM industrial_source_profiles WHERE profile_key = 'line-a'"
         ).fetchone()[0]
         migration_version = connection.execute(
             "SELECT value FROM app_schema WHERE key = 'industrial_timestamp_storage_format'"
         ).fetchone()[0]
+        connection.commit()
     assert created_at == "2026-07-11T08:00:00.000000Z"
     assert migration_version == industrial_data_schema.TIMESTAMP_STORAGE_FORMAT

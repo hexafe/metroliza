@@ -1852,7 +1852,7 @@ jobs:
           METROLIZA_COMMAND_TEST_DPR: '1'
         run: |
           Set-DisplayResolution -Width 1920 -Height 1080 -Force
-          python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py tests/test_command_matrix.py
+          python -m pytest -vv -s tests/test_report_workspace_shell.py tests/test_report_workspace_geometry.py tests/test_main_window_metadata_ui.py tests/test_active_dialog_close_guards.py tests/test_command_matrix.py tests/test_database_restore_dialog.py
 
       - name: Run native Windows specialist geometry tests
         if: ${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}

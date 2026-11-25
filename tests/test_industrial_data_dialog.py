@@ -1037,8 +1037,11 @@ def test_launcher_export_uses_temporary_cache_without_metroliza_database(monkeyp
 
 
 def test_launcher_can_select_metroliza_database_and_enable_oznak_actions(monkeypatch, tmp_path):
+    from metroliza.reports.report_schema import ensure_report_schema
+
     _app()
     db_path = tmp_path / "metroliza.db"
+    ensure_report_schema(str(db_path))
 
     class ParentWindow(QWidget):
         def __init__(self):

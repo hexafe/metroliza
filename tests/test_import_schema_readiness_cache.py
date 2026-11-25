@@ -86,7 +86,8 @@ def test_change_by_another_connection_is_detected_before_the_next_probe(
 def test_negative_verdict_is_never_stored(tmp_path, monkeypatch):
     database = tmp_path / "reports.sqlite3"
     ensure_report_schema(str(database))
-    with closing(connect_sqlite(str(database))) as other:
+    with closing(connect_sqlite(str(database), initialize_wal=False)) as other:
+        assert other.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
         other.execute("UPDATE app_schema SET value = '0' WHERE key = 'schema_version'")
         other.commit()
     calls = _count_full_checks(monkeypatch)
@@ -168,7 +169,8 @@ def test_schema_damaged_by_another_connection_mid_import_is_repaired_like_before
         ) is ReportImportDisposition.IMPORTED
         assert len(ensure_calls) == 1  # ready, no schema work
 
-        with closing(connect_sqlite(str(database))) as other:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
+        with closing(connect_sqlite(str(database), initialize_wal=False)) as other:
             other.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
             other.commit()
         assert repository._import_schema_is_ready() is False

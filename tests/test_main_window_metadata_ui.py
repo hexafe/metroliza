@@ -1,5 +1,6 @@
 from contextlib import closing
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import types
@@ -8,6 +9,7 @@ import unittest
 import pytest
 from unittest.mock import patch
 
+from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.shortcuts import plain_text
 
 try:
@@ -172,6 +174,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 source_object_name="events",
             )
             durable_db = str(Path(temp_dir) / "durable.db")
+            ensure_report_schema(durable_db)
 
             with patch(
                 "metroliza.ui.main_window.QMessageBox.question",
@@ -226,6 +229,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     source_object_name="events",
                 )
                 durable_db = str(Path(temp_dir) / "durable.db")
+                ensure_report_schema(durable_db)
                 saved_copy = Path(temp_dir) / "saved-session.sqlite"
 
                 with (
@@ -348,6 +352,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                 source_object_name="events",
             )
             durable_db = str(Path(temp_dir) / "durable.db")
+            ensure_report_schema(durable_db)
             dialog.poll_timer.start(60_000)
 
             window.set_db_file(durable_db)
@@ -378,6 +383,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             original_db = str(Path(temp_dir) / "original.db")
             replacement_db = str(Path(temp_dir) / "replacement.db")
+            ensure_report_schema(original_db)
+            ensure_report_schema(replacement_db)
             window.set_db_file(original_db)
             window.launch_realtime_industrial_monitoring_dialog()
             dialog = window.realtime_monitoring_dialog
@@ -412,6 +419,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             original_db = str(Path(temp_dir) / "original.db")
             replacement_db = str(Path(temp_dir) / "replacement.db")
+            ensure_report_schema(original_db)
+            ensure_report_schema(replacement_db)
             window.set_db_file(original_db)
             window.launch_realtime_industrial_monitoring_dialog()
             dialog = window.realtime_monitoring_dialog
@@ -439,6 +448,7 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         try:
             with tempfile.TemporaryDirectory() as temp_dir:
                 db_path = str(Path(temp_dir) / "monitoring.db")
+                ensure_report_schema(db_path)
                 window.set_db_file(db_path)
 
                 window.launch_realtime_industrial_monitoring_dashboard()
@@ -458,6 +468,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp_dir:
                 first_db = str(Path(temp_dir) / "first.db")
                 second_db = str(Path(temp_dir) / "second.db")
+                ensure_report_schema(first_db)
+                ensure_report_schema(second_db)
                 window.set_db_file(first_db)
                 window.launch_realtime_industrial_monitoring_dialog()
                 first_dialog = window.realtime_monitoring_dialog
@@ -516,7 +528,9 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     window.set_db_file(str(db_path))
                     window.set_db_file(str(db_path))
 
-                repository_type.assert_called_once_with(str(db_path.resolve()))
+                repository_type.assert_called_once()
+                self.assertEqual(repository_type.call_args.args, (str(db_path.resolve()),))
+                self.assertIsInstance(repository_type.call_args.kwargs["connection"], sqlite3.Connection)
                 repository_type.return_value.recover_abandoned_sync_staging_at_startup.assert_called_once_with()
                 self.assertIn("1 run(s), 7 row(s)", window.statusBar().currentMessage())
         finally:
@@ -1283,7 +1297,9 @@ class TestMainWindowMetadataUi(unittest.TestCase):
             return snapshot(service)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            window.set_db_file(str(Path(temp_dir) / "realtime.db"))
+            database = str(Path(temp_dir) / "realtime.db")
+            ensure_report_schema(database)
+            window.set_db_file(database)
             with patch(
                 "metroliza.ui.realtime_industrial_monitoring_dialog.default_industrial_source_config_path",
                 return_value=Path(temp_dir) / "unused-sources.yaml",
@@ -1432,6 +1448,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             first_db = str(Path(temp_dir) / "first.db")
             second_db = str(Path(temp_dir) / "second.db")
+            ensure_report_schema(first_db)
+            ensure_report_schema(second_db)
             window.set_db_file(first_db)
             window.launch_realtime_industrial_monitoring_dialog()
             realtime = window.realtime_monitoring_dialog

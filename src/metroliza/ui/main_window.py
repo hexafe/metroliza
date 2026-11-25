@@ -10,7 +10,12 @@ from time import perf_counter
 from typing import Callable
 
 from metroliza.app.startup_profile import record_event
-from metroliza.reports.db import sqlite_query_only_connection_scope
+from metroliza.reports.db import (
+    DatabaseSourceChanged,
+    SQLiteFileBinding,
+    sqlite_readonly_connection_scope,
+    sqlite_selected_reports_connection_scope,
+)
 from metroliza.resources.app_assets import encoded_icon
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui.help_menu import build_help_menu
@@ -235,7 +240,9 @@ class MainWindow(QMainWindow):
         self.last_realtime_dashboard_db_path = None
         self._realtime_session_db_path = None
         self._pending_realtime_database = None
-        self._recovered_realtime_db_paths: set[str] = set()
+        self._pending_realtime_source = None
+        self._recovered_realtime_db_paths: set[SQLiteFileBinding] = set()
+        self._accepted_database_source = None
         self._close_deferred_for_realtime = False
         self._close_deferred_for_children = False
         self._close_deferred_for_reports = False
@@ -526,6 +533,7 @@ class MainWindow(QMainWindow):
         """Set up the menu actions for the main window."""
         self.file_menu = self.menuBar().addMenu("&File")
         self.open_database_action = self.file_menu.addAction("Open database…", self._choose_database)
+        self.file_menu.addAction("Back up Reports database…", self._launch_database_backup)
         self.file_menu.addAction("Restore database copy…", self._launch_database_restore)
         self.choose_report_folder_action = self.file_menu.addAction("Choose report folder…", self._choose_report_folder)
         self.save_workspace_action = self.file_menu.addAction("Save workspace…", self._save_workspace_file)
@@ -734,14 +742,39 @@ class MainWindow(QMainWindow):
             if filename:
                 self._open_recent_location("databases", filename)
 
+    def _launch_database_backup(self):
+        if not self.db_file:
+            self.statusBar().showMessage("Open a Reports database before creating a backup.", 5000)
+            return
+        self._open_database_copy_dialog("backup_database", create_backup=True)
+
     def _launch_database_restore(self):
+        self._open_database_copy_dialog("restore_database")
+
+    def _open_database_copy_dialog(self, window_id, *, create_backup=False):
         from metroliza.ui.database_restore_dialog import DatabaseRestoreDialog
 
+        def create_dialog(snapshot):
+            dialog = DatabaseRestoreDialog(
+                self, snapshot.database_file, create_backup=create_backup,
+                source_binding=self._database_source_binding(snapshot.database_file) if create_backup else None,
+            )
+            dialog.copy_failed_on_close.connect(lambda: self._show_database_copy_failure(window_id))
+            return dialog
+
         self._open_coordinated_window(
-            "restore_database", lambda snapshot: DatabaseRestoreDialog(self, snapshot.database_file),
+            window_id, create_dialog,
             context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
             context_policy=WindowContextPolicy.CLOSE,
         )
+
+    def _show_database_copy_failure(self, window_id):
+        self._on_coordinated_close_deferral_cancelled(window_id)
+        self.workspace_notice_label.setText(
+            "The database copy failed. Open the backup or restore dialog to try again."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.show()
 
     def _choose_report_folder(self):
         if self._report_context_change_allowed():
@@ -840,10 +873,16 @@ class MainWindow(QMainWindow):
         """Validate existing SQLite without creating it; only real rows imply readiness."""
         if not db_file or not Path(db_file).is_file():
             return False
+        from metroliza.reports.report_schema import (
+            ReportUpgradeAsCopyRequired,
+            UnsupportedReportSchema,
+            check_report_schema_version,
+        )
+
         try:
-            # Plain path, not a file: URI: SQLite rejects URI authorities, so UNC shares
-            # (and mapped drives that resolve() turns into UNC) would be refused.
-            with sqlite_query_only_connection_scope(str(db_file), plain_path=True, timeout_s=0.1) as db:
+            # Keep the user's mapped drive path rather than resolving it to a UNC alias.
+            with sqlite_readonly_connection_scope(str(db_file), resolve_path=False, timeout_s=0.1) as db:
+                check_report_schema_version(db, opening=True)
                 for table, query in (("parsed_reports", "SELECT 1 FROM parsed_reports LIMIT 1"),
                                      ("reports", "SELECT 1 FROM REPORTS LIMIT 1")):
                     exists = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND lower(name)=? LIMIT 1",
@@ -851,9 +890,16 @@ class MainWindow(QMainWindow):
                     if exists is not None and db.execute(query).fetchone() is not None:
                         return True
                 return False
+        except (ReportUpgradeAsCopyRequired, UnsupportedReportSchema) as error:
+            QMessageBox.warning(self, "Cannot open database", f"{error} The current database was kept.")
+            return None
         except sqlite3.OperationalError:
-            # Busy/locked or temporarily unreadable: keep the selection, just not export-ready.
-            return False
+            QMessageBox.warning(
+                self, "Cannot open database",
+                "Metroliza could not read the selected database. Try again when it is available. "
+                "The current database was kept.",
+            )
+            return None
         except (sqlite3.DatabaseError, OSError, ValueError):
             QMessageBox.warning(self, "Cannot open database", "Select a readable SQLite database. The current database was kept.")
             return None
@@ -1121,12 +1167,14 @@ class MainWindow(QMainWindow):
 
             host = ReportsWorkspace(self.reports_page)
             host.operation_start_allowed = self._report_start_allowed
+            host.database_source_binding = self._database_source_binding
             self._reports_workspace = host
             self.parsing_dialog = host
             host.source_change_requested.connect(self.set_directory)
             host.database_change_requested.connect(self.set_db_file)
             host.metadata_enrichment_requested.connect(self.start_metadata_enrichment_from_parsing)
             host.state_changed.connect(self._sync_workflow_next_step)
+            host.import_destination_created.connect(self._on_report_import_destination_created)
             host.import_batch_finished.connect(self._on_report_import_batch_finished)
             host.shutdown_ready.connect(self._on_reports_shutdown_ready)
             self._reports_layout.insertWidget(0, host, 1)
@@ -1286,11 +1334,6 @@ class MainWindow(QMainWindow):
         if set_report_workspace_busy is not None:
             set_report_workspace_busy(busy)
         if reports is not None:
-            if reports.import_succeeded and not self._export_ready and self.db_file and Path(self.db_file).is_file():
-                # A database created by this import becomes a recent location once it exists.
-                self.recent_locations.record("databases", self.db_file)
-                self._refresh_recent_menus()
-            self._export_ready = self._export_ready or reports.import_succeeded
             reports.set_export_primary(not busy and self._export_ready)
         caption = self._home_next_caption(reports, busy)
         choosing_source = not self.directory and not busy and not self._export_ready
@@ -1357,8 +1400,22 @@ class MainWindow(QMainWindow):
         if batch is None:
             shortcut_tooltip(self.export_button, "export_workbook")
 
+    def _on_report_import_destination_created(self, selected, created):
+        if (selected is None or selected.identity is not None
+                or self._database_source_binding(self.db_file) != selected):
+            return
+        try:
+            created.require(self.db_file)
+        except (DatabaseSourceChanged, OSError):
+            return
+        self._accepted_database_source = (str(self.db_file), created.binding)
+
     def _on_report_import_batch_finished(self, batch):
-        self._last_report_import = batch if batch is not None and batch.matches_database(self.db_file) else None
+        self._last_report_import = None
+        if batch is not None and batch.matches_database(self.db_file):
+            binding = self._database_source_binding(self.db_file)
+            if binding is None or binding.identity == batch.database_identity:
+                self._last_report_import = batch
         update_export = getattr(self.export_dialog, "set_import_batch", None)
         if update_export is not None:
             update_export(self._last_report_import)
@@ -1726,6 +1783,7 @@ class MainWindow(QMainWindow):
         self._sync_module_launchers()
         if window_id == "realtime_monitor":
             self._pending_realtime_database = None
+            self._pending_realtime_source = None
         attribute = self._coordinated_window_attributes.get(window_id)
         if attribute:
             setattr(self, attribute, None)
@@ -1927,7 +1985,10 @@ class MainWindow(QMainWindow):
             if self._is_qwidget_type(IndustrialDataDialog):
                 self.industrial_data_dialog = self._open_coordinated_window(
                     "industrial_data",
-                    lambda snapshot: IndustrialDataDialog(self, snapshot.database_file),
+                    lambda snapshot: IndustrialDataDialog(
+                        self, snapshot.database_file,
+                        source_binding=self._database_source_binding(snapshot.database_file),
+                    ),
                     context_policy=WindowContextPolicy.UPDATE,
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                     context_updater=lambda dialog, snapshot: dialog.update_db_file(
@@ -1970,14 +2031,12 @@ class MainWindow(QMainWindow):
                     )
                     return
             if self._is_qwidget_type(RealtimeIndustrialMonitoringDialog):
-                def create_realtime(snapshot):
-                    resolved_db = snapshot.database_file
-                    if not resolved_db:
-                        resolved_db, _temporary = self._realtime_dashboard_db_file()
+                def create_realtime(_snapshot):
                     dialog = RealtimeIndustrialMonitoringDialog(
                         self,
-                        resolved_db,
-                        temporary_session=self._is_realtime_session_database(resolved_db),
+                        dashboard_db_path,
+                        temporary_session=using_session_db,
+                        source_binding=self._database_source_binding(dashboard_db_path),
                     )
                     dialog.shutdown_complete.connect(
                         self._on_realtime_monitoring_shutdown_complete
@@ -2057,7 +2116,8 @@ class MainWindow(QMainWindow):
         self.launch_realtime_industrial_monitoring_dialog()
 
     def _realtime_dashboard_db_file(self):
-        if self.db_file:
+        binding = self._database_source_binding(self.db_file)
+        if self.db_file and (binding is None or binding.identity is not None):
             return self.db_file, False
         if self._realtime_session_db_path is None or not self._realtime_session_db_path.exists():
             session_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_sessions"
@@ -2195,10 +2255,14 @@ class MainWindow(QMainWindow):
             return False, None
         return True, destination
 
-    def _rebind_realtime_dialog(self, dialog, database: str) -> bool:
+    def _rebind_realtime_dialog(self, dialog, database: str, *, source_binding=None) -> bool:
+        binding = source_binding or self._database_source_binding(database)
+        if binding is not None and binding.identity is None:
+            return False
         active_check = getattr(dialog, "is_monitoring_active", None)
         if callable(active_check) and active_check():
             self._pending_realtime_database = database
+            self._pending_realtime_source = binding
             dialog.rebind_database(database)
             return False
         moving_from_session = self._is_realtime_session_database(
@@ -2211,9 +2275,10 @@ class MainWindow(QMainWindow):
             )
             if not approved:
                 return False
-        if not dialog.rebind_database(database):
+        if not self._apply_realtime_database_binding(dialog, database, binding):
             return False
         self._pending_realtime_database = None
+        self._pending_realtime_source = None
         if moving_from_session:
             self._cleanup_realtime_session_db()
             set_storage_mode = getattr(dialog, "set_temporary_session_storage", None)
@@ -2227,15 +2292,33 @@ class MainWindow(QMainWindow):
         set_status_variant(self.workspace_notice_label, "success")
         return True
 
+    def _apply_realtime_database_binding(self, dialog, database, binding):
+        if binding is None:
+            return dialog.rebind_database(database)
+        try:
+            binding.require(database)
+        except DatabaseSourceChanged as error:
+            if self._database_source_binding(database) == binding:
+                self._export_ready = False
+                self._sync_workflow_next_step()
+            QMessageBox.warning(self, "Cannot switch realtime database", str(error))
+            return False
+        rebind_selected = getattr(dialog, "rebind_selected_database", None)
+        if callable(rebind_selected):
+            return rebind_selected(database, binding)
+        return dialog.rebind_database(database)
+
     def _retry_pending_realtime_rebind(self) -> None:
         database = self._pending_realtime_database
+        binding = self._pending_realtime_source
         dialog = self.realtime_monitoring_dialog
         self._pending_realtime_database = None
+        self._pending_realtime_source = None
         if not database or dialog is None:
             return
         if getattr(dialog, "db_file", None) == database:
             return
-        if not self._rebind_realtime_dialog(dialog, database):
+        if not self._rebind_realtime_dialog(dialog, database, source_binding=binding):
             self.workspace_notice_label.setText(
                 "Realtime Monitor is still using its previous database. Resolve its temporary "
                 "session data before switching monitor context."
@@ -2300,54 +2383,117 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log_and_exit(e)
 
-    def set_db_file(self, db_file, *, workspace_source=_UNCHANGED_WORKSPACE_SOURCE):
+    def select_industrial_report_database(self, dialog, db_file) -> bool:
+        """Admit an Industrial picker selection before either window adopts it."""
+        return self.set_db_file(db_file, _industrial_picker=dialog)
+
+    def _database_source_binding(self, db_file):
+        accepted = self._accepted_database_source
+        if accepted is not None and accepted[0] == str(db_file):
+            return accepted[1]
+        return None
+
+    def _database_source_is_current(self, db_file):
+        binding = self._database_source_binding(db_file)
+        if binding is None:
+            return True
         try:
-            if not self._report_selection_change_allowed(db_file, self.db_file, database=True):
+            binding.require(db_file)
+        except DatabaseSourceChanged as error:
+            self._export_ready = False
+            self.statusBar().showMessage(str(error), 5000)
+            return False
+        return True
+
+    def set_db_file(self, db_file, *, workspace_source=_UNCHANGED_WORKSPACE_SOURCE, _industrial_picker=None):
+        try:
+            binding = SQLiteFileBinding.capture(db_file) if db_file and str(db_file) != ":memory:" else None
+            if not self._database_copy_allows_selection(db_file) or not self._report_selection_change_allowed(
+                db_file, self.db_file, database=True,
+            ):
                 return False
             readiness = self._inspect_database(db_file)
             if readiness is None:
                 return False
-            if not self._industrial_database_change_allowed(db_file):
+            return self._accept_database_selection(db_file, binding, readiness, workspace_source, _industrial_picker)
+        except (DatabaseSourceChanged, ValueError, OSError) as error:
+            QMessageBox.warning(self, "Cannot open database", f"{error} The current database was kept.")
+            return False
+        except Exception as error:
+            self.log_and_exit(error)
+
+    def _accept_database_selection(self, db_file, binding, readiness, workspace_source, industrial_picker):
+        if binding is not None:
+            binding.require(db_file)
+        prepared = self._prepare_industrial_database_change(db_file, industrial_picker)
+        if prepared is None:
+            return False
+        dialog, target = prepared
+        try:
+            if not self._database_copy_allows_selection(db_file):
                 return False
-            self.workspace_notice_label.setVisible(False)
-            recovery_result = self._recover_abandoned_realtime_staging(db_file)
-            self._export_ready = readiness
-            self._apply_database_location(db_file, workspace_source)
-            if db_file and Path(db_file).is_file():
-                self.recent_locations.record("databases", db_file)
-                self._refresh_recent_menus()
-            self._sync_workflow_next_step()
-            realtime = self.realtime_monitoring_dialog
-            if (
-                realtime is not None
-                and realtime is not self.window_coordinator.get("realtime_monitor")
-                and realtime.isVisible()
-                and getattr(realtime, "db_file", None) != db_file
-            ):
-                rebound = bool(
-                    hasattr(realtime, "rebind_database")
-                    and self._rebind_realtime_dialog(realtime, str(db_file or ""))
-                )
-                if not rebound:
-                    self.workspace_notice_label.setText(
-                        "Realtime Monitor is still using its previous database. Stop it before "
-                        "switching monitor context, or resolve its temporary session data."
-                    )
-                    set_status_variant(self.workspace_notice_label, "danger")
-                self.workspace_notice_label.setVisible(True)
-            stale_workflows = self._workflows_using_previous_database(db_file)
-            if stale_workflows:
-                self._show_previous_database_workflows_notice(stale_workflows)
-            if recovery_result and recovery_result.get("runs_failed", 0):
-                self.statusBar().showMessage(
-                    "Recovered abandoned industrial sync staging: "
-                    f"{recovery_result['runs_failed']} run(s), "
-                    f"{recovery_result.get('rows_discarded', 0)} row(s) discarded.",
-                    8000,
-                )
+            if binding is not None:
+                binding.require(db_file)
+            recovery = self._recover_abandoned_realtime_staging(db_file, binding)
+            if binding is not None:
+                binding.require(db_file)
+            if dialog is not None:
+                dialog.adopt_workspace_database_change(target, db_file, source_binding=binding)
+            self._activate_database_selection(db_file, binding, readiness, workspace_source)
+            self._announce_database_selection(db_file, recovery)
             return True
-        except Exception as e:
-            self.log_and_exit(e)
+        finally:
+            if dialog is not None:
+                dialog.discard_prepared_workspace_database(target)
+
+    def _activate_database_selection(self, db_file, binding, readiness, workspace_source) -> None:
+        self.workspace_notice_label.setVisible(False)
+        self._accepted_database_source = (str(db_file), binding)
+        self._export_ready = readiness
+        self._apply_database_location(db_file, workspace_source)
+        if db_file and Path(db_file).is_file():
+            self.recent_locations.record("databases", db_file)
+            self._refresh_recent_menus()
+        self._sync_workflow_next_step()
+
+    def _announce_database_selection(self, db_file, recovery_result) -> None:
+        realtime = self.realtime_monitoring_dialog
+        if (
+            realtime is not None
+            and realtime is not self.window_coordinator.get("realtime_monitor")
+            and realtime.isVisible()
+            and getattr(realtime, "db_file", None) != db_file
+        ):
+            rebound = bool(
+                hasattr(realtime, "rebind_database")
+                and self._rebind_realtime_dialog(realtime, str(db_file or ""))
+            )
+            if not rebound:
+                self.workspace_notice_label.setText(
+                    "Realtime Monitor is still using its previous database. Stop it before "
+                    "switching monitor context, or resolve its temporary session data."
+                )
+                set_status_variant(self.workspace_notice_label, "danger")
+            self.workspace_notice_label.setVisible(True)
+        stale_workflows = self._workflows_using_previous_database(db_file)
+        if stale_workflows:
+            self._show_previous_database_workflows_notice(stale_workflows)
+        if recovery_result and recovery_result.get("runs_failed", 0):
+            self.statusBar().showMessage(
+                "Recovered abandoned industrial sync staging: "
+                f"{recovery_result['runs_failed']} run(s), "
+                f"{recovery_result.get('rows_discarded', 0)} row(s) discarded.",
+                8000,
+            )
+
+
+    def _database_copy_allows_selection(self, database):
+        for window_id in ("backup_database", "restore_database"):
+            dialog = self.window_coordinator.get(window_id)
+            if dialog is not None and dialog.owns_destination(database):
+                self.statusBar().showMessage("Wait for the database copy to finish before opening its destination.", 5000)
+                return False
+        return True
 
     def _apply_database_location(self, db_file, workspace_source):
         if workspace_source is _UNCHANGED_WORKSPACE_SOURCE:
@@ -2390,16 +2536,24 @@ class MainWindow(QMainWindow):
             set_status_variant(notice, "danger")
             notice.show()
 
-    def _industrial_database_change_allowed(self, db_file):
-        dialog = self.industrial_data_dialog
-        if dialog and dialog.isVisible() and dialog.update_db_file(db_file) is False:
-            self.workspace_notice_label.setText(
-                "Database change cancelled because temporary industrial data was not resolved."
-            )
-            set_status_variant(self.workspace_notice_label, "warning")
-            self.workspace_notice_label.setVisible(True)
-            return False
-        return True
+    def _prepare_industrial_database_change(self, db_file, picker):
+        dialog = picker if picker is not None else self.industrial_data_dialog
+        if dialog is None or (picker is None and not dialog.isVisible()
+                              and dialog is not self.window_coordinator.get("industrial_data")):
+            return None, None
+        prepare = getattr(dialog, "prepare_workspace_database_change", None)
+        if callable(prepare):
+            target = prepare(db_file)
+            if target is not None:
+                return dialog, target
+        elif dialog.update_db_file(db_file) is not False:
+            return None, None
+        self.workspace_notice_label.setText(
+            "Database change cancelled because temporary industrial data was not resolved."
+        )
+        set_status_variant(self.workspace_notice_label, "warning")
+        self.workspace_notice_label.setVisible(True)
+        return None
 
     def _workflows_using_previous_database(self, database_file) -> tuple[str, ...]:
         labels = []
@@ -2419,17 +2573,18 @@ class MainWindow(QMainWindow):
                 labels.append(label)
         return tuple(labels)
 
-    def _recover_abandoned_realtime_staging(self, db_file):
-        if not db_file or str(db_file) == ":memory:":
+    def _recover_abandoned_realtime_staging(self, db_file, binding):
+        if binding is None or binding.identity is None:
             return None
-        db_path = Path(db_file).expanduser().resolve()
-        db_key = str(db_path)
-        if db_key in self._recovered_realtime_db_paths or not db_path.exists():
+        if binding in self._recovered_realtime_db_paths:
             return None
         from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 
-        result = IndustrialDataRepository(db_key).recover_abandoned_sync_staging_at_startup()
-        self._recovered_realtime_db_paths.add(db_key)
+        with sqlite_selected_reports_connection_scope(db_file, binding) as connection:
+            repository = IndustrialDataRepository(str(db_file), connection=connection)
+            result = repository.recover_abandoned_sync_staging_at_startup()
+        binding.require(db_file)
+        self._recovered_realtime_db_paths.add(binding)
         return result
 
     def set_directory(self, directory):
@@ -2501,7 +2656,7 @@ class MainWindow(QMainWindow):
         return bool(is_active is not None and is_active())
 
     def _report_export_start_allowed(self, database):
-        if not self._recipe_allows_report_work():
+        if not self._database_source_is_current(database) or not self._recipe_allows_report_work():
             return False
         blockers = self._same_database_workflow_labels(database, exclude_export=True)
         if self.is_metadata_enrichment_active():
@@ -2516,7 +2671,7 @@ class MainWindow(QMainWindow):
 
     def _report_start_allowed(self):
         """Keep existing same-database windows safe without closing their work."""
-        if not self._recipe_allows_report_work():
+        if not self._database_source_is_current(self.db_file) or not self._recipe_allows_report_work():
             return False
         if getattr(self.export_dialog, "database_context_transition_active", False):
             self.statusBar().showMessage(
@@ -2547,7 +2702,8 @@ class MainWindow(QMainWindow):
         return False
 
     def _recipe_append_allowed(self, database):
-        return self._pdf_execution_available() and not self._same_database_workflow_labels(database)
+        return (self._database_source_is_current(database) and self._pdf_execution_available()
+                and not self._same_database_workflow_labels(database))
 
     def _on_recipe_database_appended(self, database):
         from metroliza.recipes.bindings import paths_alias
