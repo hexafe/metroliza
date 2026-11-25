@@ -880,6 +880,7 @@ def test_confirmed_delete_shows_rule_scope_impact_and_recovery_guidance(tmp_path
 def test_selected_mapping_cannot_be_deleted_from_replaced_database_context(tmp_path, qapplication_session):
     import importlib
     native, owner = _impact_native_dialog(tmp_path)
+    _wait_impact(qapplication_session, lambda: not owner.is_loading_source_options())
     service = importlib.import_module('metroliza.reports.characteristic_alias_service')
     mapping = {'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
                'scope_type': 'global', 'scope_value': None}
@@ -901,8 +902,9 @@ def test_selected_mapping_cannot_be_deleted_from_replaced_database_context(tmp_p
     assert 'changed after this list was loaded' in warning.call_args.args[2]
     assert service.fetch_all_characteristic_aliases(str(database_path)) == [mapping]
     database_path.write_bytes(b'not a SQLite database')
-    with patch.object(native.QMessageBox, 'critical'):
+    with patch.object(native.QMessageBox, 'critical'), patch.object(native, 'CustomLogger') as logger:
         owner.load_aliases()
+    logger.assert_called_once()
     assert owner.alias_table.rowCount() == 0
     assert owner._selected_mapping() is None
     owner.close()
