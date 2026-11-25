@@ -229,7 +229,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             expected_mapping=mapping,
         ), 1)
 
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection:
             deleted = connection.execute(
                 'SELECT schema_version, mapping_json FROM metroliza_characteristic_alias_deletions'
             ).fetchone()
@@ -237,7 +237,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
         self.assertEqual(json.loads(deleted[1])['canonical_name'], 'Diameter')
         self.assertEqual(json.loads(deleted[1])['scope_value'], 'REF-101')
 
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection:
             recoverable = connection.execute(
                 'SELECT mapping_json FROM metroliza_characteristic_alias_deletions'
             ).fetchone()[0]
@@ -283,7 +283,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             )
 
         self.assertEqual(resolve_characteristic_alias('DIA - X', None, self.db_path), 'Diameter')
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection:
             self.assertEqual(connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name='metroliza_characteristic_alias_deletions'"
@@ -311,7 +311,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             'scope_type': 'global', 'scope_value': None,
         }
         upsert_characteristic_alias(self.db_path, **mapping)
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection, connection:
             connection.execute(
                 "CREATE TRIGGER refuse_alias_delete BEFORE DELETE ON CHARACTERISTIC_ALIASES "
                 "BEGIN SELECT RAISE(ABORT, 'protected alias'); END"
@@ -323,7 +323,7 @@ class TestCharacteristicAliasService(unittest.TestCase):
             )
 
         self.assertEqual(resolve_characteristic_alias('DIA - X', None, self.db_path), 'Diameter')
-        with connect(self.db_path) as connection:
+        with closing(connect(self.db_path)) as connection:
             self.assertIsNone(connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' "
                 "AND name='metroliza_characteristic_alias_deletions'"
