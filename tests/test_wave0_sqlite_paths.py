@@ -1,6 +1,7 @@
 """#1159: database browsing preserves the exact selected file."""
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -67,7 +68,8 @@ def test_database_chooser_preserves_selected_existing_file(monkeypatch, tmp_path
         has_pending_changes=lambda: False, apply_button=SimpleNamespace(setEnabled=lambda _: None),
         db_path_input=fields, load_aliases=lambda: None, load_source_options=lambda: None,
     )
-    monkeypatch.setattr(export_dialog.QFileDialog, "getOpenFileName", lambda *a: (str(selected), ""))
+    open_database = Mock(return_value=(str(selected), ""))
+    monkeypatch.setattr(export_dialog.QFileDialog, "getOpenFileName", open_database)
     monkeypatch.setattr(export_dialog.QFileDialog, "getSaveFileName", lambda *a: (str(selected), ""))
     monkeypatch.setattr(modify_db.ModifyDB, "_refresh_tables_for_view", lambda instance: seen.append(instance.db_file))
     monkeypatch.setattr(characteristic_mapping_dialog, "_alias_csv_busy", lambda _: False)
@@ -77,6 +79,18 @@ def test_database_chooser_preserves_selected_existing_file(monkeypatch, tmp_path
         "modify": modify_db.ModifyDB.select_db_file,
         "mapping": characteristic_mapping_dialog.CharacteristicMappingDialog.select_db_file,
     }
+    if caller == "export":
+        host._settings_locked = MethodType(export_dialog.ExportDialog._settings_locked, host)
+        host.is_export_active = MethodType(export_dialog.ExportDialog.is_export_active, host)
+        host.export_thread = None
+        host._export_starting = False
+        host._report_workspace_busy = False
+        for lock_flag in ("_export_starting", "_report_workspace_busy"):
+            setattr(host, lock_flag, True)
+            methods[caller](host)
+            setattr(host, lock_flag, False)
+        open_database.assert_not_called()
+
     methods[caller](host)
     assert str(selected) in seen
     assert set(tmp_path.iterdir()) == {selected}

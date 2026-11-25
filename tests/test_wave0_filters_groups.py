@@ -372,7 +372,7 @@ def test_b2_f01_reopen_recomputes_scoped_headers_and_warning(scoped_header_dialo
     wait_for_choices(dialog)
     assert "Diameter-NOK" in dialog.header_availability_label.text()
     assert header_values(dialog) == ["SELECT ALL", "Width-OK", "Diameter-NOK"]
-    assert "Unavailable headers: 1" in dialog.filter_summary_label.text()
+    assert "Unavailable selections: 1 (may return 0 rows)" in dialog.filter_summary_label.text()
     assert dialog.filter_summary_label.property("statusVariant") == "warning"
     assert selected(dialog.header_list) == ["Diameter-NOK"]
     with closing(sqlite3.connect(dialog.db_file)) as reader:
@@ -399,7 +399,8 @@ def test_b2_f01_cancel_restores_committed_header_scope_flags(scoped_header_dialo
     assert set(header_values(dialog)) == {"SELECT ALL", "Diameter-NOK", "Depth-NOK"}
     item = dialog.header_list.findItems("Diameter-NOK", Qt.MatchFlag.MatchExactly)[0]
     assert item.data(Qt.ItemDataRole.UserRole) is None
-    assert "Unavailable headers" not in dialog.filter_summary_label.text()
+    assert "Unavailable selections" not in dialog.filter_summary_label.text()
+    assert dialog.filter_summary_label.property("statusVariant") == "success"
     assert not dialog.isVisible()
 
 

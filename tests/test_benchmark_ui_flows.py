@@ -520,6 +520,16 @@ def test_retention_deleted_industrial_host_subclass_fails_closed(tmp_path, qappl
     assert not target.exists()
 
 
+def test_export_completion_waits_for_the_dialog_to_release_worker():
+    scenario = harness.ExportRun()
+    scenario.export = Namespace(export_thread=Namespace(isRunning=lambda: False))
+    ctx = Namespace(marks={"export_finished_end": 1})
+    assert not scenario.done(ctx)
+
+    scenario.export.export_thread = None
+    assert scenario.done(ctx)
+
+
 def test_group_analysis_empty_payload_cannot_be_a_success(tmp_path):
     scenario = harness.GroupAnalysisExport()
     scenario.export = Namespace(export_thread=None)

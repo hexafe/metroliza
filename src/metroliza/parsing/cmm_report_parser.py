@@ -97,6 +97,7 @@ class ReviewedCmmHeaderOcr:
     settings: tuple[tuple[str, str], ...]
 
     def for_current_settings(self) -> tuple[list[dict], dict] | None:
+        """Decode the captured evidence when the active OCR settings still match."""
         if self.settings != _header_ocr_settings():
             return None
         items, diagnostics = json.loads(self.payload)
@@ -830,6 +831,7 @@ class CMMReportParser(BaseReportParser, BaseReportParserPlugin):
         return CMMReportParser._open_report(self, metadata_only=True)
 
     def captured_header_ocr(self) -> ReviewedCmmHeaderOcr | None:
+        """Capture bounded first-page OCR evidence for the approved import."""
         if self._header_extraction_diagnostics.get("header_extraction_mode") != "ocr":
             return None
         try:
