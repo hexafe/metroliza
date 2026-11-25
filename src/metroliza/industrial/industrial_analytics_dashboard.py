@@ -4933,7 +4933,7 @@ def _render_plotly_runtime(
         return !plotlySpecHasStaticImageLayer(spec);
       });
     };
-    const plotlyRenderTokens = new WeakMap();
+    const plotlyRenders = new WeakMap();
     function showPlotlyRenderFailure(target) {
       target.hidden = true;
       target.dataset.plotlyReady = 'error';
@@ -4947,29 +4947,40 @@ def _render_plotly_runtime(
     }
     async function renderPlotlyChart(target, chart, configOverrides = {}, force = false) {
       if (!target || !chart || !chart.plotly_spec || !window.Plotly) return;
-      const token = Symbol();
-      plotlyRenderTokens.set(target, token);
+      const pending = plotlyRenders.get(target);
+      if (force && pending?.initializing) {
+        // Finish the initial plot before replaying the latest dashboard state.
+        pending.refresh = true;
+        return;
+      }
+      let needsNewPlot = !force || target.dataset.plotlyReady !== '1';
+      const render = { initializing: needsNewPlot, refresh: false };
+      plotlyRenders.set(target, render);
       try {
-        const baseSpec = clonePlotlySpec(chart.plotly_spec);
-        const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
         target.dataset.dashboardChartKey = String(chart.id || '');
         const chartKey = typeof dashboardChartKeyForContainer === 'function'
           ? dashboardChartKeyForContainer(target)
           : String(chart.id || '');
-        const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
-          ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
-          : visualSpec;
-        const spec = applyThemeToPlotlySpec(markedSpec);
-        const config = Object.assign({}, spec.config || {}, configOverrides);
-        if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
-          config.doubleClick = 'reset';
-        }
-        if (force && target.dataset.plotlyReady === '1') {
-          await Plotly.react(target, spec.data || [], spec.layout || {}, config);
-        } else {
-          await Plotly.newPlot(target, spec.data || [], spec.layout || {}, config);
-        }
-        if (plotlyRenderTokens.get(target) !== token) return;
+        do {
+          render.refresh = false;
+          const baseSpec = clonePlotlySpec(chart.plotly_spec);
+          const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
+          const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
+            ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
+            : visualSpec;
+          const spec = applyThemeToPlotlySpec(markedSpec);
+          const config = Object.assign({}, spec.config || {}, configOverrides);
+          if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
+            config.doubleClick = 'reset';
+          }
+          if (needsNewPlot) {
+            await Plotly.newPlot(target, spec.data || [], spec.layout || {}, config);
+          } else {
+            await Plotly.react(target, spec.data || [], spec.layout || {}, config);
+          }
+          if (plotlyRenders.get(target) !== render) return;
+          needsNewPlot = false;
+        } while (render.refresh);
         attachRawLayerLegendHandler(target, chart);
         if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {
           window.metrolizaInstallVisualSelectionHandlers(target);
@@ -4977,14 +4988,16 @@ def _render_plotly_runtime(
         target.dataset.plotlyReady = '1';
         return true;
       } catch {
-        if (plotlyRenderTokens.get(target) === token) showPlotlyRenderFailure(target);
+        if (plotlyRenders.get(target) === render) showPlotlyRenderFailure(target);
         return false;
+      } finally {
+        if (plotlyRenders.get(target) === render) plotlyRenders.delete(target);
       }
     }
     function refreshPlotlyCharts() {
       for (const chart of chartData) {
         const target = document.getElementById(chart.id);
-        if (target && target.dataset.plotlyReady === '1') {
+        if (target && (target.dataset.plotlyReady === '1' || plotlyRenders.get(target)?.initializing)) {
           renderPlotlyChart(target, chart, {}, true);
         }
       }
@@ -5042,7 +5055,7 @@ def _render_plotly_runtime(
       });
       lightbox.addEventListener('close', () => {
         if (lightboxPlotly) {
-          plotlyRenderTokens.delete(lightboxPlotly);
+          plotlyRenders.delete(lightboxPlotly);
           Plotly.purge(lightboxPlotly);
           lightboxPlotly.dataset.plotlyReady = '0';
           lightboxPlotly.removeAttribute('data-raw-legend-handler');
