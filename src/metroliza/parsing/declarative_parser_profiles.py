@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import stat
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -1383,6 +1384,66 @@ def enable_profile(plugin_id: str, *, home: Path | None = None) -> Path:
     return target_dir
 
 
+def _is_managed_profile_directory(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISDIR(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise ValueError("The parser profile store requires ordinary directories for removal.")
+    return True
+
+
+def _verify_uninstall_profile_identity(generation: Path, plugin_id: str) -> None:
+    profile = generation / PROFILE_FILE_NAME
+    info = profile.lstat()
+    if not stat.S_ISREG(info.st_mode) or getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise ValueError("Removal requires a regular local profile.yaml file.")
+    try:
+        payload = load_profile_payload(profile)
+    except (ValueError, yaml.YAMLError) as error:
+        raise ValueError("Removal requires a readable profile with a declared plugin ID.") from error
+    if profile_plugin_id(payload) != plugin_id:
+        raise ValueError("The declared plugin ID does not match the selected profile directory.")
+
+
+def uninstall_profile(plugin_id: str, *, state: str | None = None, home: Path | None = None) -> Path:
+    """Remove one managed generation from resolution and keep its recovery copy."""
+    plugin_id = _validate_plugin_id_for_store(plugin_id)
+    locations = (PROFILE_APPROVED_SUBDIR, PROFILE_DISABLED_SUBDIR)
+    if state is not None and state not in locations:
+        raise ValueError("Choose the approved or disabled profile state.")
+
+    with parser_profile_store_lock(home=home):
+        if not _is_managed_profile_directory(profile_store_root(home=home)):
+            raise FileNotFoundError(f"Installed profile not found: {plugin_id}")
+        candidates = []
+        for location in locations if state is None else (state,):
+            parent = profile_state_dir(location, home=home)
+            if _is_managed_profile_directory(parent) and _is_managed_profile_directory(parent / plugin_id):
+                candidates.append(parent / plugin_id)
+        if not candidates:
+            raise FileNotFoundError(f"Installed profile not found: {plugin_id}")
+        if len(candidates) != 1:
+            raise ValueError("Both approved and disabled generations exist. Choose which state to remove.")
+        source, = candidates
+        _verify_uninstall_profile_identity(source, plugin_id)
+
+        backup_root = profile_backups_dir(home=home)
+        backup_root.mkdir(exist_ok=True)
+        _is_managed_profile_directory(backup_root)
+        archive = _new_profile_backup_dir(plugin_id, home=home, label="removed")
+        try:
+            archive.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError("The recovery copy already exists. Retry removal.")
+        source.rename(archive)
+    invalidate_parser_plugin_runtime()
+    return archive
+
+
 def approved_profile_backups(plugin_id: str, *, home: Path | None = None) -> tuple[str, ...]:
     """Return intact backups that belong to this exact profile."""
     plugin_id = _validate_plugin_id_for_store(plugin_id)
@@ -1390,10 +1451,12 @@ def approved_profile_backups(plugin_id: str, *, home: Path | None = None) -> tup
         return tuple(path.name for path in _matching_profile_backups(plugin_id, home=home))
 
 
-def _matching_profile_backups(plugin_id, *, home):
+def _matching_profile_backups(plugin_id, *, home, include_removed=False):
     result = []
     for path in sorted(profile_backups_dir(home=home).glob(f"{plugin_id}-*"), reverse=True):
         if path.is_symlink() or not path.is_dir() or "-rollback-current-" in path.name:
+            continue
+        if not include_removed and "-removed-" in path.name:
             continue
         profile = path / PROFILE_FILE_NAME
         approval = path / APPROVAL_FILE_NAME
@@ -1422,7 +1485,7 @@ def rollback_profile(plugin_id: str, *, backup_name: str | None = None, home: Pa
     plugin_id = _validate_plugin_id_for_store(plugin_id)
     with parser_profile_store_lock(home=home):
         ensure_profile_store_dirs(home=home)
-        candidates = _matching_profile_backups(plugin_id, home=home)
+        candidates = _matching_profile_backups(plugin_id, home=home, include_removed=bool(backup_name))
         if backup_name:
             candidates = [path for path in candidates if path.name == backup_name]
         else:
@@ -1601,6 +1664,7 @@ __all__ = [
     "render_profile_template",
     "rollback_profile",
     "sha256_file",
+    "uninstall_profile",
     "validate_profile_file",
     "validate_profile_payload",
 ]

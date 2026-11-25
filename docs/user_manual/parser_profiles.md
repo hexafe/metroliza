@@ -139,12 +139,54 @@ before validating again.
 Click **Repair Prompt** when validation fails and you want a focused prompt for
 a reviewer or LLM.
 
-The repair prompt includes the validation failure, the current profile, the
-expected-results contract, and the safety rules. Send that prompt with the
-relevant sample and ask for a corrected `profile.yaml` only.
+The repair prompt includes shareable validation check codes and the data-only
+repair rules. The local validation report holds filenames, values and other
+diagnostic details. For external review, attach only the approved synthetic or
+sanitized materials needed to explain the failure. Treat returned YAML as an
+untrusted proposal and ask for a corrected `profile.yaml` only.
 
 After repair, replace only the reviewed profile or expected-results values that
 were wrong, then run **Validate** again.
+For handoffs from older Metroliza builds, generate a fresh **Repair Prompt**
+with the current build. Keep previously saved prompts and raw validation output
+local.
+
+### Record external generation details
+
+When the provider and model are known, use the self-service CLI from a source
+checkout with Metroliza installed to record external generation or repair details locally. Pass the SHA-256 digest of each approved
+input used in the request, with a separate `--input-sha256` for each digest.
+
+```text
+python -m scripts.parser_plugin_self_service record-generation WORKSPACE \
+  --operation repair --provider PROVIDER --model MODEL --model-version VERSION \
+  --input-sha256 INPUT_DIGEST
+```
+
+The command writes a unique JSON file under `artifacts/` with the declared
+provider, model, input digests, and digest of the current `profile.yaml`. Omit
+`--model-version` when it is unknown. The receipt records what you declared.
+Use **Validate** and **Install** to check and approve the profile.
+
+## Profile compatibility
+
+The current profile format is `schema_version: 1`. This is separate from the
+supplier profile's own `plugin.version`. Validation rejects other schema
+versions and keeps the currently approved profile intact. To try a different
+format, keep the original and validate an updated copy with this version's
+handoff template before installing it.
+
+## Remove a managed profile
+
+From a source checkout with Metroliza installed, run the self-service CLI's
+`uninstall PROFILE_ID` command to archive the installed generation. If both an
+approved and a disabled generation exist, specify `--state approved` or
+`--state disabled` to choose one. Reports stops discovering the removed generation.
+
+The command prints the recovery folder. To enable an intact approved generation
+again, run `rollback PROFILE_ID --backup-name RECOVERY_FOLDER_NAME`, using the
+last part of the printed path. Removal archives are selected by name so ordinary
+rollback continues to select a previous installed version.
 
 ## Install
 

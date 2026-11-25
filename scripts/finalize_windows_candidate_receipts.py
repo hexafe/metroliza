@@ -15,6 +15,7 @@ from scripts import qualify_windows_diagnostics as diagnostics
 
 RUNS = (("core-dpr-1.0", "1.0", "default"), ("core-dpr-1.25", "1.25", "default"),
         ("core-dpr-1.5", "1.5", "default"), ("core-native-unavailable", "1.0", "unavailable"))
+PROFILE_IMPORT_RUN = "core-dpr-1.0"
 ARTIFACT_KEYS = set(core.ARTIFACTS) | {
     "import_guards_database", "private_dashboard", "ocr_evidence", "native_evidence",
     "browser_evidence", "process_evidence", "closeout_evidence", "fresh_reopen_evidence", "before_reopen_database",
@@ -112,7 +113,42 @@ def _validate_run(directory, package, head, tree, scale, mode):
     return {"path": str(Path(directory.name) / path.name).replace("\\", "/"), "sha256": core._hash(path)}
 
 
-def finalize(root: Path, head: str, tree: str):
+def _validate_profile_import_probe(root: Path, core_record: dict, *, required: bool) -> dict | None:
+    core_path = root / core_record["path"]
+    path = core_path.with_name(core.PROFILE_PROBE_FILE)
+    if not path.exists() and not path.is_symlink():
+        if required:
+            raise core.CandidateFailure("profile_probe_receipt_missing")
+        return None
+    value = core._json(path, 4096)
+    receipt = core._json(core_path)
+    expected = {field: receipt[field] for field in core.PROFILE_PROBE_BINDING_FIELDS}
+    expected.update(schema_version=1, status="passed", core_driver_receipt_sha256=core_record["sha256"])
+    details = {"observation", "input_sha256", "approval_sha256", "database_sha256"}
+    if (type(value) is not dict or set(value) != set(expected) | details
+            or core._hash(core_path) != core_record["sha256"]
+            or any(type(value[key]) is not type(wanted) or value[key] != wanted for key, wanted in expected.items())):
+        raise core.CandidateFailure("profile_probe_receipt_mismatch")
+    inputs = value["input_sha256"]
+    fixed = core.PROFILE_PROBE_FIXED_INPUT_HASHES
+    if (type(inputs) is not dict or set(inputs) != set(fixed) | {"sample"}
+            or any(inputs[key] != digest for key, digest in fixed.items())
+            or any(type(digest) is not str or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                   for digest in (inputs["sample"], value["approval_sha256"], value["database_sha256"]))):
+        raise core.CandidateFailure("profile_probe_receipt_mismatch")
+    observation = value["observation"]
+    expected_observation = {
+        "parser_id": "synthetic_package_profile", "parser_version": "0.1.0",
+        "template_variant": "synthetic_package_template", "measurement_count": 2, "nok_count": 1,
+    }
+    if (type(observation) is not dict or set(observation) != set(expected_observation)
+            or any(type(observation[key]) is not type(wanted) or observation[key] != wanted
+                   for key, wanted in expected_observation.items())):
+        raise core.CandidateFailure("profile_probe_receipt_mismatch")
+    return {"path": path.relative_to(root).as_posix(), "sha256": core._hash(path)}
+
+
+def finalize(root: Path, head: str, tree: str, *, require_profile_import_probe: bool = False):
     if any(re.fullmatch(r"[0-9a-f]{40}", value) is None for value in (head, tree)):
         raise core.CandidateFailure("combined_source_identity_invalid")
     core._input_directory(root)
@@ -129,6 +165,9 @@ def finalize(root: Path, head: str, tree: str):
     diagnostics._validate_development_artifacts(diag_root, package)
     records = {name: _validate_run(root / name, package, head, tree, scale, mode)
                for name, scale, mode in RUNS}
+    profile_import = _validate_profile_import_probe(root, records[PROFILE_IMPORT_RUN], required=require_profile_import_probe)
+    if profile_import is not None:
+        records["profile_import_probe"] = profile_import
     records["diagnostics"] = {"path": "diagnostics/" + diag_path.name, "sha256": core._hash(diag_path)}
     result = {"schema_version": 1, "status": "passed", "source_sha": head, "source_tree": tree,
               "package_tree_sha256": package["tested_tree_sha256"],
@@ -147,9 +186,11 @@ def main():
     parser.add_argument("--receipt-root", type=Path, required=True)
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--expected-source-tree", required=True)
+    parser.add_argument("--require-profile-import-probe", action="store_true")
     args = parser.parse_args()
     try:
-        finalize(args.receipt_root, args.expected_source_sha, args.expected_source_tree)
+        finalize(args.receipt_root, args.expected_source_sha, args.expected_source_tree,
+                 require_profile_import_probe=args.require_profile_import_probe)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError):
         print('{"status":"failed","reason":"combined_candidate_receipts_invalid"}')
         return 1

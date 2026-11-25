@@ -1,3 +1,4 @@
+from hashlib import sha256
 import importlib.util
 import json
 from pathlib import Path
@@ -146,6 +147,12 @@ def test_handoff_and_integrity_commands_create_self_contained_package(tmp_path, 
     assert (output_dir / "NON_TECHNICAL_STEPS.md").exists()
     assert (output_dir / "handoff_manifest.json").exists()
     assert (output_dir / "contracts" / "07_privacy_redaction_checklist.md").exists()
+    operator_steps = (output_dir / "NON_TECHNICAL_STEPS.md").read_text(encoding="utf-8")
+    step_six = (output_dir / "prompts" / "06_fix_validation_failures.md").read_text(encoding="utf-8")
+    assert "artifacts/profile_repair_prompt.md" in operator_steps
+    assert "keep the raw validation report local" in operator_steps.lower()
+    assert "artifacts/profile_repair_prompt.md" in step_six
+    assert "without the raw validation report" in step_six.lower()
 
     integrity_result = module.main(["integrity", str(output_dir)])
     integrity_output = capsys.readouterr().out
@@ -186,6 +193,98 @@ def test_repair_command_writes_profile_only_prompt_on_validation_failure(tmp_pat
     prompt_text = repair_prompt.read_text(encoding="utf-8")
     assert "Return complete corrected `profile.yaml` only" in prompt_text
     assert "Do not return Python code" in prompt_text
+
+
+def test_record_generation_attaches_only_declared_identifiers_and_input_hashes(tmp_path, capsys):
+    cli = _load_cli_module()
+    workspace = tmp_path / "workspace"
+    assert cli.main(["handoff", "--plugin-id", "receipt_profile", "--output-dir", str(workspace)]) == 0
+    expected = workspace / "expected_results.csv"
+    input_hash = sha256(expected.read_bytes()).hexdigest()
+    profile_hash = sha256((workspace / "profile.yaml").read_bytes()).hexdigest()
+    args = ["record-generation", str(workspace), "--provider", "synthetic-provider", "--model", "model-test",
+            "--model-version", "2026-11", "--input-sha256", input_hash.upper()]
+
+    assert cli.main(args) == 0
+    initial, = (workspace / "artifacts").glob("profile_generation-*.json")
+    assert json.loads(initial.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "evidence": "operator_declared_external_authoring",
+        "operation": "generate",
+        "provider": "synthetic-provider",
+        "model": "model-test",
+        "model_version": "2026-11",
+        "input_sha256": [input_hash],
+        "profile_sha256": profile_hash,
+    }
+    first = initial.read_bytes()
+    assert str(workspace).encode() not in first
+    assert expected.name.encode() not in first
+    assert cli.main([*args, "--operation", "repair", "--input-sha256", input_hash]) == 0
+    followup, = set((workspace / "artifacts").glob("profile_generation-*.json")) - {initial}
+    assert json.loads(followup.read_text(encoding="utf-8"))["operation"] == "repair"
+    assert initial.read_bytes() == first
+
+    capsys.readouterr()
+    assert cli.main([*args, "--input-sha256", "PRIVATE_SAMPLE_VALUE"]) == 2
+    assert "PRIVATE_SAMPLE_VALUE" not in capsys.readouterr().err
+    assert len(list((workspace / "artifacts").glob("profile_generation-*.json"))) == 2
+
+
+@pytest.mark.parametrize("entry", ["workspace", "profile.yaml", "artifacts"])
+def test_record_generation_rejects_redirected_workspace_entries(tmp_path, capsys, entry):
+    cli = _load_cli_module()
+    workspace = tmp_path / "workspace"
+    assert cli.main(["handoff", "--plugin-id", "receipt_profile", "--output-dir", str(workspace)]) == 0
+    original = workspace if entry == "workspace" else workspace / entry
+    outside = tmp_path / "outside"
+    original.replace(outside)
+    try:
+        original.symlink_to(outside, target_is_directory=outside.is_dir())
+    except OSError:
+        pytest.skip("Creating symlinks requires host support")
+    capsys.readouterr()
+    assert cli.main(["record-generation", str(workspace), "--provider", "synthetic-provider", "--model", "model-test",
+                     "--input-sha256", "a" * 64]) == 2
+    assert "ordinary profile workspace" in capsys.readouterr().err
+    assert not list(tmp_path.rglob("profile_generation-*.json"))
+
+
+@pytest.mark.parametrize("entry_point", ["cli", "wizard_artifact"])
+def test_profile_repair_artifact_contains_only_shareable_validation_evidence(tmp_path, capsys, entry_point):
+    from metroliza.parsing.parser_profile_handoff import workspace_from_root, write_profile_repair_prompt
+
+    workspace, profile, sample, expected = _write_fixture_workspace(tmp_path)
+    renamed = sample.with_name("SYNTHETIC_PRIVATE_SAMPLE_950.pdf")
+    sample.rename(renamed)
+    content = expected.read_text(encoding="utf-8")
+    content = content.replace(sample.name, renamed.name).replace("REF123", "SYNTHETIC_PRIVATE_REF_950")
+    expected.write_text(content.replace("10.02", "1234.567"), encoding="utf-8")
+    snippets = workspace / "reference" / "contract_snippets.md"
+    snippets.parent.mkdir()
+    snippets.write_text("SYNTHETIC_PRIVATE_WORKSPACE_SNIPPET_950", encoding="utf-8")
+
+    if entry_point == "cli":
+        output = workspace / "artifacts" / "repair.md"
+        cli = _load_cli_module()
+        assert cli.main(["repair", str(profile), "--workspace", str(workspace),
+                         "--expected-results", str(expected), "--output", str(output)]) == 1
+        private_validation = capsys.readouterr().out
+    else:
+        output = write_profile_repair_prompt(workspace_from_root(workspace))
+        private_validation = (workspace / "artifacts" / "profile_validation.txt").read_text(encoding="utf-8")
+
+    assert "SYNTHETIC_PRIVATE_REF_950" in private_validation
+    assert "1234.567" in private_validation
+    shared = output.read_text(encoding="utf-8")
+    for private in (str(tmp_path), renamed.name, "supplier_alpha", "SYNTHETIC_PRIVATE_REF_950", "REF123",
+                    "1234.567", "MAIN FEATURE", "SYNTHETIC_PRIVATE_WORKSPACE_SNIPPET_950"):
+        assert private not in shared
+    assert "expected_results_report_reference_matches" in shared
+    assert "expected_results_row_2_measured_matches" in shared
+    assert "ParseResultV2" in shared and "Metroliza owns persistence" in shared
+    assert "sample_file,reference,report_date,sample_number,block_index,header_normalized" in shared
+    assert "tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance" in shared
 
 
 def test_validate_and_diagnose_real_pdf_profile(tmp_path, capsys):
@@ -260,6 +359,108 @@ def test_install_list_disable_enable_and_evidence_use_tmp_home(tmp_path, capsys)
     assert evidence["enabled"] is True
     assert evidence["approval"]["approved_by"] == "pytest"
     assert str(home / ".metroliza") in evidence["profile_path"]
+
+
+def test_uninstall_can_archive_a_disabled_generation_without_replacing_it(tmp_path, capsys):
+    from metroliza.parsing.declarative_parser_profiles import (
+        approved_profiles_dir, disabled_profiles_dir, profile_backups_dir,
+    )
+
+    cli = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
+    home = tmp_path / "home"
+    args = ["--home", str(home)]
+    assert cli.main([*args, "install", str(profile), "--expected-results", str(expected),
+                     "--workspace", str(workspace)]) == 0
+    assert cli.main([*args, "disable", "supplier_alpha"]) == 0
+    generation = disabled_profiles_dir(home=home) / "supplier_alpha"
+    contents = {path.name: path.read_bytes() for path in generation.iterdir()}
+    profile.write_text(_profile_yaml(version="0.2.0"), encoding="utf-8")
+    assert cli.main([*args, "install", str(profile), "--expected-results", str(expected),
+                     "--workspace", str(workspace)]) == 0
+    capsys.readouterr()
+    assert cli.main([*args, "uninstall", "supplier_alpha"]) == 1
+    assert "Both approved and disabled generations exist" in capsys.readouterr().out
+    assert not list(profile_backups_dir(home=home).glob("supplier_alpha-removed-*"))
+    assert cli.main([*args, "uninstall", "supplier_alpha", "--state", "disabled"]) == 0
+    assert (approved_profiles_dir(home=home) / "supplier_alpha" / "profile.yaml").exists()
+    archive, = profile_backups_dir(home=home).glob("supplier_alpha-removed-*")
+    assert archive.name in capsys.readouterr().out
+    assert not generation.exists()
+    assert {path.name: path.read_bytes() for path in archive.iterdir()} == contents
+    assert cli.main([*args, "uninstall", "supplier_alpha", "--state", "disabled"]) == 1
+    assert {path.name: path.read_bytes() for path in archive.iterdir()} == contents
+
+
+def test_uninstall_cannot_remove_an_approved_generation_with_a_different_embedded_id(tmp_path, capsys):
+    from metroliza.parsing.declarative_parser_profiles import (
+        approved_profiles_dir, load_approved_profile_parsers, profile_backups_dir,
+    )
+
+    cli = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
+    home = tmp_path / "home"
+    args = ["--home", str(home)]
+    assert cli.main([*args, "install", str(profile), "--expected-results", str(expected),
+                     "--workspace", str(workspace)]) == 0
+    root = approved_profiles_dir(home=home)
+    renamed = (root / "supplier_alpha").rename(root / "supplier_beta")
+    loaded, errors = load_approved_profile_parsers(home=home)
+    assert [plugin_id for plugin_id, _parser in loaded] == ["supplier_alpha"]
+    assert errors == ()
+    capsys.readouterr()
+
+    assert cli.main([*args, "uninstall", "supplier_beta"]) == 1
+    assert "declared plugin ID does not match" in capsys.readouterr().out
+    assert renamed.is_dir()
+    assert not list(profile_backups_dir(home=home).glob("*-removed-*"))
+    loaded_after, errors = load_approved_profile_parsers(home=home)
+    assert [plugin_id for plugin_id, _parser in loaded_after] == ["supplier_alpha"]
+    assert errors == ()
+
+
+def test_uninstall_refuses_a_redirected_generation(tmp_path, capsys):
+    from metroliza.parsing.declarative_parser_profiles import approved_profiles_dir, profile_backups_dir
+
+    cli = _load_cli_module()
+    home = tmp_path / "home"
+    target = tmp_path / "outside"
+    target.mkdir()
+    marker = target / "profile.yaml"
+    marker.write_text("outside the profile store", encoding="utf-8")
+    generation = approved_profiles_dir(home=home) / "supplier_alpha"
+    generation.parent.mkdir(parents=True)
+    try:
+        generation.symlink_to(target, target_is_directory=True)
+    except OSError:
+        pytest.skip("Creating a directory symlink requires host support")
+    assert cli.main(["--home", str(home), "uninstall", "supplier_alpha"]) == 1
+    assert "ordinary directories" in capsys.readouterr().out
+    assert generation.is_symlink()
+    assert marker.read_text(encoding="utf-8") == "outside the profile store"
+    assert not list(profile_backups_dir(home=home).glob("supplier_alpha-removed-*"))
+
+
+@pytest.mark.parametrize("unsupported_version", [0, 2])
+def test_unsupported_profile_schema_cannot_replace_an_approved_generation(tmp_path, capsys, unsupported_version):
+    from metroliza.parsing.declarative_parser_profiles import approved_profiles_dir, profile_store_signature
+
+    cli = _load_cli_module()
+    workspace, profile, _sample, expected = _write_fixture_workspace(tmp_path)
+    home = tmp_path / "home"
+    store = ["--home", str(home)]
+    candidate = [str(profile), "--expected-results", str(expected), "--workspace", str(workspace)]
+    assert cli.main([*store, "install", *candidate]) == 0
+    signature = profile_store_signature(home=home)
+    capsys.readouterr()
+    profile.write_text(_profile_yaml(version="0.2.0").replace("schema_version: 1", f"schema_version: {unsupported_version}"),
+                       encoding="utf-8")
+    assert cli.main([*store, "validate", *candidate]) == 1
+    assert "schema_version_supported" in capsys.readouterr().out
+    assert cli.main([*store, "install", *candidate]) == 1
+    assert profile_store_signature(home=home) == signature
+    assert "schema_version: 1" in (approved_profiles_dir(home=home) / "supplier_alpha" /
+                                  "profile.yaml").read_text(encoding="utf-8")
 
 
 def test_install_requires_expected_results_and_samples(tmp_path, capsys):

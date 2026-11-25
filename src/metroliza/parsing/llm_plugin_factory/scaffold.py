@@ -508,9 +508,9 @@ Hard constraints:
 """,
             "prompts/06_fix_validation_failures.md": """# Task 6 - Fix Validation Failures
 
-Use the validation output, expected results, `profile.yaml`, samples, and `contracts/`.
+Use the newly generated `artifacts/profile_repair_prompt.md` without the raw validation report.
+Use only any separately reviewed synthetic or sanitized inputs supplied with that prompt.
 Return a corrected complete `profile.yaml` only.
-For each failed check, state the exact YAML rule that changed.
 """,
         }
     else:

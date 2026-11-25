@@ -1541,12 +1541,12 @@ class _ReportOperations:
         """Handle parse completion, including cancellation and error paths."""
         try:
             worker = self.parse_thread
-            sender = self.sender()
             operation = getattr(self, "import_operation", None)
-            if (sender is not None and sender is not worker) or (
-                operation is not None and operation.worker is not worker
-            ):
-                return  # A retired or unbound worker cannot replace the current operation's UI.
+            if operation is not None and operation.worker is not worker:
+                return  # A disproven binding needs no Qt sender lookup.
+            sender = self.sender()
+            if sender is not None and sender is not worker:
+                return  # A retired worker cannot replace the current operation's UI.
             self._complete_parse_operation(worker)
         except Exception as e:
             self.log_and_exit(e)

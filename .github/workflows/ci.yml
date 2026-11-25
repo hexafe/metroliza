@@ -452,14 +452,20 @@ jobs:
           PYTHONPATH: src;.
         run: |
           foreach ($scale in @('1.0', '1.25', '1.5')) {
+            $profileProbe = @()
+            if ($scale -eq '1.0') { $profileProbe += '--profile-import-probe' }
+            $receiptDir = Join-Path $env:CANDIDATE_RECEIPTS "core-dpr-$scale"
             & .\.venv-build\Scripts\python.exe scripts/qualify_windows_candidate_core.py `
               --source-checkout $env:GITHUB_WORKSPACE --expected-source-sha $env:GITHUB_SHA `
               --artifact-dir $env:CANDIDATE_PACKAGE `
               --fixture-dir (Join-Path $env:GITHUB_WORKSPACE 'tests/fixtures/windows_candidate') `
               --oracle (Join-Path $env:GITHUB_WORKSPACE 'scripts/synthetic-report-oracle.json') `
               --browser $env:CANDIDATE_BROWSER --dpi-scale $scale --native-mode default `
-              --output-dir (Join-Path $env:CANDIDATE_RECEIPTS "core-dpr-$scale")
+              --output-dir $receiptDir @profileProbe
             if ($LASTEXITCODE -ne 0) { throw "Candidate core failed at DPR $scale" }
+            if ($profileProbe.Count -gt 0 -and -not (Test-Path -LiteralPath (Join-Path $receiptDir 'profile-import-probe.json') -PathType Leaf)) {
+              throw 'Packaged profile import receipt missing'
+            }
           }
 
       - name: Qualify unavailable-native fallback using unchanged package bytes
@@ -483,7 +489,7 @@ jobs:
         run: |
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
           if ($LASTEXITCODE -ne 0) { throw 'Candidate tree identity unavailable' }
-          & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree
+          & .\.venv-build\Scripts\python.exe scripts/finalize_windows_candidate_receipts.py --receipt-root $env:CANDIDATE_RECEIPTS --expected-source-sha $env:GITHUB_SHA --expected-source-tree $tree --require-profile-import-probe
           if ($LASTEXITCODE -ne 0) { throw 'Candidate combined receipt gate failed' }
 
       - name: Verify acceptance left the qualified onedir unchanged
