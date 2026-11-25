@@ -274,6 +274,11 @@ production source produced the rows and when the fetch last ran.
 Cached rows are snapshots. If production data changes after the fetch, run **Fetch to
 cache** again to refresh the local copy.
 
+When saving the cache database, choose an unused name. If a removable drive or
+network share refuses the save, save to a local folder under your account first.
+The cache stays available to retry. Once the local archive is closed, copy it to
+the other drive or share without replacing any existing archive.
+
 ## The Source Column
 
 Every cached row opened in CSV Summary includes a **source** column. Use it when more than

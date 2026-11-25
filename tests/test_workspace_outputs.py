@@ -331,9 +331,16 @@ def test_history_dialog_filters_without_mutating_saved_receipts(
     try:
         _finish_history_task(dialog._listing_task)
         assert dialog.runs.count() == 2
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+
+        assert dialog.history_date.accessibleName() == "Analysis date"
+        assert not dialog.history_date.isEnabled()
         with QSignalBlocker(dialog.history_date):
             dialog.history_date.setDate(QDate(2024, 3, 1))
-        dialog.date_filter.setChecked(True)
+        QTest.keyClick(dialog.date_filter, Qt.Key.Key_Space)
+        assert dialog.date_filter.isChecked()
+        assert dialog.history_date.isEnabled()
         _finish_history_task(dialog._listing_task)
         assert dialog.runs.count() == 1
         assert "earlier.xlsx" in dialog.runs.currentItem().text()
