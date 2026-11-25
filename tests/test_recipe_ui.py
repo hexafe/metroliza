@@ -46,6 +46,14 @@ def test_recipe_review_explains_the_origin_of_ocr_metadata(qapplication_session)
         assert row.value("reference") == "ABC123"
         item.setText("ABC123")
         assert item.toolTip() == original_evidence
+        item.setText("MANUAL123")
+        report_date = page.review_table.item(0, 1 + REVIEW_FIELDS.index("report_date"))
+        report_date.setText("2026-02-30")
+        page._continue()
+        assert row.value("reference") == "MANUAL123"
+        assert "czeka" not in item.toolTip()
+        assert "valid date" in report_date.toolTip()
+        assert report_date.data(Qt.ItemDataRole.AccessibleDescriptionRole) == report_date.toolTip()
     finally:
         page.close()
 

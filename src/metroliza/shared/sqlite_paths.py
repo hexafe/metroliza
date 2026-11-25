@@ -10,6 +10,10 @@ SQLITE_FILE_FILTER = "SQLite database (" + " ".join(
 ) + ");;All files (*)"
 
 
+class SQLiteSnapshotNameError(ValueError):
+    """The destination lacks room for required SQLite sidecars."""
+
+
 def sqlite_database_path(selected: str, *, creating: bool = False) -> str:
     """Keep opened paths exact; append .db to new names without a SQLite suffix.
 

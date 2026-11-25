@@ -969,6 +969,33 @@ def test_realtime_retention_prompt_reports_meaningful_units(monkeypatch, counts,
     assert "persisted data row(s)" not in prompts[0]
 
 
+def test_realtime_archive_shows_name_limit_and_preserves_session(monkeypatch, tmp_path):
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+    from metroliza.shared.sqlite_paths import SQLiteSnapshotNameError
+    from metroliza.ui.main_window import MainWindow
+
+    _qapplication()
+    session = tmp_path / "temporary.sqlite"
+    session.write_bytes(b"session data sentinel")
+    window = SimpleNamespace(
+        _realtime_session_disposable_counts=lambda: {"industrial_samples": 1},
+        _realtime_session_db_path=session,
+    )
+    warnings = []
+
+    def reject(*_args):
+        raise SQLiteSnapshotNameError("Choose a shorter database filename.")
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Save)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _p, _t, text: warnings.append(text))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a: (str(tmp_path / "archive.sqlite"), ""))
+    monkeypatch.setattr(cache_target_module, "persist_temporary_industrial_cache", reject)
+
+    assert MainWindow._resolve_realtime_session_before_discard(window) == (False, None)
+    assert warnings == ["Choose a shorter database filename. The temporary session data was kept."]
+    assert session.read_bytes() == b"session data sentinel"
+
+
 def test_opening_csv_summary_on_an_empty_cache_needs_no_retention_decision():
     from metroliza.industrial.industrial_tabular_bridge import load_industrial_cache_tabular_result
 

@@ -388,7 +388,13 @@ class RecipeRunnerPage(QWidget):
                 item = self.review_table.item(index, column)
                 value = item.text()
                 if value != (row.value(field) or ""):
-                    valid, _error = row.set_user_value(field, value)
+                    valid, error = row.set_user_value(field, value)
+                    with QSignalBlocker(self.review_table):
+                        if valid:
+                            item.setText(row.value(field) or "")
+                            self._describe_review_item(item, row, field, self._review_field_note(row, field))
+                        else:
+                            self._set_review_item_description(item, error or "Nieprawidłowa wartość.")
                     if not valid:
                         self.only_attention.setChecked(False)
                         self.review_table.setCurrentItem(item)
@@ -512,6 +518,10 @@ class RecipeRunnerPage(QWidget):
         else:
             evidence = cell_tooltip(row, row.display_name, field)
             detail = f"{note}\n{evidence}" if note else evidence
+        RecipeRunnerPage._set_review_item_description(item, detail)
+
+    @staticmethod
+    def _set_review_item_description(item, detail):
         item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, detail)
         item.setToolTip(detail)
 

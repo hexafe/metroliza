@@ -10,7 +10,7 @@ import stat
 import tempfile
 
 from metroliza.shared.atomic_file import rename_noreplace
-from metroliza.shared.sqlite_paths import sqlite_sidecar_path_problem
+from metroliza.shared.sqlite_paths import SQLiteSnapshotNameError, sqlite_sidecar_path_problem
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _PRIVATE_DIRECTORY_MODE = 0o700
@@ -80,7 +80,7 @@ def _sidecar_paths(database_path: Path) -> tuple[Path, ...]:
 
 def _reject_existing_sidecars(destination_path: Path) -> None:
     if problem := sqlite_sidecar_path_problem(destination_path):
-        raise ValueError(problem)
+        raise SQLiteSnapshotNameError(problem)
     for sidecar_path in _sidecar_paths(destination_path):
         try:
             sidecar_path.lstat()
@@ -179,8 +179,8 @@ def publish_database_snapshot(
         raise FileNotFoundError(source_path)
 
     _validate_destination_absent(destination_path, source_path, forbidden_paths)
-    _reject_existing_sidecars(destination_path)
     destination_path.parent.mkdir(parents=True, exist_ok=True)
+    _reject_existing_sidecars(destination_path)
 
     staging_directory = Path(
         tempfile.mkdtemp(
