@@ -858,6 +858,7 @@ def test_confirmed_delete_shows_rule_scope_impact_and_recovery_guidance(tmp_path
     import importlib
     native, owner = _impact_native_dialog(tmp_path)
     service = importlib.import_module('metroliza.reports.characteristic_alias_service')
+    service.ensure_characteristic_alias_schema(owner.db_file)
     service.upsert_characteristic_alias(
         owner.db_file, 'DIA - X', 'Diameter', 'reference', 'REF-1',
     )
@@ -884,6 +885,7 @@ def test_selected_mapping_cannot_be_deleted_from_replaced_database_context(tmp_p
     service = importlib.import_module('metroliza.reports.characteristic_alias_service')
     mapping = {'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
                'scope_type': 'global', 'scope_value': None}
+    service.ensure_characteristic_alias_schema(owner.db_file)
     service.upsert_characteristic_alias(owner.db_file, **mapping)
     owner.load_aliases()
     owner.alias_table.selectRow(0)

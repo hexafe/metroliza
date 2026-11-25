@@ -529,7 +529,8 @@ class TestMainWindowMetadataUi(unittest.TestCase):
                     window.set_db_file(str(db_path))
 
                 repository_type.assert_called_once()
-                self.assertEqual(repository_type.call_args.args, (str(db_path.resolve()),))
+                selected_database, = repository_type.call_args.args
+                self.assertTrue(Path(selected_database).samefile(db_path))
                 self.assertIsInstance(repository_type.call_args.kwargs["connection"], sqlite3.Connection)
                 repository_type.return_value.recover_abandoned_sync_staging_at_startup.assert_called_once_with()
                 self.assertIn("1 run(s), 7 row(s)", window.statusBar().currentMessage())
@@ -1527,6 +1528,86 @@ def _wait_for_filter_shutdown(predicate):
     while not predicate() and time.monotonic() < deadline:
         QTest.qWait(5)
     assert predicate(), "Filter shutdown did not finish"
+
+
+@pytest.mark.parametrize(
+    ("first_selected", "next_selected"),
+    [(True, True), (False, True), (True, False)],
+    ids=["database-to-database", "session-to-database", "database-to-session"],
+)
+def test_realtime_reopen_uses_current_workspace_database(tmp_path, qapplication_session, first_selected, next_selected):
+    from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+
+    settings = QSettings(str(tmp_path / "realtime.ini"), QSettings.Format.IniFormat)
+    window = MainWindow("test", None, ui_preferences=UiPreferences(settings))
+    first_database = str(tmp_path / "first.sqlite")
+    next_database = str(tmp_path / "next.sqlite")
+    for database in (first_database, next_database):
+        ensure_report_schema(database)
+
+    try:
+        if first_selected:
+            assert window.set_db_file(first_database)
+        window.launch_realtime_industrial_monitoring_dialog()
+        first_monitor = window.realtime_monitoring_dialog
+        first_path = Path(first_monitor.db_file)
+        assert first_monitor.temporary_session is not first_selected
+        assert first_monitor.close()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        qapplication_session.processEvents()
+        assert window.window_coordinator.get("realtime_monitor") is None
+        assert "realtime_monitor" in window.window_coordinator.registered_window_ids
+        closed_session = first_path.read_bytes() if not first_selected and first_path.exists() else None
+
+        assert window.set_db_file(next_database if next_selected else None)
+        assert window.workspace_context.snapshot.database_file == (next_database if next_selected else None)
+        window.launch_realtime_industrial_monitoring_dialog()
+        monitor = window.realtime_monitoring_dialog
+        assert monitor is not first_monitor
+        assert monitor.db_file == window.last_realtime_dashboard_db_path
+        assert monitor.temporary_session is not next_selected
+        assert Path(monitor.db_file) != first_path
+        if next_selected:
+            assert monitor.db_file == next_database
+            assert monitor._database_source_binding is window._database_source_binding(next_database)
+            with monitor._database_component(IndustrialDataRepository, standalone=monitor.source_repository) as repository:
+                repository.upsert_source_profile(
+                    profile_key="reopened", profile_name="Reopened monitor",
+                    source_db_alias="fixture", database_type="sqlite", source_object_name="events",
+                )
+            profiles = IndustrialDataRepository(monitor.db_file).list_source_profiles()
+            assert [profile.profile_key for profile in profiles] == ["reopened"]
+        else:
+            assert monitor._database_source_binding is None
+            assert Path(monitor.db_file).is_file()
+
+        if first_selected:
+            assert IndustrialDataRepository(first_database).list_source_profiles() == []
+        else:
+            assert (first_path.read_bytes() if first_path.exists() else None) == closed_session
+    finally:
+        window.close()
+
+
+def test_name_matching_preserves_file_created_after_pending_database_selection(tmp_path, qapplication_session):
+    settings = QSettings(str(tmp_path / "mapping.ini"), QSettings.Format.IniFormat)
+    window = MainWindow("test", None, ui_preferences=UiPreferences(settings))
+    database = tmp_path / "pending.sqlite"
+    try:
+        assert window.set_db_file(str(database))
+        assert not database.exists()
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute("CREATE TABLE independent_data (value TEXT)")
+            connection.execute("INSERT INTO independent_data VALUES ('owned elsewhere')")
+        original = database.read_bytes()
+
+        window.launch_characteristic_mapping_dialog()
+
+        assert window.characteristic_mapping_dialog is None
+        assert "selected database" in window.statusBar().currentMessage().lower()
+        assert database.read_bytes() == original
+    finally:
+        window.close()
 
 
 @pytest.mark.parametrize("blocked_in", ["schema", "sqlite_lock"])

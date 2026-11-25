@@ -332,15 +332,17 @@ runpy.run_path(fixture, run_name="__main__")
                                + (child_exited[0] - close_finished))
     assert fixture_process_elapsed < fixture_process_budget
     assert elapsed < CLOSE_MAX_SECONDS + DRAIN_SECONDS + fixture_process_budget
-    # Whether frames are still buffered at the post-exit snapshot depends on the
-    # platform pipe buffer: Linux (64 KiB) leaves frames for the slow reader, while
-    # Windows' small anonymous-pipe buffer is drained to EOF within DRAIN_SECONDS
-    # (observed in Windows core smoke). Either way no terminal arrived, so the
-    # channel stays incomplete. The drain flag itself is covered deterministically
-    # by test_pending_receiver_drain_is_flagged_and_snapshot_stays_frozen.
-    assert result.channel == "incomplete"
-    assert not result.clean_terminal_received
-    assert not result.source_loss_known
+    # Pipe buffering and scheduling determine whether the bounded writer can
+    # deliver its terminal drop count before close ends. Both outcomes retain a
+    # loss incident. The assertions above still enforce the full shutdown budget.
+    assert result.channel in {"incomplete", "loss_observed"}
+    if result.channel == "loss_observed":
+        assert result.clean_terminal_received
+        assert result.source_loss_known
+        assert result.source_dropped > 0
+    else:
+        assert not result.clean_terminal_received
+        assert not result.source_loss_known
     assert result.needs_incident
     assert result.history.total_bytes <= 2 * 1024 * 1024
 

@@ -59,10 +59,7 @@ def _measurement_source_sql(
     *,
     connection: sqlite3.Connection | None = None,
 ) -> str | None:
-    if _legacy_measurement_tables_exist(db_path, connection=connection):
-        from metroliza.reports.report_schema import ensure_report_schema
-
-        ensure_report_schema(db_path, connection=connection)
+    has_legacy_measurement_tables = _legacy_measurement_tables_exist(db_path, connection=connection)
 
     if _sqlite_object_exists(db_path, 'vw_measurement_export', connection=connection):
         return """
@@ -92,7 +89,7 @@ def _measurement_source_sql(
             LEFT JOIN report_metadata rm ON rm.report_id = pr.id
         """
 
-    if _legacy_measurement_tables_exist(db_path, connection=connection):
+    if has_legacy_measurement_tables:
         return """
             SELECT
                 REPORTS.ID AS report_id,

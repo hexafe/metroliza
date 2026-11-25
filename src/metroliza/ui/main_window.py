@@ -2010,7 +2010,7 @@ class MainWindow(QMainWindow):
         if not self._report_database_action_allowed():
             return
         try:
-            dashboard_db_path, using_session_db = self._realtime_dashboard_db_file()
+            dashboard_db_path, using_session_db = self._realtime_dashboard_db_file(self.db_file)
             from metroliza.ui.realtime_industrial_monitoring_dialog import (
                 RealtimeIndustrialMonitoringDialog,
             )
@@ -2031,12 +2031,13 @@ class MainWindow(QMainWindow):
                     )
                     return
             if self._is_qwidget_type(RealtimeIndustrialMonitoringDialog):
-                def create_realtime(_snapshot):
+                def create_realtime(snapshot):
+                    database, temporary_session = self._realtime_dashboard_db_file(snapshot.database_file)
                     dialog = RealtimeIndustrialMonitoringDialog(
                         self,
-                        dashboard_db_path,
-                        temporary_session=using_session_db,
-                        source_binding=self._database_source_binding(dashboard_db_path),
+                        database,
+                        temporary_session=temporary_session,
+                        source_binding=self._database_source_binding(database),
                     )
                     dialog.shutdown_complete.connect(
                         self._on_realtime_monitoring_shutdown_complete
@@ -2052,6 +2053,8 @@ class MainWindow(QMainWindow):
                     context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
                     context_updater=self._update_realtime_window_context,
                 )
+                dashboard_db_path = self.realtime_monitoring_dialog.db_file
+                using_session_db = self.realtime_monitoring_dialog.temporary_session
             elif self.realtime_monitoring_dialog is None or not self.realtime_monitoring_dialog.isVisible():
                 self.realtime_monitoring_dialog = RealtimeIndustrialMonitoringDialog(
                     self,
@@ -2115,10 +2118,10 @@ class MainWindow(QMainWindow):
     def launch_realtime_industrial_monitoring_dashboard(self):
         self.launch_realtime_industrial_monitoring_dialog()
 
-    def _realtime_dashboard_db_file(self):
-        binding = self._database_source_binding(self.db_file)
-        if self.db_file and (binding is None or binding.identity is not None):
-            return self.db_file, False
+    def _realtime_dashboard_db_file(self, database):
+        binding = self._database_source_binding(database)
+        if database and (binding is None or binding.identity is not None):
+            return database, False
         if self._realtime_session_db_path is None or not self._realtime_session_db_path.exists():
             session_dir = Path(tempfile.gettempdir()) / "metroliza" / "realtime_sessions"
             session_dir.mkdir(parents=True, exist_ok=True)
@@ -2368,7 +2371,7 @@ class MainWindow(QMainWindow):
             self.log_and_exit(e)
 
     def launch_characteristic_mapping_dialog(self):
-        if not self._report_database_action_allowed():
+        if not self._report_database_action_allowed() or not self._database_source_is_current(self.db_file):
             return
         try:
             from metroliza.ui.characteristic_mapping_dialog import CharacteristicMappingDialog
@@ -2380,6 +2383,7 @@ class MainWindow(QMainWindow):
                 context_fields=frozenset({WorkspaceField.DATABASE_FILE}),
             )
             self.characteristic_mapping_dialog.database_change_allowed = self._report_database_action_allowed
+            self.characteristic_mapping_dialog.report_database_is_current = self._database_source_is_current
         except Exception as e:
             self.log_and_exit(e)
 

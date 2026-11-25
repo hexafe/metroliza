@@ -661,7 +661,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "19d06eb210135385ee67be9e687dcb8e775e4f2831d59a892cd11210784ddb6b",
+      "fingerprint": "4235c9d42013b59ddb6585ed5f527357c7200c3893753ef187a23050de72bae8",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -670,7 +670,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "fc443905d91887cd9fe56c950ef8b4d7e5d930fc7661c4df33161375753f148c",
+      "fingerprint": "1364581ee7b30c0de3fb0adb964fb1c3996039054a28d4409442719551fcf01d",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -679,7 +679,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e1217a429d01cb4d758e97fa77b215a8b50dc7c58d96f5f79e6c264918563595",
+      "fingerprint": "871466c5b79db48af092e4a37522333c39b2cfcbe1f2be4eb64675b5f2a7841f",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -688,7 +688,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "95c772c1800016acf3a068bc624e787470d14f05c9d7f5e88e4620d1804d0896",
+      "fingerprint": "7a821b86db7062b6576d371d0b1fec65b81bc2bad079426cfc6563b4da68add8",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
