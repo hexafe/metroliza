@@ -1,4 +1,13 @@
+import hashlib
+import json
 from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, PLOTLY_ASSET_HASHES, PLOTLY_NOTICE_FILENAME
 
 
 def test_onefile_spec_includes_builtin_cmm_parser_hiddenimport():
@@ -109,6 +118,105 @@ def test_nuitka_includes_all_native_acceleration_modules_when_available():
     ):
         assert f"find_spec('{module_name}')" in script
         assert f"'--include-module={module_name}'" in script
+
+
+@pytest.mark.parametrize(
+    ("mode_args", "entry_name", "output_name", "expected_relative", "make_output"),
+    [
+        (("-Mode", "standalone"), "application.py", "example.exe", "application.dist/example.exe", True),
+        (("-FastDev",), "alternate.app.py", "custom output.exe", "alternate.app.dist/custom output.exe", True),
+        (("-Mode", "standalone"), "application.py", "example.exe", "application.dist/example.exe", False),
+        ((), "application.py", "nested/onefile.exe", "nested/onefile.exe", True),
+        pytest.param(
+            ("-Mode", "standalone"), "application.py", "custom", "application.dist/custom.exe", True,
+            marks=pytest.mark.skipif(sys.platform != "win32", reason="Nuitka adds .exe on Windows"),
+        ),
+    ],
+)
+def test_nuitka_stages_notices_for_the_exact_compiler_output(
+    tmp_path, monkeypatch, mode_args, entry_name, output_name, expected_relative, make_output,
+):
+    powershell = shutil.which("pwsh")
+    if powershell is None:
+        pytest.skip("PowerShell Core is not installed")
+    if not any(shutil.which(name) for name in ("clang-cl", "clang")):
+        pytest.skip("A Clang executable is needed by the build script's compiler probe")
+
+    root = Path(__file__).resolve().parents[1]
+    packaging = tmp_path / "packaging"
+    packaging.mkdir()
+    shutil.copyfile(root / "packaging/build_nuitka.ps1", packaging / "build_nuitka.ps1")
+    (packaging / entry_name).touch()
+    shutil.copyfile(root / "THIRD_PARTY_NOTICES.md", tmp_path / "THIRD_PARTY_NOTICES.md")
+    asset_dir = Path("src") / PLOTLY_ASSET_DIRECTORY
+    shutil.copytree(root / asset_dir, tmp_path / asset_dir)
+    artifact = tmp_path / expected_relative
+    artifact.parent.mkdir(exist_ok=True)
+    stale_exe = tmp_path / artifact.name
+    stale_exe.write_bytes(b"not the current build")
+    monkeypatch.setenv("METROLIZA_TEST_NUITKA_PYTHON", sys.executable)
+    monkeypatch.setenv("METROLIZA_TEST_NUITKA_STAGER", str(root / "scripts/stage_release_notices.py"))
+    monkeypatch.setenv("METROLIZA_TEST_NUITKA_EMIT", "1" if make_output else "0")
+
+    # Substitute the compiler and dependency probes, then execute the real notice stager.
+    wrapper = tmp_path / "run-test.ps1"
+    wrapper.write_text(
+        r"""
+param([string]$EntryPoint, [string]$OutputName, [string]$Mode, [switch]$FastDev)
+
+function python {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '-c') {
+        if ($args[1] -match 'PyQt5|_metroliza_|openvino') { $global:LASTEXITCODE = 1 }
+        return
+    }
+    if ($args[0] -eq '-m' -and $args[1] -eq 'nuitka') {
+        if ($env:METROLIZA_TEST_NUITKA_EMIT -eq '0') { return }
+        $name = ($args | Where-Object { $_.StartsWith('--output-filename=') }).Substring(18)
+        if ($IsWindows -and [IO.Path]::GetExtension($name) -ine '.exe') { $name += '.exe' }
+        if ($args -contains '--standalone') {
+            $folder = $args | Where-Object { $_.StartsWith('--output-folder-name=') }
+            $directory = if ($folder) { $folder.Substring(21) } else {
+                [IO.Path]::GetFileNameWithoutExtension($args[2]) + '.dist'
+            }
+            $name = Join-Path $directory $name
+        }
+        [IO.File]::WriteAllText((Join-Path (Get-Location) $name), 'compiled fixture')
+        return
+    }
+    $command = Split-Path $args[0] -Leaf
+    if ($command -eq 'stage_release_notices.py') {
+        $stagerArgs = @($args | Select-Object -Skip 1)
+        & $env:METROLIZA_TEST_NUITKA_PYTHON $env:METROLIZA_TEST_NUITKA_STAGER @stagerArgs
+        return
+    }
+    if ($command -notin @('vendored_plotly.py', 'validate_packaged_pdf_parser.py')) {
+        throw 'Unexpected command in the isolated Nuitka build test'
+    }
+}
+& ./packaging/build_nuitka.ps1 -CompilerStrategy clang @PSBoundParameters
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(wrapper),
+         "-EntryPoint", f"packaging/{entry_name}", "-OutputName", output_name, *mode_args],
+        cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=45, check=False,
+    )
+
+    assert not stale_exe.with_name(f"{stale_exe.name}.licenses").exists()
+    if not make_output:
+        assert result.returncode != 0
+        assert "Failed to stage third-party notice sidecars" in result.stderr
+        return
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert artifact.read_bytes() == b"compiled fixture"
+    sidecar = artifact.with_name(f"{artifact.name}.licenses")
+    manifest = json.loads((sidecar / "NOTICE_MANIFEST.json").read_text(encoding="utf-8"))
+    actual_notice_sha = hashlib.sha256((sidecar / PLOTLY_NOTICE_FILENAME).read_bytes()).hexdigest()
+    assert actual_notice_sha == PLOTLY_ASSET_HASHES[PLOTLY_NOTICE_FILENAME]
+    assert {"name": PLOTLY_NOTICE_FILENAME, "sha256": actual_notice_sha} in manifest["files"]
 
 
 def test_windows_runtime_setup_and_diagnostic_scripts_cover_ocr_prerequisites():
