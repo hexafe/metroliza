@@ -3,6 +3,7 @@
 from contextlib import closing
 import os
 import sqlite3
+import sys
 from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
@@ -79,6 +80,74 @@ def test_snapshot_reports_long_destination_before_writing(tmp_path, nested):
             source, destination, write_snapshot=lambda _: pytest.fail("unexpected write"),
         )
     assert list(path for path in tmp_path.rglob("*") if path.is_file()) == [source]
+
+
+def _windows_volume_component_limit(path):
+    from ctypes import WinDLL, WinError, byref, wintypes
+
+    get_volume_information = WinDLL("kernel32", use_last_error=True).GetVolumeInformationW
+    get_volume_information.argtypes = (
+        wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD, wintypes.LPDWORD,
+        wintypes.LPDWORD, wintypes.LPDWORD, wintypes.LPWSTR, wintypes.DWORD,
+    )
+    get_volume_information.restype = wintypes.BOOL
+    limit = wintypes.DWORD()
+    if not get_volume_information(path.anchor, None, 0, None, byref(limit), None, None, 0):
+        raise WinError()
+    return limit.value
+
+
+def _unicode_windows_database_name(units):
+    # Include a character that takes two UTF-16 code units and a three-byte BMP character.
+    suffix = "\U0001f4c1測.db"
+    suffix_units = len(suffix.encode("utf-16-le")) // 2
+    return "a" * (units - suffix_units) + suffix
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires native Windows path and SQLite behavior")
+def test_windows_unicode_database_names_preserve_data_and_distinguish_wal_headroom(tmp_path):
+    from metroliza.reports.db import (
+        _is_transient_sqlite_error, sqlite_connection_scope, sqlite_readonly_connection_scope,
+    )
+
+    limit = _windows_volume_component_limit(tmp_path)
+    rejected = tmp_path / _unicode_windows_database_name(limit - len("-journal") + 1)
+    boundary = tmp_path / _unicode_windows_database_name(limit - len("-journal"))
+    with pytest.raises(sqlite3.OperationalError, match="shorter database filename"):
+        with sqlite_connection_scope(str(rejected)):
+            pytest.fail("a new database needs space for its rollback journal")
+    assert list(tmp_path.iterdir()) == []
+
+    with sqlite_connection_scope(str(boundary)) as connection:
+        connection.execute("CREATE TABLE sample (value INTEGER)")
+        connection.execute("INSERT INTO sample VALUES (7)")
+        connection.commit()
+    boundary.rename(rejected)
+    with sqlite_connection_scope(str(rejected)) as connection:
+        connection.execute("UPDATE sample SET value = 8")
+        connection.commit()
+    with sqlite_readonly_connection_scope(str(rejected)) as connection:
+        assert connection.execute("SELECT value FROM sample").fetchone() == (8,)
+    assert list(tmp_path.iterdir()) == [rejected]
+
+    rejected.unlink()
+    source = tmp_path / "source.db"
+    with closing(sqlite3.connect(source)) as connection:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
+        connection.execute("CREATE TABLE sample (value INTEGER)")
+        connection.execute("INSERT INTO sample VALUES (9)")
+        connection.commit()
+    source.rename(rejected)
+    original = rejected.read_bytes()
+    with sqlite_readonly_connection_scope(str(rejected)) as connection:
+        assert connection.execute("SELECT value FROM sample").fetchone() == (9,)
+    with pytest.raises(sqlite3.OperationalError, match="shorter database filename") as failure:
+        with sqlite_connection_scope(str(rejected)):
+            pytest.fail("an existing DELETE-mode database needs a journal to enter WAL")
+    assert not _is_transient_sqlite_error(failure.value)
+    assert isinstance(failure.value.__cause__, sqlite3.OperationalError)
+    assert rejected.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [rejected]
 
 
 @pytest.mark.parametrize("suffix", [".sqlite", ".sqlite3", ".DB", ".db", ""])
