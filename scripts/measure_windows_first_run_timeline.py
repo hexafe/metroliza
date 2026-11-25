@@ -72,7 +72,10 @@ CORRUPT_TARGET = "_internal/python311.dll"
 class WindowSampler:
     """Polls visible top-level windows of the launch's processes every ``SAMPLE_MS``."""
 
-    def __init__(self, launcher_name: str, frames_dir: Path | None, frame_every_ms: int) -> None:
+    def __init__(
+        self, launcher_name: str, frames_dir: Path | None, frame_every_ms: int,
+        *, bootloader_image: Path | None = None,
+    ) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -82,6 +85,7 @@ class WindowSampler:
         self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         self.names = {launcher_name.lower(), *APP_PROCESS_NAMES}
         self.frames_dir = frames_dir
+        self.bootloader_image = bootloader_image
         self.frame_every_ms = frame_every_ms
         self.samples: list[dict[str, Any]] = []
         self.frames: list[dict[str, Any]] = []
@@ -155,6 +159,11 @@ class WindowSampler:
         return found
 
     def _grab_frame(self, now_ms: float, windows: list[dict[str, Any]]) -> None:
+        bootloader = None
+        if self.bootloader_image is not None:
+            bootloader = next((w for w in windows if w["kind"] == "bootloader_splash"), None)
+            if bootloader is None:
+                return
         try:
             from PIL import ImageGrab
         except ImportError:
@@ -172,6 +181,9 @@ class WindowSampler:
             crop = image.crop((left, top, left + max(1, (right - left) // 3), bottom))
             record["splash_kind"] = splash["kind"]
             record["animation_signature"] = hashlib.sha256(crop.tobytes()).hexdigest()[:16]
+        if bootloader is not None:
+            record["bootloader_pid"] = bootloader["pid"]
+            record["bootloader_image_error"] = splash_image_error(image.crop(bootloader["rect"]), self.bootloader_image)
         if self.frames_dir is not None:
             name = f"{int(now_ms)}.png"
             image.resize((image.width // 2, image.height // 2)).save(self.frames_dir / name)
@@ -196,6 +208,19 @@ class WindowSampler:
             self._stop.wait(SAMPLE_MS / 1000)
 
 
+def splash_image_error(window_image, expected: Path) -> float:
+    """Compare the visible artwork, ignoring the bottom where status text changes."""
+    from PIL import Image, ImageChops, ImageStat
+
+    thumb_size = (52, 22)
+    with Image.open(expected) as artwork:
+        reference = artwork.convert("RGB").resize(thumb_size)
+    captured = window_image.convert("RGB").resize(thumb_size)
+    artwork_area = (0, 0, thumb_size[0], 16)
+    difference = ImageChops.difference(reference.crop(artwork_area), captured.crop(artwork_area))
+    return round(sum(ImageStat.Stat(difference).mean) / 3, 3)
+
+
 def classify(cls: str, title: str, width: int, height: int) -> str:
     if cls == SPLASH_CLASS:
         return "launcher_splash"
@@ -207,6 +232,8 @@ def classify(cls: str, title: str, width: int, height: int) -> str:
         if width <= 900 and height <= 400:
             return "qt_splash"
         return "main_window"
+    if cls.casefold().startswith("tk"):
+        return "bootloader_splash"
     if cls == "#32770":
         return "message_box"
     return "other"
@@ -382,12 +409,15 @@ def clear_directory(path: Path) -> None:
 
 
 class Timeline:
-    def __init__(self, out: Path, *, frames: bool, frame_every_ms: int) -> None:
+    def __init__(
+        self, out: Path, *, frames: bool, frame_every_ms: int, bootloader_image: Path | None = None,
+    ) -> None:
         self.out = out
         self.frames = frames
         # PNG files are kept only while this is set (the first rounds); later rounds still
         # sample the animation area, but keep no screenshots, so disk use stays bounded.
         self.save_frames = frames
+        self.bootloader_image = bootloader_image
         self.frame_every_ms = frame_every_ms
         self.work = Path(tempfile.mkdtemp(prefix="metroliza-timeline-"))
         self.state = self.work / "state"
@@ -435,7 +465,8 @@ class Timeline:
         frames_dir = run_dir / "frames" if sample_frames and self.save_frames else None
         if frames_dir is not None:
             frames_dir.mkdir()
-        sampler = WindowSampler(exe.name, frames_dir, self.frame_every_ms if sample_frames else 0)
+        sample_interval = self.frame_every_ms if sample_frames or self.bootloader_image is not None else 0
+        sampler = WindowSampler(exe.name, frames_dir, sample_interval, bootloader_image=self.bootloader_image)
         record: dict[str, Any] = {"variant": variant, "scenario": scenario, "exe": exe.name,
                                   "status": "ok"}
         sampler.start()
@@ -444,6 +475,8 @@ class Timeline:
             started = time.perf_counter()
             process = subprocess.Popen([str(exe)], env=env, cwd=self.cwd, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            record["process_id"] = process.pid
+            record["launched_epoch_ms"] = launched
             try:
                 code = process.wait(timeout=LAUNCH_TIMEOUT_S)
                 record["exit_code"] = code

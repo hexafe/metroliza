@@ -38,17 +38,17 @@ except ImportError:  # pragma: no cover - direct ``python scripts/...`` executio
     from scripts import generate_third_party_inventory as generator
 
 
+from scripts.third_party_inventory_contract import (
+    DEFAULT_REQUIREMENTS,
+    INVENTORY_PATH,
+    default_cargo_manifests,
+    inventory_provenance,
+    validate_inventory,
+)
 from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_REQUIREMENTS = ("requirements.txt", "requirements-ocr.txt")
-LAUNCHER_MANIFEST = Path("packaging/launcher/Cargo.toml")
-
-
-def default_cargo_manifests(repo_root: Path = REPO_ROOT) -> list[Path]:
-    native = sorted((repo_root / "src/metroliza/native").glob("*/Cargo.toml"))
-    return [*native, repo_root / LAUNCHER_MANIFEST]
 
 
 def bundled_distributions(onedir: Path) -> dict[str, str]:
@@ -169,7 +169,7 @@ def generate_build_inventory(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--inventory", required=True, type=Path, help="Committed inventory to verify.")
+    parser.add_argument("--inventory", default=REPO_ROOT / INVENTORY_PATH, type=Path, help="Committed inventory to verify.")
     parser.add_argument("--onedir", required=True, type=Path, help="The built onedir that ships.")
     parser.add_argument("--receipt", required=True, type=Path)
     parser.add_argument("--generated", type=Path, help="Write the regenerated inventory here.")
@@ -180,26 +180,40 @@ def main(argv: list[str] | None = None) -> int:
     if not args.onedir.is_dir():
         print(f"ERROR: onedir not found: {args.onedir}", file=sys.stderr)
         return 1
-    committed = json.loads(args.inventory.read_text(encoding="utf-8"))
-    plotly_problem = None
+    problems = []
+    try:
+        committed = validate_inventory(args.inventory, REPO_ROOT)
+    except (OSError, ValueError) as exc:
+        committed = None
+        problems.append(str(exc))
+    if committed is not None:
+        try:
+            embedded = (args.onedir / "_internal" / INVENTORY_PATH.name).read_bytes()
+        except OSError:
+            embedded = None
+        if embedded != args.inventory.read_bytes():
+            problems.append("Packaged third-party inventory differs from the committed bytes")
     try:
         packaged_plotly = plotly_inventory(args.onedir / "_internal" / PLOTLY_ASSET_DIRECTORY)
     except (OSError, ValueError):
         packaged_plotly = None
-        plotly_problem = "Packaged Plotly bundle or companion notice is missing, unreadable, or has unexpected bytes"
+        problems.insert(0, "Packaged Plotly bundle or companion notice is missing, unreadable, or has unexpected bytes")
+    requirements = args.requirements or [REPO_ROOT / name for name in DEFAULT_REQUIREMENTS]
+    cargo_manifests = args.cargo_manifest or default_cargo_manifests()
     generated, bundled = generate_build_inventory(
-        onedir=args.onedir,
-        requirement_paths=args.requirements or [REPO_ROOT / name for name in DEFAULT_REQUIREMENTS],
-        cargo_manifests=args.cargo_manifest or default_cargo_manifests(),
+        onedir=args.onedir, requirement_paths=requirements, cargo_manifests=cargo_manifests,
     )
     generated["vendored_plotly"] = packaged_plotly
     if args.generated:
+        generated["provenance"] = inventory_provenance(
+            generated, REPO_ROOT, requirement_paths=requirements, cargo_manifests=cargo_manifests,
+        )
         args.generated.parent.mkdir(parents=True, exist_ok=True)
         args.generated.write_text(json.dumps(generated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    receipt = compare_inventories(committed, generated, bundled) | {"inventory": args.inventory.as_posix()}
-    if plotly_problem is not None:
-        receipt["status"] = "FAIL"
-        receipt["problems"].insert(0, plotly_problem)
+    receipt = compare_inventories(committed, generated, bundled) if committed is not None else {"problems": []}
+    receipt["problems"][:0] = problems
+    receipt["status"] = "FAIL" if receipt["problems"] else "PASS"
+    receipt["inventory"] = args.inventory.as_posix()
     args.receipt.parent.mkdir(parents=True, exist_ok=True)
     args.receipt.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     for problem in receipt["problems"]:

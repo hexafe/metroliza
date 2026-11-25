@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import tomllib
 
+import pytest
 
-INVENTORY_PATH = Path("docs/release_checks/third_party_inventory.json")
+from scripts.third_party_inventory_contract import INVENTORY_PATH, REPO_ROOT, validate_inventory
 
 
 def test_release_inventory_represents_all_resolved_dependencies() -> None:
-    payload = json.loads(INVENTORY_PATH.read_text(encoding="utf-8"))
+    payload = validate_inventory(REPO_ROOT / INVENTORY_PATH, REPO_ROOT)
     python = payload["python"]
     rust = payload["rust"]
 
@@ -56,7 +58,7 @@ def test_notice_and_packagers_require_inventory_sidecars() -> None:
 
     assert "third_party_inventory.json" in notice
     assert "PyQt6 and PyMuPDF are dual-license components" in notice
-    assert "third_party_inventory.json" in pyinstaller_common
+    assert "validate_inventory(inventory_path, root_dir)" in pyinstaller_common
     assert "scripts/stage_release_notices.py" in windows_builder
     assert "scripts/stage_release_notices.py" in nuitka_builder
 
@@ -65,4 +67,40 @@ def test_release_notice_files_keep_lf_on_every_checkout() -> None:
     # The notices beside the EXE are compared byte-for-byte with Linux and Windows checkouts.
     attributes = Path(".gitattributes").read_text(encoding="utf-8").splitlines()
     assert "THIRD_PARTY_NOTICES.md text eol=lf" in attributes
-    assert "docs/release_checks/third_party_inventory.json text eol=lf" in attributes
+    assert f"{INVENTORY_PATH.as_posix()} text eol=lf" in attributes
+
+
+@pytest.mark.parametrize(
+    ("mutated", "failure"),
+    [
+        ("version", "release mismatch"),
+        ("nested requirement", "dependency inputs changed"),
+        ("Cargo.toml", "dependency inputs changed"),
+        ("Cargo.lock", "dependency inputs changed"),
+        ("records", "records changed"),
+        ("missing", "No such file"),
+    ],
+)
+def test_inventory_fails_closed_on_stale_inputs_or_bytes(tmp_path, mutated, failure):
+    payload = validate_inventory(REPO_ROOT / INVENTORY_PATH, REPO_ROOT)
+    version_path = Path("src/metroliza/app/version.py")
+    for path in [INVENTORY_PATH, version_path, *map(Path, payload["provenance"]["dependency_inputs"])]:
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO_ROOT / path, tmp_path / path)
+    inventory = tmp_path / INVENTORY_PATH
+    assert validate_inventory(inventory, tmp_path) == payload
+
+    if mutated == "version":
+        (tmp_path / version_path).write_text('RELEASE_VERSION = "9.0.0-dev.1"\n', encoding="utf-8")
+    elif mutated == "records":
+        payload["python"]["packages"][0]["version"] = "0.0.0"
+        inventory.write_text(json.dumps(payload), encoding="utf-8")
+    elif mutated == "missing":
+        inventory.unlink()
+    else:
+        name = "requirements.txt" if mutated == "nested requirement" else f"packaging/launcher/{mutated}"
+        with (tmp_path / name).open("a", encoding="utf-8") as stream:
+            stream.write("\n# changed dependency input\n")
+
+    with pytest.raises((FileNotFoundError, ValueError), match=failure):
+        validate_inventory(inventory, tmp_path)

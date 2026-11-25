@@ -16,6 +16,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from metroliza.app.startup_profile import record_event
+from metroliza.app.startup_splash import close_bootloader_splash
 from metroliza.app.version import VERSION_LABEL
 from metroliza.shared.exit_code import system_exit_code
 from metroliza.shared.diagnostic_package import PackageIdentity, inspect_package, package_notice
@@ -83,14 +85,20 @@ def _child_environment() -> dict[str, str]:
     return environment
 
 
-def _launch(root: Path, arguments: list[str],
+def _launch(root: Path | None, arguments: list[str],
             rejected: list[PackageIdentity] | None = None) -> int | None:
     """Verify and run the payload; None means it was not started.
 
     When ``rejected`` is given, the package identity that failed verification is
     appended to it so the caller can name the reason.
     """
-    launcher, identity = _verify_payload(root)
+    try:
+        if root is None:
+            return None
+        launcher, identity = _verify_payload(root)
+    finally:
+        # Let the supervisor or its application own any window after verification.
+        close_bootloader_splash(phase="portable_handoff")
     if launcher is None:
         if rejected is not None and not identity.valid:
             rejected.append(identity)
@@ -111,12 +119,11 @@ def _launch(root: Path, arguments: list[str],
 def main() -> int:
     if not getattr(sys, "frozen", False) or os.name != "nt":
         return 1
+    record_event("portable_python_entry")
     extracted = getattr(sys, "_MEIPASS", None)
     rejected: list[PackageIdentity] = []
-    result = (
-        _launch(Path(extracted) / PAYLOAD_DIRECTORY, sys.argv[1:], rejected)
-        if isinstance(extracted, str) else None
-    )
+    root = Path(extracted) / PAYLOAD_DIRECTORY if isinstance(extracted, str) else None
+    result = _launch(root, sys.argv[1:], rejected)
     if result is None:
         # Fixed text only: no raw exception, native stack, path, or data. A rejected
         # package names its reason and file from fixed allowlists.

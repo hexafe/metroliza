@@ -343,6 +343,13 @@ def test_unassigned_late_activity_is_not_copied_to_a_different_root(tmp_path):
 @pytest.mark.parametrize("nested", [False, True])
 def test_repeated_bootstrap_invocations_keep_history_available(tmp_path, monkeypatch, nested):
     recorder = SafeBugReportRecorder()
+    close_history = recorder.close_history
+    closes = []
+
+    def track_history_close(timeout=2.0):
+        closes.append((timeout, close_history(timeout)))
+
+    monkeypatch.setattr(recorder, "close_history", track_history_close)
     monkeypatch.setattr(safe_bugreport, "recorder", recorder)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
@@ -361,6 +368,7 @@ def test_repeated_bootstrap_invocations_keep_history_available(tmp_path, monkeyp
     assert bootstrap.run_application() == 0
     if not nested:
         assert bootstrap.run_application() == 0
+    assert closes == [(2.0, True), (2.0, True)]
     assert not recorder.history_is_running()
 
     restored = SafeBugReportRecorder()

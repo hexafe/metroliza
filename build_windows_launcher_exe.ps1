@@ -33,7 +33,6 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $crateDir = Join-Path $repoRoot 'packaging/launcher'
 $distDir = Join-Path $repoRoot 'dist'
 $venvPython = Join-Path $repoRoot '.venv-build/Scripts/python.exe'
-$provenanceManifestPath = Join-Path $repoRoot 'build/provenance/build_provenance.json'
 
 function Invoke-Step {
     param(
@@ -62,7 +61,7 @@ function Get-ReleaseLabel {
         return $ReleaseLabel
     }
     $python = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { 'python' }
-    $code = "import sys; sys.path.insert(0, 'packaging'); " +
+    $code = "import sys; sys.path[:0] = ['packaging', 'src']; " +
         "from pathlib import Path; from pyinstaller_common import read_version_label; " +
         "print(read_version_label(Path('.')))"
     $label = & $python -c $code
@@ -126,12 +125,27 @@ try {
     $version = [string]$names.version
     if (-not $OnedirPath) { $OnedirPath = Join-Path $distDir $names.onedir }
     if (-not $Output) { $Output = Join-Path $distDir $names.launcher }
+    $provenanceManifestPath = Join-Path $OnedirPath '_internal/metroliza/app/build_provenance.json'
     $gitSha = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $gitSha -notmatch '^[0-9a-f]{40}$') {
         throw 'Could not determine the git commit'
     }
     if (@(git status --porcelain).Count -ne 0) {
         Write-Warning 'The working tree is dirty; the EXE records the commit id only.'
+    }
+    $hasProvenance = Test-Path -LiteralPath $provenanceManifestPath -PathType Leaf
+    if ($hasProvenance) {
+        $payloadLabel = & $identityPython scripts/build_provenance.py validate-onedir --onedir $OnedirPath
+        if ($LASTEXITCODE -ne 0 -or $payloadLabel -ne $version) {
+            if ($Supervised) { throw 'The launcher provenance does not match the onedir and release' }
+            $hasProvenance = $false
+            Write-Warning 'The supplied onedir provenance could not be verified against this build; release sidecars will be skipped.'
+        }
+    }
+
+    if (-not $hasProvenance -and
+        ((Test-Path -LiteralPath "$Output.provenance.json") -or (Test-Path -LiteralPath "$Output.licenses"))) {
+        throw 'Choose an unused output path to avoid retaining an earlier release identity beside the new EXE'
     }
 
     if ($Supervised) {
@@ -247,15 +261,16 @@ try {
         'scripts/release_identity.py', 'verify-pe', '--version', $label, '--input', $Output
     )
 
-    if ((Test-Path -LiteralPath $venvPython) -and (Test-Path -LiteralPath $provenanceManifestPath)) {
+    if ($hasProvenance) {
         # Sidecars describe the final bytes, so they are staged after signing.
         Invoke-Step 'Staging provenance and notice sidecars' {
-            Invoke-Checked -Executable $venvPython -Arguments @(
+            Invoke-Checked -Executable $identityPython -Arguments @(
                 'scripts/build_provenance.py', 'stage',
                 '--manifest', $provenanceManifestPath,
+                '--from-onedir', $OnedirPath, '--wrapper-format', 'launcher', '--launcher-entry', $Entry,
                 '--artifact', $Output
             )
-            Invoke-Checked -Executable $venvPython -Arguments @(
+            Invoke-Checked -Executable $identityPython -Arguments @(
                 'scripts/stage_release_notices.py',
                 '--dist-dir', $distDir,
                 '--artifact', $Output
@@ -264,7 +279,7 @@ try {
     }
     else {
         Write-Host ""
-        Write-Host '==> Provenance and notice sidecars skipped (no build provenance manifest or build venv)'
+        Write-Host '==> Provenance and notice sidecars skipped (no onedir provenance manifest)'
     }
 
     $sha = (Get-FileHash -LiteralPath $Output -Algorithm SHA256).Hash.ToLowerInvariant()

@@ -32,17 +32,17 @@ def _write_onedir(root: Path) -> Path:
 
 
 def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA, gap: int = 0,
-                   version: str = "2026.09rc1_261031") -> None:
+                   version: str = "2026.09rc1_261031", entry: str = "metroliza.exe") -> None:
     """Write a stub + payload + trailer laid out like packaging/launcher/src/pack.rs (raw blobs)."""
     records, offset = [], 0
     for name, data in sorted(files.items()):
         records.append({"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                         "compressed_size": len(data), "offset": offset})
         offset += len(data) + gap
-    content = release_zip.content_sha256("metroliza.exe", [(r["path"], r["size"], r["sha256"]) for r in records])
+    content = release_zip.content_sha256(entry, [(r["path"], r["size"], r["sha256"]) for r in records])
     manifest = json.dumps(
         {"format": 1, "version": f"{version}-{content[:12]}", "git_sha": git_sha,
-         "entry": "metroliza.exe", "chunk_size": 4194304, "files": records}
+         "entry": entry, "chunk_size": 4194304, "files": records}
     ).encode()
     stub = b"MZ" + b"\0" * 62
     blobs = b"".join(files[name] + b"\0" * gap for name in sorted(files))
@@ -110,6 +110,51 @@ def test_content_hash_matches_the_packer_definition(tmp_path: Path) -> None:
     assert release_zip.content_sha256("a.exe", []) == hashlib.sha256(
         b"metroliza-onedir-content-v1\nentry\0a.exe\n"
     ).hexdigest()
+
+
+def test_launcher_provenance_requires_matching_embedded_onedir(tmp_path, monkeypatch):
+    from metroliza.app.version import VERSION_LABEL
+    from scripts import build_provenance
+
+    onedir = _write_onedir(tmp_path)
+    embedded = onedir / build_provenance.ONEDIR_MANIFEST
+    embedded.parent.mkdir(parents=True)
+    embedded.write_text(json.dumps({
+        "schema_version": 1, "release_label": VERSION_LABEL, "git_sha": GIT_SHA, "dirty": False,
+        "built_at_utc": "2026-07-16T10:15:00Z", "packager": "pyinstaller", "python_version": "3.11.9",
+    }))
+    app = onedir / "metroliza.exe"
+    sidecar = app.with_suffix(".exe.provenance.json")
+    sidecar.write_text(json.dumps(json.loads(embedded.read_text()) | {
+        "artifact": build_provenance._artifact_identity(app),
+    }))
+    files = ONEDIR_FILES | {
+        build_provenance.ONEDIR_MANIFEST.as_posix(): embedded.read_bytes(),
+        sidecar.name: sidecar.read_bytes(),
+    }
+    monkeypatch.setattr(build_provenance, "inspect_git_identity", lambda _: (GIT_SHA, False))
+    exe = tmp_path / "renamed.exe"
+
+    def stage():
+        return build_provenance.stage_artifact_provenance(
+            embedded, (exe,), onedir=onedir, wrapper_format="launcher",
+        )
+
+    exe.write_bytes(b"unrelated executable")
+    with pytest.raises(release_zip.ReleaseZipError, match="payload trailer"):
+        stage()
+    _fake_launcher(exe, files | {"metroliza.exe": b"stale"})
+    with pytest.raises(ValueError, match="payload files do not match"):
+        stage()
+    _fake_launcher(exe, files, git_sha="e" * 40)
+    with pytest.raises(ValueError, match="payload source does not match"):
+        stage()
+    _fake_launcher(exe, files, entry="metroliza_application.exe")
+    with pytest.raises(ValueError, match="payload entry does not match"):
+        stage()
+    _fake_launcher(exe, files)
+    sidecar, = stage()
+    assert json.loads(sidecar.read_text())["artifact"]["sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest()
 
 
 def test_semver_zip_preserves_exact_label_names_hash_and_cache_identity(tmp_path: Path):

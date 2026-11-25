@@ -791,7 +791,14 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     envelope = uploads['windows-supervised-portable-onefile']
     launcher = uploads['windows-supervised-launcher-exe']
     # The envelope upload must never pick up the launcher EXE (and vice versa).
-    assert envelope.endswith('-windows-x64-portable.exe')
+    portable_exe = 'dist/Metroliza-*-windows-x64-portable.exe'
+    assert envelope.splitlines() == [
+        portable_exe,
+        f'{portable_exe}.provenance.json',
+        f'{portable_exe}.licenses/**',
+    ]
+    assert '--require-splash --splash-receipt $splashReceipt' in commands
+    assert uploads['windows-portable-splash-receipt'].endswith('/portable-splash/portable-splash.json')
     assert 'dist/Metroliza-*-windows-x64.exe' in launcher.splitlines()
     assert 'Where-Object { $_.Name -eq $artifactNames.portable }' in commands
     # User-facing EXEs are retained only from a fully qualified run; diagnostic receipts
@@ -804,6 +811,24 @@ def test_portable_job_qualifies_and_retains_the_launcher_beside_the_envelope() -
     assert steps[-1]['if'] == 'success()'
     verify = next(i for i, step in enumerate(steps) if 'remains at the exact clean head' in step['name'])
     assert verify > max(i for i, step in enumerate(steps) if 'qualify' in step['name'].lower())
+
+
+def test_portable_build_checks_actual_inventory_before_creating_the_envelope() -> None:
+    import yaml
+
+    root = CI_WORKFLOW_PATH.parents[2]
+    builder = (root / "build_windows_portable_exe.ps1").read_text(encoding="utf-8")
+    assert "packaging/windows-rc-constraints.txt" in builder
+    assert "$env:PIP_CONSTRAINT = $previousPipConstraint" in builder
+    verify = builder.index("scripts/verify_third_party_inventory.py --onedir $onedir")
+    wrap = builder.index("packaging/metroliza_portable_onefile.spec")
+    assert builder.index("build_windows_exe.ps1 -Clean -WithNative -Mode onedir") < verify < wrap
+    assert "if ($LASTEXITCODE -ne 0) { throw" in builder[verify:wrap]
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["windows-portable-onefile"]["steps"]
+    inventory = next(step for step in steps if step.get("with", {}).get("name") == "windows-portable-payload-inventory")
+    assert inventory["if"] == "always()"
+    assert inventory["with"]["path"] == "build/provenance/portable-inventory/*.json"
 
 
 def test_first_run_timeline_selects_only_the_launcher_when_both_routes_exist() -> None:

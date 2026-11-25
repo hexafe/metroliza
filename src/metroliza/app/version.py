@@ -1,12 +1,13 @@
-RELEASE_VERSION = "0.8.0-dev.8"
+RELEASE_VERSION = "0.8.0-dev.10"
 # Deprecated import compatibility only; actual build time is provenance.built_at_utc.
 VERSION_DATE = ""
 VERSION_LABEL = RELEASE_VERSION
-CURRENT_RELEASE_HIGHLIGHT = 'Multi-file CSV recipes, clearer report scope, and local analysis history.'
+CURRENT_RELEASE_HIGHLIGHT = 'Restores startup feedback while the Windows portable app unpacks.'
 PUBLIC_VERSION_LABEL = VERSION_LABEL
 
 release_notes = f"""
     <br><b>Current version {PUBLIC_VERSION_LABEL}:</b><br>
+    - See the Metroliza splash while the Windows portable EXE unpacks<br>
     - Run a CSV recipe on several files, see both output names up front, and keep compatible settings after refreshing the input<br>
     - Keep report corrections after reviewing again and choose between reports containing NOK and only NOK measurements<br>
     - Reopen a saved workspace, restore a database backup to a new file, and find recent results in analysis history<br>

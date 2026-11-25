@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 
 from scripts import verify_third_party_inventory as verifier
+from scripts.third_party_inventory_contract import INVENTORY_PATH, SCHEMA_VERSION, inventory_provenance
 
 
 def _inventory(python: dict[str, str], rust: set[tuple[str, str, str]]) -> dict:
@@ -70,9 +71,14 @@ def test_cli_writes_receipt_and_generated_inventory_and_fails_on_drift(tmp_path:
     shutil.copytree(verifier.REPO_ROOT / "src" / verifier.PLOTLY_ASSET_DIRECTORY, packaged_assets)
     committed_path = tmp_path / "inventory.json"
     committed = _inventory({"numpy": "2.4.6"}, RUST)
+    committed["schema_version"] = SCHEMA_VERSION
     committed["vendored_plotly"] = verifier.plotly_inventory(packaged_assets)
+    committed["provenance"] = inventory_provenance(committed, verifier.REPO_ROOT)
     committed_path.write_text(json.dumps(committed), encoding="utf-8")
+    embedded_inventory = onedir / "_internal" / INVENTORY_PATH.name
+    shutil.copyfile(committed_path, embedded_inventory)
     actual = _inventory({"numpy": "2.4.6", "pluggy": "1.7.0"}, RUST)
+    actual["schema_version"] = SCHEMA_VERSION
     monkeypatch.setattr(verifier, "generate_build_inventory", lambda **_kwargs: (actual, {"pluggy": "1.7.0"}))
 
     code = verifier.main([
@@ -86,9 +92,17 @@ def test_cli_writes_receipt_and_generated_inventory_and_fails_on_drift(tmp_path:
         "python missing_from_inventory: pluggy==1.7.0"
     ]
     committed_path.write_text(json.dumps(actual), encoding="utf-8")
+    shutil.copyfile(committed_path, embedded_inventory)
     assert verifier.main([
         "--inventory", str(committed_path), "--onedir", str(onedir), "--receipt", str(tmp_path / "pass.json"),
     ]) == 0
+
+    embedded_inventory.write_text('{"stale":"package inventory"}', encoding="utf-8")
+    assert verifier.main([
+        "--inventory", str(committed_path), "--onedir", str(onedir), "--receipt", str(tmp_path / "embedded.json"),
+    ]) == 1
+    assert "Packaged third-party inventory differs" in (tmp_path / "embedded.json").read_text(encoding="utf-8")
+    shutil.copyfile(committed_path, embedded_inventory)
 
     (packaged_assets / "plotly.min.js.LICENSE.txt").unlink()
     assert verifier.main([

@@ -1,0 +1,20 @@
+{
+  "runtime": "Tcl/Tk 8.6.12.1 (CPython Windows x64 distribution)",
+  "files": {
+    "tcl86t.dll": {
+      "sha256": "4e699ff2d6d147d0586c8c77be5a18f20ca0758f432d7b0f489223f2fa4dd221",
+      "license_file": "tcllicense.terms",
+      "license_sha256_lf": "c0a69a2bfd757361ec7e6143973b103c90409316b49e9c88db26ad6388e79f16"
+    },
+    "tk86t.dll": {
+      "sha256": "b6af038120f2b8644c7ce1e11917f410009848287622135d7e386f90d28a831c",
+      "license_file": "tklicense.terms",
+      "license_sha256_lf": "2cde822b93ca16ae535c954b7dfe658b4ad10df2a193628d1b358f1765e8b198"
+    }
+  },
+  "license_source": "https://github.com/python/cpython-bin-deps/tree/0db2b3830eb40d5211ab6258a8d931d065d29522/amd64",
+  "runtime_installer": {
+    "url": "https://www.python.org/ftp/python/3.11.9/amd64/tcltk.msi",
+    "sha256": "c8845743fb77abec0f01faa823bf3300e2113ef344758fc36360fee3dd71a8a8"
+  }
+}

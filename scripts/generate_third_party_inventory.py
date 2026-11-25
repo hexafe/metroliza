@@ -19,13 +19,18 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if not __package__:
-    sys.path.insert(0, str(REPO_ROOT))
+for import_root in (REPO_ROOT, REPO_ROOT / "src"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
+from scripts.third_party_inventory_contract import (  # noqa: E402
+    DEFAULT_REQUIREMENTS,
+    INVENTORY_PATH,
+    SCHEMA_VERSION,
+    default_cargo_manifests,
+    inventory_provenance,
+)
 from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, plotly_inventory  # noqa: E402
-
-
-DEFAULT_OUTPUT = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
 
 
 def requirement_roots(paths: Iterable[str | Path]) -> tuple[str, ...]:
@@ -206,11 +211,13 @@ def generate_inventory(
     requirement_paths: Iterable[str | Path],
     cargo_manifests: Iterable[str | Path],
 ) -> dict[str, Any]:
+    requirement_paths = tuple(Path(path) for path in requirement_paths)
+    cargo_manifests = tuple(Path(path) for path in cargo_manifests)
     roots = requirement_roots(requirement_paths)
     python_packages, missing_python = build_python_inventory(roots)
     rust_packages, rust_warnings = build_rust_inventory(cargo_manifests)
-    return {
-        "schema_version": 1,
+    payload = {
+        "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "python": {
             "requirement_roots": list(roots),
@@ -225,6 +232,10 @@ def generate_inventory(
             "legal_review_required_for": ["PyQt6/Qt", "PyMuPDF"],
         },
     }
+    payload["provenance"] = inventory_provenance(
+        payload, REPO_ROOT, requirement_paths=requirement_paths, cargo_manifests=cargo_manifests,
+    )
+    return payload
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -236,13 +247,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Requirement file to include; defaults to runtime and OCR requirements.",
     )
     parser.add_argument("--cargo-manifest", action="append", default=[])
-    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+    parser.add_argument("--output", default=str(REPO_ROOT / INVENTORY_PATH))
     args = parser.parse_args(argv)
-    requirement_paths = args.requirements or ["requirements.txt", "requirements-ocr.txt"]
-    cargo_manifests = args.cargo_manifest or [
-        *(str(path.relative_to(REPO_ROOT)) for path in sorted((REPO_ROOT / "src/metroliza/native").glob("*/Cargo.toml"))),
-        "packaging/launcher/Cargo.toml",
-    ]
+    requirement_paths = args.requirements or [REPO_ROOT / path for path in DEFAULT_REQUIREMENTS]
+    cargo_manifests = args.cargo_manifest or default_cargo_manifests(REPO_ROOT)
     payload = generate_inventory(
         requirement_paths=requirement_paths,
         cargo_manifests=cargo_manifests,
