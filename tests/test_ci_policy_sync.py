@@ -62,7 +62,12 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(t
     assert len(core) == 2
     assert "foreach ($scale in @('1.0', '1.25', '1.5'))" in core[0]["run"]
     assert "--native-mode default" in core[0]["run"]
+    assert "if ($scale -eq '1.0') { $profileProbe += '--profile-import-probe' }" in core[0]["run"]
+    assert "--output-dir $receiptDir @profileProbe" in core[0]["run"]
+    assert "Join-Path $receiptDir 'profile-import-probe.json'" in core[0]["run"]
+    assert "throw 'Packaged profile import receipt missing'" in core[0]["run"]
     assert "--dpi-scale 1.0 --native-mode unavailable" in core[1]["run"]
+    assert "--profile-import-probe" not in core[1]["run"]
     diagnostics = next(step for step in steps if "scripts/qualify_windows_diagnostics.py" in step.get("run", ""))
     for step in [diagnostics, *core]:
         assert "--artifact-dir $env:CANDIDATE_PACKAGE" in step["run"]

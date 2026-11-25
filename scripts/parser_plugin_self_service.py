@@ -31,6 +31,7 @@ from metroliza.parsing.declarative_parser_profiles import (  # noqa: E402
     render_profile_template,
     rollback_profile,
     sha256_file,
+    uninstall_profile,
     validate_profile_file,
 )
 from metroliza.parsing.parser_profile_handoff import (  # noqa: E402
@@ -39,6 +40,7 @@ from metroliza.parsing.parser_profile_handoff import (  # noqa: E402
     format_handoff_integrity_report,
     render_profile_repair_prompt,
     validate_handoff_workspace,
+    write_profile_generation_receipt,
 )
 from metroliza.parsing.parser_plugin_paths import parser_profile_store_lock  # noqa: E402
 
@@ -132,6 +134,22 @@ def _cmd_integrity(args: argparse.Namespace) -> int:
     return 0 if report.passed else 1
 
 
+def _cmd_record_generation(args: argparse.Namespace) -> int:
+    try:
+        output = write_profile_generation_receipt(
+            args.workspace, operation=args.operation, provider=args.provider, model=args.model,
+            model_version=args.model_version, input_sha256=tuple(args.input_sha256),
+        )
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
+    except OSError:
+        print("Could not read the profile workspace or write the generation receipt.", file=sys.stderr)
+        return 2
+    print(f"Generation receipt: {output.name}")
+    return 0
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     samples = _sample_paths(args)
     report = validate_profile_file(
@@ -223,7 +241,7 @@ def _cmd_repair(args: argparse.Namespace) -> int:
     )
     print(_format_validation_report(report))
     if report.passed:
-        print("Validation passed; no repair prompt was written.")
+        print("Validation passed; no repair prompt was written. Keep any previous prompt local.")
         return 0
 
     workspace_root = Path(args.workspace) if args.workspace else Path(args.profile).parent
@@ -236,7 +254,7 @@ def _cmd_repair(args: argparse.Namespace) -> int:
         handoff_path=workspace_root / "llm_handoff.md",
         expected_results_path=expected_results,
     )
-    prompt = render_profile_repair_prompt(workspace, _format_validation_report(report))
+    prompt = render_profile_repair_prompt(workspace, report)
     output = Path(args.output) if args.output else workspace_root / "artifacts" / "profile_repair_prompt.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(prompt, encoding="utf-8")
@@ -274,6 +292,11 @@ def _cmd_disable(args: argparse.Namespace) -> int:
 
 def _cmd_enable(args: argparse.Namespace) -> int:
     return _run_store_action(enable_profile, args.plugin_id, home=args.home, label="Enabled")
+
+
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    return _run_store_action(uninstall_profile, args.plugin_id, home=args.home,
+                             label="Archived removed profile", state=args.state)
 
 
 def _cmd_rollback(args: argparse.Namespace) -> int:
@@ -346,6 +369,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     handoff_parser.set_defaults(func=_cmd_handoff)
 
+    generation_parser = subparsers.add_parser("record-generation", help="Record local external-authoring evidence")
+    generation_parser.add_argument("workspace", help="Handoff workspace root")
+    generation_parser.add_argument("--operation", choices=("generate", "repair"), default="generate")
+    generation_parser.add_argument("--provider", required=True)
+    generation_parser.add_argument("--model", required=True)
+    generation_parser.add_argument("--model-version")
+    generation_parser.add_argument("--input-sha256", action="append", required=True,
+                                   help="SHA-256 of an input used, repeat for each input")
+    generation_parser.set_defaults(func=_cmd_record_generation)
+
     integrity_parser = subparsers.add_parser("integrity", help="Check that a handoff folder is self-contained")
     integrity_parser.add_argument("workspace", help="Handoff workspace root")
     integrity_parser.set_defaults(func=_cmd_integrity)
@@ -387,6 +420,12 @@ def build_parser() -> argparse.ArgumentParser:
     enable_parser = subparsers.add_parser("enable", help="Enable a disabled profile")
     enable_parser.add_argument("plugin_id")
     enable_parser.set_defaults(func=_cmd_enable)
+
+    uninstall_parser = subparsers.add_parser("uninstall", help="Remove a managed profile and retain a recovery copy")
+    uninstall_parser.add_argument("plugin_id")
+    uninstall_parser.add_argument("--state", choices=("approved", "disabled"),
+                                  help="Choose a generation when both states exist")
+    uninstall_parser.set_defaults(func=_cmd_uninstall)
 
     rollback_parser = subparsers.add_parser("rollback", help="Restore the latest or named profile backup")
     rollback_parser.add_argument("plugin_id")

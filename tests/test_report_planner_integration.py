@@ -699,7 +699,9 @@ def test_profile_handoff_approval_and_rollback_drive_real_reports_import(app, tm
     assert cli.main(["repair", *candidate_args]) == 1
     repair_prompt = (handoff / "artifacts" / "profile_repair_prompt.md").read_text(encoding="utf-8")
     assert "Return complete corrected `profile.yaml` only" in repair_prompt
-    assert "probe_required_markers_present" in repair_prompt
+    assert "sample_profile_probe_selected" in repair_prompt
+    assert "probe_required_markers_present" not in repair_prompt
+    assert "profile-sample.pdf" not in repair_prompt
     assert cli.main(install_args) == 1
     approved_profile = approved_profiles_dir(home=home) / plugin_id / "profile.yaml"
     assert not approved_profile.exists()
@@ -746,6 +748,21 @@ def test_profile_handoff_approval_and_rollback_drive_real_reports_import(app, tm
             _review_and_import_profile(app, source, restored_database)
             _assert_profile_journey_database(
                 restored_database, version="0.1.0", reference="REF-A", header="TEST FEATURE",
+            )
+
+            store_args = ["--home", str(home)]
+            assert cli.main([*store_args, "uninstall", plugin_id]) == 0
+            assert not approved_profile.exists()
+            archives = list(approved_profile.parents[2].glob(f"backups/{plugin_id}-removed-*"))
+            archive, = archives
+            _review_and_import_profile(app, source, tmp_path / "removed.db", approved=False)
+            assert cli.main([*store_args, "rollback", plugin_id]) == 1
+            assert not approved_profile.exists()
+            assert cli.main([*store_args, "rollback", plugin_id, "--backup-name", archive.name]) == 0
+            reenabled_database = tmp_path / "reenabled.db"
+            _review_and_import_profile(app, source, reenabled_database)
+            _assert_profile_journey_database(
+                reenabled_database, version="0.1.0", reference="REF-A", header="TEST FEATURE",
             )
     finally:
         invalidate_parser_plugin_runtime()

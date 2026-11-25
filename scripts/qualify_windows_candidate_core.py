@@ -33,6 +33,15 @@ from scripts.windows_candidate_exit_evidence import (
 SCENARIO_FILE = "windows-candidate-result.json"
 STAGE_FILE = "core-stage.json"
 FAILED_DIAGNOSTIC_FILE = "core-failed-diagnostic.json"
+PROFILE_PROBE_FILE = "profile-import-probe.json"
+PROFILE_PROBE_BINDING_FIELDS = (
+    "source_sha", "source_tree", "package_tree_sha256", "launcher_sha256", "application_sha256",
+    "driver_sha256", "ui_scale", "native_mode",
+)
+PROFILE_PROBE_FIXED_INPUT_HASHES = {
+    "profile": "f56fd53618ddf4f446b81cff67e4cedbea04784b82a4be183bb56890f610d784",
+    "expected": "c1e55e0f40e851b5ca21e11803c966b17926c8d8965399f8bc33ab272aed40cb",
+}
 MAX_FAILED_DIAGNOSTIC_BYTES = 4096
 _CHILD_FAILURE_STAGES = frozenset({
     "root_validation", "fixture_validation", "startup_marker", "runtime_ack",
@@ -44,7 +53,7 @@ _CHILD_FAILURE_STAGES = frozenset({
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
-    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "complete",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "profile_import", "complete",
 })
 _REOPEN_FAILURE_STAGES = frozenset({
     "input", "host_ready", "reopen", "database_preservation",
@@ -117,6 +126,8 @@ _CLOSED_CHILD_FAILURES = frozenset({
     "closeout_privacy_failed", "closeout_shell_failed", "closeout_lifecycle_failed",
     "uiux_checks_failed", "uiux_observation_size", "uiux_data_failed",
     "uiux_reports_failed", "uiux_tabular_failed", "uiux_controls_failed", "uiux_deadline", "uiux_unexpected",
+    "profile_probe_home_mismatch", "profile_probe_reports_context", "profile_probe_unapproved_selection",
+    "profile_probe_approval", "profile_probe_approved_selection", "profile_probe_import_count", "profile_probe_input_changed",
     "TypeError", "ValueError", "KeyError", "OSError", "RuntimeError",
     "AssertionError", "OperationalError", "FileNotFoundError", "PermissionError",
 })
@@ -901,6 +912,115 @@ def _verify_main_html(path, *, source, packaged):
         raise CandidateFailure("main_html_retained_verification_failed") from None
 
 
+def _verify_profile_database(database: Path, source_sha256: str) -> dict:
+    with closing(sqlite3.connect(database.as_uri() + "?mode=ro&immutable=1", uri=True)) as connection:
+        connection.execute("PRAGMA trusted_schema=OFF")
+        if connection.execute("PRAGMA integrity_check").fetchone() != ("ok",):
+            raise CandidateFailure("profile_probe_database_integrity")
+        reports = connection.execute("""
+            SELECT pr.parser_id, pr.parser_version, pr.template_variant, pr.measurement_count,
+                   pr.has_nok, pr.nok_count, rm.reference, rm.report_date, rm.sample_number,
+                   loc.file_name, src.sha256
+            FROM parsed_reports AS pr
+            JOIN report_metadata AS rm ON rm.report_id = pr.id
+            JOIN source_files AS src ON src.id = pr.source_file_id
+            JOIN source_file_locations AS loc ON loc.source_file_id = src.id AND loc.is_active = 1
+        """).fetchmany(2)
+        rows = connection.execute("""
+            SELECT header, ax, nominal, tol_plus, tol_minus, bonus, meas, dev, outtol, status_code, is_nok
+            FROM report_measurements ORDER BY row_order
+        """).fetchmany(3)
+        if reports != [("synthetic_package_profile", "0.1.0", "synthetic_package_template", 2, 1, 1,
+                        "REF-A", "2026-01-05", "0007", "profile-sample.pdf", source_sha256)] or rows != [
+            ("TEST FEATURE", "X", 10.0, 0.2, -0.2, None, 10.09, 0.09, 0.0, "ok", 0),
+            ("TEST FEATURE", "Y", 20.0, 0.2, -0.2, 0.01, 20.35, 0.35, 0.14, "nok", 1),
+        ]:
+            raise CandidateFailure("profile_probe_report_or_rows_mismatch")
+        return {
+            "parser_id": reports[0][0], "parser_version": reports[0][1],
+            "template_variant": reports[0][2], "measurement_count": len(rows),
+            "nok_count": reports[0][5],
+        }
+
+
+def _verify_profile_import_probe(work: Path, payload: dict) -> dict:
+    probe = payload.get("profile_import_probe")
+    if type(probe) is not dict or set(probe) != {"inputs", "approval_sha256", "database_sha256"}:
+        raise CandidateFailure("profile_probe_runtime_evidence_missing")
+    child = work / payload["relative_artifact_dir"]
+    scratch = child / "profile-import"
+    installed = work.parent / "profile-probe-home/.metroliza/parser_plugins/profiles/approved/synthetic_package_profile"
+    for directory in (work, child, scratch, scratch / "samples", *reversed(installed.parents[:6]), installed):
+        _directory(directory)
+    inputs = {
+        "profile": _hash(scratch / "profile.yaml"),
+        "expected": _hash(scratch / "expected.csv"),
+        "sample": _hash(scratch / "samples/profile-sample.pdf"),
+    }
+    if (probe["inputs"] != inputs
+            or any(inputs[name] != digest for name, digest in PROFILE_PROBE_FIXED_INPUT_HASHES.items())
+            or _hash(installed / "profile.yaml") != inputs["profile"]):
+        raise CandidateFailure("profile_probe_input_hash_mismatch")
+    approval_path = installed / "approval.json"
+    approval = _json(approval_path, 16 * 1024)
+    expected_approval = {
+        "plugin_id": "synthetic_package_profile", "version": "0.1.0", "approved_by": "synthetic-candidate",
+        "sha256": inputs["profile"], "expected_results_sha256": inputs["expected"],
+        "validation_passed": True, "sample_count": 1,
+    }
+    if (type(approval) is not dict or _hash(approval_path) != probe["approval_sha256"] or any(
+            type(approval.get(key)) is not type(value) or approval.get(key) != value
+            for key, value in expected_approval.items())):
+        raise CandidateFailure("profile_probe_approval_mismatch")
+    database = scratch / "profile-import.sqlite"
+    database_hash = _hash(database)
+    if database_hash != probe["database_sha256"]:
+        raise CandidateFailure("profile_probe_database_hash_mismatch")
+    sidecars = _inert_import_guard_sidecars(database, "profile_probe_database_not_closed")
+    observation = _verify_profile_database(database, inputs["sample"])
+    _assert_import_guard_unchanged(database, database_hash, sidecars, "profile_probe_database_changed")
+    return {
+        "observation": observation,
+        "database_sha256": database_hash,
+        "input_sha256": inputs,
+        "approval_sha256": probe["approval_sha256"],
+    }
+
+
+def _configure_profile_import_probe(environment: dict, private: Path, enabled: bool) -> None:
+    if not enabled:
+        return
+    profile_home = private / "profile-probe-home"
+    profile_home.mkdir()
+    environment.update({
+        "USERPROFILE": str(profile_home),
+        "HOMEDRIVE": profile_home.drive,
+        "HOMEPATH": str(profile_home)[len(profile_home.drive):],
+        "METROLIZA_WINDOWS_CANDIDATE_PROFILE_IMPORT": "1",
+    })
+    environment.pop("PARSER_EXTERNAL_PLUGIN_PATHS", None)
+    environment.pop("PARSER_DISABLED_PLUGIN_IDS", None)
+
+
+def _profile_import_probe_evidence(work: Path, payload: dict, enabled: bool) -> dict:
+    if not enabled:
+        return {}
+    try:
+        return {"profile_import_probe": _verify_profile_import_probe(work, payload)}
+    except (OSError, sqlite3.Error, ValueError):
+        raise CandidateFailure("profile_probe_verification_failed") from None
+
+
+def _write_profile_import_probe(output: Path, core_receipt: dict, proof: dict | None) -> None:
+    if proof is None:
+        return
+    binding = {field: core_receipt[field] for field in PROFILE_PROBE_BINDING_FIELDS}
+    binding["core_driver_receipt_sha256"] = _hash(output / "core-driver-receipt.json")
+    with (output / PROFILE_PROBE_FILE).open("x", encoding="ascii") as stream:
+        json.dump({"schema_version": 1, "status": "passed", **binding, **proof}, stream, indent=2)
+        stream.write("\n")
+
+
 def _copy_verified_results(work: Path, payload: dict, output: Path, oracle: Path) -> dict:
     child = work / payload["relative_artifact_dir"]
     _directory(child)
@@ -1434,6 +1554,8 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         "TMP": str(scratch_temp),
         "TMPDIR": str(scratch_temp),
     })
+    profile_probe_enabled = getattr(args, "profile_import_probe", False)
+    _configure_profile_import_probe(environment, private, profile_probe_enabled)
     owned = []
     terminate = True
     exit_collected = False
@@ -1499,6 +1621,7 @@ def _run_private_core(private: Path, *, args, diag, artifact: Path, fixtures: Pa
         stage["name"] = "retained_artifacts"
         payload["artifacts"]["database"]["sha256"] = _hash(work / payload["relative_artifact_dir"] / "reports.sqlite")
         artifacts = _copy_verified_results(work, payload, output, args.oracle)
+        artifacts.update(_profile_import_probe_evidence(work, payload, profile_probe_enabled))
         artifacts.update(fresh_reopen)
         stage["name"] = "uiux_retention"
         _retain_uiux_results(work / payload["relative_artifact_dir"], output, args)
@@ -1580,6 +1703,7 @@ def qualify(args) -> dict:
         if failures:
             raise failures[0]
         _verify_dashboard_closed(diag, output, artifacts, args.browser)
+        profile_probe = artifacts.pop("profile_import_probe", None)
         result = {
             "schema_version": 1,
             "status": "passed",
@@ -1620,6 +1744,7 @@ def qualify(args) -> dict:
         with (output / "core-driver-receipt.json").open("x", encoding="ascii") as stream:
             json.dump(result, stream, indent=2)
             stream.write("\n")
+        _write_profile_import_probe(output, result, profile_probe)
         return result
     except CandidateFailure as error:
         payload = _failed_diagnostic_payload(failure_observation, private_stage, error, args.expected_source_sha)
@@ -1639,6 +1764,8 @@ def main() -> int:
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--dpi-scale", choices=("1.0", "1.25", "1.5"), default="1.0")
     parser.add_argument("--native-mode", choices=("default", "unavailable"), default="default")
+    parser.add_argument("--profile-import-probe", action="store_true",
+                        help="Also qualify default-store declarative PDF discovery and retain separate proof.")
     args = parser.parse_args()
     try:
         qualify(args)
