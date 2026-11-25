@@ -8,7 +8,6 @@ import sqlite3
 import threading
 import weakref
 from collections import defaultdict
-from contextlib import closing
 from pathlib import PurePath
 
 from metroliza.reports.characteristic_alias_service import ensure_characteristic_alias_table
@@ -785,7 +784,7 @@ def _snapshot_versions(connection, tables):
 
 
 def _normalized_snapshot_matches(connection, tables, ownership_version):
-    with closing(sqlite3.connect(":memory:")) as reference:
+    with sqlite_connection_scope(":memory:") as reference:
         for statement in SCHEMA_TABLE_STATEMENTS:
             table = statement.split()[5]
             # Earlier report_metadata_v1 backups predate the separate parse-state projection.
