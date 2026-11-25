@@ -154,6 +154,7 @@ def test_mapping_resumes_keeps_actual_database_and_blocks_same_db_review(app, wi
     dialog = window.characteristic_mapping_dialog
     wait_until(app, lambda: not dialog.is_loading_source_options())
     assert not dialog.isModal() and dialog.isVisible()
+    assert not database.exists(), 'Opening name matching must not create the pending Reports database.'
     window.launch_characteristic_mapping_dialog()
     assert window.characteristic_mapping_dialog is dialog
     assert not window._report_start_allowed()
@@ -166,6 +167,74 @@ def test_mapping_resumes_keeps_actual_database_and_blocks_same_db_review(app, wi
     assert 'save immediately' in dialog.persistence_label.text()
     dialog.close()
     app.processEvents()
+
+
+def test_pending_mapping_database_reads_are_noncreating_and_writes_are_blocked(
+        tmp_path, qapplication_session, window, monkeypatch):  # noqa: F811
+    database = tmp_path / 'pending.sqlite3'
+    assert window.set_db_file(str(database))
+    window.launch_characteristic_mapping_dialog()
+    dialog = window.characteristic_mapping_dialog
+    try:
+        wait_until(qapplication_session, lambda: not dialog.is_loading_source_options())
+        assert not database.exists()
+        assert dialog.alias_table.rowCount() == 0
+
+        warnings = []
+        monkeypatch.setattr(
+            matching.QMessageBox, 'warning',
+            lambda _parent, title, message: warnings.append((title, message)),
+        )
+        monkeypatch.setattr(
+            dialog, '_build_editor',
+            lambda **_kwargs: pytest.fail('A pending database must not open a writer.'),
+        )
+        monkeypatch.setattr(
+            matching.QFileDialog, 'getOpenFileName',
+            lambda *_args: pytest.fail('Import must be blocked before opening the file chooser.'),
+        )
+
+        dialog.add_mapping()
+        dialog.import_mappings()
+
+        assert len(warnings) == 2
+        assert all('has not been created yet' in message for _title, message in warnings)
+        assert not database.exists()
+    finally:
+        dialog.close()
+
+
+def test_mapping_load_is_read_only_for_existing_store_without_alias_schema(tmp_path, qapplication_session):
+    from metroliza.reports.characteristic_alias_service import (
+        fetch_all_characteristic_aliases,
+        save_manual_characteristic_alias,
+    )
+
+    database = tmp_path / 'legacy-empty.sqlite3'
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute('CREATE TABLE legacy_marker (value TEXT)')
+        connection.execute("INSERT INTO legacy_marker(value) VALUES ('preserve me')")
+    before = database.read_bytes()
+    dialog = matching.CharacteristicMappingDialog(db_file=str(database), modal=False)
+    try:
+        wait_until(qapplication_session, lambda: not dialog.is_loading_source_options())
+        assert dialog.alias_table.rowCount() == 0
+        assert database.read_bytes() == before
+        with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES'"
+            ).fetchone() is None
+            assert connection.execute('SELECT value FROM legacy_marker').fetchone() == ('preserve me',)
+
+        save_manual_characteristic_alias(database, {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'global', 'scope_value': None,
+        })
+        dialog.load_aliases()
+        assert fetch_all_characteristic_aliases(str(database))[0]['canonical_name'] == 'Diameter'
+        assert dialog.alias_table.rowCount() == 1
+    finally:
+        dialog.close()
 
 
 @pytest.mark.parametrize('kind', ['modify', 'mapping'])

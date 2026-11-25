@@ -357,6 +357,51 @@ def test_report_schema_exposes_expected_view_columns(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("key", ["schema_version", "source_location_ownership_version"])
+def test_ensure_report_schema_does_not_downgrade_unknown_versions(tmp_path, key):
+    database = tmp_path / "future.db"
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("CREATE TABLE app_schema (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        connection.execute("INSERT INTO app_schema VALUES (?, ?)", (key, "future"))
+        connection.execute("CREATE TABLE future_owned (name TEXT)")
+        connection.execute("INSERT INTO future_owned VALUES ('keep')")
+    before = database.read_bytes()
+    with pytest.raises(ValueError, match="Unsupported report database schema version"):
+        ensure_report_schema(str(database))
+    assert database.read_bytes() == before
+    assert not list(tmp_path.glob("future.db-*"))
+    assert not list(tmp_path.glob("metroliza-reports-pre-migration-*.sqlite"))
+
+
+def test_failed_legacy_migration_rolls_back_bootstrap_ddl_and_keeps_the_source(tmp_path, monkeypatch):
+    from metroliza.reports import report_schema
+
+    database = tmp_path / "legacy.db"
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT)")
+        connection.execute("INSERT INTO REPORTS VALUES (7, 'keep')")
+        connection.execute("CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY, REPORT_ID INTEGER)")
+    original_bytes = database.read_bytes()
+    with closing(sqlite3.connect(database)) as connection:
+        before = list(connection.iterdump())
+
+    def migration_failure(cursor):
+        assert cursor.execute("SELECT COUNT(*) FROM parsed_reports").fetchone() == (1,)
+        cursor.execute("UPDATE REPORTS SET REFERENCE = 'temporary'")
+        raise RuntimeError("synthetic migration failure")
+
+    monkeypatch.setattr(report_schema, "ensure_characteristic_alias_table", migration_failure)
+    with pytest.raises(RuntimeError, match="synthetic migration failure"):
+        ensure_report_schema(str(database))
+    assert database.read_bytes() == original_bytes
+    recovery, = tmp_path.glob("metroliza-reports-pre-migration-*.sqlite")
+    with closing(sqlite3.connect(recovery)) as connection:
+        assert list(connection.iterdump()) == before
+    with closing(sqlite3.connect(database)) as connection:
+        assert list(connection.iterdump()) == before
+        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+
+
 def test_report_schema_refreshes_stale_measurement_export_view(tmp_path):
     db_path = str(tmp_path / "reports.db")
     with closing(sqlite3.connect(db_path)) as conn, conn:

@@ -717,6 +717,7 @@ def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:
 
     def operation(cursor):
         cursor.execute("BEGIN IMMEDIATE")
+        ensure_characteristic_alias_table(cursor)
         matching = "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES WHERE alias_name = ? AND scope_type = ? AND scope_value IS ?"
         source = cursor.execute(matching, original).fetchone() if original is not None else None
         if original is not None and (source is None or source[1] != previous["canonical_name"]):

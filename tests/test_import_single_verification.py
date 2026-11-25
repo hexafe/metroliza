@@ -260,6 +260,7 @@ def _prepare_schema(database, schema_state):
         repository.ensure_schema()
     if schema_state == "outdated":
         with closing(sqlite3.connect(database)) as connection:
+            assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
             connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
             connection.commit()
     return repository

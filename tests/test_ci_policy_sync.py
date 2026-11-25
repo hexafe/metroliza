@@ -221,7 +221,8 @@ def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate(
     assert 'METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080' in step
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
     assert 'pytest -vv -s' in step
-    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui', 'active_dialog_close_guards'):
+    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui',
+                 'active_dialog_close_guards', 'database_restore_dialog'):
         assert f'tests/test_{test}.py' in step
     assert name in policy
 

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import csv
-from html import escape
 from functools import partial
+from html import escape
 import sqlite3
 import threading
 import time
@@ -36,6 +37,7 @@ from PyQt6.QtWidgets import (
 from metroliza.reports.characteristic_alias_service import (
     CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
+    CHARACTERISTIC_ALIAS_TABLE,
     delete_characteristic_alias,
     ensure_characteristic_alias_schema,
     export_characteristic_aliases_csv,
@@ -51,8 +53,11 @@ from metroliza.reports.characteristic_mapping_service import (
     fetch_distinct_report_metric_names,
     fetch_mapping_impact_counts,
 )
-from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite, sqlite_file_identity
-from metroliza.reports.import_persist_profile import close_persist_connection
+from metroliza.reports.db import (
+    _is_transient_sqlite_error,
+    sqlite_file_identity,
+    sqlite_readonly_connection_scope,
+)
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui import detached_threads
 from metroliza.ui.curation_presentation import bind_button
@@ -86,6 +91,28 @@ SOURCE_LOAD_STOP_WAIT_MS = 2000
 _DEFAULT_ALIAS_SCHEMA = ensure_characteristic_alias_schema
 _DEFAULT_ALIAS_IMPORT = import_characteristic_aliases_csv
 _DEFAULT_ALIAS_EXPORT = export_characteristic_aliases_csv
+_DEFAULT_ALIAS_FETCH = fetch_all_characteristic_aliases
+
+
+@contextmanager
+def _readonly_source_options_connection(db_file):
+    scope = None
+    connection = None
+    for attempt in range(3):
+        scope = sqlite_readonly_connection_scope(db_file, resolve_path=False)
+        try:
+            connection = scope.__enter__()
+            break
+        except sqlite3.OperationalError as exc:
+            if attempt >= 2 or not _is_transient_sqlite_error(exc):
+                raise
+            time.sleep(0.05)
+    if connection is None or scope is None:
+        raise RuntimeError('Could not open the source database.')
+    try:
+        yield connection
+    finally:
+        scope.__exit__(None, None, None)
 _ALIAS_CSV_CONTROLS = ('select_db_button', 'add_button', 'add_from_selected_button',
                        'edit_button', 'delete_button', 'import_button', 'export_button')
 
@@ -293,37 +320,24 @@ class _SourceOptionsLoadThread(QThread):
                 except sqlite3.Error:
                     pass
 
-    def _open_connection(self) -> sqlite3.Connection:
-        # Same transient lock/open retry policy as execute_with_retry, which opened the connection
-        # for every statement before the loader owned one.
-        attempts = 3
-        for attempt in range(attempts):
-            try:
-                return connect_sqlite(self.db_file)
-            except sqlite3.OperationalError as exc:
-                if attempt >= attempts - 1 or not _is_transient_sqlite_error(exc):
-                    raise
-                time.sleep(0.05)
-        raise RuntimeError('unreachable')  # pragma: no cover
-
     def run(self) -> None:
         try:
-            connection = self._open_connection()
-            try:
-                with self._connection_lock:
-                    self._connection = connection
-                try:
-                    if self.isInterruptionRequested():
-                        return
-                    metric_options = fetch_distinct_report_metric_names(self.db_file, connection=connection)
-                    if self.isInterruptionRequested():
-                        return
-                    reference_options = fetch_distinct_references(self.db_file, connection=connection)
-                finally:
+            if not Path(self.db_file).is_file():
+                metric_options, reference_options = [], []
+            else:
+                with _readonly_source_options_connection(self.db_file) as connection:
                     with self._connection_lock:
-                        self._connection = None
-            finally:
-                close_persist_connection(connection)
+                        self._connection = connection
+                    try:
+                        if self.isInterruptionRequested():
+                            return
+                        metric_options = fetch_distinct_report_metric_names(self.db_file, connection=connection)
+                        if self.isInterruptionRequested():
+                            return
+                        reference_options = fetch_distinct_references(self.db_file, connection=connection)
+                    finally:
+                        with self._connection_lock:
+                            self._connection = None
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.failed.emit(self.request_id, exc)
@@ -600,6 +614,7 @@ class CharacteristicMappingDialog(QDialog):
         self._loaded_alias_database_path: str | None = None
         self._loaded_alias_database_identity: tuple[int, int] | None = None
         self.database_change_allowed = None
+        self.report_database_is_current = None
         self.metric_options: list[dict[str, object]] = []
         self.reference_options: list[dict[str, object]] = []
         self._source_request_id = 0
@@ -1018,20 +1033,16 @@ class CharacteristicMappingDialog(QDialog):
         self._sync_warning_labels()
 
     def load_aliases(self):
-        if not self.db_file:
-            self._invalidate_loaded_aliases()
-            self.alias_table.setRowCount(0)
-            self.empty_state_label.setVisible(True)
-            self._sync_selection_actions()
-            self._sync_warning_labels()
+        native_read = (
+            ensure_characteristic_alias_schema is _DEFAULT_ALIAS_SCHEMA
+            and fetch_all_characteristic_aliases is _DEFAULT_ALIAS_FETCH
+        )
+        if not self.db_file or (native_read and not Path(self.db_file).is_file()):
+            self._clear_alias_rows()
             return
 
         try:
-            ensure_characteristic_alias_schema(self.db_file)
-            loaded_path, loaded_identity = _alias_database_binding(self.db_file)
-            alias_rows = fetch_all_characteristic_aliases(self.db_file)
-            if _alias_database_binding(self.db_file) != (loaded_path, loaded_identity):
-                raise ValueError('The selected database changed while name matches were loading. Reload the list.')
+            loaded_path, loaded_identity, alias_rows = self._load_alias_rows()
         except Exception as exc:
             self._invalidate_loaded_aliases()
             self.alias_table.setRowCount(0)
@@ -1056,6 +1067,48 @@ class CharacteristicMappingDialog(QDialog):
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
         self._filter_alias_table()
+        self._sync_warning_labels()
+
+    def _load_alias_rows(self):
+        if (
+            ensure_characteristic_alias_schema is _DEFAULT_ALIAS_SCHEMA
+            and fetch_all_characteristic_aliases is _DEFAULT_ALIAS_FETCH
+        ):
+            selected_path = Path(self.db_file).expanduser().resolve(strict=True)
+            selected_identity = sqlite_file_identity(selected_path, include_empty=True)
+            if selected_identity is None:
+                raise ValueError('The selected database is unavailable. Reload the name matches.')
+            with sqlite_readonly_connection_scope(str(selected_path), resolve_path=False) as connection:
+                if sqlite_file_identity(selected_path, include_empty=True) != selected_identity:
+                    raise ValueError('The selected database changed while name matches were loading.')
+                alias_table_exists = connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND lower(name) = lower(?) LIMIT 1",
+                    (CHARACTERISTIC_ALIAS_TABLE,),
+                ).fetchone()
+                if alias_table_exists is None:
+                    alias_rows = []
+                else:
+                    alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+                if sqlite_file_identity(selected_path, include_empty=True) != selected_identity:
+                    raise ValueError('The selected database changed while name matches were loading. Reload the list.')
+            return str(selected_path), selected_identity, alias_rows
+
+        ensure_characteristic_alias_schema(self.db_file)
+        loaded_path, loaded_identity = _alias_database_binding(self.db_file)
+        if fetch_all_characteristic_aliases is _DEFAULT_ALIAS_FETCH:
+            with sqlite_readonly_connection_scope(self.db_file) as connection:
+                alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+        else:
+            alias_rows = fetch_all_characteristic_aliases(self.db_file)
+        if _alias_database_binding(self.db_file) != (loaded_path, loaded_identity):
+            raise ValueError('The selected database changed while name matches were loading. Reload the list.')
+        return loaded_path, loaded_identity, alias_rows
+
+    def _clear_alias_rows(self):
+        self._invalidate_loaded_aliases()
+        self.alias_table.setRowCount(0)
+        self.empty_state_label.setVisible(True)
+        self._sync_selection_actions()
         self._sync_warning_labels()
 
     def _invalidate_loaded_aliases(self):
@@ -1150,7 +1203,7 @@ class CharacteristicMappingDialog(QDialog):
             self._open_mapping_editor(selected, previous=selected)
 
     def _open_mapping_editor(self, initial_values, previous=None):
-        if _alias_csv_busy(self) or not self._ensure_db_file_selected():
+        if _alias_csv_busy(self) or not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
             return
         editor = self._build_editor(initial_values=initial_values)
         database = self.db_file
@@ -1236,6 +1289,21 @@ class CharacteristicMappingDialog(QDialog):
             return True
         QMessageBox.warning(self, 'Database required', 'Please select a database file first.')
         return False
+
+    def _ensure_existing_database_for_write(self) -> bool:
+        if not self._ensure_db_file_selected():
+            return False
+        guard = getattr(self, 'report_database_is_current', None)
+        if guard is None:
+            return True
+        if not Path(self.db_file).is_file():
+            QMessageBox.warning(
+                self,
+                'Database required',
+                'The selected database has not been created yet. Open or create it in Reports before editing, importing, or exporting name matches.',
+            )
+            return False
+        return guard(self.db_file)
 
     def _build_import_validation_summary(self, error: CharacteristicAliasImportValidationError, *, preview_limit: int = 10):
         details = list(error.row_error_details or [])
@@ -1324,7 +1392,7 @@ class CharacteristicMappingDialog(QDialog):
         started_at = time.monotonic()
         if _alias_csv_busy(self):
             return
-        if not self._ensure_db_file_selected():
+        if not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
             return
 
         filename, _ = QFileDialog.getOpenFileName(
@@ -1415,7 +1483,7 @@ class CharacteristicMappingDialog(QDialog):
         started_at = time.monotonic()
         if _alias_csv_busy(self):
             return
-        if not self._ensure_db_file_selected():
+        if not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
             return
 
         filename, _ = QFileDialog.getSaveFileName(

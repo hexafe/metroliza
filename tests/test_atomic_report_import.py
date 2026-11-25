@@ -374,6 +374,7 @@ def test_atomic_import_migrates_legacy_active_owners_before_duplicate_noop(tmp_p
     repository = ReportRepository(str(database))
     repository.import_report_if_absent(source_path=source, **_payload("accepted"))
     with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
         connection.execute("DROP INDEX idx_source_file_locations_active_path_unique")
         connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
         connection.execute(
@@ -421,7 +422,8 @@ def test_schema_readiness_is_readonly_and_existing_migration_is_idempotent(
     source.write_bytes(b"schema-readiness")
     database = tmp_path / "reports.sqlite3"
     ReportRepository(str(database)).import_report_if_absent(source_path=source, **_payload("accepted"))
-    with closing(connect_sqlite(str(database))) as connection:
+    with closing(connect_sqlite(str(database), initialize_wal=False)) as connection:
+        assert connection.execute("PRAGMA journal_mode=DELETE").fetchone() == ("delete",)
         if damage == "missing-marker":
             connection.execute("DELETE FROM app_schema WHERE key = 'source_location_ownership_version'")
         elif damage in ("stale-marker", "old-main-version"):

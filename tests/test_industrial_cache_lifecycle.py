@@ -326,7 +326,7 @@ def test_snapshot_refuses_symlink_and_non_regular_destinations(tmp_path):
 def test_reparse_point_detection_is_platform_bounded(monkeypatch):
     reparse_flag = 0x400
     monkeypatch.setattr(
-        cache_target_module.stat,
+        stat,
         "FILE_ATTRIBUTE_REPARSE_POINT",
         reparse_flag,
         raising=False,
@@ -785,6 +785,7 @@ def test_realtime_archive_is_valid_before_rebind_and_session_cleanup(
     from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
     import metroliza.ui.main_window as main_window_module
+    from metroliza.reports.report_schema import ensure_report_schema
     from metroliza.ui.ui_preferences import UiPreferences
 
     _qapplication()
@@ -797,6 +798,7 @@ def test_realtime_archive_is_valid_before_rebind_and_session_cleanup(
     errors = []
     archive = tmp_path / "saved session ź.sqlite"
     incoming = tmp_path / "incoming.db"
+    ensure_report_schema(str(incoming))
     try:
         window.launch_realtime_industrial_monitoring_dialog()
         dialog = window.realtime_monitoring_dialog
@@ -817,9 +819,9 @@ def test_realtime_archive_is_valid_before_rebind_and_session_cleanup(
                 ).fetchall() == [("row-1",)]
             events.append(stage)
 
-        def observed_rebind(database):
+        def observed_rebind(database, **options):
             assert_archive_before_mutation("rebind")
-            return real_rebind(database)
+            return real_rebind(database, **options)
 
         def observed_cleanup():
             assert_archive_before_mutation("cleanup")

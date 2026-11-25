@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from pathlib import Path
 from time import monotonic
@@ -69,7 +70,11 @@ from metroliza.industrial.industrial_workers import (
     RealtimeDashboardWriterThread,
     RealtimeMonitorPollThread,
 )
-from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.db import (
+    selected_reports_worker_options,
+    sqlite_readonly_connection_scope,
+    sqlite_selected_reports_connection_scope,
+)
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
 from metroliza.ui.realtime_monitor_presentation import observed_freshness
@@ -105,9 +110,12 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         db_file: str | None = None,
         config_path: str | Path | None = None,
         temporary_session: bool = False,
+        *,
+        source_binding=None,
     ):
         super().__init__(parent)
         self.db_file = str(db_file or "")
+        self._database_source_binding = source_binding
         self.temporary_session = bool(temporary_session)
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.repository = RealtimeMonitorConfigRepository(self.db_file)
@@ -388,8 +396,10 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.resume_label.setText(" | ".join(details[:3]) + (f" · +{len(details) - 3} sources" if len(details) > 3 else ""))
 
     @staticmethod
-    def _read_saved_poll_offsets(database, configs):
-        with sqlite_readonly_connection_scope(database) as connection:
+    def _read_saved_poll_offsets(database, configs, *, connection=None):
+        scope = (nullcontext(connection) if connection is not None
+                 else sqlite_readonly_connection_scope(database))
+        with scope as connection:
             store = StreamOffsetStore(database, connection=connection)
             return {(config.source_profile_id, config.stream_key):
                     store.get_offset(source_profile_id=config.source_profile_id,
@@ -762,6 +772,25 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.event_review_table.clearSelection()
         self._sync_event_action_buttons()
 
+    @contextmanager
+    def _database_component(self, factory, *, standalone=None):
+        with sqlite_selected_reports_connection_scope(self.db_file, self._database_source_binding) as connection:
+            if connection is not None:
+                yield factory(self.db_file, connection=connection)
+            else:
+                yield standalone if standalone is not None else factory(self.db_file)
+
+    def _source_binding_options(self):
+        binding = self._database_source_binding
+        return {"source_binding": binding} if binding is not None else {}
+
+    def _worker_connection_options(self):
+        return selected_reports_worker_options(self.db_file, self._database_source_binding)
+
+    def _save_config(self, config):
+        with self._database_component(RealtimeMonitorConfigRepository, standalone=self.repository) as repository:
+            return repository.upsert_config(config)
+
     def refresh_event_review(self) -> None:
         if self._event_search_timer.isActive():
             self._event_page_starts = [None]
@@ -771,10 +800,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.event_older_button.setEnabled(False)
         self.event_newer_button.setEnabled(len(self._event_page_starts) > 1)
         try:
-            events = RealtimeDashboardService(self.db_file).list_open_anomaly_events(
-                limit=_EVENT_PAGE_SIZE + 1, severity=self.event_severity_combo.currentData(),
-                signal_search=self.event_signal_search.text(), older_than=self._event_page_starts[-1],
-            )
+            with self._database_component(RealtimeDashboardService) as service:
+                events = service.list_open_anomaly_events(
+                    limit=_EVENT_PAGE_SIZE + 1, severity=self.event_severity_combo.currentData(),
+                    signal_search=self.event_signal_search.text(), older_than=self._event_page_starts[-1],
+                )
         except Exception as exc:
             self.event_review_table.setRowCount(0)
             self.event_page_label.clear()
@@ -842,34 +872,34 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             )
             set_status_variant(self.event_review_status_label, "warning")
             return
-        service = RealtimeDashboardService(self.db_file)
         try:
-            if action == "acknowledge":
-                service.acknowledge_event(
-                    event_id=event_id,
-                    ack_by=operator,
-                    comment=comment,
-                    expected_status="open",
-                )
-                verb = "acknowledged"
-            elif action == "resolve":
-                service.resolve_event(
-                    event_id=event_id,
-                    resolved_by=operator,
-                    comment=comment,
-                    expected_status="open",
-                )
-                verb = "resolved"
-            elif action == "false_positive":
-                service.mark_event_false_positive(
-                    event_id=event_id,
-                    marked_by=operator,
-                    comment=comment,
-                    expected_status="open",
-                )
-                verb = "marked false positive"
-            else:
-                raise ValueError(f"Unsupported event action: {action}")
+            with self._database_component(RealtimeDashboardService) as service:
+                if action == "acknowledge":
+                    service.acknowledge_event(
+                        event_id=event_id,
+                        ack_by=operator,
+                        comment=comment,
+                        expected_status="open",
+                    )
+                    verb = "acknowledged"
+                elif action == "resolve":
+                    service.resolve_event(
+                        event_id=event_id,
+                        resolved_by=operator,
+                        comment=comment,
+                        expected_status="open",
+                    )
+                    verb = "resolved"
+                elif action == "false_positive":
+                    service.mark_event_false_positive(
+                        event_id=event_id,
+                        marked_by=operator,
+                        comment=comment,
+                        expected_status="open",
+                    )
+                    verb = "marked false positive"
+                else:
+                    raise ValueError(f"Unsupported event action: {action}")
         except AnomalyEventStatusConflictError:
             self.refresh_event_review()
             self.event_review_status_label.setText(
@@ -897,7 +927,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         imported = import_source_profiles_to_repository(config_path, source_repository)
         profiles = source_repository.list_source_profiles(include_disabled=True)
         configs = config_repository.list_configs()
-        offsets = self._read_saved_poll_offsets(source_repository.database, configs)
+        connection = getattr(source_repository, "connection", None)
+        if connection is None:
+            offsets = self._read_saved_poll_offsets(source_repository.database, configs)
+        else:
+            offsets = self._read_saved_poll_offsets(source_repository.database, configs, connection=connection)
         return config_path, imported, profiles, configs, offsets
 
     def _apply_loaded_database_state(self, state) -> None:
@@ -926,14 +960,30 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
     def reload_from_database(self) -> bool:
         try:
-            state = self._load_database_state(self.source_repository, self.repository)
+            state = self._load_bound_database_state(
+                self.source_repository, self.repository, self._database_source_binding,
+            )
         except Exception as exc:
             self._report_database_load_failure(exc)
             return False
         self._apply_loaded_database_state(state)
         return True
 
-    def rebind_database(self, db_file: str) -> bool:
+    def _load_bound_database_state(self, source_repository, config_repository, binding):
+        if binding is None:
+            return self._load_database_state(source_repository, config_repository)
+        database = source_repository.database
+        with sqlite_selected_reports_connection_scope(database, binding) as connection:
+            return self._load_database_state(
+                IndustrialDataRepository(database, connection=connection),
+                RealtimeMonitorConfigRepository(database, connection=connection),
+            )
+
+    def rebind_selected_database(self, db_file, source_binding) -> bool:
+        """Retain the workspace selection identity through the monitor's confirmation."""
+        return self.rebind_database(db_file, source_binding=source_binding)
+
+    def rebind_database(self, db_file: str, *, source_binding=None) -> bool:
         """Move an idle monitor to the active workspace database without stale context."""
 
         target = str(db_file or "").strip()
@@ -945,7 +995,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 "warning",
             )
             return False
-        if target == self.db_file:
+        if target == self.db_file and source_binding == self._database_source_binding:
             return True
         if not self._close_source_profiles_for_context_change(
             "changing the workspace database"
@@ -955,15 +1005,17 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         candidate_repository = RealtimeMonitorConfigRepository(target)
         candidate_source_repository = IndustrialDataRepository(target)
         try:
-            state = self._load_database_state(
+            state = self._load_bound_database_state(
                 candidate_source_repository,
                 candidate_repository,
+                source_binding,
             )
         except Exception as exc:
             self._report_database_load_failure(exc)
             return False
 
         self.db_file = target
+        self._database_source_binding = source_binding
         self.repository = candidate_repository
         self.source_repository = candidate_source_repository
         self.active_configs = ()
@@ -1001,6 +1053,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self,
             db_file=self.db_file,
             config_path=self.config_path,
+            **self._source_binding_options(),
         )
         self.source_window.finished.connect(self._handle_source_dialog_closed)
         self.source_window.show()
@@ -1214,7 +1267,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             self._set_config_status("Select an enabled source to save.", "warning")
             return ()
         try:
-            config = self.repository.upsert_config(self._config_from_form(profile))
+            config = self._save_config(self._config_from_form(profile))
             self.configs_by_profile_id[profile.id] = config
             self.active_configs = ()
             self._set_config_status(
@@ -1237,7 +1290,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         saved: list[RealtimeMonitorConfig] = []
         try:
             for profile in profiles:
-                config = self.repository.upsert_config(self._config_from_form(profile))
+                config = self._save_config(self._config_from_form(profile))
                 self.configs_by_profile_id[profile.id] = config
                 saved.append(config)
             self.active_configs = ()
@@ -1286,7 +1339,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             for profile in profiles:
                 config = self.configs_by_profile_id.get(profile.id)
                 if save_current and current_profile is not None and profile.id == current_profile.id:
-                    config = self.repository.upsert_config(self._config_from_form(profile))
+                    config = self._save_config(self._config_from_form(profile))
                     self.configs_by_profile_id[profile.id] = config
                 elif config is None:
                     # Missing configs are rejected by preflight above. Never persist
@@ -1359,7 +1412,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             return
         if timer_active:
             self._advance_poll_due_times(configs)
-        poll_thread = RealtimeMonitorPollThread(db_file=self.db_file, configs=configs)
+        poll_thread = RealtimeMonitorPollThread(
+            db_file=self.db_file, configs=configs, **self._worker_connection_options(),
+        )
         self.poll_thread = poll_thread
         poll_thread.update_label.connect(lambda text: self._set_poll_status(text, "info"))
         poll_thread.result_ready.connect(self._on_poll_results)
@@ -1523,6 +1578,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         dashboard_thread = RealtimeDashboardWriterThread(
             db_file=self.db_file,
             output_file=str(output_path),
+            **self._worker_connection_options(),
         )
         self.dashboard_thread = dashboard_thread
         dashboard_thread.result_ready.connect(self._on_dashboard_written)
@@ -1578,7 +1634,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         try:
             output_path = Path(_field_path(self.dashboard_path_field.text()) or self._default_dashboard_path())
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            snapshot = RealtimeDashboardService(self.db_file).dashboard_snapshot()
+            with self._database_component(RealtimeDashboardService) as service:
+                snapshot = service.dashboard_snapshot()
             self.last_dashboard_path = write_realtime_dashboard_html(snapshot, output_path)
             if open_after:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.last_dashboard_path)))

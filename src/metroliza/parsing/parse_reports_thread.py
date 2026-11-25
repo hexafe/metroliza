@@ -10,10 +10,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import Lock
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
 from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
 from metroliza.reports.db import checkpoint_pending_import_commits
@@ -1369,6 +1370,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         # Initialize the thread with validated request values
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
+        self.selected_database = None
+        self.created_database = None
+        self._creation_delivery_lock = Lock()
+        self._creation_receiver_active = False
         self.metadata_parsing_mode = validated_request.metadata_parsing_mode
         self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
@@ -2045,8 +2050,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             # Keep one owner-thread connection alive across per-report commits.
             # Closing the last WAL connection after each report forces repeated
             # checkpoint/sidecar cleanup. Preparation workers never borrow it.
-            scope_options = {"existing_identity": append_identity} if append_identity is not None else {}
-            with lazy_sqlite_connection_scope(self.db_file, **scope_options) as connection:
+            with lazy_sqlite_connection_scope(self.db_file, **self._import_database_scope(append_identity)) as connection:
                 report_fingerprints = set()
                 self._emit_stage_progress('load_existing_reports', 1.0)
 
@@ -2330,6 +2334,33 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.last_import_batch = ImportedReportBatch(database, identity, tuple(committed_reports.items()))
             _release_report_inspections(reports_to_parse)
             self._finish_import_resources(diagnostic)
+
+    def _import_database_scope(self, append_identity):
+        options = {"existing_identity": append_identity} if append_identity is not None else {}
+        if self.selected_database is not None:
+            options["selected_database"] = self.selected_database
+            options["on_created_database"] = self._receive_created_database
+        return options
+
+    def enable_creation_receipt_delivery(self):
+        with self._creation_delivery_lock:
+            self._creation_receiver_active = True
+
+    def _receive_created_database(self, created) -> bool:
+        with self._creation_delivery_lock:
+            if not self._creation_receiver_active:
+                return False
+            self.created_database = created
+            return True
+
+    @pyqtSlot()
+    def close_created_database(self):
+        with self._creation_delivery_lock:
+            self._creation_receiver_active = False
+            created = self.created_database
+            self.created_database = None
+        if created is not None:
+            created.close()
 
     def _finish_import_resources(self, diagnostic) -> None:
         """Report teardown failures without releasing inputs still owned by workers."""

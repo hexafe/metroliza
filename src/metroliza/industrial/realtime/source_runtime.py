@@ -33,11 +33,13 @@ class RealtimeSourceRuntime:
         database: str,
         configs: Iterable[RealtimePollConfig],
         adapter: SourceDbAdapter,
+        connection=None,
     ) -> None:
         self.database = database
+        self.connection = connection
         self.configs = tuple(config.validated() for config in configs)
         self.adapter = adapter
-        self.source_health_service = RealtimeSourceHealthService(database)
+        self.source_health_service = RealtimeSourceHealthService(database, connection=connection)
 
     def list_statuses(self) -> tuple[RealtimeMonitorStatus, ...]:
         return tuple(
@@ -50,7 +52,7 @@ class RealtimeSourceRuntime:
         )
 
     def poll_once(self) -> tuple[PollingCycleResult, ...]:
-        repository = IndustrialDataRepository(self.database)
+        repository = IndustrialDataRepository(self.database, connection=self.connection)
         profiles = {profile.id: profile for profile in repository.list_source_profiles(include_disabled=True)}
         results: list[PollingCycleResult] = []
         for config in self.configs:
@@ -92,6 +94,7 @@ class RealtimeSourceRuntime:
                 profile=profile,
                 config=config,
                 adapter=self.adapter,
+                connection=self.connection,
             )
             try:
                 health = self.source_health_service.evaluate(config)

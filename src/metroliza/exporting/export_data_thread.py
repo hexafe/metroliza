@@ -47,7 +47,7 @@ from metroliza.exporting.export_summary_render_pool import (
     iter_summary_render_results,
 )
 import metroliza.shared.custom_logger as custom_logger
-from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_connection_scope
+from metroliza.reports.db import execute_select_with_columns, read_sql_query_result, sqlite_report_schema_connection_scope
 from metroliza.shared.diagnostic_events import (
     ExportFailureBackend, ExportFailureCode, ExportFailureStage,
     build_export_failure_diagnostic,
@@ -5139,7 +5139,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._ensure_chart_executor()
             identity = getattr(self, "_existing_database_identity", None)
             if identity is None:
-                database_scope = sqlite_connection_scope(self.db_file)
+                database_scope = sqlite_report_schema_connection_scope(self.db_file)
             else:
                 from metroliza.reports.report_query_service import sqlite_approved_report_export_scope
 
