@@ -910,6 +910,30 @@ def test_w1_completion_actions_only_for_produced_files(monkeypatch, tmp_path, pr
     assert revealed == list(paths[:1])
 
 
+@pytest.mark.parametrize("dismissal", ["close", "escape"])
+def test_modeless_export_result_with_file_actions_can_be_dismissed(tmp_path, dismissal):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QMessageBox, QWidget
+
+    app = _app()
+    parent = QWidget()
+    output = tmp_path / "report.xlsx"
+    output.touch()
+    export_dialog.show_export_result_message(
+        parent, "info", "Done", "Done", artifacts=(output,), modeless=True,
+    )
+    box = parent.findChild(QMessageBox)
+    assert box.isVisible()
+    assert {button.text() for button in box.buttons()} >= {"OK", "Open workbook"}
+    if dismissal == "close":
+        assert box.close()
+    else:
+        QTest.keyClick(box, Qt.Key.Key_Escape)
+    assert not box.isVisible()
+    app.processEvents()
+
+
 @pytest.mark.parametrize("reveal", [False, True])
 def test_w1_actions_check_missing_files_and_open_failure(monkeypatch, tmp_path, reveal):
     _app()

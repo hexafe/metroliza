@@ -180,6 +180,8 @@ def _configure_export_result_dialog(dialog, *, level, title, message, diagnostic
         dialog.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
     if hasattr(dialog, "setStandardButtons"):
         dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+    if hasattr(dialog, "setEscapeButton"):
+        dialog.setEscapeButton(QMessageBox.StandardButton.Ok)
     if diagnostics and hasattr(dialog, "setDetailedText"):
         dialog.setDetailedText(str(diagnostics))
 
