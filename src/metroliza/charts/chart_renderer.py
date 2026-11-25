@@ -933,14 +933,25 @@ def benchmark_histogram_render_runtime(renderer: ChartRenderer, payload: dict[st
     import time
 
     samples: list[float] = []
+    native_results = 0
     for _ in range(max(1, int(iterations))):
-        start = time.perf_counter()
-        _ = renderer.render_histogram_png(payload, fallback_fig=plt.figure(figsize=(8, 4)))
-        samples.append(time.perf_counter() - start)
-        plt.close("all")
+        figure, axes = plt.subplots(figsize=(8, 4))
+        try:
+            axes.hist(payload["values"], bins=payload.get("bin_count") or 24)
+            axes.set_title(payload["title"])
+            for limit in (payload.get("lsl"), payload.get("usl")):
+                if limit is not None:
+                    axes.axvline(limit)
+            start = time.perf_counter()
+            result = renderer.render_histogram_png(payload, fallback_fig=figure)
+            samples.append(time.perf_counter() - start)
+            native_results += int(result.backend == "native")
+        finally:
+            plt.close(figure)
     median_s = float(statistics.median(samples)) if samples else 0.0
     return {
         "iterations": float(len(samples)),
+        "native_results": float(native_results),
         "median_s": median_s,
         "runtime_min_ms": float(min(samples) * 1000.0),
         "runtime_avg_ms": float(sum(samples) / len(samples) * 1000.0),

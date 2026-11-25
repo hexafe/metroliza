@@ -144,6 +144,12 @@ checks do not qualify a packaged EXE or the separately owned diagnostic preview/
 
 ### Coverage Reporting Semantics
 
+- Static and unit test jobs check out full Git history so the bug-sweep validator can
+  resolve each audited snapshot by exact commit ID. The validator uses only local Git
+  objects and still rejects unavailable snapshots. Checkout credentials are disabled,
+  with no separate history cache or fetch inside the validator. The existing job
+  timeouts cover the extra history transfer. Contributors validating terminal snapshots
+  need the same historical objects available in their checkout.
 - The `unit-tests` job emits coverage output in two places:
   - terminal/log summary via `python -m coverage report --fail-under=80`
   - machine-readable artifact via `coverage.xml` (`python -m coverage xml -o coverage.xml`)

@@ -20,6 +20,18 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
+@pytest.mark.parametrize("job_id", ["static-checks", "unit-tests"])
+def test_bug_sweep_validation_jobs_can_resolve_historical_snapshots(job_id):
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    checkout = next(
+        step for step in workflow["jobs"][job_id]["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["fetch-depth"] == "0"
+
+
 def test_native_launcher_fixture_uses_supported_identity_and_actual_pinned_pe_writer():
     import yaml
 
@@ -1438,6 +1450,22 @@ def test_portable_job_requires_frozen_compute_equivalence_receipt():
     receipt = next(step for step in steps if step.get('with', {}).get('name') == 'windows-compute-worker-receipt')
     assert receipt['if'] == 'always()'
     assert receipt['with']['path'].endswith('/compute-worker-receipt/compute-workers.json')
+
+
+def test_cmm_performance_job_binds_each_measured_run_to_the_built_wheel():
+    import yaml
+
+    workflow = yaml.safe_load(CI_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["cmm-parser-perf-gate"]["steps"]
+    install = next(step["run"] for step in steps if "maturin build --locked" in step.get("run", ""))
+    measured = next(step["run"] for step in steps if "--enforce-cmm-parser-guardrail" in step.get("run", ""))
+    wheel_glob = "dist/native/metroliza_cmm_native-*.whl"
+    assert wheel_glob in install and wheel_glob in measured
+    assert 'pip install --force-reinstall "${wheels[0]}"' in install
+    assert 'for run_idx in 1 2 3; do' in measured
+    assert '--cmm-native-wheel "${wheels[0]}"' in measured
+    assert "--cmm-native-min-speedup-ratio 1.00" in measured
+    assert "--cmm-native-min-usage-rate 0.95" in measured
 
 
 AUTOMATIC_CHECK_NAMES = {

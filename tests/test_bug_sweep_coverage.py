@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -824,6 +825,28 @@ def test_mixed_pending_and_terminal_ledger_is_accepted_and_preserved() -> None:
         if record["rule"] == "application-lifecycle"
     )
     assert snapshot_record["terminal_snapshot"] == expected_snapshot
+
+
+def test_terminal_snapshot_resolves_a_real_older_commit() -> None:
+    if os.getenv("GITHUB_ACTIONS") != "true" and _git(REPO_ROOT, "rev-parse", "--is-shallow-repository") == "true":
+        pytest.skip("Historical snapshot validation needs a full checkout.")
+    ledger = _ledger()
+    baseline = ledger["baseline"]["sha"]
+    assert baseline != _current_commit_sha()
+
+    def resolve(sha):
+        return COVERAGE.git_tracked_paths_at_commit(REPO_ROOT, sha)
+
+    historical_paths = resolve(baseline)
+    rule = _terminalize_rule(
+        ledger, "github-control-plane", audited_commit_sha=baseline, paths=historical_paths,
+    )
+    _validate_coverage(ledger, historical_path_resolver=resolve)
+
+    rule["terminal_snapshot"]["audited_commit_sha"] = "f" * 40
+    rule["terminal_snapshot"]["rule_record_sha256"] = COVERAGE.rule_record_sha256(rule)
+    with pytest.raises(COVERAGE.CoverageValidationError, match="unavailable locally"):
+        _validate_coverage(ledger, historical_path_resolver=resolve)
 
 
 def test_historical_additional_matching_path_invalidates_terminal_snapshot() -> None:
