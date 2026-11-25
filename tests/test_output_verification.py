@@ -234,7 +234,7 @@ def test_report_receipt_gates_published_stage_and_cloud_conversion(
         finish_export=lambda **kwargs: terminal.append(kwargs),
     )
     monkeypatch.setattr(workflow_diagnostics, "start_workflow_trace", lambda operation: trace)
-    monkeypatch.setattr(export, "sqlite_connection_scope", lambda path: nullcontext(None))
+    monkeypatch.setattr(export, "sqlite_report_schema_connection_scope", lambda path: nullcontext(None))
     monkeypatch.setattr(export, "ensure_report_schema", lambda *args, **kwargs: None)
     monkeypatch.setattr(export.QCoreApplication, "processEvents", lambda: None)
 
