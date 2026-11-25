@@ -51,13 +51,17 @@ on:
         options: [full, identity, startup]
         required: false
         default: "full"
+      run_windows_nuitka_qualification:
+        description: "Set to 1 for owner-only Windows Nuitka standalone notice qualification"
+        required: false
+        default: "0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1')) }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_nuitka_qualification == '1' && '-nuitka' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || inputs.run_windows_nuitka_qualification == '1')) }}
 
 jobs:
   windows-launcher-qualification:
@@ -2143,3 +2147,197 @@ jobs:
           name: windows-first-run-timeline
           path: first-run-timeline
           if-no-files-found: warn
+
+  windows-nuitka-qualification:
+    name: Windows Nuitka standalone notice qualification (manual/opt-in)
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.run_windows_nuitka_qualification == '1' &&
+      github.ref_type == 'branch' && github.event.repository.private == false &&
+      github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    runs-on: windows-2025
+    timeout-minutes: 120
+    concurrency:
+      group: windows-nuitka-qualification-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout exact source from the dispatch event
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup native Windows Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          architecture: x64
+
+      - name: Verify source and prepare pinned build dependencies
+        shell: pwsh
+        env:
+          PIP_CONSTRAINT: ${{ github.workspace }}/packaging/windows-rc-constraints.txt
+          PYTHONPATH: src;.
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $commit -cne $env:GITHUB_SHA) { throw 'Unexpected source commit' }
+          $tree = git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0 -or $tree -cnotmatch '^[0-9a-f]{40}$') { throw 'Missing source tree identity' }
+          "NUITKA_SOURCE_TREE=$tree" >> $env:GITHUB_ENV
+          $status = git status --porcelain=v1
+          if ($LASTEXITCODE -ne 0 -or $status) { throw 'Expected a clean source checkout' }
+          foreach ($path in @('metroliza_package_entry.dist', 'nuitka-build-report.xml', 'dist')) {
+            if (Test-Path -LiteralPath $path) { throw 'Unexpected pre-existing Nuitka output' }
+          }
+          python -m pip install --disable-pip-version-check -r requirements-build.txt -r requirements-ocr.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependency installation failed' }
+          python -m pip check
+          if ($LASTEXITCODE -ne 0) { throw 'Build dependency verification failed' }
+          python scripts/fetch_rapidocr_models.py
+          if ($LASTEXITCODE -ne 0) { throw 'OCR model hash verification failed' }
+
+      - name: Build one native standalone application without credential bundling
+        shell: pwsh
+        run: .\packaging\build_nuitka.ps1 -Mode standalone -CompilerStrategy clang
+
+      - name: Verify compiled Windows assets and their serialized notice manifest
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: |
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $commit -cne $env:GITHUB_SHA) { throw 'Source commit changed' }
+          $tree = git rev-parse 'HEAD^{tree}'
+          if ($LASTEXITCODE -ne 0 -or $tree -cne $env:NUITKA_SOURCE_TREE) { throw 'Source tree changed' }
+          $status = git status --porcelain=v1 --untracked-files=no
+          if ($LASTEXITCODE -ne 0 -or $status) { throw 'Tracked source changed during build' }
+
+          @'
+          from hashlib import file_digest
+          from importlib.metadata import version
+          import json
+          import os
+          from pathlib import Path, PureWindowsPath
+          from struct import unpack_from
+          import sys
+
+          from defusedxml.ElementTree import parse
+          from metroliza.app.release_identity import current_identity
+          from scripts.release_zip import NOTICE_MANIFEST, REQUIRED_NOTICES
+          from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, PLOTLY_ASSET_HASHES, verified_plotly_files
+
+          def digest(path):
+              with path.open('rb') as stream:
+                  return file_digest(stream, 'sha256').hexdigest()
+
+          def report_output_matches(raw, executable):
+              reported = PureWindowsPath(raw)
+              expected = PureWindowsPath(executable)
+              relative = PureWindowsPath(expected.parent.name, expected.name)
+              if reported.parts[:1] == ('${cwd}',):
+                  return PureWindowsPath(*reported.parts[1:]) == relative
+              return reported in (relative, expected)
+
+          def verify_x64_executable(path):
+              with path.open('rb') as stream:
+                  file_size = os.fstat(stream.fileno()).st_size
+                  dos = stream.read(64)
+                  if len(dos) != 64 or dos[:2] != b'MZ':
+                      raise SystemExit('Invalid Windows x64 PE executable: DOS header')
+                  pe_offset, = unpack_from('<I', dos, 0x3C)
+                  if not 64 <= pe_offset <= file_size - 24:
+                      raise SystemExit('Invalid Windows x64 PE executable: COFF header bounds')
+                  stream.seek(pe_offset)
+                  coff = stream.read(24)
+                  if len(coff) != 24:
+                      raise SystemExit('Invalid Windows x64 PE executable: truncated COFF header')
+                  signature, machine, section_count, _, _, _, optional_size, flags = unpack_from('<4sHHIIIHH', coff)
+                  if (signature != b'PE\0\0' or machine != 0x8664 or not 1 <= section_count <= 96
+                      or not flags & 0x0002 or flags & 0x3000 or optional_size < 112):
+                      raise SystemExit('Invalid Windows x64 PE executable: COFF image fields')
+
+                  optional = stream.read(optional_size)
+                  if len(optional) != optional_size or unpack_from('<H', optional)[0] != 0x20B:
+                      raise SystemExit('Invalid Windows x64 PE executable: PE32+ optional header')
+                  entry_rva, = unpack_from('<I', optional, 16)
+                  image_size, headers_size = unpack_from('<II', optional, 56)
+                  directory_count, = unpack_from('<I', optional, 108)
+                  table_size = section_count * 40
+                  if (directory_count > (optional_size - 112) // 8
+                      or not pe_offset + 24 + optional_size + table_size <= headers_size <= file_size
+                      or not headers_size <= entry_rva < image_size):
+                      raise SystemExit('Invalid Windows x64 PE executable: header or entry bounds')
+
+                  sections = stream.read(table_size)
+                  if len(sections) != table_size:
+                      raise SystemExit('Invalid Windows x64 PE executable: truncated section table')
+                  entry_backed = False
+                  virtual_end = headers_size
+                  for section in range(0, table_size, 40):
+                      virtual_size, rva, raw_size, raw_offset = unpack_from('<IIII', sections, section + 8)
+                      characteristics, = unpack_from('<I', sections, section + 36)
+                      if (not virtual_end <= rva or rva + max(virtual_size, raw_size) > image_size
+                          or (raw_size and not headers_size <= raw_offset <= file_size - raw_size)):
+                          raise SystemExit('Invalid Windows x64 PE executable: section bounds')
+                      virtual_end = rva + max(virtual_size, raw_size)
+                      if characteristics & 0x20000000 and 0 <= entry_rva - rva < min(virtual_size, raw_size):
+                          entry_backed = True
+                  if not entry_backed:
+                      raise SystemExit('Invalid Windows x64 PE executable: entry point lacks executable file data')
+              return file_size
+
+          if sys.platform != 'win32' or os.environ['RUNNER_ARCH'] != 'X64':
+              raise SystemExit('Native Windows x64 runner required')
+          root = Path.cwd()
+          distribution = root / 'metroliza_package_entry.dist'
+          exe = distribution / current_identity(root).nuitka_name
+          report_path = root / 'nuitka-build-report.xml'
+          report = parse(report_path).getroot()
+          nuitka_version = version('Nuitka')
+          if (report.tag != 'nuitka-compilation-report' or report.get('completion') != 'yes'
+              or report.get('mode') != 'standalone' or report.get('nuitka_version') != nuitka_version):
+              raise SystemExit('Nuitka standalone completion report does not match the build')
+          reported_output = report.find('output')
+          if reported_output is None or not report_output_matches(reported_output.get('run_filename', ''), exe):
+              raise SystemExit('Nuitka report does not identify the observed executable')
+
+          exe_size = verify_x64_executable(exe)
+          assets = verified_plotly_files(distribution / PLOTLY_ASSET_DIRECTORY)
+          licenses = exe.with_name(f'{exe.name}.licenses')
+          if {path.name for path in licenses.iterdir()} != {*REQUIRED_NOTICES, NOTICE_MANIFEST}:
+              raise SystemExit('Unexpected standalone notice sidecar contents')
+          notice_records = []
+          for name, source in REQUIRED_NOTICES.items():
+              observed = digest(licenses / name)
+              if digest(root / source) != observed:
+                  raise SystemExit(f'Staged notice differs from source: {name}')
+              notice_records.append({'name': name, 'sha256': observed})
+          manifest_path = licenses / NOTICE_MANIFEST
+          if json.loads(manifest_path.read_text(encoding='utf-8')) != {'files': notice_records}:
+              raise SystemExit('Standalone notice manifest does not describe the staged files')
+
+          receipt = {
+              'schema_version': 1, 'status': 'passed', 'scope': 'windows-nuitka-standalone-notices',
+              'source_sha': os.environ['GITHUB_SHA'], 'source_tree': os.environ['NUITKA_SOURCE_TREE'],
+              'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'runner_os': os.environ['RUNNER_OS'], 'runner_arch': os.environ['RUNNER_ARCH'],
+              'runner_image_version': os.environ.get('ImageVersion'), 'nuitka_version': nuitka_version,
+              'report_sha256': digest(report_path), 'notice_manifest_sha256': digest(manifest_path),
+              'notice_manifest': notice_records,
+              'exe': {'name': exe.name, 'sha256': digest(exe), 'bytes': exe_size},
+              'plotly_assets': [{'path': path.relative_to(distribution).as_posix(),
+                                  'sha256': PLOTLY_ASSET_HASHES[path.name], 'bytes': path.stat().st_size}
+                                 for path in assets],
+          }
+          with (Path(os.environ['RUNNER_TEMP']) / 'nuitka-standalone-notices.json').open('x', encoding='utf-8') as output:
+              json.dump(receipt, output, indent=2)
+              output.write('\n')
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { throw 'Nuitka standalone notice qualification failed' }
+
+      - name: Retain only the bounded Windows Nuitka notice receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-nuitka-standalone-notices
+          path: ${{ runner.temp }}/nuitka-standalone-notices.json
+          if-no-files-found: error
+          retention-days: 7
