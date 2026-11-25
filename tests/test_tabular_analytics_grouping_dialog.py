@@ -925,6 +925,23 @@ def test_async_preview_completion_handler_does_not_release_live_worker(tmp_path)
         assert not sip.isdeleted(worker)
 
 
+def test_async_preview_reaper_waits_for_each_workers_queued_signal(tmp_path) -> None:
+    with _held_sqlite_preview(tmp_path) as (dialog, worker, _loaded, read_allowed, _finish_allowed):
+        request = dialog._selector_preview_request_id
+        read_allowed.set()
+        assert worker.wait(1500)
+
+        # Model a reaper call caused by an older worker while the GUI still
+        # has this worker's result and finished notifications queued.
+        dialog._on_sqlite_selector_preview_stopped()
+        assert worker in dialog._selector_preview_threads
+        assert _process_events_until(
+            lambda: dialog._selector_preview_rendered_request_id == request
+            and not dialog._selector_preview_threads
+        )
+        assert dialog.selector_list.count() == 4
+
+
 @pytest.mark.parametrize("close_action", ["close", "reject"])
 @pytest.mark.parametrize("discard", [False, True])
 def test_async_preview_dirty_close_confirms_once_without_starting_new_work(tmp_path, close_action, discard) -> None:

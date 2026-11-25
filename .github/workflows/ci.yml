@@ -1083,10 +1083,11 @@ jobs:
       COVERAGE_MINIMUM_THRESHOLD: '80'
       QT_QPA_PLATFORM: offscreen
     steps:
-      - name: Checkout
+      - name: Checkout including historical audit snapshots
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Qt runtime system libraries
         run: |

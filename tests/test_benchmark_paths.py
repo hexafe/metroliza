@@ -27,6 +27,34 @@ from scripts.benchmark_paths import (
 )
 
 
+@pytest.mark.parametrize(
+    ("scenario", "runner", "backend_flag", "guardrail"),
+    [
+        (
+            "cmm_parser_backend_compare", "benchmark_cmm_parser_backend_compare",
+            "native_available", "--enforce-cmm-parser-guardrail",
+        ),
+        (
+            "chart_render_budget_path", "benchmark_chart_render_budget_path",
+            "histogram_native_available", "--enforce-chart-render-guardrail",
+        ),
+    ],
+)
+def test_enforced_guardrail_fails_without_native_backend(tmp_path, monkeypatch, scenario, runner, backend_flag, guardrail):
+    monkeypatch.setattr(
+        benchmark_paths, runner,
+        lambda *_args, **_kwargs: ScenarioResult(scenario, 0.0, {}, {backend_flag: 0}),
+    )
+    args = ["benchmark_paths.py", "--output-dir", str(tmp_path), "--scenarios", scenario]
+    monkeypatch.setattr(sys, "argv", [*args, guardrail])
+
+    with pytest.raises(RuntimeError, match="requires the native"):
+        benchmark_paths.main()
+
+    monkeypatch.setattr(sys, "argv", args)
+    assert benchmark_paths.main() == 0
+
+
 def test_build_benchmark_run_summary_includes_contract_keys():
     results = [
         {

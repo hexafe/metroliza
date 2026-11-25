@@ -20,6 +20,18 @@ GOOGLE_SMOKE_RUNBOOK_PATH = Path('docs/google_conversion_smoke_runbook.md')
 NATIVE_DIAGNOSTIC_CONDITION = "${{ !cancelled() && steps.windows-core-dependencies.outcome == 'success' }}"
 
 
+@pytest.mark.parametrize("job_id", ["static-checks", "unit-tests"])
+def test_bug_sweep_validation_jobs_can_resolve_historical_snapshots(job_id):
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    checkout = next(
+        step for step in workflow["jobs"][job_id]["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["fetch-depth"] == "0"
+
+
 def test_native_launcher_fixture_uses_supported_identity_and_actual_pinned_pe_writer():
     import yaml
 

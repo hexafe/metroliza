@@ -3223,7 +3223,7 @@ def main() -> int:
                 f"native_usage_rate={native_usage_rate:.3f}"
             )
         else:
-            print('CMM parser guardrail skipped: native parser extension unavailable in this environment.')
+            raise RuntimeError('CMM parser guardrail requires the native parser extension')
 
     if args.enforce_chart_render_guardrail:
         chart_budget = next((item for item in payload['results'] if item['scenario'] == 'chart_render_budget_path'), None)
@@ -3240,7 +3240,7 @@ def main() -> int:
                 f"Chart render guardrail passed: histogram_branch_regression_ratio={regression_ratio:.3f}"
             )
         else:
-            print('Chart render guardrail skipped: native chart extension unavailable in this environment.')
+            raise RuntimeError('Chart render guardrail requires the native chart extension')
 
     return 0
 
