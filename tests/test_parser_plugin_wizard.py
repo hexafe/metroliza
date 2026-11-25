@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from threading import Event, get_ident
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import yaml
@@ -17,9 +18,9 @@ from metroliza.parsing import parser_profile_handoff as handoff_service
 
 try:
     from PyQt6 import sip
-    from PyQt6.QtCore import QCoreApplication, QEvent
+    from PyQt6.QtCore import QCoreApplication, QEvent, Qt
     from PyQt6.QtTest import QTest
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QMessageBox
 
     from metroliza.ui.parser_plugin_wizard import (
         ParserPluginWizardDialog,
@@ -291,7 +292,7 @@ from pathlib import Path
 from threading import Event, Timer
 from time import monotonic
 from PyQt6.QtCore import QTimer
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from metroliza.app.gc_policy import install
 from metroliza.parsing import parser_profile_handoff as service
 from metroliza.ui import detached_threads
@@ -400,6 +401,39 @@ print("STARTED -> QUIT -> FINISHED; artifact identical", len(expected), len(beat
             self.assertEqual(summary.enabled, 0)
             self.assertTrue((summary.root / "approved").is_dir())
             self.assertTrue((summary.root / "incoming").is_dir())
+
+    def test_manage_tab_restore_and_refresh_are_separately_clickable(self):
+        profile = SimpleNamespace(plugin_id="supplier_alpha", enabled=True, approved=True, detail="approved")
+        module = "metroliza.ui.parser_plugin_wizard"
+        with tempfile.TemporaryDirectory() as home_dir, patch(f"{module}.list_profiles", return_value=[profile]), patch(
+            f"{module}.approved_profile_backups", return_value=("previous",)
+        ), patch(f"{module}.rollback_profile") as rollback, patch.object(
+            QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes
+        ):
+            home = Path(home_dir)
+            dialog = ParserPluginWizardDialog(home=home)
+            try:
+                dialog.show()
+                self.app.processEvents()
+                dialog.profile_list.setCurrentRow(0)
+                self.assertTrue(dialog.rollback_button.isEnabled())
+
+                def click_at_button(button):
+                    center = button.mapTo(dialog, button.rect().center())
+                    target = dialog.childAt(center)
+                    self.assertIs(target, button)
+                    QTest.mouseClick(target, Qt.MouseButton.LeftButton, pos=target.mapFrom(dialog, center))
+
+                click_at_button(dialog.refresh_button)
+                rollback.assert_not_called()
+                dialog.profile_list.setCurrentRow(0)
+                click_at_button(dialog.rollback_button)
+                rollback.assert_called_once_with("supplier_alpha", home=home)
+                self.assertIn("Restored verified version", dialog.manage_status_label.text())
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def test_dialog_can_create_handoff_workspace_without_llm_calls(self):
         with tempfile.TemporaryDirectory() as home_dir:

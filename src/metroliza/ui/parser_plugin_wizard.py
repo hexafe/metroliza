@@ -204,7 +204,7 @@ class ParserPluginWizardDialog(QDialog):
         manage_actions.addWidget(self.enable_button, 0, 0)
         manage_actions.addWidget(self.disable_button, 0, 1)
         manage_actions.addWidget(self.rollback_button, 1, 0, 1, 2)
-        manage_actions.addWidget(self.refresh_button, 1, 0, 1, 2)
+        manage_actions.addWidget(self.refresh_button, 2, 0, 1, 2)
         manage_layout.addLayout(manage_actions)
         self.task_tabs.addTab(manage, "Manage installed profiles")
 
