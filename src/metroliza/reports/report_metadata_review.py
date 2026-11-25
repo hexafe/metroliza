@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from metroliza.reports.report_metadata_models import (
     MetadataCandidate,
     MetadataSelectionResult,
+    USER_SOURCE_TYPE,
 )
 from metroliza.reports.report_metadata_normalizers import (
     is_missing_reference,
@@ -67,7 +68,6 @@ ORIGIN_OCR = "ocr"
 ORIGIN_USER = "user"
 OVERRIDE_ORIGINS = frozenset({ORIGIN_OCR, ORIGIN_USER})
 
-USER_SOURCE_TYPE = "user_manual"
 OCR_REVIEW_SOURCE_TYPE = "ocr_review"
 MANUAL_OVERRIDE_SOURCE = "metadata_review"
 _FILENAME_SOURCE_TYPE = "filename_candidate"
@@ -235,19 +235,8 @@ def apply_metadata_override(
             source_type = USER_SOURCE_TYPE
             if item.value is not None:
                 candidates.append(
-                    MetadataCandidate(
-                        field_name=name,
-                        raw_value=item.value,
-                        normalized_value=item.value,
-                        source_type=USER_SOURCE_TYPE,
-                        source_detail=MANUAL_OVERRIDE_SOURCE,
-                        page_number=None,
-                        region_name=MANUAL_OVERRIDE_SOURCE,
-                        label_text=None,
-                        rule_id=f"user:{name}",
-                        confidence=1.0,
-                        evidence_text=None,
-                        selected=True,
+                    MetadataCandidate.from_manual_edit(
+                        name, item.value, source_detail=MANUAL_OVERRIDE_SOURCE,
                     )
                 )
             manual_overrides[name] = {

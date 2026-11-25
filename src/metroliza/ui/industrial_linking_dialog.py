@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from time import monotonic
 from typing import Any
 
@@ -19,7 +20,12 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.db import (
+    selected_reports_worker_options,
+    sqlite_connection_scope,
+    sqlite_report_schema_connection_scope,
+    sqlite_selected_reports_connection_scope,
+)
 from metroliza.industrial.industrial_join_service import (
     clear_manual_industrial_report_link,
     materialize_industrial_report_links,
@@ -49,16 +55,19 @@ _DEFAULT_MATERIALIZE_LINKS = materialize_industrial_report_links
 class _AutoLinkThread(QThread):
     """Own the unchanged service call and its literal error until native finish."""
 
-    def __init__(self, db_file: str):
+    def __init__(self, db_file: str, *, connection_scope=nullcontext):
         super().__init__()
         self.db_file = db_file
+        self._connection_scope = connection_scope
         self.summary = None
         self.error = None
         self.discard_result = False
 
     def run(self):
         try:
-            self.summary = _DEFAULT_MATERIALIZE_LINKS(self.db_file)
+            with self._connection_scope() as connection:
+                options = {"connection": connection} if connection is not None else {}
+                self.summary = _DEFAULT_MATERIALIZE_LINKS(self.db_file, **options)
         except Exception as exc:
             self.error = str(exc)
 
@@ -91,11 +100,12 @@ def _search_pattern(search_text: str) -> str:
     return f"%{str(search_text or '').strip()}%"
 
 
-def list_reports_for_manual_linking(db_file: str, *, search_text: str = "") -> list[dict[str, Any]]:
+def list_reports_for_manual_linking(db_file: str, *, search_text: str = "", connection=None) -> list[dict[str, Any]]:
     """Return Metroliza reports with their current accepted production link summary."""
 
     search = str(search_text or "").strip()
-    with sqlite_connection_scope(db_file) as conn:
+    scope = nullcontext(connection) if connection is not None else sqlite_report_schema_connection_scope(db_file)
+    with scope as conn:
         ensure_report_schema(db_file, connection=conn)
         rows = conn.execute(
             """
@@ -163,6 +173,7 @@ def list_production_records_for_manual_linking(
     db_file: str,
     *,
     search_text: str = "",
+    connection=None,
 ) -> list[dict[str, Any]]:
     """Return cached production rows available for manual linking."""
 
@@ -183,7 +194,8 @@ def list_production_records_for_manual_linking(
                OR COALESCE(isp.profile_name, '') LIKE ?
         """
         params = (pattern,) * 10
-    with sqlite_connection_scope(db_file) as conn:
+    scope = nullcontext(connection) if connection is not None else sqlite_connection_scope(db_file)
+    with scope as conn:
         rows = conn.execute(
             f"""
             SELECT
@@ -223,9 +235,10 @@ def list_production_records_for_manual_linking(
 class IndustrialLinkingDialog(QDialog):
     """Let users manually link cached production rows to Metroliza reports."""
 
-    def __init__(self, parent=None, *, db_file: str | None = None):
+    def __init__(self, parent=None, *, db_file: str | None = None, source_binding=None):
         super().__init__(parent)
         self.db_file = db_file
+        self._source_binding = source_binding
         self._loaded_searches = None
         if type(self) is IndustrialLinkingDialog:
             self._auto_link_thread = None
@@ -312,6 +325,11 @@ class IndustrialLinkingDialog(QDialog):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         configure_table(table, stretch_column=1, resize_to_contents=(0,))
 
+    @contextmanager
+    def _database_options(self):
+        with sqlite_selected_reports_connection_scope(self.db_file, getattr(self, "_source_binding", None)) as connection:
+            yield {"connection": connection} if connection is not None else {}
+
     def reload_data(self) -> None:
         if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
             return
@@ -322,8 +340,11 @@ class IndustrialLinkingDialog(QDialog):
             self._invalidate_rows("Select a Metroliza report database before linking.", "warning")
             return
         try:
-            reports = list_reports_for_manual_linking(self.db_file, search_text=searches[0])
-            production_rows = list_production_records_for_manual_linking(self.db_file, search_text=searches[1])
+            with self._database_options() as options:
+                reports = list_reports_for_manual_linking(self.db_file, search_text=searches[0], **options)
+                production_rows = list_production_records_for_manual_linking(
+                    self.db_file, search_text=searches[1], **options,
+                )
         except Exception:
             self._invalidate_rows("Could not load link data. Check the database and refresh.", "danger")
             return
@@ -396,7 +417,7 @@ class IndustrialLinkingDialog(QDialog):
         has_current_rows = self._loaded_searches is not None
         self.link_button.setEnabled(has_db and has_current_rows and has_report and has_production)
         self.clear_button.setEnabled(has_db and has_current_rows and has_report)
-        self.auto_link_button.setEnabled(has_db)
+        self.auto_link_button.setEnabled(has_db and (self._source_binding is None or has_current_rows))
 
     def link_selected_records(self) -> None:
         if type(self) is IndustrialLinkingDialog and self._auto_link_thread is not None:
@@ -412,11 +433,13 @@ class IndustrialLinkingDialog(QDialog):
             return
         _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_STARTED)
         try:
-            set_manual_industrial_report_link(
-                str(self.db_file),
-                report_id=report_id,
-                industrial_record_id=production_record_id,
-            )
+            with self._database_options() as options:
+                set_manual_industrial_report_link(
+                    str(self.db_file),
+                    report_id=report_id,
+                    industrial_record_id=production_record_id,
+                    **options,
+                )
         except Exception as exc:
             _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not save manual link: {exc}")
@@ -435,7 +458,8 @@ class IndustrialLinkingDialog(QDialog):
             return
         _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_STARTED)
         try:
-            removed = clear_manual_industrial_report_link(str(self.db_file), report_id=report_id)
+            with self._database_options() as options:
+                removed = clear_manual_industrial_report_link(str(self.db_file), report_id=report_id, **options)
         except Exception as exc:
             _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINK_CHANGE_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not clear manual link: {exc}")
@@ -459,7 +483,9 @@ class IndustrialLinkingDialog(QDialog):
             self._start_auto_links(started_at)
             return
         try:
-            summary = materialize_industrial_report_links(str(self.db_file))
+            # Lightweight compatibility owners used by callers do not own a workspace binding.
+            with IndustrialLinkingDialog._database_options(self) as options:
+                summary = materialize_industrial_report_links(str(self.db_file), **options)
         except Exception as exc:
             _bugreport_recorder.record(BugReportAction.INDUSTRIAL_LINKS_REFRESH_FAILED)
             QMessageBox.warning(self, "Production links", f"Could not refresh auto links: {exc}")
@@ -480,7 +506,9 @@ class IndustrialLinkingDialog(QDialog):
     def _start_auto_links(self, started_at) -> None:
         thread = None
         try:
-            thread = _AutoLinkThread(self.db_file)
+            thread = _AutoLinkThread(
+                self.db_file, **selected_reports_worker_options(self.db_file, self._source_binding),
+            )
             self._auto_link_thread = thread
             detached_threads.register(thread, defer_quit=True, owner=self, on_finished=IndustrialLinkingDialog._auto_links_finished)
             detached_threads.run_when_finished([thread], thread.deleteLater)

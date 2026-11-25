@@ -445,11 +445,14 @@ print("STARTED -> QUIT -> FINISHED; artifact identical", len(expected), len(beat
             try:
                 dialog.store_path_label.setText("Store: " + ("Profiles and measurements / " * 10).strip())
                 dialog.setFont(QFont("Sans Serif", 14))
-                dialog.resize(560, 480)
                 dialog.show()
                 self.app.processEvents()
+                dialog.resize(560, 480)
+                self.app.processEvents()
+                self.assertEqual(dialog.size(), dialog.minimumSize())
                 manage = dialog.task_tabs.currentWidget()
                 self.assertIsInstance(manage, QScrollArea)
+                self.assertGreater(manage.verticalScrollBar().maximum(), 0)
                 for button in (dialog.rollback_button, dialog.refresh_button):
                     manage.ensureWidgetVisible(button)
                     self.app.processEvents()

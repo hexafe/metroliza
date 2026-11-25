@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from itertools import islice
 
-from metroliza.reports.db import execute_with_retry
-from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
+from metroliza.reports.db import (
+    execute_with_retry,
+    run_transaction_with_retry,
+    sqlite_file_identity,
+    sqlite_readonly_connection_scope,
+)
 
 
 CHARACTERISTIC_ALIAS_TABLE = 'CHARACTERISTIC_ALIASES'
@@ -712,6 +717,7 @@ def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:
 
     def operation(cursor):
         cursor.execute("BEGIN IMMEDIATE")
+        ensure_characteristic_alias_table(cursor)
         matching = "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES WHERE alias_name = ? AND scope_type = ? AND scope_value IS ?"
         source = cursor.execute(matching, original).fetchone() if original is not None else None
         if original is not None and (source is None or source[1] != previous["canonical_name"]):
@@ -815,44 +821,174 @@ def upsert_characteristic_alias(
     )
 
 
+_STALE_ALIAS_DELETE = 'This name match changed after it was loaded. Reload the list and review it again.'
+_STALE_DATABASE_BINDING = 'The selected database changed after the list was loaded. Reload the list and try again.'
+
+
+def _normalize_expected_alias_delete(expected_mapping, expected_database_path, expected_database_identity):
+    expected = None
+    if expected_mapping is not None:
+        scope_type, scope_value = normalize_alias_scope(
+            str(expected_mapping.get('scope_type') or ''), expected_mapping.get('scope_value'),
+        )
+        expected = {
+            'alias_name': str(expected_mapping.get('alias_name') or '').strip(),
+            'canonical_name': str(expected_mapping.get('canonical_name') or '').strip(),
+            'scope_type': scope_type,
+            'scope_value': scope_value,
+        }
+    if expected_database_path is None:
+        if expected_database_identity is not None:
+            raise ValueError(_STALE_DATABASE_BINDING)
+        return expected, None
+    if expected is None:
+        raise ValueError('A database identity check requires the selected mapping values.')
+    try:
+        path = Path(expected_database_path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(_STALE_DATABASE_BINDING) from exc
+    if expected_database_identity is None or sqlite_file_identity(path) != expected_database_identity:
+        raise ValueError(_STALE_DATABASE_BINDING)
+    return expected, path
+
+
+def _check_alias_database_owner(db_path, expected_path, expected_identity, cursor=None):
+    if expected_path is None:
+        return
+    try:
+        current_path = Path(db_path).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(_STALE_DATABASE_BINDING) from exc
+    if current_path != expected_path or sqlite_file_identity(expected_path) != expected_identity:
+        raise ValueError(_STALE_DATABASE_BINDING)
+    if cursor is not None:
+        opened_path = cursor.execute('PRAGMA database_list').fetchone()[2]
+        try:
+            if Path(opened_path).resolve(strict=True) != expected_path:
+                raise ValueError
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ValueError(_STALE_DATABASE_BINDING) from exc
+
+
+def _record_deleted_alias(cursor, row, mapping):
+    cursor.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS main.metroliza_characteristic_alias_deletions (
+            deletion_id INTEGER PRIMARY KEY,
+            schema_version INTEGER NOT NULL,
+            deleted_at_utc TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            mapping_json TEXT NOT NULL
+        )
+        '''
+    )
+    columns = cursor.execute('PRAGMA main.table_info(metroliza_characteristic_alias_deletions)')
+    expected_columns = (
+        ('deletion_id', 'INTEGER', 0, 1),
+        ('schema_version', 'INTEGER', 1, 0),
+        ('deleted_at_utc', 'TEXT', 1, 0),
+        ('mapping_json', 'TEXT', 1, 0),
+    )
+    if tuple((name, kind, required, key) for _, name, kind, required, _, key in columns) != expected_columns:
+        raise sqlite3.DatabaseError('The local Metroliza name match history table has an incompatible layout.')
+    receipt = {'id': row[0], **mapping, 'created_at': row[3], 'updated_at': row[4]}
+    cursor.execute(
+        'INSERT INTO main.metroliza_characteristic_alias_deletions (schema_version, mapping_json) VALUES (1, ?)',
+        (json.dumps(receipt, ensure_ascii=False, allow_nan=False),),
+    )
+    cursor.execute(
+        '''DELETE FROM main.metroliza_characteristic_alias_deletions WHERE deletion_id < (
+            SELECT deletion_id FROM main.metroliza_characteristic_alias_deletions
+            ORDER BY deletion_id DESC LIMIT 1 OFFSET 99)'''
+    )
+
+
+def _delete_unchecked_alias(cursor, alias_name, scope_type, scope_value):
+    cursor.execute(
+        '''
+        DELETE FROM CHARACTERISTIC_ALIASES
+        WHERE alias_name = ? AND scope_type = ?
+          AND ((scope_value IS NULL AND ? IS NULL) OR scope_value = ?)
+        ''',
+        (alias_name, scope_type, scope_value, scope_value),
+    )
+    return int(cursor.rowcount or 0)
+
+
+def _delete_confirmed_alias(cursor, db_path, alias_name, scope_type, scope_value,
+                            expected, expected_path, expected_identity):
+    if not cursor.connection.in_transaction:
+        cursor.execute('BEGIN IMMEDIATE')
+    _check_alias_database_owner(db_path, expected_path, expected_identity, cursor)
+    cursor.execute(
+        '''
+        SELECT id, canonical_name, scope_value, created_at, updated_at
+        FROM CHARACTERISTIC_ALIASES
+        WHERE alias_name = ? AND scope_type = ?
+          AND ((scope_value IS NULL AND ? IS NULL) OR scope_value = ?)
+        ''',
+        (alias_name, scope_type, scope_value, scope_value),
+    )
+    rows = cursor.fetchall()
+    if len(rows) != 1:
+        raise ValueError(_STALE_ALIAS_DELETE)
+    actual = {
+        'alias_name': alias_name,
+        'canonical_name': str(rows[0][1]),
+        'scope_type': scope_type,
+        'scope_value': rows[0][2],
+    }
+    if actual != expected:
+        raise ValueError(_STALE_ALIAS_DELETE)
+    _record_deleted_alias(cursor, rows[0], actual)
+    cursor.execute(
+        '''
+        DELETE FROM CHARACTERISTIC_ALIASES
+        WHERE id = ? AND alias_name = ? AND canonical_name = ? AND scope_type = ?
+          AND ((scope_value IS NULL AND ? IS NULL) OR scope_value = ?)
+        ''',
+        (rows[0][0], alias_name, expected['canonical_name'], scope_type, scope_value, scope_value),
+    )
+    if cursor.rowcount != 1:
+        raise ValueError(_STALE_ALIAS_DELETE)
+    _check_alias_database_owner(db_path, expected_path, expected_identity, cursor)
+    return 1
+
+
 def delete_characteristic_alias(
     db_path: str,
     alias_name: str,
     scope_type: str,
     scope_value: str | None = None,
     *,
+    expected_mapping: dict[str, str | None] | None = None,
+    expected_database_path: str | Path | None = None,
+    expected_database_identity: tuple[int, int] | None = None,
     connection: sqlite3.Connection | None = None,
     retries: int = 2,
     retry_delay_s: float = 0.05,
 ) -> int:
-    """Delete one alias row (or rows) by alias + normalized scope."""
+    """Delete one alias row, preserving its rule locally when an expectation is supplied."""
     normalized_alias_name = str(alias_name or '').strip()
     if not normalized_alias_name:
         raise ValueError('alias_name is required')
 
-    normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
+    scope_type, scope_value = normalize_alias_scope(scope_type, scope_value)
+    expected, expected_path = _normalize_expected_alias_delete(
+        expected_mapping, expected_database_path, expected_database_identity,
+    )
+    _check_alias_database_owner(db_path, expected_path, expected_database_identity)
+    operation_path = str(expected_path) if expected_path is not None else db_path
 
     def operation(cursor) -> int:
-        cursor.execute(
-            '''
-            DELETE FROM CHARACTERISTIC_ALIASES
-            WHERE alias_name = ? AND scope_type = ?
-              AND (
-                (scope_value IS NULL AND ? IS NULL)
-                OR scope_value = ?
-              )
-            ''',
-            (
-                normalized_alias_name,
-                normalized_scope_type,
-                normalized_scope_value,
-                normalized_scope_value,
-            ),
+        if expected is None:
+            return _delete_unchecked_alias(cursor, normalized_alias_name, scope_type, scope_value)
+        return _delete_confirmed_alias(
+            cursor, db_path, normalized_alias_name, scope_type, scope_value,
+            expected, expected_path, expected_database_identity,
         )
-        return int(cursor.rowcount or 0)
 
     return run_transaction_with_retry(
-        db_path,
+        operation_path,
         operation,
         connection=connection,
         retries=retries,

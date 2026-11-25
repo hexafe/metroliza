@@ -406,6 +406,49 @@ def _close_preview_windows(window) -> str:
     return status
 
 
+def _verify_incident_capture(app, dialog) -> None:
+    from PyQt6.QtCore import QTimer
+    from PyQt6.QtWidgets import QMessageBox
+
+    def dismiss_capture_warning() -> None:
+        for widget in app.topLevelWidgets():
+            if (
+                isinstance(widget, QMessageBox) and widget.isVisible()
+                and widget.parent() is dialog and widget.windowTitle() == dialog.tr("Capture current state")
+            ):
+                widget.reject()
+
+    try:
+        heading = dialog.tr("Recent event timeline")
+        _, separator, timeline = dialog.preview.toPlainText().partition(f"\n{heading}\n")
+        if not separator or not any(line.partition(". ")[0].isdecimal() for line in timeline.splitlines()):
+            raise ValueError
+        capture = dialog.capture_button
+        if not capture.isVisible() or not capture.isEnabled():
+            raise ValueError
+        report_dialog = import_module("metroliza.ui.safe_bugreport_dialog").SafeBugReportDialog
+        # A failed Capture uses a modal warning. Dismiss only that warning while
+        # the button's synchronous slot is inside its temporary event loop.
+        QTimer.singleShot(0, dismiss_capture_warning)
+        capture.click()
+        app.processEvents()
+        previews = [widget for widget in app.topLevelWidgets() if isinstance(widget, report_dialog) and widget.isVisible()]
+        if len(previews) != 1:
+            raise ValueError
+        preview = previews[0]
+        shown = preview.preview.toPlainText()
+        if (
+            preview.parent() is not dialog or not shown or shown != preview._preview_report
+            or not preview.preview.isReadOnly()
+            or not preview.copy_button.isVisible() or not preview.copy_button.isEnabled()
+        ):
+            raise ValueError
+        if not preview.close() or preview.isVisible():
+            raise ValueError
+    except Exception:
+        raise ValueError("qualification_preview_unavailable") from None
+
+
 def _export_preview_dialog(app, dialog, root: Path) -> None:
     from PyQt6.QtCore import Qt, QTimer
 
@@ -416,6 +459,7 @@ def _export_preview_dialog(app, dialog, root: Path) -> None:
     app.processEvents()
     if not dialog.preview.toPlainText() or not dialog.export_button.isEnabled():
         raise ValueError("qualification_preview_unavailable")
+    _verify_incident_capture(app, dialog)
     chosen = root / "selected.zip"
     timer = QTimer(dialog)
     timer.setInterval(50)

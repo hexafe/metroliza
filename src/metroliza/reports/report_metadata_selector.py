@@ -18,6 +18,7 @@ from metroliza.reports.report_metadata_models import (
     MetadataCandidate,
     MetadataSelectionResult,
     MetadataWarning,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
 )
 from metroliza.reports.report_filename_parser import (
     find_filename_date,
@@ -762,7 +763,7 @@ def select_report_metadata(
     if sample_candidate is not None and sample_candidate.source_type == "projected_from_stats_count":
         warnings.append(
             _build_warning(
-                "sample_number_projected_from_stats_count",
+                SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
                 "sample_number",
                 "Sample number was projected from stats count.",
             )

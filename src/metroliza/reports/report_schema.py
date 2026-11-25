@@ -8,10 +8,28 @@ import sqlite3
 import threading
 import weakref
 from collections import defaultdict
-from pathlib import PurePath
+from contextlib import closing
+from functools import partial
+from pathlib import Path, PurePath
+from uuid import uuid4
 
 from metroliza.reports.characteristic_alias_service import ensure_characteristic_alias_table
-from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope
+from metroliza.reports.db import (
+    SQLiteFileBinding,
+    backup_sqlite_connection,
+    backup_sqlite_database,
+    check_sqlite_integrity,
+    report_recovery_source,
+    run_transaction_with_retry,
+    sqlite_connection_scope,
+    sqlite_readonly_connection_scope,
+    sqlite_report_schema_connection_scope,
+)
+from metroliza.shared.sqlite_snapshot import (
+    publish_database_snapshot,
+    resolved_database_leaf,
+    sync_database_parent,
+)
 from metroliza.storage.industrial_schema import (
     ensure_industrial_data_schema as ensure_industrial_storage_schema,
 )
@@ -37,6 +55,7 @@ _LEGACY_TABLE_SELECTS = {
 _LEGACY_REPORT_KEY = "id"
 _LEGACY_MEASUREMENT_REPORT_KEY = "report_id"
 _REPORT_SNAPSHOT_TABLES = {"parsed_reports", "report_metadata", "report_measurements"}
+_LEGACY_SNAPSHOT_TABLES = {"reports", "measurements"}
 _RESTORE_UNRECOGNIZED = "The file is not a recognized Metroliza report database."
 _RESTORE_LINK_ERROR = "The copy contains a broken link between records."
 
@@ -770,17 +789,62 @@ def _snapshot_unique_keys(connection, table):
     }
 
 
+class UnsupportedReportSchema(ValueError):
+    """The stored version needs a different version of Metroliza."""
+
+
+class ReportUpgradeAsCopyRequired(ValueError):
+    """The selected database must remain read-only during an upgrade."""
+
+
+_UPGRADE_AS_COPY = (
+    "This older Reports database needs a separate upgraded copy. "
+    "Choose File > Restore database copy…, select this database, then select "
+    "Upgrade to the current Reports schema and choose a new file."
+)
+
+
 def _snapshot_versions(connection, tables):
     if "app_schema" not in tables:
         return {}
     rows = connection.execute(
-        "SELECT key, value FROM app_schema "
+        "SELECT key, value FROM main.app_schema "
         "WHERE key IN ('schema_version', 'source_location_ownership_version')"
     ).fetchall()
     versions = dict(rows)
     if len(versions) != len(rows):
-        raise ValueError("Unsupported report database schema version.")
+        raise UnsupportedReportSchema("Unsupported report database schema version.")
     return versions
+
+
+def _report_tables(connection):
+    return {name.casefold() for (name,) in connection.execute(
+        "SELECT name FROM main.sqlite_schema WHERE type = 'table'"
+    )}
+
+
+def _supported_report_versions(connection, tables):
+    versions = _snapshot_versions(connection, tables)
+    if versions.get("schema_version") not in (None, "0", SCHEMA_VERSION) or versions.get(
+        "source_location_ownership_version"
+    ) not in (None, "0", SOURCE_LOCATION_OWNERSHIP_VERSION):
+        raise UnsupportedReportSchema("Unsupported report database schema version.")
+    return versions
+
+
+def check_report_schema_version(connection, *, opening=False, before_in_place_upgrade=False) -> bool:
+    """Reject unknown version markers before opening for editing or bootstrapping."""
+    tables = _report_tables(connection)
+    versions = _supported_report_versions(connection, tables)
+    historical = _requires_report_recovery(tables, versions)
+    if historical:
+        if opening:
+            # Opening in the main window also starts independent Industrial work.
+            # Route the operator through a copy before exposing it to those writers.
+            raise ReportUpgradeAsCopyRequired(_UPGRADE_AS_COPY)
+        if before_in_place_upgrade:
+            _require_rollback_journal(connection)
+    return historical
 
 
 def _normalized_snapshot_matches(connection, tables, ownership_version):
@@ -799,7 +863,7 @@ def _normalized_snapshot_matches(connection, tables, ownership_version):
                 return False
             if _snapshot_unique_keys(connection, table) != _snapshot_unique_keys(reference, table):
                 return False
-    if ownership_version is not None:
+    if ownership_version == SOURCE_LOCATION_OWNERSHIP_VERSION:
         expected = next(
             statement for statement in SCHEMA_INDEX_STATEMENTS
             if "idx_source_file_locations_active_path_unique" in statement
@@ -815,7 +879,7 @@ def _normalized_snapshot_matches(connection, tables, ownership_version):
 
 
 def _validate_legacy_snapshot(connection, tables):
-    if not {"reports", "measurements"} <= tables:
+    if not _LEGACY_SNAPSHOT_TABLES <= tables:
         raise ValueError(_RESTORE_UNRECOGNIZED)
     reports = _snapshot_columns(connection, "reports")
     measurements = _snapshot_columns(connection, "measurements")
@@ -833,26 +897,57 @@ def _validate_legacy_snapshot(connection, tables):
 def validate_report_snapshot(connection) -> None:
     """Verify supported report snapshot shape without initializing or migrating it."""
     try:
-        tables = {name.casefold() for (name,) in connection.execute(
-            "SELECT name FROM sqlite_schema WHERE type = 'table'"
-        )}
-        versions = _snapshot_versions(connection, tables)
-        if versions or _REPORT_SNAPSHOT_TABLES & tables:
-            if not versions:
+        tables = _report_tables(connection)
+        versions = _supported_report_versions(connection, tables)
+        schema = versions.get("schema_version")
+        ownership = versions.get("source_location_ownership_version")
+        if schema == SCHEMA_VERSION or _REPORT_SNAPSHOT_TABLES & tables:
+            if schema not in ("0", SCHEMA_VERSION):
                 raise ValueError(_RESTORE_UNRECOGNIZED)
-            ownership = versions.get("source_location_ownership_version")
-            if versions.get("schema_version") != SCHEMA_VERSION or ownership not in (
-                None, SOURCE_LOCATION_OWNERSHIP_VERSION,
-            ):
-                raise ValueError("Unsupported report database schema version.")
             if not _normalized_snapshot_matches(connection, tables, ownership):
                 raise ValueError(_RESTORE_UNRECOGNIZED)
         else:
+            if ownership == SOURCE_LOCATION_OWNERSHIP_VERSION:
+                raise ValueError(_RESTORE_UNRECOGNIZED)
             _validate_legacy_snapshot(connection, tables)
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise ValueError(_RESTORE_LINK_ERROR)
     except sqlite3.DatabaseError as exc:
         raise ValueError(_RESTORE_UNRECOGNIZED) from exc
+
+
+def _requires_report_recovery(tables, versions) -> bool:
+    schema = versions.get("schema_version")
+    ownership = versions.get("source_location_ownership_version")
+    if schema == "0" or ownership == "0":
+        return True
+    if schema == SCHEMA_VERSION:
+        return ownership is None or "report_parse_state" not in tables
+    return _LEGACY_SNAPSHOT_TABLES <= tables
+
+
+def _fail_on_backup_lock(status, _remaining, _total):
+    # A pinned reader and a private staging file should never need to wait for
+    # another connection in backup(). Leave lock retry to the transaction owner.
+    if status in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        raise sqlite3.OperationalError("database is locked during Reports recovery backup")
+
+
+def _publish_report_recovery(database, connection):
+    source = report_recovery_source(connection, database)
+    destination = source.with_name(f"metroliza-reports-pre-migration-{uuid4().hex}.sqlite")
+
+    def write_snapshot(staging):
+        backup_sqlite_connection(connection, str(staging), progress=_fail_on_backup_lock)
+
+    def verify_snapshot(staging):
+        with sqlite_readonly_connection_scope(str(staging), immutable=True) as copy:
+            validate_report_snapshot(copy)
+        report_recovery_source(connection, database)
+
+    published = publish_database_snapshot(source, destination, write_snapshot=write_snapshot, validate=verify_snapshot)
+    sync_database_parent(published)
+    report_recovery_source(connection, database)
 
 
 def _normalized_schema_sql(statement):
@@ -958,50 +1053,152 @@ def is_report_schema_ready_cached(connection) -> bool:
     return True
 
 
-def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
-    """Ensure report ingestion tables, indexes, views, and schema metadata exist."""
+def _apply_report_schema(cursor) -> None:
+    for statement in SCHEMA_TABLE_STATEMENTS:
+        cursor.execute(statement)
+    _migrate_legacy_report_tables(cursor)
+    _migrate_source_location_ownership(cursor)
+    _backfill_report_parse_state(cursor)
+    ensure_characteristic_alias_table(cursor)
+    for statement in SCHEMA_INDEX_STATEMENTS:
+        cursor.execute(statement)
+    for view_name in SCHEMA_VIEW_NAMES:
+        cursor.execute(f"DROP VIEW IF EXISTS {view_name}")
+    for statement in SCHEMA_VIEW_STATEMENTS:
+        cursor.execute(statement)
+    cursor.execute(
+        "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
+        ("schema_version", SCHEMA_VERSION),
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
+        ("source_location_ownership_version", SOURCE_LOCATION_OWNERSHIP_VERSION),
+    )
 
-    def _ensure_schema(cursor):
-        for statement in SCHEMA_TABLE_STATEMENTS:
-            cursor.execute(statement)
-        _migrate_legacy_report_tables(cursor)
-        _migrate_source_location_ownership(cursor)
-        _backfill_report_parse_state(cursor)
-        ensure_characteristic_alias_table(cursor)
-        for statement in SCHEMA_INDEX_STATEMENTS:
-            cursor.execute(statement)
-        for view_name in SCHEMA_VIEW_NAMES:
-            cursor.execute(f"DROP VIEW IF EXISTS {view_name}")
-        for statement in SCHEMA_VIEW_STATEMENTS:
-            cursor.execute(statement)
-        cursor.execute(
-            "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
-            ("schema_version", SCHEMA_VERSION),
-        )
-        cursor.execute(
-            "INSERT OR REPLACE INTO app_schema (key, value) VALUES (?, ?)",
-            ("source_location_ownership_version", SOURCE_LOCATION_OWNERSHIP_VERSION),
-        )
+
+def _apply_industrial_schema(database, connection) -> None:
+    ensure_industrial_storage_schema(
+        database,
+        transaction_runner=partial(run_transaction_with_retry, join_transaction=True),
+        connection_scope=sqlite_connection_scope,
+        connection=connection,
+    )
+
+
+def _prepare_schema_transaction(database, cursor, *, joining=False):
+    connection = cursor.connection
+    if not joining:
+        # Pin the read state that will be backed up and then promoted to a writer.
+        cursor.execute("BEGIN DEFERRED")
+    tables = _report_tables(connection)
+    versions = _supported_report_versions(connection, tables)
+    recovery_needed = _requires_report_recovery(tables, versions)
+    if recovery_needed:
+        if joining:
+            raise ValueError("Finish the active transaction before upgrading the Reports schema.")
+        _require_rollback_journal(connection)
+        _publish_report_recovery(database, connection)
+    _apply_report_schema(cursor)
+    if recovery_needed:
+        report_recovery_source(connection, database)
+    _apply_industrial_schema(database, connection)
+    if recovery_needed:
+        report_recovery_source(connection, database)
+    return connection if recovery_needed else None
+
+
+def _require_rollback_journal(connection) -> None:
+    journal_mode, = connection.execute("PRAGMA main.journal_mode").fetchone()
+    if journal_mode not in ("delete", "truncate", "persist"):
+        raise ReportUpgradeAsCopyRequired(_UPGRADE_AS_COPY)
+
+
+def _join_schema_transaction(database, connection) -> None:
+    with closing(connection.cursor()) as cursor:
+        cursor.execute("SAVEPOINT metroliza_prepare_reports")
+        try:
+            _prepare_schema_transaction(database, cursor, joining=True)
+        except BaseException:
+            cursor.execute("ROLLBACK TO metroliza_prepare_reports")
+            raise
+        finally:
+            cursor.execute("RELEASE metroliza_prepare_reports")
+
+
+def _ensure_report_schema(database, connection, retries, retry_delay_s) -> None:
+    if connection.in_transaction:
+        _join_schema_transaction(database, connection)
+        return
+    migrated = run_transaction_with_retry(
+        database,
+        partial(_prepare_schema_transaction, database),
+        connection=connection,
+        retries=retries,
+        retry_delay_s=retry_delay_s,
+    )
+    if migrated is not None:
+        report_recovery_source(migrated, database)
+    connection.execute("PRAGMA foreign_keys=ON")
+
+
+def ensure_report_schema(database: str, *, connection=None, retries: int = 4, retry_delay_s: float = 1) -> None:
+    """Prepare the Reports and Industrial schemas on a single connection."""
 
     invalidate_report_schema_ready_cache(connection)
     try:
-        run_transaction_with_retry(
-            database,
-            _ensure_schema,
-            connection=connection,
-            retries=retries,
-            retry_delay_s=retry_delay_s,
-        )
-        ensure_industrial_storage_schema(
-            database,
-            transaction_runner=run_transaction_with_retry,
-            connection_scope=sqlite_connection_scope,
-            connection=connection,
-            retries=retries,
-            retry_delay_s=retry_delay_s,
-        )
+        if connection is not None:
+            _ensure_report_schema(database, connection, retries, retry_delay_s)
+            return
+        with sqlite_report_schema_connection_scope(database) as owned:
+            _ensure_report_schema(database, owned, retries, retry_delay_s)
     finally:
         invalidate_report_schema_ready_cache(connection)
+
+
+def _prepare_upgraded_snapshot(source, binding, staging) -> None:
+    backup_sqlite_database(
+        str(source), str(staging), source_binding=binding, progress=_fail_on_backup_lock,
+    )
+    with sqlite_connection_scope(str(staging), initialize_wal=False) as connection:
+        validate_report_snapshot(connection)
+        mode, = connection.execute("PRAGMA main.journal_mode=DELETE").fetchone()
+        if mode != "delete":
+            raise RuntimeError("SQLite could not prepare the private upgrade copy")
+        with connection, closing(connection.cursor()) as cursor:
+            cursor.execute("BEGIN IMMEDIATE")
+            _apply_report_schema(cursor)
+            _apply_industrial_schema(str(staging), connection)
+
+
+def publish_upgraded_report_copy(
+    source, destination, *, forbidden_destinations=(), source_binding: SQLiteFileBinding | None = None,
+) -> Path:
+    """Upgrade a verified snapshot in private and publish it at a new filename."""
+    binding = source_binding or SQLiteFileBinding.capture(source)
+    binding.require(source)
+    source_path = binding.path
+    destination_path = resolved_database_leaf(destination)
+    if binding.identity is None:
+        raise FileNotFoundError(source_path)
+
+    def verify_copy(staging):
+        with sqlite_readonly_connection_scope(str(staging), immutable=True) as copy:
+            check_sqlite_integrity(copy)
+            validate_report_snapshot(copy)
+            if not is_report_schema_ready(copy):
+                raise ValueError("The copy does not have the current Reports schema.")
+        binding.require(source)
+
+    return publish_database_snapshot(
+        source_path,
+        destination_path,
+        write_snapshot=partial(_prepare_upgraded_snapshot, source, binding),
+        validate=verify_copy,
+        forbidden_paths=tuple(
+            resolved_database_leaf(candidate)
+            for candidate in forbidden_destinations if str(candidate or "").strip()
+        ),
+    )
 
 
 def ensure_schema_indexes(cursor) -> None:

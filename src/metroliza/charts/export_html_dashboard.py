@@ -34,6 +34,8 @@ from metroliza.charts.dashboard_shell import (
     humanize_dashboard_reason_code,
     render_dashboard_hero,
     render_dashboard_compact_hero_css,
+    render_dashboard_noscript_notice,
+    render_dashboard_noscript_styles,
     should_hide_dashboard_debug_text,
 )
 from metroliza.charts.dashboard_html_controls import (
@@ -3220,7 +3222,7 @@ def _render_dashboard_html(
     if str(manifest.get("plotly_runtime_status") or "") in {"snapshot_only", "budget_snapshot_only"}:
         plotly_status_notice = (
             '<p class="runtime-note">Interactive charts are unavailable in this export. '
-            'Image snapshots are shown instead.</p>'
+            'Use the available image snapshots and tables.</p>'
         )
     elif (
         isinstance(manifest.get("plotly_budget"), dict)
@@ -3234,21 +3236,19 @@ def _render_dashboard_html(
         replaced_noun = "chart" if replaced_specs == 1 else "charts"
         replaced_verb = "was" if replaced_specs == 1 else "were"
         embedded_noun = "chart" if embedded_specs == 1 else "charts"
-        embedded_verb = "remains" if embedded_specs == 1 else "remain"
         plotly_status_notice = (
             '<p class="runtime-note">'
             f'{html.escape(str(replaced_specs))} interactive {replaced_noun} {replaced_verb} '
             'replaced with image snapshots '
             f'to keep the saved export within the {budget_mb:.0f} MB Plotly data budget. '
-            f'{html.escape(str(embedded_specs))} interactive {embedded_noun} '
-            f'{embedded_verb} available.</p>'
+            f'The export includes interactive data for {html.escape(str(embedded_specs))} {embedded_noun}.</p>'
         )
     hero_markup = render_dashboard_hero(
         eyebrow="Metroliza Export Dashboard",
         headline=source_label,
         lede_markup=lede_markup,
         controls_markup=dashboard_controls_markup,
-        notice_markup=plotly_status_notice,
+        notice_markup=plotly_status_notice + render_dashboard_noscript_notice(),
         overview_markup=overview_cards,
         nav_markup=nav_markup,
     )
@@ -3465,6 +3465,9 @@ def _render_dashboard_html(
     }}
 {dashboard_semantic_css}
 {dashboard_controls_css}
+    .chart-image-trigger[hidden] {{
+      display: none;
+    }}
     .runtime-note {{
       margin: 14px 0 0;
       max-width: 780px;
@@ -3924,6 +3927,7 @@ def _render_dashboard_html(
       .section-actions {{ align-items: flex-start; }}
     }}
   </style>
+{render_dashboard_noscript_styles()}
 </head>
 <body>
   <a class="skip-link" href="#dashboard-content">Skip to dashboard content</a>
@@ -3947,7 +3951,8 @@ def _render_dashboard_html(
           <div id="chart-lightbox-plotly" class="lightbox-plotly-chart" aria-label="Enlarged interactive chart"></div>
           <p id="chart-lightbox-plotly-fallback" class="plotly-runtime-fallback"
              role="status" aria-live="polite" hidden>
-            The enlarged interactive view could not be rendered. Close it and use the image snapshot.
+            The enlarged interactive view could not be rendered. Close this view to return to the dashboard.
+            <span class="lightbox-snapshot-guidance" hidden>Use the image snapshot in the dashboard.</span>
           </p>
         </div>
       </div>
@@ -4164,19 +4169,22 @@ def _render_dashboard_html(
         const spec = applyThemeToPlotlySpec(markedSpec);
         const config = Object.assign({{ responsive: true }}, spec.config || {{}});
         try {{
-          let renderResult = null;
-          if (force && container.dataset.plotlyReady === '1') {{
-            renderResult = window.Plotly.react(container, spec.data, spec.layout, config);
-          }} else if (container.dataset.plotlyReady !== '1') {{
-            renderResult = window.Plotly.newPlot(container, spec.data, spec.layout, config);
-          }} else {{
+          const ready = container.dataset.plotlyReady === '1';
+          if (ready && !force) {{
             return true;
           }}
+          const lightboxRender = container === lightboxPlotly ? Symbol() : null;
+          if (lightboxRender) lightboxPlotlyRender = lightboxRender;
+          const renderResult = ready
+            ? window.Plotly.react(container, spec.data, spec.layout, config)
+            : window.Plotly.newPlot(container, spec.data, spec.layout, config);
           container.dataset.plotlyReady = '1';
           clearPlotlyRuntimeFallback(container);
           if (renderResult && typeof renderResult.catch === 'function') {{
             renderResult.catch(() => {{
-              showPlotlyRuntimeFallback(container, 'render-error');
+              if (!lightboxRender || lightboxPlotlyRender === lightboxRender) {{
+                showPlotlyRuntimeFallback(container, 'render-error');
+              }}
             }});
           }}
           if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {{
@@ -4245,8 +4253,10 @@ def _render_dashboard_html(
       const lightboxImage = document.getElementById('chart-lightbox-image');
       const lightboxPlotlyShell = document.getElementById('chart-lightbox-plotly-shell');
       const lightboxPlotly = document.getElementById('chart-lightbox-plotly');
+      const lightboxSnapshotGuidance = document.querySelector('#chart-lightbox-plotly-fallback .lightbox-snapshot-guidance');
       const lightboxCaption = document.getElementById('chart-lightbox-caption');
       const closeButton = document.getElementById('chart-lightbox-close');
+      let lightboxPlotlyRender = null;
       let plotlyAttempts = 0;
       const tryInitPlotly = () => {{
         if (initializePlotlyCharts()) {{
@@ -4297,6 +4307,7 @@ def _render_dashboard_html(
         }});
       }};
       const clearLightboxPlotly = () => {{
+        lightboxPlotlyRender = null;
         if (!lightboxPlotly) {{
           clearPlotlyInteractionArtifacts();
           return;
@@ -4318,7 +4329,8 @@ def _render_dashboard_html(
         clearPlotlyInteractionArtifacts();
       }};
       const resizeLightboxPlotly = () => {{
-        if (!window.Plotly || !lightbox || !lightbox.open || lightbox.dataset.mode !== 'plotly' || !lightboxPlotly) {{
+        if (!window.Plotly || !lightbox || !lightbox.open || lightbox.dataset.mode !== 'plotly'
+            || lightboxPlotly?.dataset.plotlyReady !== '1') {{
           return;
         }}
         try {{
@@ -4351,6 +4363,8 @@ def _render_dashboard_html(
         }}
         clearPlotlyInteractionArtifacts();
         copyPlotlySpecAttributes(sourceContainer, lightboxPlotly);
+        const snapshot = sourceContainer.closest('.chart-card')?.querySelector('.chart-image-trigger img');
+        lightboxSnapshotGuidance.hidden = !snapshot?.naturalWidth;
         lightboxImage.setAttribute('src', '');
         lightboxImage.setAttribute('alt', '');
         setLightboxMode('plotly');
@@ -4405,11 +4419,30 @@ def _render_dashboard_html(
       }};
 
       document.querySelectorAll('.chart-image-trigger[data-lightbox-route="image"]').forEach((trigger) => {{
-        trigger.addEventListener('click', () => {{
+        const image = trigger.querySelector('img');
+        const snapshot = trigger.closest('.chart-snapshot');
+        const showMissingSnapshot = () => {{
+          trigger.hidden = true;
+          snapshot.querySelector('.chart-snapshot-error').hidden = false;
+          const note = snapshot.querySelector('.chart-fallback-note');
+          if (note) note.hidden = true;
+        }};
+        image.addEventListener('error', showMissingSnapshot);
+        if (image.complete && !image.naturalWidth) showMissingSnapshot();
+        trigger.addEventListener('click', (event) => {{
           const source = trigger.getAttribute('data-image-src') || '';
           const caption = trigger.getAttribute('data-image-caption') || '';
-          if (!source) return;
+          if (!source || typeof lightbox.showModal !== 'function' || !image.naturalWidth
+              || event.button !== 0 || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+          event.preventDefault();
           openImageLightbox(source, caption);
+        }});
+        trigger.addEventListener('keydown', (event) => {{
+          if (event.key === ' ' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey
+              && typeof lightbox.showModal === 'function' && image.naturalWidth) {{
+            event.preventDefault();
+            trigger.click();
+          }}
         }});
       }});
 
@@ -4464,13 +4497,13 @@ def _render_report_scope(manifest: dict[str, Any]) -> str:
 
     overview = "".join(field(label, scope[label]) for label in main_labels if label in scope)
     settings = "".join(field(label, value) for label, value in scope.items() if label not in main_labels)
-    warnings = list(manifest.get("report_warnings") or ())
-    if not manifest.get("chart_count"):
-        warnings.append("No charts were generated for the selected scope.")
+    warnings = manifest.get("report_warnings") or ()
     warning_markup = ""
     if warnings:
         warning_items = "".join(f"<li>{html.escape(str(warning))}</li>" for warning in warnings)
         warning_markup = f'<p class="runtime-note"><strong>Warnings</strong></p><ul>{warning_items}</ul>'
+    if not manifest.get("chart_count"):
+        warning_markup += '<p class="runtime-note">No charts were generated for the selected scope.</p>'
     return (
         '<section class="measurement-section report-scope" aria-labelledby="report-scope-title">'
         f'<h2 id="report-scope-title">Report scope</h2><dl>{overview}</dl>{warning_markup}'
@@ -4592,14 +4625,6 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         or chart.get("id")
         or f"{chart.get('chart_type') or 'chart'}:{title}"
     )
-    has_image_fallback = bool(str(chart.get("image_path") or "").strip())
-    if has_image_fallback:
-        fallback_copy = (
-            "The interactive chart could not be loaded. "
-            "Its image snapshot remains available below."
-        )
-    else:
-        fallback_copy = "The interactive chart could not be loaded in this saved dashboard."
     return (
         '<div class="plotly-shell">'
         '<div class="plotly-shell-header">'
@@ -4616,7 +4641,7 @@ def _render_plotly_shell(chart: dict[str, Any]) -> str:
         f'data-dashboard-chart-key="{html.escape(chart_key)}" '
         f'data-plotly-spec-light="{spec_json_light}" data-plotly-spec-dark="{spec_json_dark}"></div>'
         '<p class="plotly-runtime-fallback" role="status" aria-live="polite" hidden>'
-        f'{html.escape(fallback_copy)}</p>'
+        'The interactive chart could not be loaded in this saved dashboard.</p>'
         '</div>'
     )
 
@@ -4632,19 +4657,19 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
         if interactive_available
         else ""
     )
-    wrapper_class = "chart-fallback-shell" if interactive_available else ""
+    wrapper_class = "chart-snapshot chart-fallback-shell" if interactive_available else "chart-snapshot"
     return (
-        f'<div class="{wrapper_class}">' if wrapper_class else ""
-    ) + (
-        f'<button type="button" class="chart-image-trigger" aria-label="Open larger view: {html.escape(title)}" '
+        f'<div class="{wrapper_class}">'
+        f'<a href="{html.escape(image_path)}" class="chart-image-trigger" aria-label="Open larger view: {html.escape(title)}" '
         'data-lightbox-route="image" '
         f'data-image-src="{html.escape(image_path)}" '
         f'data-image-caption="{html.escape(title)}">'
         f'<img src="{html.escape(image_path)}" alt="{html.escape(title)}">'
-        '</button>'
+        '</a>'
         f'{fallback_note}'
-    ) + (
-        '</div>' if wrapper_class else ""
+        '<p class="chart-snapshot-error runtime-note" role="status" hidden>'
+        'This image snapshot could not load. Check that the dashboard assets folder is available.</p>'
+        '</div>'
     )
 
 

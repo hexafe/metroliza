@@ -51,6 +51,25 @@ Optional preparation steps:
 - [Export filtering](export_filtering.md) if you only want part of the database in the export,
 - [Export grouping](export_grouping.md) if you want grouped analysis/reporting.
 
+### Large workbooks
+
+Workbook generation scales with the number of readings and the number of selected
+charts. These measured examples used Fast Diagnostics with one reference and
+144 synthetic measurements per report. Each run used a fresh Linux application
+process on a ThinkPad P15.
+
+| Reports | Measurements | Export time | Peak process memory | Workbook size |
+| ---: | ---: | ---: | ---: | ---: |
+| 300 | 43,200 | 19.4–19.9 s across two runs | 383–388 MiB | 6.5 MiB |
+| 1,500 | 216,000 | 68.9–76.1 s across two completed runs | 918–921 MiB | 32.0 MiB |
+
+An additional 216,000-reading run exceeded the benchmark time limit. The largest
+observed gap in interface updates in the completed runs was about six seconds.
+Real exports vary with the selected data and chart options. Use reference or
+date filters to shrink large exports and save smaller workbooks when you only
+need part of the database.
+[Reports workflow benchmark](../../scripts/benchmark_ui_flows.py)
+
 ## Files
 
 ### Select a database file
@@ -375,7 +394,16 @@ If the worker confirms cancellation, you get an **Export canceled** message.
 
 For workbook presets, Metroliza creates a local **.xlsx file** with the main exported
 measurement sheets and selected workbook charts.
-The **REPORT SCOPE** sheet records the source database name, filters, grouping, chart settings and warnings.
+The **REPORT SCOPE** sheet records the source database name, filters, grouping, chart settings,
+analysis method and its version, the Metroliza version and warnings. **Selected source reports**
+counts distinct reports in the saved selection. **Parser IDs** lists the first twelve available parser IDs,
+and **Data through (report date)** shows the latest known report date in that selection and flags
+any unavailable report dates. **Analysed measurement rows** counts the rows that reached analysis
+after filtering. Each chart shows its own sample size. Workbook viewers can display reliable USL,
+LSL and sample size values before recalculating formulas. The workbook computes its average from
+readings stored to three decimal places and keeps a preview where rounding is unambiguous. Cells
+with an unverified result stay blank in previews until a spreadsheet application recalculates
+their formulas. The dashboard can use higher precision.
 
 For **HTML dashboard only**, Metroliza creates the dashboard file directly and does not
 create a workbook. Google Sheets conversion is not used for dashboard-only output.
@@ -386,7 +414,7 @@ When **HTML dashboard** is selected, or when grouping makes it automatic, Metrol
 the dashboard HTML file and its matching asset folder next to the workbook. Keep both
 together. If the asset folder is missing after moving files, dashboard chart snapshots,
 styles, or offline resources may not load correctly.
-The dashboard lists the report scope and warnings before the measurement charts.
+The dashboard lists the same report scope and warnings before the measurement charts.
 
 ### Optional Google Sheets output
 
@@ -397,6 +425,7 @@ If you enabled Google Sheets export, Metroliza also attempts that extra output, 
 When export finishes, Metroliza shows a completion message. Depending on the result, this
 message offers **Open workbook**, **Open dashboard**, and **Show in folder** for the files
 this run produced. File links open the file they name; Google Sheet links work as before.
+The completion message includes the same analysed row count and warnings as the generated files.
 Diagnostics and omission details remain available in the message.
 
 After you acknowledge the message, the **Last export** row keeps the outcome, local time,

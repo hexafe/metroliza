@@ -62,7 +62,12 @@ def test_combined_candidate_workflow_preserves_authority_and_same_package_gate(t
     assert len(core) == 2
     assert "foreach ($scale in @('1.0', '1.25', '1.5'))" in core[0]["run"]
     assert "--native-mode default" in core[0]["run"]
+    assert "if ($scale -eq '1.0') { $profileProbe += '--profile-import-probe' }" in core[0]["run"]
+    assert "--output-dir $receiptDir @profileProbe" in core[0]["run"]
+    assert "Join-Path $receiptDir 'profile-import-probe.json'" in core[0]["run"]
+    assert "throw 'Packaged profile import receipt missing'" in core[0]["run"]
     assert "--dpi-scale 1.0 --native-mode unavailable" in core[1]["run"]
+    assert "--profile-import-probe" not in core[1]["run"]
     diagnostics = next(step for step in steps if "scripts/qualify_windows_diagnostics.py" in step.get("run", ""))
     for step in [diagnostics, *core]:
         assert "--artifact-dir $env:CANDIDATE_PACKAGE" in step["run"]
@@ -216,7 +221,8 @@ def test_native_windows_report_workspace_step_keeps_one_real_owner_and_dpi_gate(
     assert 'METROLIZA_EXPECT_WORKSPACE_SCREEN: 1920x1080' in step
     assert 'Set-DisplayResolution -Width 1920 -Height 1080 -Force' in step
     assert 'pytest -vv -s' in step
-    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui', 'active_dialog_close_guards'):
+    for test in ('report_workspace_shell', 'report_workspace_geometry', 'main_window_metadata_ui',
+                 'active_dialog_close_guards', 'database_restore_dialog'):
         assert f'tests/test_{test}.py' in step
     assert name in policy
 
@@ -932,6 +938,8 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'tests/test_output_request_presentation.py',
         'tests/test_filter_presentation.py',
         'tests/test_curation_presentation.py',
+        'tests/test_wave0_modifydb_mapping.py::test_stored_report_review_filters_and_selected_context_are_read_only',
+        'tests/test_wave0_modifydb_mapping.py::test_external_record_update_keeps_pending_modify_db_draft',
         'tests/test_parser_profile_onboarding.py',
         'tests/test_industrial_onboarding_presentation.py',
         'tests/test_industrial_onboarding_delta.py',

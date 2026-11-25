@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.industrial_credentials import load_industrial_credentials, save_industrial_credentials
+from metroliza.reports.db import selected_reports_worker_options, sqlite_selected_reports_connection_scope
 from metroliza.ui.industrial_filter_dialog import IndustrialFilterDialog
 from metroliza.ui.industrial_grouping_dialog import IndustrialGroupingDialog
 from metroliza.industrial.industrial_source_config import (
@@ -66,9 +67,12 @@ class IndustrialExportDialog(QDialog):
         grouping_state: IndustrialGroupingState | None = None,
         include_plots: bool = True,
         config_path: str | Path | None = None,
+        source_binding=None,
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self._source_binding = source_binding
+        self._bound_cache_available = True
         self.report_db_file = db_file if report_db_file is _REPORT_DB_FILE_UNSET else report_db_file
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.live_mode = not bool(db_file)
@@ -256,9 +260,13 @@ class IndustrialExportDialog(QDialog):
         if not self.db_file:
             return "No industrial cache selected"
         try:
-            counts = IndustrialDataRepository(self.db_file).summarize_counts()
+            with sqlite_selected_reports_connection_scope(self.db_file, self._source_binding) as connection:
+                options = {"connection": connection} if connection is not None else {}
+                counts = IndustrialDataRepository(self.db_file, **options).summarize_counts()
         except Exception as exc:
+            self._bound_cache_available = self._source_binding is None
             return f"Cache unavailable: {exc}"
+        self._bound_cache_available = True
         return (
             f"{counts.records} cached production rows, {counts.link_candidates} report links, "
             f"{counts.source_profiles} production sources"
@@ -312,7 +320,7 @@ class IndustrialExportDialog(QDialog):
                 self.username_edit.text().strip()
             ) and bool(self.password_edit.text())
         else:
-            ready = ready and bool(self.db_file)
+            ready = ready and bool(self.db_file and self._bound_cache_available)
         self.start_button.setEnabled(ready)
         if ready:
             if self.live_mode:
@@ -393,10 +401,13 @@ class IndustrialExportDialog(QDialog):
         self.set_industrial_grouping_state(IndustrialGroupingState())
 
     def open_filter_dialog(self) -> None:
+        binding = self._source_binding if self.report_db_file == self.db_file else None
+        options = {"source_binding": binding} if binding is not None else {}
         self.filter_window = IndustrialFilterDialog(
             self,
             db_file=self.report_db_file,
             state=self.filter_state,
+            **options,
         )
         self.filter_window.exec()
 
@@ -458,6 +469,7 @@ class IndustrialExportDialog(QDialog):
             grouping_state=self.grouping_state,
             include_charts=self.include_plots_checkbox.isChecked(),
             include_raw_data=self.include_raw_data_checkbox.isChecked(),
+            **selected_reports_worker_options(self.db_file, self._source_binding),
         )
 
     def show_loading_screen(self) -> None:

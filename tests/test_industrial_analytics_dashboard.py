@@ -459,6 +459,12 @@ def test_write_production_dashboard_writes_offline_plotly_html(tmp_path) -> None
     assert "Production Analytics" in html_text
     assert "plotly-2.27.0.min.js" in html_text
     assert "cdn.plot.ly" not in html_text
+    assert '<noscript><p class="runtime-note dashboard-noscript-notice">' in html_text
+    assert '<p id="plotly-runtime-unavailable" class="runtime-note" role="status" hidden>' in html_text
+    assert "document.getElementById('plotly-runtime-unavailable').hidden = false;" in html_text
+    assert "snapshot.open = true" in html_text
+    assert "await Plotly.newPlot(" in html_text
+    assert "await Plotly.react(" in html_text
     assert "theme-switch" in html_text
     assert "dashboard-control-bar" in html_text
     assert '.theme-option[data-active="1"]' in html_text
@@ -599,9 +605,12 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "spec_count>0" in result["html_dashboard_plotly_budget"]["reason"]
     assert "production-dashboard-charts" not in html_text
     assert "plotly-2.27.0.min.js" not in html_text
+    assert 'id="plotly-runtime-unavailable"' not in html_text
     assert "theme-switch" in html_text
     assert 'data-theme-choice="auto"' in html_text
     assert "metroliza-dashboard-theme" in html_text
+    assert "applyThemeChoice(button.getAttribute('data-theme-choice')" in html_text
+    assert "themeMedia.addEventListener('change', onSystemThemeChange)" in html_text
     assert 'id="dashboard-visual-dialog"' not in html_text
     assert '<button type="button" class="visual-settings-trigger"' not in html_text
     assert 'class="chart-image"' in html_text
@@ -611,7 +620,7 @@ def test_write_production_dashboard_omits_plotly_when_payload_exceeds_budget(tmp
     assert "Cycle Time S violin" in html_text
     assert "Cycle Time S box" in html_text
     assert "5 interactive charts were replaced with image snapshots" in html_text
-    assert "0 of 5 interactive charts remain available" in html_text
+    assert "The export includes interactive data for 0 of 5 charts." in html_text
     assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     assert not (Path(result["html_dashboard_assets_path"]) / "plotly-2.27.0.min.js").exists()
     assert any("plotly_spec" in chart for chart in manifest["charts"])
@@ -639,7 +648,7 @@ def test_write_production_dashboard_omits_plotly_chart_by_chart_when_payload_exc
     assert "production-dashboard-charts" in html_text
     assert "plotly-2.27.0.min.js" in html_text
     assert "1 interactive chart was replaced with image snapshots" in html_text
-    assert "4 of 5 interactive charts remain available" in html_text
+    assert "The export includes interactive data for 4 of 5 charts." in html_text
     assert "Interactive chart replaced with an image snapshot because this chart would make" in html_text
     chart_payload = json.loads(
         re.search(

@@ -27,6 +27,7 @@ from metroliza.reports.report_metadata_review import (
     build_overrides,
     normalize_review_value,
 )
+from metroliza.reports.report_repository import ReportRepository
 from metroliza.shared.parse_contracts import ParseRequest
 
 
@@ -537,6 +538,269 @@ def test_user_cleared_value_survives_fast_import_and_enrichment(tmp_path, fake_o
     provenance = json.loads(metadata["metadata_json"])
     assert provenance["manual_overrides"][field]["value"] is None
     assert provenance["field_sources"][field] == "user_manual"
+
+
+@pytest.mark.parametrize("reference", ["REVIEWED-REF", "OCR-REF-9"])
+def test_complete_enrichment_preserves_existing_manual_candidate_history(
+    tmp_path, fake_ocr, monkeypatch, reference,
+):
+    source = _source(tmp_path)
+    database = tmp_path / "db.sqlite3"
+    plan = replace(_plan(source, database, _review(source, database)), run_background_metadata_enrichment=True)
+    complete = ParseReportsThread._complete_requested_enrichment
+    captured = {}
+
+    def with_manual_edits(worker, paths, connection):
+        metadata, _, _ = _single_report(database)
+        ReportRepository(str(database)).update_report_metadata_fields(
+            metadata["report_id"], {"reference": reference, "part_name": None},
+        )
+        captured["before"] = _graph(database)
+        complete(worker, paths, connection)
+        captured["first_result"] = worker.last_enrichment_result
+        captured["enriched"] = _graph(database)
+        complete(worker, paths, connection)
+        captured["repeated_result"] = worker.last_enrichment_result
+        captured["repeated"] = _graph(database)
+        with closing(sqlite3.connect(database)) as blocker, blocker:
+            blocker.execute(
+                "CREATE TRIGGER reject_enrichment BEFORE UPDATE OF raw_report_json ON parsed_reports "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic enrichment rollback'); END"
+            )
+
+        def changed_ocr(cls, page, bbox, pdf_backend):
+            return [dict(item, text="OCR-REF-ROLLBACK") if item["text"] == "OCR-REF-9" else item
+                    for item in FAKE_OCR_ITEMS], None
+
+        monkeypatch.setattr(CMMReportParser, "_ocr_header_items_from_pixmap", classmethod(changed_ocr))
+        complete(worker, paths, connection)
+        captured["rolled_back"] = _graph(database)
+
+    monkeypatch.setattr(ParseReportsThread, "_complete_requested_enrichment", with_manual_edits)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert worker.last_parse_result.imported_files == 1
+    assert captured["first_result"].enriched_files == captured["repeated_result"].enriched_files == 1
+    assert worker.last_enrichment_result.failed_files == 1
+    metadata, candidates, _ = _single_report(database)
+    assert (metadata["reference"], metadata["part_name"]) == (reference, None)
+    reference_rows = [item for item in candidates if item["field_name"] == "reference"]
+    assert [(item["source_type"], item["normalized_value"]) for item in reference_rows if item["is_selected"]] == [
+        ("user_manual", reference)
+    ]
+    assert any(item["normalized_value"] == "OCR-REF-9" and item["source_type"] != "user_manual"
+               and not item["is_selected"] for item in reference_rows)
+    assert not any(item["is_selected"] for item in candidates if item["field_name"] == "part_name")
+    provenance = json.loads(metadata["metadata_json"])
+    assert provenance["field_sources"]["reference"] == provenance["field_sources"]["part_name"] == "manual"
+    assert provenance["manual_overrides"]["reference"]["value"] == reference
+    assert provenance["manual_overrides"]["part_name"]["value"] is None
+
+    def manual_evidence(stage):
+        return [row for row in captured[stage]["report_metadata_candidates"]
+                if row[2] in {"reference", "part_name"}]
+
+    assert all(row in manual_evidence("enriched") for row in manual_evidence("before"))
+    assert manual_evidence("repeated") == manual_evidence("enriched")
+    assert len(captured["repeated"]["report_metadata_candidates"]) == len(captured["enriched"]["report_metadata_candidates"])
+    assert captured["rolled_back"] == captured["repeated"]
+
+
+def test_complete_enrichment_preserves_manual_edit_after_snapshot(tmp_path, fake_ocr, monkeypatch):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    source = _source(tmp_path)
+    database = tmp_path / "db.sqlite3"
+    plan = replace(_plan(source, database, _review(source, database)), run_background_metadata_enrichment=True)
+    read_snapshot = worker_module.report_metadata_row_for_enrichment
+    edited = []
+
+    def edit_after_snapshot(db_file, report_id, *, connection=None):
+        result = read_snapshot(db_file, report_id, connection=connection)
+        ReportRepository(db_file).update_report_metadata_fields(report_id, {"reference": "NEW-MANUAL"})
+        edited.append(_graph(database))
+        return result
+
+    monkeypatch.setattr(worker_module, "report_metadata_row_for_enrichment", edit_after_snapshot)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert worker.last_parse_result.imported_files == 1
+    assert worker.last_enrichment_result.failed_files == 1
+    assert edited == [_graph(database)]
+    assert _single_report(database)[0]["reference"] == "NEW-MANUAL"
+
+
+@pytest.mark.parametrize("typed_count", [6, None])
+@pytest.mark.parametrize("fresh_raw_count", [None, "077"])
+@pytest.mark.parametrize("has_previous_evidence", [True, False])
+def test_complete_enrichment_retains_raw_count_with_manual_integer(
+    tmp_path, monkeypatch, typed_count, fresh_raw_count, has_previous_evidence,
+):
+    from metroliza.parsing import parse_reports_thread as worker_module
+
+    source = _source(tmp_path, names=("noreference.pdf",))
+    database = tmp_path / "db.sqlite3"
+    plan = replace(_plan(source, database, _review(source, database)), run_background_metadata_enrichment=True)
+    complete = ParseReportsThread._complete_requested_enrichment
+    read_snapshot = worker_module.report_metadata_row_for_enrichment
+    ocr_items = [dict(item, text="004") if item["text"] == "12" else item for item in FAKE_OCR_ITEMS]
+    captured = {}
+
+    def read_header(cls, page, bbox, pdf_backend):
+        return ocr_items, None
+
+    def edit_after_snapshot(db_file, report_id, *, connection=None):
+        row = read_snapshot(db_file, report_id, connection=connection)
+        ReportRepository(db_file).update_report_metadata_fields(report_id, {"stats_count_int": 7})
+        captured["new_edit"] = _graph(database)
+        return row
+
+    def after_light_import(worker, paths, connection):
+        complete(worker, paths, connection)
+        captured["initial_result"] = worker.last_enrichment_result
+        metadata, _, _ = _single_report(database)
+        ReportRepository(str(database)).update_report_metadata_fields(
+            metadata["report_id"], {"stats_count_int": typed_count},
+        )
+        if not has_previous_evidence:
+            with closing(sqlite3.connect(database)) as old_database, old_database:
+                old_database.execute("DELETE FROM report_metadata_candidates WHERE field_name = 'stats_count_raw'")
+        captured["before"] = _single_report(database)
+        if fresh_raw_count is None:
+            ocr_items[:] = [item for item in ocr_items if item["text"] not in {"STATS COUNT", "004"}]
+        else:
+            ocr_items[:] = [dict(item, text=fresh_raw_count) if item["text"] == "004" else item for item in ocr_items]
+        complete(worker, paths, connection)
+        captured["updated_result"] = worker.last_enrichment_result
+        captured["updated"] = _single_report(database)
+        complete(worker, paths, connection)
+        captured["repeated_result"] = worker.last_enrichment_result
+        captured["repeated"] = _single_report(database)
+        monkeypatch.setattr(worker_module, "report_metadata_row_for_enrichment", edit_after_snapshot)
+        complete(worker, paths, connection)
+
+    monkeypatch.setattr(CMMReportParser, "_ocr_header_items_from_pixmap", classmethod(read_header))
+    monkeypatch.setattr(ParseReportsThread, "_complete_requested_enrichment", after_light_import)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert worker.last_parse_result.imported_files == 1
+    assert captured["initial_result"].enriched_files == captured["updated_result"].enriched_files == 1
+    assert captured["repeated_result"].enriched_files == 1
+    before, before_candidates, _ = captured["before"]
+    updated, updated_candidates, _ = captured["updated"]
+    assert (before["stats_count_raw"], before["stats_count_int"]) == ("004", typed_count)
+    assert (updated["stats_count_raw"], updated["stats_count_int"]) == ("004", typed_count)
+    count_fields = {"stats_count_raw", "stats_count_int"}
+    original_count_candidates = [row for row in before_candidates if row["field_name"] in count_fields]
+    assert any(row["field_name"] == "stats_count_raw" and row["source_type"] != "user_manual"
+               and row["is_selected"] and row["raw_value"] == "004"
+               for row in original_count_candidates) is has_previous_evidence
+    retained_count_candidates = [row for row in updated_candidates if row["field_name"] in count_fields]
+    assert all(row in retained_count_candidates for row in original_count_candidates)
+    new_candidates = [row for row in retained_count_candidates if row not in original_count_candidates]
+    assert {row["raw_value"] for row in new_candidates} == ({fresh_raw_count} if fresh_raw_count else set())
+    assert all(row["field_name"] == "stats_count_raw" and not row["is_selected"] for row in new_candidates)
+    assert [row for row in captured["repeated"][1] if row["field_name"] in count_fields] == retained_count_candidates
+    metadata_json = json.loads(updated["metadata_json"])
+    assert metadata_json["field_sources"]["stats_count_raw"] == json.loads(before["metadata_json"])[
+        "field_sources"
+    ]["stats_count_raw"]
+    assert "stats_count_raw" not in metadata_json["manual_overrides"]
+    assert worker.last_enrichment_result.failed_files == 1
+    assert _graph(database) == captured["new_edit"]
+
+
+@pytest.mark.parametrize("ocr_agrees_with_filename", [False, True])
+def test_complete_enrichment_reconciles_raw_selection_without_losing_history(
+    tmp_path, fake_ocr, monkeypatch, ocr_agrees_with_filename,
+):
+    source = _source(tmp_path)
+    database = tmp_path / "db.sqlite3"
+    plan = replace(_plan(source, database, _review(source, database)), run_background_metadata_enrichment=True)
+    complete = ParseReportsThread._complete_requested_enrichment
+    captured = {}
+
+    def after_light_import(worker, paths, connection):
+        captured["light"] = _single_report(database)
+        complete(worker, paths, connection)
+        captured["first"] = _single_report(database)
+        ReportRepository(str(database)).update_report_metadata_fields(
+            captured["first"][0]["report_id"], {"stats_count_int": 6},
+        )
+        if ocr_agrees_with_filename:
+            def read_agreeing_header(cls, page, bbox, pdf_backend):
+                return [dict(item, text="7") if item["text"] == "12" else item for item in FAKE_OCR_ITEMS], None
+
+            monkeypatch.setattr(CMMReportParser, "_ocr_header_items_from_pixmap", classmethod(read_agreeing_header))
+        complete(worker, paths, connection)
+        captured["edited"] = _single_report(database)
+        complete(worker, paths, connection)
+
+    monkeypatch.setattr(ParseReportsThread, "_complete_requested_enrichment", after_light_import)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert worker.last_parse_result.imported_files == 1
+    assert worker.last_enrichment_result.enriched_files == 1
+
+    def raw_evidence(snapshot):
+        return [row for row in snapshot[1] if row["field_name"] == "stats_count_raw"]
+
+    assert captured["light"][0]["stats_count_raw"] == captured["first"][0]["stats_count_raw"] == "7"
+    assert any(row["normalized_value"] == "12" and row["is_selected"] for row in raw_evidence(captured["first"]))
+    final = _single_report(database)
+    assert (final[0]["stats_count_raw"], final[0]["stats_count_int"]) == ("7", 6)
+    metadata_json = json.loads(final[0]["metadata_json"])
+    accepted_source = "position_cell" if ocr_agrees_with_filename else "filename_candidate"
+    assert metadata_json["field_sources"]["stats_count_raw"] == accepted_source
+    assert "stats_count_raw" not in metadata_json["manual_overrides"]
+    assert [(row["normalized_value"], row["source_type"]) for row in raw_evidence(final) if row["is_selected"]] == [
+        ("7", accepted_source),
+    ]
+    saved_evidence = [dict(row, is_selected=0) for row in raw_evidence(final)]
+    assert all(dict(row, is_selected=0) in saved_evidence for row in raw_evidence(captured["first"]))
+    assert raw_evidence(final) == raw_evidence(captured["edited"])
+
+
+@pytest.mark.parametrize("manual_sample", ["MANUAL-5", None])
+def test_complete_enrichment_keeps_manual_sample_classification(tmp_path, fake_ocr, monkeypatch, manual_sample):
+    source = _source(tmp_path, names=("noreference.pdf",))
+    database = tmp_path / "db.sqlite3"
+    plan = replace(_plan(source, database, _review(source, database)), run_background_metadata_enrichment=True)
+    complete = ParseReportsThread._complete_requested_enrichment
+    captured = {}
+
+    def warning_codes():
+        with closing(sqlite3.connect(database)) as connection:
+            return {code for (code,) in connection.execute("SELECT code FROM report_metadata_warnings")}
+
+    def after_light_import(worker, paths, connection):
+        complete(worker, paths, connection)
+        initial, _, _ = _single_report(database)
+        captured["initial_provenance"] = json.loads(initial["metadata_json"])["sample_number_provenance"]
+        captured["initial_warnings"] = warning_codes()
+        ReportRepository(str(database)).update_report_metadata_fields(
+            initial["report_id"], {"sample_number": manual_sample},
+        )
+        complete(worker, paths, connection)
+
+    monkeypatch.setattr(ParseReportsThread, "_complete_requested_enrichment", after_light_import)
+    worker = ParseReportsThread(plan)
+    worker.run()
+
+    assert worker.last_parse_result.imported_files == worker.last_enrichment_result.enriched_files == 1
+    assert captured["initial_provenance"] == "projected_from_stats_count"
+    projected_warning = "sample_number_projected_from_stats_count"
+    assert projected_warning in captured["initial_warnings"]
+    metadata, candidates, _ = _single_report(database)
+    assert (metadata["sample_number"], metadata["sample_number_kind"]) == (manual_sample, "unknown")
+    assert json.loads(metadata["metadata_json"])["sample_number_provenance"] == "manual"
+    assert projected_warning not in warning_codes()
+    selected = [row["normalized_value"] for row in candidates if row["field_name"] == "sample_number" and row["is_selected"]]
+    assert selected == ([manual_sample] if manual_sample is not None else [])
 
 
 # --- cancel / invalidation: no database write ---------------------------------

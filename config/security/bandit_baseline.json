@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "caa0e4b9a2832e95bea8bfdb236345b8b88a58b96225679f51e11ba37ba7d951",
+      "fingerprint": "46e1e10d2fece7b6f7e61fb70c2e2cfaf095ce16bf82b66e37c26494a0e08c52",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2f28138763a9e57fa87a4efd86e1806e8973d5e0fa8eeae550c24b6a52d34171",
+      "fingerprint": "b033f1bb3cea78d4a3b2701477f292de3556cd81a8840e0198d40c6610277784",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -274,7 +274,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "ce305d09fd6b97e5e31acc7765befc3c71e8c843298bbfc79a8e554320581719",
+      "fingerprint": "a3cefb047f9008d13c9046e9605d739bf68ec11125b64a37ae1f5fb0b6f11577",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -283,7 +283,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "af76d6f73dbfbdde60599476de1c539aa6fc9c82b6567f7b44c966234a5cf04e",
+      "fingerprint": "ad12f4c36a1a4c2700a399146a8e6380756d4156b793cd5434505afc6791ea42",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -292,7 +292,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e654f9c744f80538c4f87c203fbf61590d23ef00e0537a3063c589ad493038ca",
+      "fingerprint": "f95a1ba78fb10bd28c988c8f82689fc8ca93f8aee42cfa4e945c26c296972d37",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -301,7 +301,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "10b61304d81604a55177e355b1d3ce95b1ba17d6512e36b4406924a59a92ba32",
+      "fingerprint": "13f2596e926070816d176a5b15df5ea9e9c44c08e5bd3aad9b095f6b5b783258",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -310,7 +310,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2b980532c724fa471321693f9a4588f82d8b2153a79ee7e5e6386913a3192d48",
+      "fingerprint": "d30147d15e2f23e14a190030ae9872234b92a5860a01332f0bfb556967cb49c4",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -319,7 +319,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2fd93a03de1437a95affebb11078caaf9f5c6e46dc290a93f20a6d8cb47d9d7a",
+      "fingerprint": "a58a13107b388a71d96b899d68e238ecbdc6badee7f104275fd34e4741f89dc5",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -328,7 +328,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4006f21e2ea829fab031cf87e190cff92b3605d81d72d1781bb88831513bc972",
+      "fingerprint": "f48bbec18e11f18443544e262309acc0775882ade8bbb78bda1337d95cc815cc",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -337,7 +337,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "278230b5344776edc82cdbfe212baed938fb25c9a68ee424f8411f6f3e8cd5d2",
+      "fingerprint": "93d206c7e91b16d078a7964c4bd024402a3431d1990e5395190ffddf48238bbd",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -346,7 +346,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "786ffd2d60e0cf5384556dae4ce721a38f82c05821b78a6de43f91d543609676",
+      "fingerprint": "79e9babbf39df78c830463e524370def337a94169f4baae790eafb19c48c00b6",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -355,7 +355,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8a8ed06710c859f74005fa042c96fa6fc28f662b1107504648251c6c95a5c278",
+      "fingerprint": "f8d65c871adc94d8a22f599e3a29e84269baadbfa19944662425bdd67dd54df5",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -364,7 +364,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "2a7456350d7f357fe983c11b23abc8e3b34e9ae3130294c02df581d61a1965ba",
+      "fingerprint": "17890cd740358e34887aba830cae5f1887c9be895d20b459e2c69d127119ba07",
       "test_id": "B608",
       "path": "src/metroliza/industrial/industrial_export_service.py",
       "owner": "Security review",
@@ -652,7 +652,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "fca6c45f3d0e3a8ef8edf1d0a97ca76fda5b8694ef81b7d1e1a6a3082c3f5a9a",
+      "fingerprint": "acc5c78598a0f2a25bf7b65bceb0db78d8ed3bfad11dfba1bd4427c45b80e86a",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_alias_service.py",
       "owner": "Security review",
@@ -661,7 +661,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "19d06eb210135385ee67be9e687dcb8e775e4f2831d59a892cd11210784ddb6b",
+      "fingerprint": "4235c9d42013b59ddb6585ed5f527357c7200c3893753ef187a23050de72bae8",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -670,7 +670,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "fc443905d91887cd9fe56c950ef8b4d7e5d930fc7661c4df33161375753f148c",
+      "fingerprint": "1364581ee7b30c0de3fb0adb964fb1c3996039054a28d4409442719551fcf01d",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -679,7 +679,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "e1217a429d01cb4d758e97fa77b215a8b50dc7c58d96f5f79e6c264918563595",
+      "fingerprint": "871466c5b79db48af092e4a37522333c39b2cfcbe1f2be4eb64675b5f2a7841f",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -688,7 +688,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "95c772c1800016acf3a068bc624e787470d14f05c9d7f5e88e4620d1804d0896",
+      "fingerprint": "7a821b86db7062b6576d371d0b1fec65b81bc2bad079426cfc6563b4da68add8",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_mapping_service.py",
       "owner": "Security review",
@@ -697,7 +697,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "70ea9b336f88a3c8556ed1048625c1645f6ca7019533e050acdb26edce9493b5",
+      "fingerprint": "e2e950c607289a6d903d79717b631b2e465bd4c0921fba39c749cb1a57a3c7d0",
       "test_id": "B608",
       "path": "src/metroliza/reports/db.py",
       "owner": "Security review",
@@ -706,7 +706,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "64b88993bf3774146e6519dfd73e2a60abaa609043f5bcc7857ef455bfac4605",
+      "fingerprint": "068b0ad0e34b48887b4618e22303b9eca6e0eecaa730dcc9b369a7d07c4ce60e",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_audit.py",
+      "owner": "Security review",
+      "rationale": "Bounded edit audit sample readback. Table and row key names are fixed choices, editable fields resolve through an explicit mapping, and all identifiers are quoted. The record ID and maximum value size are bound. Legacy readback admits only the verified unique INTEGER rowid key. Astra reviewed the exact finding on 2026-11-24 for #954.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "b37005beceab31bb1a5216e4a34cf7cdcb0970103558635fa723fc91eb41e656",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
@@ -715,7 +724,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "677054c7efb7fb11bf5bd10eb6fb3b132b8ccdeea39dc4b17257b862b585af28",
+      "fingerprint": "84324ccf8af658f362aa9d643a01d1f2b99265ba2d161d9d0566e0e5f8e63c55",
       "test_id": "B608",
       "path": "src/metroliza/reports/report_edit_service.py",
       "owner": "Security review",
@@ -1255,7 +1264,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4da753747dd9e747aaa5a5487951f00ea989b95b58604cffdde1cba8e1d50209",
+      "fingerprint": "88b30eb174a3120bc3ec911e51863741a99b8af23720aa2444b4b975c9d0954b",
       "test_id": "B608",
       "path": "src/metroliza/ui/industrial_linking_dialog.py",
       "owner": "Security review",
@@ -1264,7 +1273,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "d93e0d3a7070b4d5308b23b45dadcc5e88f39d969d9c3ebceb4f87d61281c97d",
+      "fingerprint": "86aaa91808847b3c88aea87c8ea71879c41a84961150461db8a155a14b7ffbfb",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1273,16 +1282,16 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "b28775edd148a7b423f8b50868c9a2b8887e24c9a440ded3f08b48c405720235",
+      "fingerprint": "626449836ab8a5038d31786735880ca61b04e11cf6121cc1be7802bf7096e6b3",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
-      "rationale": "_plan_report_records: select_exprs comes from _select_exprs_for_specs on REPORT_RECORD_COLUMNS filtered by schema availability; source names and aliases are escaped with _quote_identifier. order_by is empty or the fixed ORDER BY report_id string; vw_report_overview is fixed.",
+      "rationale": "The selected report columns come from REPORT_RECORD_COLUMNS and are SQLite-quoted. New metadata and warning projections are fixed expressions selected by the known schema shape. The source view and order clause are fixed.",
       "expires_on": "2027-04-30"
     },
     {
       "repository": "metroliza",
-      "fingerprint": "50803ec7e335053d749fe6fd9630a6744f2a29f5d24597e966da93154c810326",
+      "fingerprint": "4c94ab8515f5b7b054f744cf8daa55b8efb03534853c35cf18f2ddfd786800f6",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1291,7 +1300,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "817cfcf90193237db0310c41ae245d5c8398b65a4049d7f4207a5c8795ecddb3",
+      "fingerprint": "9d9919a3d9ec79b51e5859a493b94684688b15417e18ec1b18d76f44b432e2ef",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1300,7 +1309,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "a76d206d5544027e0af89b4366a9e802fde5f608a05774e49206596a36c907f6",
+      "fingerprint": "5edb4905046e68e3d5aafd603c06fbe5bb40a0247e538f61b2d747a77c48e625",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1309,7 +1318,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "c95e81ea41ee2297a86352f75250653cf41306a87f0a3aad873a5b4aa080a3d6",
+      "fingerprint": "1eb9517674fa1788140950c8a030ad8480baa5661cbabca873672a0a39d0aaef",
       "test_id": "B608",
       "path": "src/metroliza/ui/modify_db.py",
       "owner": "Security review",
@@ -1476,6 +1485,51 @@
       "path": "scripts/compare_export_outputs.py",
       "owner": "Metroliza maintainers",
       "rationale": "_industrial_schema_scope: table iterates only the two literal keys of INDUSTRIAL_RUNTIME_TABLES; _identifier quotes that fixed identifier. The SELECT reads distinct scope keys after canonical cache-catalog validation, through the existing read-only comparison snapshot. No filename, database-provided object name, user value or external SQL fragment enters the statement. Scope values are compared in Python, not interpolated. This constant-table SELECT is a reviewed B608 false positive; changes to the enumeration or identifier quoting require reassessment.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "3090f1588a347204ae9ba5b24af50d10df261cdc431c770147f54a11ba071101",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/report_export_context.py",
+      "owner": "Security review",
+      "rationale": "report_selection_from_snapshot: SQL reads a connection-owned TEMP export snapshot. The only interpolated part is its internally generated table identifier, quoted by quote_identifier. Column names and clauses are fixed. The parser display limit is a bound SQL parameter. Source values remain database values and cannot modify SQL.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "445aed6bf1db5ecd138bebff2b6cac7031be9696147d158860fd031059239e46",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/report_export_context.py",
+      "owner": "Security review",
+      "rationale": "report_selection_from_snapshot: SQL reads a connection-owned TEMP export snapshot. The only interpolated part is its internally generated table identifier, quoted by quote_identifier. Column names and clauses are fixed. The parser display limit is a bound SQL parameter. Source values remain database values and cannot modify SQL.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "1229f01d1a44ee27f793aa7da3fcc3af927b263dabc2f9d30bf1243031b5f555",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_curation.py",
+      "owner": "Security review",
+      "rationale": "The detail projection contains only fixed report fields, subset-checked against discovered column names and SQLite-quoted, and qualified expressions from fixed schema-dependent choices. The selected report ID remains bound on the local read-only connection.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "3a946fb387f7c473b65a7fe20ad89657afa55400ab9b33a471e836d29572f3e5",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "The count query takes a table and column solely from NORMALIZATION_TARGETS for the validated storage flavor. Both identifiers use SQLite double-quote escaping, and the candidate text is bound as a parameter.",
+      "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "4348569b5fa1a13e333a292531cbaba12f7ab1de045603680f70d11647c45da3",
+      "test_id": "B608",
+      "path": "src/metroliza/reports/report_edit_service.py",
+      "owner": "Security review",
+      "rationale": "The optimistic guard reuses record_sample_targets. Its tables and keys are fixed choices and supported editable names resolve through explicit field mappings. All identifiers are SQLite-quoted and the record ID is bound.",
       "expires_on": "2027-01-24"
     }
   ]

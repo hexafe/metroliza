@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -36,6 +37,7 @@ from metroliza.industrial.industrial_source_config import (
     upsert_source_profile_in_config,
     upsert_source_profile_to_repository,
 )
+from metroliza.reports.db import DatabaseSourceChanged, sqlite_selected_reports_connection_scope
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.shortcuts import install_button_commands
 from metroliza.ui.help_menu import attach_help_menu_to_layout
@@ -94,9 +96,12 @@ class IndustrialSourceProfilesDialog(QDialog):
         parent=None,
         db_file: str | None = None,
         config_path: str | Path | None = None,
+        *,
+        source_binding=None,
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self._database_source_binding = source_binding
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self._loading_profile = False
         self._committed_form_snapshot: _SourceFormSnapshot | None = None
@@ -259,6 +264,14 @@ class IndustrialSourceProfilesDialog(QDialog):
             return
         self.reload_profiles()
 
+    @contextmanager
+    def _cache_repository(self):
+        with sqlite_selected_reports_connection_scope(self.db_file, self._database_source_binding) as connection:
+            if connection is None:
+                yield IndustrialDataRepository(self.db_file)
+            else:
+                yield IndustrialDataRepository(self.db_file, connection=connection)
+
     def reload_profiles(self) -> None:
         if self._loading_profile:
             return
@@ -277,10 +290,8 @@ class IndustrialSourceProfilesDialog(QDialog):
                     BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_STARTED
                 )
                 try:
-                    imported = import_source_profiles_to_repository(
-                        self.config_path,
-                        IndustrialDataRepository(self.db_file),
-                    )
+                    with self._cache_repository() as repository:
+                        imported = import_source_profiles_to_repository(self.config_path, repository)
                 except Exception:
                     _bugreport_recorder.record(
                         BugReportAction.INDUSTRIAL_SOURCE_PROFILE_IMPORT_FAILED
@@ -302,9 +313,8 @@ class IndustrialSourceProfilesDialog(QDialog):
         db_profiles: list[IndustrialSourceProfile] = []
         if self.db_file:
             try:
-                db_profiles = IndustrialDataRepository(self.db_file).list_source_profiles(
-                    include_disabled=True
-                )
+                with self._cache_repository() as repository:
+                    db_profiles = repository.list_source_profiles(include_disabled=True)
             except Exception as exc:
                 if config_error:
                     config_error = (
@@ -448,14 +458,14 @@ class IndustrialSourceProfilesDialog(QDialog):
                 BugReportAction.OPTION_INDUSTRIAL_SOURCE_ORDER_BY,
                 enabled=profile.order_by_enabled,
             )
-            upsert_source_profile_in_config(self.config_path, profile)
-            saved_profile = profile
             if self.db_file:
-                saved_profile = upsert_source_profile_to_repository(
-                    IndustrialDataRepository(self.db_file),
-                    profile,
-                )
-        except (IndustrialSourceConfigError, ValueError) as exc:
+                with self._cache_repository() as repository:
+                    upsert_source_profile_in_config(self.config_path, profile)
+                    saved_profile = upsert_source_profile_to_repository(repository, profile)
+            else:
+                saved_profile = profile
+                upsert_source_profile_in_config(self.config_path, profile)
+        except (IndustrialSourceConfigError, DatabaseSourceChanged, ValueError) as exc:
             _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCE_PROFILE_SAVE_FAILED)
             QMessageBox.warning(self, "Production line source", str(exc))
             return

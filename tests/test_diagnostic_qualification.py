@@ -385,6 +385,58 @@ def test_preview_failure_receipt_revalidates_cleanup_without_private_text(tmp_pa
     }
 
 
+@pytest.mark.parametrize("fault", ["timeline", "copy", "open"])
+def test_preview_requires_timeline_and_capturable_frozen_report(tmp_path, monkeypatch, fault):
+    from PyQt6.QtWidgets import QApplication
+
+    from metroliza.ui import incident_dialog, safe_bugreport_dialog
+    from tests.test_incident_dialog import _incident
+
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.setenv("LOCALAPPDATA", str(state))
+    assert IncidentStore().publish(_incident()).status is StoreStatus.SAVED
+    export_attempts = []
+    monkeypatch.setattr(incident_dialog.IncidentDialog, "_export_selected",
+                        lambda _dialog: export_attempts.append(True))
+
+    if fault == "timeline":
+        monkeypatch.setattr(incident_dialog.IncidentDialog, "_timeline_lines",
+                            lambda dialog, _events: [dialog.tr("Recent event timeline")])
+    elif fault == "copy":
+        original_refresh = safe_bugreport_dialog.SafeBugReportDialog._refresh_preview
+
+        def disable_copy(dialog, *args):
+            original_refresh(dialog, *args)
+            dialog.copy_button.setEnabled(False)
+
+        monkeypatch.setattr(safe_bugreport_dialog.SafeBugReportDialog, "_refresh_preview", disable_copy)
+    else:
+        def fail_to_open(_parent):
+            raise RuntimeError("private capture failure sentinel")
+
+        monkeypatch.setattr(safe_bugreport_dialog, "open_safe_bug_report_dialog", fail_to_open)
+
+    with pytest.raises(ValueError, match="^qualification_preview_unavailable$") as failure:
+        diagnostic_qualification._preview_export(tmp_path)
+
+    assert failure.value.cleanup == "complete"
+    assert not export_attempts
+    assert not (tmp_path / "selected.zip").exists()
+    assert not any(
+        widget.isVisible() and isinstance(widget, (incident_dialog.IncidentDialog,
+                                                    safe_bugreport_dialog.SafeBugReportDialog))
+        for widget in QApplication.topLevelWidgets()
+    )
+    diagnostic_qualification._write_failure(tmp_path, "preview", failure.value)
+    assert json.loads((tmp_path / "failure.json").read_bytes()) == {
+        "schema_version": 1,
+        "stage": "preview",
+        "reason": "qualification_preview_unavailable",
+        "cleanup": "complete",
+    }
+
+
 def test_preview_cleanup_destroys_owned_qt_widgets_before_app_release():
     from PyQt6 import sip
     from PyQt6.QtCore import QCoreApplication, QEvent

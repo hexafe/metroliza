@@ -286,6 +286,7 @@ def test_running_import_results_remain_bound_to_actual_operation(app, dialog, mo
     worker = owner.parse_thread
     assert worker is not None
     foreign = backend.ParseReportsThread(worker.import_plan)
+    sender_lookups = []
     try:
         wait_until(app, entered.is_set)
         if change == "registry_invalidation":
@@ -301,8 +302,15 @@ def test_running_import_results_remain_bound_to_actual_operation(app, dialog, mo
                 foreign.finished.emit()
             else:
                 owner.import_operation.worker = foreign
+
+                def observe_sender(_receiver):
+                    sender_lookups.append(True)
+                    return None
+
                 try:
-                    owner.on_parse_finished()
+                    with monkeypatch.context() as context:
+                        context.setattr(type(owner), "sender", observe_sender)
+                        owner.on_parse_finished()
                 finally:
                     owner.import_operation.worker = worker
             assert owner._preflight_result is review
@@ -315,6 +323,7 @@ def test_running_import_results_remain_bound_to_actual_operation(app, dialog, mo
     assert owner.report_planner.model.execution_counts == {"saved": 5}
     assert owner.import_succeeded and owner._preflight_result is None
     assert not owner.report_planner.model.valid and not owner.parse_button.isEnabled()
+    assert sender_lookups == []
 
 
 @pytest.mark.parametrize("state,detail", [

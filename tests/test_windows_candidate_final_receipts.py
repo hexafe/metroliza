@@ -141,6 +141,59 @@ def test_same_package_protocol_fixture_binds_archive_and_all_four_runs(tmp_path)
     assert json.loads((root / "combined-candidate-receipt.json").read_bytes()) == result
 
 
+def _write_profile_probe(root):
+    directory = root / "core-dpr-1.0"
+    receipt = core._json(directory / "core-driver-receipt.json")
+    core._write_profile_import_probe(directory, receipt, {
+        "observation": {
+            "parser_id": "synthetic_package_profile", "parser_version": "0.1.0",
+            "template_variant": "synthetic_package_template", "measurement_count": 2, "nok_count": 1,
+        },
+        "database_sha256": "c" * 64,
+        "approval_sha256": "d" * 64,
+        "input_sha256": {
+            "profile": "f56fd53618ddf4f446b81cff67e4cedbea04784b82a4be183bb56890f610d784",
+            "expected": "c1e55e0f40e851b5ca21e11803c966b17926c8d8965399f8bc33ab272aed40cb",
+            "sample": "e" * 64,
+        },
+    })
+    return directory / "profile-import-probe.json"
+
+
+def test_finalizer_retains_verified_profile_probe_bound_to_exact_default_dpr_run(tmp_path):
+    root = _prepared(tmp_path)
+    probe = _write_profile_probe(root)
+    result = final.finalize(root, HEAD, TREE, require_profile_import_probe=True)
+    assert result["receipts"]["profile_import_probe"] == {
+        "path": "core-dpr-1.0/profile-import-probe.json", "sha256": core._hash(probe),
+    }
+    assert core._json(probe)["core_driver_receipt_sha256"] == result["receipts"]["core-dpr-1.0"]["sha256"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source_tree", "0" * 40), ("package_tree_sha256", "0" * 64), ("driver_sha256", "0" * 64),
+    ("ui_scale", "1.25"), ("native_mode", "unavailable"), ("core_driver_receipt_sha256", "0" * 64),
+])
+def test_finalizer_rejects_mismatched_profile_probe_binding(tmp_path, field, value):
+    root = _prepared(tmp_path)
+    probe = _write_profile_probe(root)
+    payload = core._json(probe)
+    payload[field] = value
+    _write(probe, payload)
+    with pytest.raises(core.CandidateFailure, match="profile_probe_receipt_mismatch"):
+        final.finalize(root, HEAD, TREE)
+    assert not (root / "combined-candidate-receipt.json").exists()
+
+
+def test_required_profile_probe_cannot_be_replaced_by_other_dpr_evidence(tmp_path):
+    root = _prepared(tmp_path)
+    probe = _write_profile_probe(root)
+    probe.rename(root / "core-dpr-1.25" / probe.name)
+    with pytest.raises(core.CandidateFailure, match="profile_probe_receipt_missing"):
+        final.finalize(root, HEAD, TREE, require_profile_import_probe=True)
+    assert not (root / "combined-candidate-receipt.json").exists()
+
+
 @pytest.mark.parametrize("field,value", [
     ("startup_phases", ["PRIVATE_SENTINEL"]),
     ("startup_phases", ["child_entry", "child_entry"]),

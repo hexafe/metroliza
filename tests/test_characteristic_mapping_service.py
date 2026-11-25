@@ -224,6 +224,21 @@ def test_service_falls_back_to_legacy_reports_measurements_schema(tmp_path):
         'reference_count': 2,
         'sample_references': ['R-A', 'R-B'],
     }
+    from pathlib import Path
+
+    with closing(sqlite3.connect(f'{Path(db_path).resolve().as_uri()}?mode=ro', uri=True)) as connection:
+        readonly_rows = fetch_distinct_report_metric_names(db_path, connection=connection)
+        assert readonly_rows == rows
+        assert fetch_distinct_references(db_path, connection=connection) == [
+            {'reference': 'R-A', 'measurement_count': 2, 'report_count': 1},
+            {'reference': 'R-B', 'measurement_count': 1, 'report_count': 1},
+        ]
+        schema_tables = {
+            name for (name,) in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert schema_tables == {'REPORTS', 'MEASUREMENTS'}
 
 
 # ---------------------------------------------------------------------------

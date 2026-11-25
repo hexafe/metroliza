@@ -38,7 +38,7 @@ FAILURE_STAGES = frozenset({
     "inference", "import_guards", "ui", "closeout", "closeout_privacy",
     "closeout_shell", "closeout_lifecycle", "closeout_lifecycle_review",
     "closeout_lifecycle_seed", "closeout_lifecycle_export",
-    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "complete",
+    "closeout_lifecycle_realtime", "closeout_lifecycle_final", "uiux", "profile_import", "complete",
 })
 DEADLINES_S = {"review": 30.0, "import": 45.0}
 FIXTURES = {
@@ -709,6 +709,13 @@ def _run_main_html_slice(child, receipt):
 
 def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
     from metroliza.app.bootstrap import get_or_create_qapplication
+    profile_probe = os.environ.get("METROLIZA_WINDOWS_CANDIDATE_PROFILE_IMPORT") == "1"
+    if profile_probe:
+        from metroliza.app.windows_candidate_profile import run_profile_probe, verify_profile_probe_home
+
+        profile_home = root.parent / "profile-probe-home"
+        verify_profile_probe_home(profile_home)
+
     # Each stage closes its own windows. Keep their shared application alive
     # until all subsequent widget and worker stages have finished.
     _record_core_stage(root, receipt, "qapplication")
@@ -792,6 +799,9 @@ def _execute_core_checks(root, fixtures, ocr_fixture, receipt):
 
     _record_core_stage(root, receipt, "uiux")
     _run_uiux_slice(child, fixtures, receipt)
+    if profile_probe:
+        _record_core_stage(root, receipt, "profile_import")
+        receipt["profile_import_probe"] = run_profile_probe(child / "profile-import", profile_home, application)
 
 
 def _require_inference_result(receipt, inference):

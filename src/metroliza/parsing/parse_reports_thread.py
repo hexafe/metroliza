@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
 import metroliza.shared.custom_logger as custom_logger
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -29,7 +29,11 @@ from metroliza.shared.progress_status import (
     format_progress_duration,
 )
 from metroliza.reports.report_identity import ImportedReportBatch, build_report_identity_hash
-from metroliza.reports.report_metadata_models import CanonicalReportMetadata
+from metroliza.reports.report_metadata_models import (
+    CanonicalReportMetadata,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
+    USER_SOURCE_TYPE,
+)
 from metroliza.reports.report_repository import (
     ReportEnrichmentApproval,
     ReportImportDisposition,
@@ -1186,13 +1190,15 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
 
     merged_metadata_json = dict(enriched_metadata_json)
     current_manual_overrides = current_metadata_json.get("manual_overrides")
+    preserved_sources = set(preserved_fields)
     if isinstance(current_manual_overrides, dict) and current_manual_overrides:
         merged_metadata_json["manual_overrides"] = current_manual_overrides
+        preserved_sources.update(current_manual_overrides)
 
     field_sources = dict(merged_metadata_json.get("field_sources") or {})
     current_field_sources = current_metadata_json.get("field_sources")
     if isinstance(current_field_sources, dict):
-        for field_name in preserved_fields:
+        for field_name in preserved_sources:
             source = current_field_sources.get(field_name)
             if source is not None:
                 field_sources[field_name] = source
@@ -1203,6 +1209,15 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
         "preserved_fields": sorted(set(preserved_fields)),
         "updated_fields": sorted(set(updated_fields)),
     }
+    warnings = tuple(_metadata_value(enriched_metadata, "warnings") or ())
+    sample_source = field_sources.get("sample_number")
+    if sample_source in ("manual", USER_SOURCE_TYPE, "metadata_review"):
+        merged_map["sample_number_kind"] = "unknown"
+        merged_metadata_json["sample_number_provenance"] = sample_source
+        warnings = tuple(
+            warning for warning in warnings
+            if _metadata_value(warning, "code") != SAMPLE_NUMBER_PROJECTION_WARNING_CODE
+        )
 
     merged_metadata = CanonicalReportMetadata(
         parser_id=_metadata_value(enriched_metadata, "parser_id"),
@@ -1223,7 +1238,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
         comment=merged_map.get("comment"),
         page_count=_metadata_value(enriched_metadata, "page_count"),
         metadata_json=merged_metadata_json,
-        warnings=tuple(_metadata_value(enriched_metadata, "warnings") or ()),
+        warnings=warnings,
     )
     merge_summary = {
         "preserved_fields": sorted(set(preserved_fields)),
@@ -1340,6 +1355,7 @@ def persist_complete_metadata_enrichment(
         identity_hash=build_report_identity_hash(merged_metadata),
         raw_report_json=raw_report_json,
         approval=approval,
+        expected_metadata_json=current_row.get("metadata_json"),
     )
     return merged_metadata, merge_summary
 
@@ -1391,6 +1407,10 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         # Initialize the thread with validated request values
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
+        self.selected_database = None
+        self.created_database = None
+        self._creation_delivery_lock = Lock()
+        self._creation_receiver_active = False
         self.metadata_parsing_mode = validated_request.metadata_parsing_mode
         self.run_background_metadata_enrichment = validated_request.run_background_metadata_enrichment
         self.parsing_canceled = False
@@ -2072,8 +2092,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             # Keep one owner-thread connection alive across per-report commits.
             # Closing the last WAL connection after each report forces repeated
             # checkpoint/sidecar cleanup. Preparation workers never borrow it.
-            scope_options = {"existing_identity": append_identity} if append_identity is not None else {}
-            with lazy_sqlite_connection_scope(self.db_file, **scope_options) as connection:
+            with lazy_sqlite_connection_scope(self.db_file, **self._import_database_scope(append_identity)) as connection:
                 report_fingerprints = set()
                 self._emit_stage_progress('load_existing_reports', 1.0)
 
@@ -2360,6 +2379,33 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.last_import_batch = ImportedReportBatch(database, identity, tuple(committed_reports.items()))
             _release_report_inspections(reports_to_parse)
             self._finish_import_resources(diagnostic)
+
+    def _import_database_scope(self, append_identity):
+        options = {"existing_identity": append_identity} if append_identity is not None else {}
+        if self.selected_database is not None:
+            options["selected_database"] = self.selected_database
+            options["on_created_database"] = self._receive_created_database
+        return options
+
+    def enable_creation_receipt_delivery(self):
+        with self._creation_delivery_lock:
+            self._creation_receiver_active = True
+
+    def _receive_created_database(self, created) -> bool:
+        with self._creation_delivery_lock:
+            if not self._creation_receiver_active:
+                return False
+            self.created_database = created
+            return True
+
+    @pyqtSlot()
+    def close_created_database(self):
+        with self._creation_delivery_lock:
+            self._creation_receiver_active = False
+            created = self.created_database
+            self.created_database = None
+        if created is not None:
+            created.close()
 
     def _finish_import_resources(self, diagnostic) -> None:
         """Report teardown failures without releasing inputs still owned by workers."""

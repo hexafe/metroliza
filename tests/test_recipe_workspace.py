@@ -216,9 +216,13 @@ def test_owned_recipe_vetoes_dangerous_database_rebind_before_inspection_but_all
         def inspect(candidate):
             inspected.append(candidate)
             return original_inspect(candidate)
+
+        def recover(candidate, binding):
+            binding.require(candidate)
+            recovered.append(candidate)
+
         monkeypatch.setattr(window, "_inspect_database", inspect)
-        monkeypatch.setattr(window, "_recover_abandoned_realtime_staging",
-                            lambda candidate: recovered.append(candidate))
+        monkeypatch.setattr(window, "_recover_abandoned_realtime_staging", recover)
         assert window.set_db_file(str(forbidden)) is False
         assert not inspected and not recovered
         assert window.db_file == str(previous)

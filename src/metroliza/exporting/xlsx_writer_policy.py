@@ -4,6 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from xlsxwriter.worksheet import Worksheet
+
+
+class LiteralSourceWorksheet(Worksheet):
+    """Honor the workbook's disabled formula conversion for array-like text."""
+
+    def _write_token_as_string(self, token, row, col, *args):
+        # The regular strings_to_formulas option misses the brace syntax in
+        # XlsxWriter. This also covers the scalar and column fallbacks.
+        if not self.strings_to_formulas and str.startswith(token, "{=") and str.endswith(token, "}"):
+            return self.write_string(row, col, *args)
+        return super()._write_token_as_string(token, row, col, *args)
+
 
 def xlsxwriter_workbook_options() -> dict[str, bool]:
     """Return safe defaults for workbooks containing imported source data."""
@@ -37,6 +50,7 @@ def write_untrusted_xlsx_cell(
 
 
 __all__ = [
+    "LiteralSourceWorksheet",
     "pandas_xlsxwriter_engine_kwargs",
     "write_untrusted_xlsx_cell",
     "xlsxwriter_workbook_options",

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 import json
+from os import fstat, path as os_path, stat_result
 from pathlib import Path
 import re
+import stat
+from tempfile import TemporaryDirectory
 from typing import Any
+from uuid import uuid4
 
 from metroliza.parsing.declarative_parser_profiles import (
+    ProfileValidationReport,
     ensure_profile_store_dirs,
     expected_sample_paths,
     install_profile,
@@ -96,6 +102,12 @@ def _default_handoff_root(*, safe_id: str, home: Path | None, output_dir: Path |
     return profile_store_root(home=home) / "incoming" / safe_id
 
 
+_PROFILE_EXPECTED_RESULTS_COLUMNS = (
+    "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
+    "axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance"
+)
+
+
 def create_profile_handoff_workspace(
     *,
     plugin_id: str,
@@ -129,8 +141,7 @@ def create_profile_handoff_workspace(
         )
     if not expected_results_path.exists():
         expected_results_path.write_text(
-            "sample_file,reference,report_date,sample_number,block_index,header_normalized,"
-            "axis_code,nominal,tol_plus,tol_minus,bonus,measured,deviation,out_of_tolerance\n",
+            _PROFILE_EXPECTED_RESULTS_COLUMNS + "\n",
             encoding="utf-8",
         )
 
@@ -184,13 +195,19 @@ def create_profile_handoff_workspace(
             "- Ask for declarative Metroliza parser profile YAML only.",
             "- Do not ask for Python code.",
             "- Do not allow network calls, package changes, shell commands, installers, or database writes.",
-            "- If validation fails, send the validation output and prompts/06_fix_validation_failures.md.",
+            "- If validation fails, use Repair Prompt in Metroliza or the repair command below.",
+            "- Keep the raw validation report local. Share only the newly generated artifacts/profile_repair_prompt.md",
+            "  and any synthetic or sanitized attachments you have reviewed and approved for sharing.",
             "",
             "## Validate From The Metroliza Source Checkout",
             "",
             "```bash",
             (
                 f'PYTHONPATH=src:. python scripts/parser_plugin_self_service.py validate "{profile_path}" '
+                f'--expected-results "{expected_results_path}" --workspace "{root}"'
+            ),
+            (
+                f'PYTHONPATH=src:. python scripts/parser_plugin_self_service.py repair "{profile_path}" '
                 f'--expected-results "{expected_results_path}" --workspace "{root}"'
             ),
             (
@@ -232,10 +249,7 @@ def create_profile_handoff_workspace(
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(contents, encoding="utf-8")
 
-    expected_columns = (
-        "sample_file, reference, report_date, sample_number, block_index, header_normalized, "
-        "axis_code, nominal, tol_plus, tol_minus, bonus, measured, deviation, out_of_tolerance"
-    )
+    expected_columns = _PROFILE_EXPECTED_RESULTS_COLUMNS.replace(",", ", ")
     handoff_path.write_text(
         "\n".join(
             [
@@ -256,6 +270,7 @@ def create_profile_handoff_workspace(
                 "",
                 "Ask for a declarative Metroliza parser profile only.",
                 "Do not ask for Python code, package changes, network calls, database writes, or installer changes.",
+                "If validation fails, use the current Repair Prompt action. Keep raw validation output local.",
                 "",
                 "Required profile contract:",
                 "",
@@ -538,12 +553,16 @@ def validate_profile_handoff(workspace: HandoffWorkspace):
     )
 
 
-def write_profile_validation_artifact(workspace: HandoffWorkspace) -> tuple[Path, bool]:
-    report = validate_profile_handoff(workspace)
+def _write_profile_validation_report(workspace, report):
     output = workspace.root / "artifacts" / "profile_validation.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(_validation_lines(report)) + "\n", encoding="utf-8")
-    return output, report.passed
+    return output
+
+
+def write_profile_validation_artifact(workspace: HandoffWorkspace) -> tuple[Path, bool]:
+    report = validate_profile_handoff(workspace)
+    return _write_profile_validation_report(workspace, report), report.passed
 
 
 def write_profile_diagnose_artifact(workspace: HandoffWorkspace) -> Path:
@@ -585,27 +604,88 @@ def write_profile_diagnose_artifact(workspace: HandoffWorkspace) -> Path:
     return output
 
 
-def render_profile_repair_prompt(workspace: HandoffWorkspace, validation_output: str) -> str:
-    snippets_path = workspace.root / "reference" / "contract_snippets.md"
-    snippets = snippets_path.read_text(encoding="utf-8") if snippets_path.is_file() else ""
+_SHAREABLE_REPAIR_CHECKS = frozenset("""
+    profile_yaml_readable schema_version_supported plugin_section_present plugin_id_slug
+    display_name_present version_semver source_format_supported template_ids_present priority_range
+    probe_required_markers_present probe_confidence_range report_field_patterns_present
+    row_patterns_present row_pattern_count_within_limit profile_contract_validation profile_parser_class_builds
+    expected_results_file_present expected_results_csv_readable expected_results_required_columns_present
+    expected_results_rows_present expected_results_sample_rows_found expected_results_actual_row_count_matches
+    expected_results_report_reference_matches expected_results_report_date_matches
+    expected_results_report_sample_number_matches expected_results_requires_parse_invoker
+    is_parser_plugin_subclass manifest_instance manifest_plugin_id_present manifest_supported_formats_present
+    probe_returns_probe_result probe_plugin_id_matches_manifest probe_outcome_consistent
+    probe_match_has_semantic_rows probe_execution parse_to_v2_returns_parse_result_v2
+    parser_inherits_base_report_parser parse_result_plugin_id_matches_manifest
+    parse_result_source_format_supported parse_result_has_measurements legacy_adapter_returns_list
+    parse_validation_execution
+""".split())
+_SHAREABLE_PATTERN_CHECK = re.compile(
+    r"(?:row_pattern_[0-9]{1,3}|report_field_(?:reference|report_date|sample_number))_regex_(?:compiles|safe)"
+)
+_EXPECTED_ROW_NUMBER = re.compile(r"expected_results_row_([0-9]{1,7})_")
+_EXPECTED_ROW_CHECKS = (
+    "present", "axis_code_matches", "block_index_matches", "header_normalized_matches",
+    "nominal_matches", "tol_plus_matches", "tol_minus_matches", "bonus_matches", "measured_matches",
+    "deviation_matches", "out_of_tolerance_matches",
+)
+
+
+def _shareable_repair_check(name: str) -> str:
+    if name in _SHAREABLE_REPAIR_CHECKS or _SHAREABLE_PATTERN_CHECK.fullmatch(name):
+        return name
+    if name.startswith("sample_"):
+        for suffix in ("profile_probe_selected", "contract_validation"):
+            if name.endswith("_" + suffix):
+                return "sample_" + suffix
+    row = _EXPECTED_ROW_NUMBER.match(name)
+    if row:
+        for suffix in _EXPECTED_ROW_CHECKS:
+            if name.endswith("_" + suffix):
+                return f"expected_results_row_{row.group(1)}_{suffix}"
+    return "additional_local_validation_failure"
+
+
+def _shareable_repair_checks(report):
+    if not isinstance(report, ProfileValidationReport):
+        return ("Review validation details locally and add a sanitized failure description.",)
+    checks = (report.checks, *(contract.checks for contract in report.contract_reports))
+    codes = list(dict.fromkeys(_shareable_repair_check(check.name)
+                              for group in checks for check in group if not check.passed))
+    if not codes:
+        return ("No failing validation check was reported.",)
+    visible = [f"- {code}" for code in codes[:32]]
+    if len(codes) > 32:
+        visible.append("- Additional validation failures are available in the local validation report.")
+    return tuple(visible)
+
+
+def render_profile_repair_prompt(workspace: HandoffWorkspace, validation_output: ProfileValidationReport | str) -> str:
+    """Render reviewable repair guidance from shareable checks. Keep workspace data local."""
     return "\n".join(
         [
-            f"# Repair request for declarative parser profile: {workspace.profile_path.name}",
+            "# Repair request for a declarative parser profile",
             "",
             "The profile failed validation. Return complete corrected `profile.yaml` only.",
             "",
             "## Failed validation",
-            validation_output.strip() or "No validation output supplied.",
+            *_shareable_repair_checks(validation_output),
             "",
             "## Repair constraints",
             "- Keep the profile data-only YAML.",
             "- Do not return Python code.",
             "- Do not add network calls, shell commands, package changes, installers, or database writes.",
             "- Keep plugin.plugin_id and plugin.source_format unless the validation output says they are invalid.",
-            "- expected_results.csv must cover every parsed row for each approval sample.",
             "",
-            "## Contract snippets",
-            snippets.strip(),
+            "## Parser and persistence contract",
+            "- `probe.required_markers` comes from stable document content. A matching filename is insufficient.",
+            "- The declarative runtime builds `ParseResultV2` with report identity, measurements, and coded warnings.",
+            "- Metroliza owns persistence. Do not write SQLite or modify source files.",
+            "- `expected_results.csv` must cover every parsed row for each approval sample.",
+            f"- Expected columns: `{_PROFILE_EXPECTED_RESULTS_COLUMNS}`.",
+            "",
+            "## Optional attachments",
+            "Use only reviewed synthetic samples, the relevant expected-result rows, and the reviewed profile rules.",
             "",
             "## Required output",
             "Complete updated file contents for `profile.yaml` only.",
@@ -615,14 +695,72 @@ def render_profile_repair_prompt(workspace: HandoffWorkspace, validation_output:
 
 
 def write_profile_repair_prompt(workspace: HandoffWorkspace) -> Path:
-    validation_path, _passed = write_profile_validation_artifact(workspace)
-    prompt = render_profile_repair_prompt(
-        workspace,
-        validation_path.read_text(encoding="utf-8"),
-    )
+    report = validate_profile_handoff(workspace)
+    _write_profile_validation_report(workspace, report)
+    prompt = render_profile_repair_prompt(workspace, report)
     output = workspace.root / "artifacts" / "profile_repair_prompt.md"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(prompt, encoding="utf-8")
+    return output
+
+
+_GENERATION_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+_GENERATION_DIGEST = re.compile(r"[0-9a-fA-F]{64}")
+_GENERATION_PROFILE_LIMIT = 4 * 1024 * 1024
+
+
+def _generation_entry_metadata(path: Path) -> stat_result:
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise ValueError("Choose an ordinary profile workspace and artifacts directory.")
+    return metadata
+
+
+def write_profile_generation_receipt(
+    root: str | Path, *, operation: str, provider: str, model: str,
+    model_version: str | None, input_sha256: tuple[str, ...],
+) -> Path:
+    """Record explicitly declared external authoring identifiers and content hashes."""
+    identifiers = (provider, model) if model_version is None else (provider, model, model_version)
+    if operation not in {"generate", "repair"} or not all(_GENERATION_IDENTIFIER.fullmatch(value) for value in identifiers):
+        raise ValueError("Use provider, model and version identifiers for a generate or repair operation.")
+    if not 1 <= len(input_sha256) <= 24 or not all(_GENERATION_DIGEST.fullmatch(value) for value in input_sha256):
+        raise ValueError("Supply between 1 and 24 SHA-256 digests of the inputs used.")
+
+    workspace = workspace_from_root(Path(root).absolute())
+    if not stat.S_ISDIR(_generation_entry_metadata(workspace.root).st_mode):
+        raise ValueError("Choose a profile handoff folder.")
+    profile = _generation_entry_metadata(workspace.profile_path)
+    if not stat.S_ISREG(profile.st_mode) or not 0 < profile.st_size <= _GENERATION_PROFILE_LIMIT:
+        raise ValueError("Choose a workspace with a regular profile.yaml up to 4 MiB.")
+    artifacts = workspace.root / "artifacts"
+    if not stat.S_ISDIR(_generation_entry_metadata(artifacts).st_mode):
+        raise ValueError("The workspace must contain its artifacts directory.")
+    with workspace.profile_path.open("rb") as handle:
+        before = fstat(handle.fileno())
+        if not os_path.samestat(profile, before):
+            raise ValueError("profile.yaml changed while recording evidence. Retry with the reviewed file.")
+        content = handle.read(_GENERATION_PROFILE_LIMIT + 1)
+        after = fstat(handle.fileno())
+    if (not 0 < len(content) == after.st_size <= _GENERATION_PROFILE_LIMIT
+            or before.st_mtime_ns != after.st_mtime_ns
+            or not os_path.samestat(after, _generation_entry_metadata(workspace.profile_path))):
+        raise ValueError("profile.yaml changed while recording evidence. Retry with the reviewed file.")
+    receipt = {
+        "schema_version": 1,
+        "evidence": "operator_declared_external_authoring",
+        "operation": operation,
+        "provider": provider,
+        "model": model,
+        "model_version": model_version,
+        "input_sha256": list(dict.fromkeys(value.lower() for value in input_sha256)),
+        "profile_sha256": sha256(content).hexdigest(),
+    }
+    output = artifacts / f"profile_generation-{uuid4().hex}.json"
+    with TemporaryDirectory(prefix=".profile-receipt-", dir=artifacts) as temporary:
+        staged = Path(temporary) / "receipt.json"
+        staged.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        staged.replace(output)
     return output
 
 
@@ -660,6 +798,7 @@ __all__ = [
     "summarize_profile_store",
     "validate_handoff_workspace",
     "validate_profile_handoff",
+    "write_profile_generation_receipt",
     "workspace_from_root",
     "write_profile_diagnose_artifact",
     "write_profile_repair_prompt",

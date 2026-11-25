@@ -5,6 +5,13 @@ from defusedxml import ElementTree
 from zipfile import ZipFile
 
 import pandas as pd
+import pytest
+from openpyxl import load_workbook
+from xlsxwriter.worksheet import Worksheet
+
+from metroliza.analytics.row_table import RowTable
+from metroliza.exporting.export_backends import ExcelExportBackend
+from metroliza.exporting.export_sheet_writer import _measurement_formula_cache, create_measurement_formats
 
 from modules.export_sheet_writer import (
     build_measurement_header_block_plan,
@@ -19,43 +26,43 @@ import xlsxwriter
 import tempfile
 
 
-# Ordered package fingerprints of valid measurement workbooks from the pre-fix source.
+# Ordered fingerprints of valid measurement workbooks, including the cached USL, LSL, AVG and COUNT.
 VALID_MEASUREMENT_XLSX_FINGERPRINTS = (
-    'aa3b49fa5d5c7a793ca13149e170428b6a05ffbd588f3d01f9794ab64943f302',
-    'dbcaf74a9174a04813b47d460e0e2ee912e422fbe41c1cc591af270e45b204c3',
-    'c0d087a154a1703c806f7ca77483ad45b2304851cc7a4ebe7399497a2ff76c3c',
-    '85e82cead80d6098c3c76c7a71b0740ee1414cd2dfbcb4ffe49352547b99b6ab',
-    'c7331f964e89f5810703749af0762ac646e59b6ba6020c84d8e5555736713c2c',
-    '1ab35267e9da678a1dc4cf16da5c4f8e0b954013218a2ceae18cc6e79997bc52',
-    'b397933785cebb212a6593e05bcac2769a0af328d22605393b73951a1fdbdf7c',
-    '279bee43a07dbcceaf745e1c4640b020971087822a80b72ffc99bf9abf0228af',
-    'ba167496b7511f3233df6ba16becdab20774627b85d116a16f97aeb4c4bedebd',
-    '2b52aef4c684c4e0da18940a3e2c37d8d940f74a74746ffda2f3e90a84e3e177',
-    '130ead47781396b4aa571aa065d206eeaff0cf0fab23eaf0d353fe71ab3cdecf',
-    'd9cc19dcc1f01456c43d095330d848366ef58a14815db0c2c1b9b80cd581a264',
-    '16c35f82483f7a00e92368c3e909033f4c9d3ddddd18f3ca58cc303304f09419',
-    'f323641b811c951a5419cb42abc23086ff62b436f1e6be1cbb3eb5f2eb84efcc',
-    '79603c746e554577039926010421ac278e6719e7b680eab676af54a34ebd10ea',
-    '6037cf023897618f56eeb43b8de8ab586f9f60ec856a385d6ac64e5f12620801',
-    '757c957096414dcdebdad28e58dcf7bf7ec93d42a5e6d8ce9b795c18afc802db',
-    '1ba12b2339985bd6ad37cc52af47267e37a6e02e0286658a4c18a32fac201c45',
-    '3855e920e59c2a24c58dfc7177c71c146b4e2127b5ff284436972c0af2e436e6',
-    'ca168680698f60aa72026aa96569c9e8e6b4c64b934802bd5489cdd947c183e7',
-    '929a0ce7cea8a97ba585a38bf9e9909076df3863516d42718dd50c2da6558e53',
-    '128d71c3fdf883e013d1eff770b0d30b97726a69752f7990454f32ffd69a4031',
-    '082c6c55fe9b303380ae3bfa511a7e486bd940f2cde011bdd32b634f921be297',
-    'a033b7849eea4e5172c75d13eceede55ef1910590e0a1279baf237571fbe1107',
-    'dda1e914a804be750462c6baf1133b2a883b3ceb186c1b52141259800a515fc4',
-    '45379a1f9ffd0122de05b04afa95de7d8e7a5d942200736db0505918de67e023',
-    '1ff84c01f1319124e0f9f410fcf931b25543a758039e9a5cd13b4ed98f5dfe97',
-    'fa72da13afdb75edfd3ab0f93027465d4eb165166d9de5ab06f928a64fdf5b81',
-    '26082de1b7a44a365ebc3627be59d6e81c703478c35b22ffe25c8ace1f1f2b80',
-    '4bffa2fffa0c026ffde4f6ed9b7c1a03d96154f20d2d4bfc95aff3255ea994d4',
-    '5d0053cb742179d7367d766b8931cd50dabb756611fd687bf680dd25986d1b76',
-    '213c8a2449b29f293bb3db2c89fbbfe0f0169a0ebfe2468c575fad2dc3818bdb',
-    'd2c2254aa9cf2a35838fe5d2e28a90b605800a98ed85f3a71413517745cf2ce7',
-    'd2c68d811e4090cbf0b5fb5e659a7b5a2ceca998feeb2feff146202088fab6fb',
-    '6814db8d360cfd310c462df093bdaedeec1419e7466acefd853c9ecba167b508',
+    '2cc67becbc7984036fa12b7ce7f563982113185c2c86ac0b965292e839274253',
+    'b3d12c8cced4f806756a1b5f4dc535cc433935f4dc801ee3181ab90a97780a18',
+    'dff2fe716ed85cf23c7029f9e1abdce957e65bfb43c361ac4566e7499e7529c7',
+    '9879eb6c23b5ef9e53b10a3514c209017b74bbb46193d82c3fa091a2d9ee5418',
+    '5c6e2a0b6f1e208c36db95a674b41f276f770a0839e047418aa8080751cd3926',
+    'c32e9aa02ff492f986f561f1dfeb9d25e0730e7f6a6039f35473cc9bd39b53bc',
+    '9ffb5ae9dea37946e308e062532c20d43d35e53a34111ffca1d2c86f8969374e',
+    'd83158acc62efd5e25949eb2de4e9df92319c93db19561de6a9137ab02d3109e',
+    '42014c4b94834764aab1ae0a01902e8c46c0489e4d69146077ba2a64d26d0a8f',
+    'a283a47e36ee7e563169e0f1c4be652f1f29b5ce2e74a3856cce48048a88099b',
+    '7250c5238d9267d3e512f33d0cd5125a9197f2f9a13b2bdf7d9e46d2f1c0d624',
+    '3d67b123a40fc61020cc3739f15b5127d189a0529f37c8e65d5e9ae672d5c311',
+    'b531aa76c305ac1b5e6efd5a6114b8864e0d3d99c5741888011f88ada1665e88',
+    'ad32aef15800759d7371d01e7e7a68d843144a48599f5d8cc7dbab40094892bc',
+    '75fb77d3c867b14b25720002d7463ae86e4a3c4ef4efc8c834c77c4e2c18ef5b',
+    'da77e5359102a0c9bf793a93823891b0ef327952a636538a83e7979cd2df036b',
+    '24ee0aa597b658e55c9e1e4b32d93a6185b0668500622e944a5265d65f529e39',
+    '524d9d90ea90fe84b67a2b1a57e214e3374f6982b9f1c400b5e734d013775c2e',
+    '37adc6475eba36392245b5b2494491e81406ef6e167d65eaba87a2be0d552767',
+    'e915b8097a7cecd059adcb932c84605143bb9fccdef3b060707db43a41079692',
+    '7705c6078a6d44515441fbaa82f42707d6e5aca67ba5e123474ee39ad0272232',
+    '21cd2a5a08e2fea1794626c8d5925ac686de609d133ff73ac748594f26b32526',
+    '4437526cf3675abdc7c0ca461c61c7c1272799eedcc85cfa9562e9344c92f835',
+    '0c979bd6f1c0c06bb2ca3dda495e452c3c796ea759d09e732ea1053fac7fced7',
+    '1ccc8519b159accc72757bc0d7dbd2a29fbf65fcb4ac877256fc80ce9cf5b0fa',
+    'b65465176dbbf710a6371233c2a6ba00199c86bbd75b9c6403df311492a38846',
+    '5829c00422c1114178ea3dc2f500139967727910598481778f9a06be7814647d',
+    '34f9aa288f79f76a8e82bbc86070883e03b154906f5cefb318e7f29b2dc4021c',
+    '87a78a0ed0e016637bae58ba1f5f7d1c350b1b0eecab0244d244defce5914d8e',
+    'bdf1241e7d1f08f11bd32a5c24584829acd279bb527036fc5f38d3bba7c113e1',
+    '459bca6780a1b82e5c85ae11a3601d1d7771dea397f6a4d42476f6db748fa140',
+    '4678aabb6f9bbc4d98316246db1bf082c6026cc63a907b76b4581ca147d47950',
+    '283159df4093c4cacbee5d0b8f6e60033a855cb1d2a4cf98b7c40a9a9ac0b25f',
+    '6faacbb01d9458fd1aa9dcacc2acfe3952be0dbc26bcbaca085d67a703820373',
+    '73dec723b1a5d8d82b13ea96a06b7cf27b17982690a301282e6828fbeec46c05',
 )
 
 
@@ -98,12 +105,130 @@ class DummyWorksheet:
         self.conditional_formats.append(args)
 
 
+def _write_formula_cache_workbook(tmp_path, readings, *, qualified_worksheet=True, limits=(1.0, 0.5, -0.5)):
+    column_names = ('DATE', 'SAMPLE_NUMBER', 'MEAS', 'NOM', '+TOL', '-TOL')
+    group = RowTable(
+        rows=tuple((None, str(index), value, *limits) for index, value in enumerate(readings, start=1)),
+        columns=column_names,
+    )
+    path = tmp_path / 'measurements.xlsx'
+    backend = ExcelExportBackend()
+    writer = backend.create_writer(str(path))
+    try:
+        if not qualified_worksheet:
+            writer.book.worksheet_class = Worksheet
+        workbook = backend.get_workbook(writer)
+        sheet = workbook.add_worksheet('READINGS')
+        write_measurement_block(
+            sheet, build_measurement_write_bundle('Feature - X', group, 0),
+            create_measurement_formats(workbook), base_col=0,
+        )
+    finally:
+        backend.close_writer(writer)
+    return path
+
+
+@pytest.mark.parametrize(
+    ('readings', 'stored', 'expected'),
+    [
+        ((1.0011, 1.0016), (1.001, 1.002), (1.002, 2)),
+        ((-1.0011, -1.0016), (-1.001, -1.002), (-1.002, 2)),
+        ((1.002, 1.003), (1.002, 1.003), (1.003, 2)),
+        ((-1.002, -1.003), (-1.002, -1.003), (-1.003, 2)),
+        ((-0.001, None, 0.002), (-0.001, None, 0.002), (0.001, 2)),
+        ((-0.002, 0.001), (-0.002, 0.001), (-0.001, 2)),
+        ((-0.001, 0.001), (-0.001, 0.001), (0, 2)),
+        ((999.001, -999.0), (999.001, -999.0), (None, 2)),
+        ((-999.001, 999.0), (-999.001, 999.0), (None, 2)),
+        ((9_999_999_999.001, -9_999_999_999.0), (9_999_999_999.001, -9_999_999_999.0), (None, 2)),
+        ((-9_999_999_999.001, 9_999_999_999.0), (-9_999_999_999.001, 9_999_999_999.0), (None, 2)),
+        ((999.003, -999.0, 0), (999.003, -999.0, 0), (0.001, 3)),
+        ((1, 1, 0.002, -1), (1, 1, 0.002, -1), (None, 4)),
+        ((1_000_000_000_000, 2), (1_000_000_000_000, 2), (None, 2)),
+        ((1, 'unknown'), (1, 'unknown'), (None, 1)),
+        ((1, '=2'), (1, '=2'), (None, 1)),
+        ((1, '{=2'), (1, '{=2'), (None, 1)),
+        ((1, '{=2}'), (1, '{=2}'), (None, 1)),
+        ((1, float('nan')), (1, '#NUM!'), (None, 1)),
+        ((1, float('inf')), (1, '#DIV/0!'), (None, 1)),
+    ],
+)
+def test_measurement_formula_caches_follow_written_cells(tmp_path, readings, stored, expected):
+    path = _write_formula_cache_workbook(tmp_path, readings)
+    formulas = load_workbook(path)
+    cached = load_workbook(path, data_only=True)
+    try:
+        assert formulas['READINGS']['D2'].value == f'=ROUND(AVERAGE(C22:C{21 + len(stored)}), 3)'
+        assert formulas['READINGS']['D7'].value == f'=COUNT(C22:C{21 + len(stored)})'
+        assert tuple(cached['READINGS'].cell(row, 3).value for row in range(22, 22 + len(stored))) == stored
+        assert (cached['READINGS']['D2'].value, cached['READINGS']['D7'].value) == expected
+        assert formulas['READINGS']['D1'].value == f'=ROUND(MIN(C22:C{21 + len(stored)}), 3)'
+        assert cached['READINGS']['D1'].value is None
+    finally:
+        formulas.close()
+        cached.close()
+
+
+@pytest.mark.parametrize(('limits', 'expected'), [
+    ((0, 0.1, None), (0.1, 0)),
+    ((1.234, 0.12, -0.2), (1.354, 1.034)),
+    ((1, float('nan'), -0.5), (None, 0.5)),
+    ((1, float('inf'), -0.5), (None, 0.5)),
+    ((1_000_000_000_000, 0.22, -0.11), (None, None)),
+])
+def test_limit_previews_use_only_reliable_worksheet_operands(tmp_path, limits, expected):
+    path = _write_formula_cache_workbook(tmp_path, (0.05, 0.07), limits=limits)
+    formulas = load_workbook(path)
+    cached = load_workbook(path, data_only=True)
+    try:
+        sheet = cached['READINGS']
+        for tolerance, result, value in zip(('B2', 'B3'), ('B4', 'B5'), expected, strict=True):
+            assert formulas['READINGS'][result].value == f'=(B1+{tolerance})'
+            if value is None:
+                assert sheet[result].value is None
+            else:
+                assert sheet[result].value == pytest.approx(value)
+                assert sheet[result].value == pytest.approx(sheet['B1'].value + sheet[tolerance].value)
+    finally:
+        formulas.close()
+        cached.close()
+
+
+def test_measurement_formula_caches_fall_back_for_unqualified_worksheet(tmp_path):
+    path = _write_formula_cache_workbook(tmp_path, (1, '{=2}'), qualified_worksheet=False)
+    namespace = {'sheet': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
+    with ZipFile(path) as archive:
+        sheet = ElementTree.fromstring(archive.read('xl/worksheets/sheet1.xml'))
+    array_formula = sheet.find(".//sheet:c[@r='C23']/sheet:f", namespace)
+    assert array_formula is not None
+    assert array_formula.attrib == {'t': 'array', 'ref': 'C23'}
+    assert array_formula.text == '2'
+
+    cached = load_workbook(path, data_only=True)
+    try:
+        assert cached['READINGS']['C22'].value == 1
+        assert (cached['READINGS']['D2'].value, cached['READINGS']['D7'].value) == (None, None)
+    finally:
+        cached.close()
+
+
+@pytest.mark.parametrize(
+    ('values', 'count'),
+    [
+        ((1, float('nan')), 1),
+        ((1, float('inf')), 1),
+        ((1.000001, 1.002), 2),
+        ((700_000_000_000, -700_000_000_000), 2),
+        ((1, True), 1),
+        ((1, object()), None),
+    ],
+)
+def test_formula_cache_preserves_fallback_for_uncertain_averages(values, count):
+    assert _measurement_formula_cache(values) == (None, count)
+
+
 class TestExportSheetWriter(unittest.TestCase):
     def _write_valid_measurement_corpus_case(self, path, index, owners):
-        from metroliza.exporting.export_backends import ExcelExportBackend
-        from metroliza.exporting.export_sheet_writer import create_measurement_formats
-        from openpyxl import load_workbook
-
         nominal = (0.0, 10.0, -3.0, 1000000.0, 0.125)[index % 5]
         tolerance = (0.5, 0.125, 2.0, 5.0, 0.005)[index % 5]
         row_count, block_count = 1 + index % 7, 1 + index % 3
@@ -149,7 +274,7 @@ class TestExportSheetWriter(unittest.TestCase):
         finally:
             workbook.close()
 
-    def test_valid_measurement_output_corpus_matches_pre_fix_packages(self):
+    def test_valid_measurement_output_corpus_matches_reviewed_packages(self):
         from pathlib import Path
 
         self.assertEqual(len(VALID_MEASUREMENT_XLSX_FINGERPRINTS), 35)

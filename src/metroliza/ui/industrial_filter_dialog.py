@@ -18,7 +18,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from metroliza.reports.db import sqlite_connection_scope
+from metroliza.reports.db import sqlite_report_schema_connection_scope as sqlite_connection_scope
+from metroliza.reports.db import selected_reports_worker_options
 from metroliza.industrial.industrial_workflow_state import (
     INDUSTRIAL_FILTER_FIELDS,
     INDUSTRIAL_QUERY_FILTER_OPERATOR_CHOICES,
@@ -53,8 +54,9 @@ _DEFAULT_CONNECTION_SCOPE = sqlite_connection_scope
 _DEFAULT_REPORT_SCHEMA = ensure_report_schema
 
 
-def _read_database_reference_rows(db_file):
-    with sqlite_connection_scope(db_file) as conn:
+def _read_database_reference_rows(db_file, *, connection_scope=None):
+    scope = connection_scope() if connection_scope is not None else sqlite_connection_scope(db_file)
+    with scope as conn:
         ensure_report_schema(db_file, connection=conn)
         return conn.execute(
             """
@@ -67,17 +69,19 @@ def _read_database_reference_rows(db_file):
 
 
 class _ReferenceThread(QThread):
-    def __init__(self, db_file: str, epoch: int):
+    def __init__(self, db_file: str, epoch: int, *, connection_scope=None):
         super().__init__()
         self.db_file = db_file
         self.epoch = epoch
+        self._connection_scope = connection_scope
         self.references = None
         self.error = None
         self.discard_result = False
 
     def run(self):
         try:
-            rows = _read_database_reference_rows(self.db_file)
+            options = {"connection_scope": self._connection_scope} if self._connection_scope is not None else {}
+            rows = _read_database_reference_rows(self.db_file, **options)
             self.references = [str(row[0]).strip() for row in rows if str(row[0]).strip()]
         except Exception as exc:
             self.error = str(exc)
@@ -86,9 +90,12 @@ class _ReferenceThread(QThread):
 class IndustrialFilterDialog(QDialog):
     """Collect Oznak fetch filters in a separate modal dialog."""
 
-    def __init__(self, parent=None, db_file: str | None = None, state: IndustrialFilterState | None = None):
+    def __init__(
+        self, parent=None, db_file: str | None = None, state: IndustrialFilterState | None = None, *, source_binding=None,
+    ):
         super().__init__(parent)
         self.db_file = db_file
+        self._source_binding = source_binding
         if type(self) is IndustrialFilterDialog:
             self._reference_thread = None
             self._reference_progress = None
@@ -234,16 +241,8 @@ class IndustrialFilterDialog(QDialog):
             self._start_reference_load(started_at)
             return
         try:
-            with sqlite_connection_scope(self.db_file) as conn:
-                ensure_report_schema(self.db_file, connection=conn)
-                rows = conn.execute(
-                    """
-                    SELECT DISTINCT TRIM(reference)
-                    FROM report_metadata
-                    WHERE TRIM(COALESCE(reference, '')) <> ''
-                    ORDER BY TRIM(reference) COLLATE NOCASE
-                    """
-                ).fetchall()
+            options = selected_reports_worker_options(self.db_file, getattr(self, "_source_binding", None))
+            rows = _read_database_reference_rows(self.db_file, **options)
         except Exception as exc:
             QMessageBox.warning(
                 self,
@@ -438,7 +437,10 @@ class IndustrialFilterDialog(QDialog):
         thread = None
         try:
             self._references_closed = False
-            thread = _ReferenceThread(self.db_file, self._reference_epoch)
+            thread = _ReferenceThread(
+                self.db_file, self._reference_epoch,
+                **selected_reports_worker_options(self.db_file, self._source_binding),
+            )
             self._reference_thread = thread
             detached_threads.register(thread, defer_quit=True, owner=self, on_finished=IndustrialFilterDialog._references_finished)
             detached_threads.run_when_finished([thread], thread.deleteLater)

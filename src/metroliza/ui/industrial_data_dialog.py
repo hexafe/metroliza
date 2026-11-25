@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from functools import partial
 import weakref
 
@@ -65,7 +66,14 @@ from metroliza.industrial.industrial_workers import (
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.industrial.industrial_workflow_state import IndustrialFilterState, IndustrialGroupingState
 from metroliza.industrial.oznak_adapter import get_oznak_adapter_status
-from metroliza.reports.db import _is_transient_sqlite_error, sqlite_query_only_connection_scope
+from metroliza.reports.db import (
+    SQLiteFileBinding,
+    _is_transient_sqlite_error,
+    selected_reports_worker_options,
+    sqlite_query_only_connection_scope,
+    sqlite_readonly_connection_scope,
+    sqlite_selected_reports_connection_scope,
+)
 from metroliza.tabular.tabular_analytics_service import cleanup_tabular_load_result
 from metroliza.ui import detached_threads
 from metroliza.ui.ui_foundation import (
@@ -235,11 +243,13 @@ def _register_background_thread(thread, owner) -> bool:
 class IndustrialDataDialog(QDialog):
     """Show industrial-data status and launch source, sync, and export dialogs."""
 
-    def __init__(self, parent=None, db_file: str | None = None):
+    def __init__(self, parent=None, db_file: str | None = None, *, source_binding=None):
         super().__init__(parent)
         self.report_db_file = db_file
         self.database_change_allowed = None
         self._workspace_db_file = db_file
+        self._cache_file_binding = source_binding
+        self._cache_status_available = False
         self.cache_target: IndustrialCacheTarget = (
             existing_metroliza_cache_target(db_file)
             if db_file
@@ -516,17 +526,38 @@ class IndustrialDataDialog(QDialog):
     def update_db_file(self, db_file: str | None) -> bool:
         """Point an already-open dialog at the current main-window database."""
 
-        if db_file:
-            updated = self._set_cache_target(existing_metroliza_cache_target(db_file), guard_workspace=True)
-        else:
-            updated = self._set_cache_target(create_temporary_industrial_cache_target(), guard_workspace=True)
-        if not updated:
+        if db_file == self._workspace_db_file:
+            return True
+        target = self.prepare_workspace_database_change(db_file)
+        if target is None:
             return False
-        self._workspace_db_file = db_file
-        self.refresh_status()
+        self.adopt_workspace_database_change(target, db_file)
         return True
 
+    def prepare_workspace_database_change(self, db_file):
+        """Resolve warnings and temporary data before adopting a workspace database."""
+        target = (existing_metroliza_cache_target(db_file) if db_file
+                  else create_temporary_industrial_cache_target())
+        return target if self._can_set_cache_target(target, guard_workspace=True) else None
+
+    def adopt_workspace_database_change(self, target, db_file, *, source_binding=None):
+        """Apply a database change after the workspace accepts the file."""
+        self._adopt_cache_target(target, source_binding=source_binding)
+        self._workspace_db_file = db_file
+        self.refresh_status()
+
+    def discard_prepared_workspace_database(self, target):
+        """Release any unused temporary target created while preparing the change."""
+        if target != self.cache_target:
+            cleanup_temporary_industrial_cache(target)
+
     def _set_cache_target(self, target: IndustrialCacheTarget, *, guard_workspace: bool = False) -> bool:
+        if not self._can_set_cache_target(target, guard_workspace=guard_workspace):
+            return False
+        self._adopt_cache_target(target)
+        return True
+
+    def _can_set_cache_target(self, target: IndustrialCacheTarget, *, guard_workspace: bool) -> bool:
         previous = getattr(self, "cache_target", None)
         if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
             if previous is None or previous.cache_db_file != target.cache_db_file:
@@ -547,11 +578,20 @@ class IndustrialDataDialog(QDialog):
             if guard_workspace and self.database_change_allowed is not None and not self.database_change_allowed():
                 cleanup_temporary_industrial_cache(target)
                 return False
+            if previous is not self.cache_target:
+                cleanup_temporary_industrial_cache(target)
+                return False
+        return True
+
+    def _adopt_cache_target(self, target: IndustrialCacheTarget, *, source_binding=None) -> None:
+        previous = getattr(self, "cache_target", None)
+        if previous is not None and previous.cache_db_file != target.cache_db_file:
             self._cleanup_temporary_cache(previous)
         self.cache_target = target
+        self._cache_file_binding = source_binding
+        self._cache_status_available = False
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
-        return True
 
     def _storage_field_text(self) -> str:
         target = getattr(self, "cache_target", None)
@@ -587,13 +627,37 @@ class IndustrialDataDialog(QDialog):
         if not filename:
             return
 
-        if not self._set_cache_target(existing_metroliza_cache_target(filename), guard_workspace=True):
-            return
-        self._workspace_db_file = filename
         parent = self.parent()
-        if parent is not None and hasattr(parent, "set_db_file"):
-            parent.set_db_file(filename)
-        self.refresh_status()
+        workspace_picker = getattr(parent, "select_industrial_report_database", None)
+        if callable(workspace_picker):
+            workspace_picker(self, filename)
+            return
+
+        self._select_local_report_database(parent, filename)
+
+    def _select_local_report_database(self, parent, filename):
+        from metroliza.reports.report_schema import check_report_schema_version
+
+        try:
+            binding = SQLiteFileBinding.capture(filename)
+            if binding.identity is not None:
+                with sqlite_readonly_connection_scope(filename, resolve_path=False) as reader:
+                    check_report_schema_version(reader, opening=True)
+                binding.require(filename)
+            target = self.prepare_workspace_database_change(filename)
+            if target is None:
+                return
+            binding.require(filename)
+            set_database = getattr(parent, "set_db_file", None)
+            if callable(set_database) and set_database(filename) is False:
+                return
+            binding.require(filename)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        self.adopt_workspace_database_change(
+            target, filename, source_binding=binding,
+        )
 
     def create_database_file(self) -> None:
         """Create durable storage, preserving any populated temporary cache."""
@@ -631,6 +695,7 @@ class IndustrialDataDialog(QDialog):
             cleanup_temporary_industrial_cache(generated_target)
         self._cleanup_temporary_cache(previous)
         self.cache_target = target
+        self._cache_file_binding = None
         self.db_file = target.cache_db_file
         self.report_db_file = target.report_db_file
         self.refresh_status()
@@ -797,40 +862,41 @@ class IndustrialDataDialog(QDialog):
         self._configure_action_roles(self.sources_button)
         self._present_next_action("Source setup needed. Next: Configure sources [Ctrl+D].", variant="warning")
 
-    def _load_cache_status(self):
+    def _load_cache_status(self, repository):
         config_error = ""
         try:
-            repository = IndustrialDataRepository(self.db_file)
-            try:
-                import_source_profiles_to_repository(self.config_path, repository)
-            except IndustrialSourceConfigError as exc:
-                config_error = str(exc)
-            counts = repository.summarize_counts()
-            profiles = repository.list_source_profiles(include_disabled=True)
-            latest_sync = repository.latest_sync_run()
-        except Exception:
-            self.cache_label.setText("Local industrial cache: not initialized")
-            self.cache_label.setToolTip(
-                "The selected file could not be opened as a Metroliza SQLite cache."
+            import_source_profiles_to_repository(self.config_path, repository)
+        except IndustrialSourceConfigError as exc:
+            config_error = str(exc)
+        counts = repository.summarize_counts()
+        profiles = repository.list_source_profiles(include_disabled=True)
+        latest_sync = repository.latest_sync_run()
+        return counts, profiles, latest_sync, config_error
+
+    def _show_cache_load_failure(self) -> None:
+        self._cache_status_available = False
+        self._set_action_buttons_enabled(cache_available=False)
+        self.cache_label.setText("Local industrial cache: not initialized")
+        self.cache_label.setToolTip(
+            "The selected file could not be opened as a Metroliza SQLite cache."
+        )
+        self.sources_label.setText("Production sources: not loaded")
+        self.workflow_label.setText(
+            self._format_workflow_strip(
+                source_text="unknown",
+                access_text="not checked",
+                cache_text="reselect cache",
+                csv_text="waiting",
             )
-            self.sources_label.setText("Production sources: not loaded")
-            self.workflow_label.setText(
-                self._format_workflow_strip(
-                    source_text="unknown",
-                    access_text="not checked",
-                    cache_text="initialize cache",
-                    csv_text="waiting",
-                )
-            )
-            self.sync_summary_label.setText("Last sync/cache outcome: cache diagnostics unavailable")
-            set_status_variant(self.workflow_label, "warning")
-            set_status_variant(self.sync_summary_label, "warning")
-            self.status_label.setText("Initialize the active local industrial cache.")
-            set_status_variant(self.status_label, "warning")
-            self._configure_action_roles(self.select_database_button)
-            self._present_next_action("Local cache unavailable. Next: Open a readable cache or use Temp.", variant="warning")
-            return None
-        return repository, counts, profiles, latest_sync, config_error
+        )
+        self.sync_summary_label.setText("Last sync/cache outcome: cache diagnostics unavailable")
+        set_status_variant(self.workflow_label, "warning")
+        set_status_variant(self.sync_summary_label, "warning")
+        self.status_label.setText("Open a readable cache or use Temp.")
+        set_status_variant(self.status_label, "warning")
+        self._configure_action_roles(self.select_database_button)
+        self._present_next_action("Local cache unavailable. Next: Open a readable cache or use Temp.", variant="warning")
+
 
     def _refresh_loaded_cache_status(
         self,
@@ -897,6 +963,14 @@ class IndustrialDataDialog(QDialog):
             self._configure_action_roles(self.sources_button)
             self._present_next_action("No enabled production source. Next: Configure sources [Ctrl+D].", variant="warning")
 
+    @contextmanager
+    def _cache_repository(self):
+        with sqlite_selected_reports_connection_scope(self.db_file, self._cache_file_binding) as connection:
+            if connection is None:
+                yield IndustrialDataRepository(self.db_file)
+            else:
+                yield IndustrialDataRepository(self.db_file, connection=connection)
+
     def refresh_status(self) -> None:
         update_path_field(
             self.database_field,
@@ -908,11 +982,14 @@ class IndustrialDataDialog(QDialog):
         if not self.db_file:
             self._refresh_unavailable_cache_status()
             return
-        self._set_action_buttons_enabled(cache_available=True)
-        cache_status = self._load_cache_status()
-        if cache_status is None:
+        try:
+            with self._cache_repository() as repository:
+                self._refresh_loaded_cache_status(repository, *self._load_cache_status(repository))
+        except Exception:
+            self._show_cache_load_failure()
             return
-        self._refresh_loaded_cache_status(*cache_status)
+        self._cache_status_available = True
+        self._set_action_buttons_enabled(cache_available=True)
 
     def _configure_action_roles(self, primary: QPushButton) -> None:
         workflow_actions = (
@@ -1072,7 +1149,8 @@ class IndustrialDataDialog(QDialog):
             self.refresh_status()
             return
         try:
-            IndustrialDataRepository(self.db_file).ensure_schema()
+            with self._cache_repository() as repository:
+                repository.ensure_schema()
         except Exception as exc:
             QMessageBox.warning(self, "Industrial data", f"Could not initialize cache: {exc}")
             self.refresh_status()
@@ -1081,12 +1159,19 @@ class IndustrialDataDialog(QDialog):
         set_status_variant(self.status_label, "success")
         self.refresh_status()
 
+    def _source_binding_options(self):
+        binding = self._cache_file_binding
+        return {"source_binding": binding} if binding is not None else {}
+
     def open_sources_dialog(self) -> None:
+        if self.db_file and not self._cache_status_available:
+            return
         _bugreport_recorder.record(BugReportAction.INDUSTRIAL_SOURCES_OPENED)
         self.source_window = IndustrialSourceProfilesDialog(
             self,
             db_file=self.db_file,
             config_path=self.config_path,
+            **self._source_binding_options(),
         )
         self.source_window.exec()
         self.config_path = self.source_window.config_path
@@ -1104,6 +1189,7 @@ class IndustrialDataDialog(QDialog):
             config_path=self.config_path,
             access_only=False,
             filter_state=self.sync_filter_state,
+            **self._source_binding_options(),
         )
         self.sync_window.exec()
         self.config_path = getattr(self.sync_window, "config_path", self.config_path)
@@ -1118,6 +1204,7 @@ class IndustrialDataDialog(QDialog):
             grouping_state=self.grouping_state,
             include_plots=self.include_plots,
             config_path=self.config_path,
+            **self._source_binding_options(),
         )
         self.export_window.exec()
         self.refresh_status()
@@ -1268,7 +1355,9 @@ class IndustrialDataDialog(QDialog):
                 "Report-to-production links need an open Metroliza report database.",
             )
             return
-        self.linking_window = IndustrialLinkingDialog(self, db_file=self.report_db_file)
+        self.linking_window = IndustrialLinkingDialog(
+            self, db_file=self.report_db_file, **self._source_binding_options(),
+        )
         self.linking_window.exec()
         self.refresh_status()
 
@@ -1283,7 +1372,9 @@ class IndustrialDataDialog(QDialog):
 
         self.status_label.setText("Refreshing report-to-production links...")
         set_status_variant(self.status_label, "neutral")
-        self.link_refresh_thread = IndustrialLinkRefreshThread(self.report_db_file)
+        self.link_refresh_thread = IndustrialLinkRefreshThread(
+            self.report_db_file, **selected_reports_worker_options(self.report_db_file, self._cache_file_binding),
+        )
         self.link_refresh_thread.summary_ready.connect(self.on_link_refresh_finished)
         self.link_refresh_thread.error_occurred.connect(self.on_link_refresh_error)
         self.link_refresh_thread.finished.connect(self.on_link_refresh_thread_stopped)
@@ -1443,11 +1534,11 @@ class IndustrialDataDialog(QDialog):
     def _set_action_buttons_enabled(self, *, cache_available: bool) -> None:
         refresh_active = self._background_work_owns_context()
         storage_change_enabled = not refresh_active
-        cache_action_enabled = bool(cache_available and not refresh_active)
+        cache_action_enabled = bool(cache_available and self._cache_status_available and not refresh_active)
         self.select_database_button.setEnabled(storage_change_enabled)
         self.use_temp_button.setEnabled(storage_change_enabled)
         self.create_database_button.setEnabled(storage_change_enabled)
-        self.sources_button.setEnabled(storage_change_enabled)
+        self.sources_button.setEnabled(storage_change_enabled and (self._cache_status_available or not self.db_file))
         self.initialize_button.setEnabled(cache_action_enabled)
         self.initialize_cache_action.setEnabled(cache_action_enabled)
         self.diagnostics_button.setEnabled(cache_action_enabled)

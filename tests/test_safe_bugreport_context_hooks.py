@@ -260,14 +260,16 @@ def test_database_sync_payload_has_fixed_categories_and_exact_terminal_token(mon
         if failure:
             raise ValueError(PRIVATE)
 
-    dialog = SimpleNamespace(db_file=f"/{PRIVATE}.db", _create_report_edit_service=lambda: SimpleNamespace(
-        apply_changes=apply_changes,
-    ))
+    dialog = SimpleNamespace(
+        db_file=f"/{PRIVATE}.db",
+        _uses_native_edit_service=lambda: False,
+        _create_report_edit_service=lambda: SimpleNamespace(apply_changes=apply_changes),
+    )
     if failure:
         with pytest.raises(ValueError, match=PRIVATE):
             module.ModifyDB._apply_edit_payload(dialog, payload)
     else:
-        assert module.ModifyDB._apply_edit_payload(dialog, payload) is True
+        assert module.ModifyDB._apply_edit_payload(dialog, payload) == (True, None)
     assert calls == [payload]
     option = recorder.context_snapshot().options[-1]
     assert option.kind is OptionSnapshotKind.DATABASE_EDIT
@@ -292,12 +294,17 @@ def test_database_async_finish_is_bound_to_owned_worker_token(monkeypatch, failu
     monkeypatch.setattr(module.detached_threads, "delete_on_owner_thread", lambda _obj: None)
     token = module._record_database_edit_options(_edit_payload())
     newer = module._record_database_edit_options(_edit_payload())
-    thread = SimpleNamespace(_bugreport_option_token=token, error=ValueError(PRIVATE) if failure else None)
+    receipt = {"private_edit_sample": PRIVATE}
+    thread = SimpleNamespace(
+        _bugreport_option_token=token,
+        error=ValueError(PRIVATE) if failure else None,
+        receipt=receipt,
+    )
     results = []
     dialog = SimpleNamespace(
         _edit_thread=thread, _edit_progress=object(), _save_in_progress=True,
         _report_save_error=lambda _error: results.append("failed"),
-        _edit_succeeded=lambda: results.append("completed"),
+        _edit_succeeded=lambda received: results.append(received),
     )
     module.ModifyDB._finish_edit(dialog, SimpleNamespace(_bugreport_option_token=newer))
     assert len(_requests(recorder)) == 2
@@ -305,5 +312,9 @@ def test_database_async_finish_is_bound_to_owned_worker_token(monkeypatch, failu
     terminal = _requests(recorder)[-1]
     assert terminal.operation_id == token != newer
     assert terminal.outcome is (ContextOperationOutcome.FAILED if failure else ContextOperationOutcome.COMPLETED)
-    assert results == ["failed" if failure else "completed"]
+    assert thread.receipt is None
+    if failure:
+        assert results == ["failed"]
+    else:
+        assert len(results) == 1 and results[0] is receipt
     assert PRIVATE not in _report(recorder)

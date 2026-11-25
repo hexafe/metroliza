@@ -194,10 +194,11 @@ Use **Edit filters...** in the fetch dialog to paste reference/ID values quickly
 
 Opens or raises the
 [Realtime Industrial Monitoring](realtime_industrial_monitoring.md) dialog using the local realtime sample/event store. Selecting a Metroliza report
-database first is optional. If no database is selected, Metroliza creates a temporary
-session SQLite store so the dashboard and future monitoring setup can open without
-changing a report database. Select or create a persistent database only when you want
-the realtime samples and anomaly events to remain available after the session.
+database first is optional. Metroliza uses a temporary session store until you open
+an existing database or import into a new one in Reports. After an import creates
+a new database, open or reopen Industrial Data or Realtime Monitor to use it. You
+can still use temporary storage and save a separate copy of your realtime session
+when switching databases or closing Metroliza.
 
 Use the **SQL query** tab only when guided filters are not enough or when IT/MES support gives you a reviewed read-only query. **Preview SQL** reads a small sample first; the default preview is `5` rows. Use **Open recipe...** and **Save recipe...** for reusable SQL queries such as a shift, station, work order, or date range.
 
@@ -250,7 +251,11 @@ While enrichment runs, the main window shows progress and a **Cancel** button. I
 
 Opens the local diagnostic viewer when this build includes it. The action is disabled
 when the feature is unavailable. A problem loading an installed viewer produces an error
-message. Diagnostic preview and selected export are provided by that separate viewer.
+message. Select a saved incident to see its safe summary and up to 40 of the latest recorded
+events in their stored order. The viewer shows how many earlier retained events were
+left out of the timeline. Use **Export selected** to save the selected incident locally.
+Use **Capture current state…** to open the same local preview as **Help > Report a
+problem…** with a fresh activity snapshot.
 
 ### Help > Report a problem…
 

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 from metroliza.shared.safe_bugreport import (
@@ -126,6 +127,7 @@ def test_industrial_source_save_failure_does_not_record_profile_text(monkeypatch
         config_path="PRIVATE_PATH_SENTINEL",
         db_file="PRIVATE_PATH_SENTINEL",
         profile_from_form=lambda: SimpleNamespace(order_by_enabled=True),
+        _cache_repository=nullcontext,
     )
 
     module.IndustrialSourceProfilesDialog.save_source(dialog)
@@ -170,8 +172,11 @@ def test_realtime_review_never_records_operator_comment_or_event_id(monkeypatch)
         def __init__(self, _db_file):
             pass
 
-        def acknowledge_event(self, **_kwargs):
-            return None
+        def acknowledge_event(self, **kwargs):
+            assert kwargs == {
+                "event_id": 82731, "ack_by": "OPERATOR_SENTINEL", "comment": "COMMENT_SENTINEL",
+                "expected_status": "open",
+            }
 
     monkeypatch.setattr(module, "RealtimeDashboardService", Service)
     status = SimpleNamespace(setText=lambda _text: None)
@@ -185,6 +190,7 @@ def test_realtime_review_never_records_operator_comment_or_event_id(monkeypatch)
         refresh_event_review=lambda: None,
     )
 
+    dialog._database_component = lambda component: nullcontext(component(dialog.db_file))
     module.RealtimeIndustrialMonitoringDialog._apply_selected_event_action(
         dialog, "acknowledge"
     )

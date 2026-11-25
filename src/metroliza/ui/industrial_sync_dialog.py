@@ -71,8 +71,13 @@ from metroliza.industrial.industrial_workers import (
     IndustrialOznakAccessCheckThread,
     IndustrialOznakSyncThread,
 )
+from metroliza.reports.db import (
+    selected_reports_worker_options,
+    sqlite_readonly_connection_scope,
+    sqlite_report_schema_connection_scope,
+    sqlite_selected_reports_connection_scope,
+)
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
-from metroliza.reports.db import sqlite_connection_scope, sqlite_readonly_connection_scope
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -228,9 +233,11 @@ class IndustrialSyncDialog(QDialog):
         config_path: str | Path | None = None,
         access_only: bool | None = None,
         filter_state: IndustrialFilterState | None = None,
+        source_binding=None,
     ):
         super().__init__(parent)
         self.db_file = db_file
+        self._source_binding = source_binding
         self.report_db_file = db_file if report_db_file is _REPORT_DB_FILE_UNSET else report_db_file
         self.config_path = Path(config_path or default_industrial_source_config_path()).expanduser()
         self.access_only = bool(access_only) if access_only is not None else not bool(db_file)
@@ -557,8 +564,10 @@ class IndustrialSyncDialog(QDialog):
             return
         from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 
-        dialog = IndustrialSourceProfilesDialog(self, db_file=None if self.access_only else self.db_file,
-                                                 config_path=self.config_path)
+        options = {"source_binding": self._source_binding} if self._source_binding is not None else {}
+        dialog = IndustrialSourceProfilesDialog(
+            self, db_file=None if self.access_only else self.db_file, config_path=self.config_path, **options,
+        )
         dialog.exec()
         self.config_path = dialog.config_path
         adopt_config = getattr(self.parent(), "on_industrial_source_config_changed", None)
@@ -688,7 +697,9 @@ class IndustrialSyncDialog(QDialog):
             )
         else:
             try:
-                profiles = IndustrialDataRepository(self.db_file).list_source_profiles()
+                with sqlite_selected_reports_connection_scope(self.db_file, self._source_binding) as connection:
+                    options = {"connection": connection} if connection is not None else {}
+                    profiles = IndustrialDataRepository(self.db_file, **options).list_source_profiles()
             except Exception as exc:
                 profiles = []
                 self.status_label.setText(f"Could not load sources: {exc}")
@@ -929,6 +940,15 @@ class IndustrialSyncDialog(QDialog):
         self._sync_filter_status()
         return True
 
+    def _report_db_binding(self):
+        return self._source_binding if self.report_db_file == self.db_file else None
+
+    def _inline_references_connection(self):
+        binding = self._report_db_binding()
+        if binding is not None:
+            return sqlite_selected_reports_connection_scope(self.report_db_file, binding)
+        return sqlite_report_schema_connection_scope(self.report_db_file)
+
     def load_inline_database_references(self) -> None:
         if not self.report_db_file:
             QMessageBox.warning(
@@ -938,7 +958,7 @@ class IndustrialSyncDialog(QDialog):
             )
             return
         try:
-            with sqlite_connection_scope(self.report_db_file) as conn:
+            with self._inline_references_connection() as conn:
                 ensure_report_schema(self.report_db_file, connection=conn)
                 rows = conn.execute(
                     """
@@ -1023,10 +1043,13 @@ class IndustrialSyncDialog(QDialog):
         self._sync_action_buttons()
 
     def open_filter_dialog(self) -> None:
+        binding = self._report_db_binding()
+        options = {"source_binding": binding} if binding is not None else {}
         self.filter_window = IndustrialFilterDialog(
             self,
             db_file=self.report_db_file,
             state=self.filter_state,
+            **options,
         )
         self.filter_window.exec()
 
@@ -1422,6 +1445,7 @@ class IndustrialSyncDialog(QDialog):
                 report_db_file=None
                 if self._active_batch_total > 1 and not operation.test_only
                 else self.report_db_file,
+                **selected_reports_worker_options(self.db_file, self._source_binding),
             )
         self.oznak_sync_thread.progress_message.connect(self.on_oznak_progress)
         self.oznak_sync_thread.result_ready.connect(self.on_oznak_result)
@@ -1654,7 +1678,10 @@ class IndustrialSyncDialog(QDialog):
         if self._should_refresh_links_after_batch():
             self.status_label.setText(f"{self.status_label.text()} Refreshing report links...")
             set_status_variant(self.status_label, "neutral")
-            self.link_refresh_thread = IndustrialLinkRefreshThread(str(self.report_db_file))
+            self.link_refresh_thread = IndustrialLinkRefreshThread(
+                str(self.report_db_file),
+                **selected_reports_worker_options(self.report_db_file, self._report_db_binding()),
+            )
             self.link_refresh_thread.summary_ready.connect(self._on_batch_link_refresh_ready)
             self.link_refresh_thread.error_occurred.connect(self._on_batch_link_refresh_error)
             self.link_refresh_thread.finished.connect(self._clear_batch_link_refresh_thread)

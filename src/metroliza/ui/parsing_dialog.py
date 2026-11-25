@@ -383,6 +383,7 @@ class _ReportOperations:
         self._export_primary = False
         self._external_context = external_context
         self.operation_start_allowed = None
+        self.database_source_binding = None
         self._operation_progress = 0
         # Initialize variables
         self.directory = directory
@@ -897,13 +898,13 @@ class _ReportOperations:
                 if self._external_context:
                     self.database_change_requested.emit(filename)
                     return
+                parent = self.parent()
+                if parent is not None and hasattr(parent, "set_db_file") and parent.set_db_file(filename) is False:
+                    return
                 logger.info("Selected parse database file: %s", filename)
                 self._invalidate_preflight()
                 self.db_file = filename
                 update_path_field(self.database_text_label, filename)
-                if self.parent() is not None and hasattr(self.parent(), "set_db_file"):
-                    self.parent().set_db_file(filename)
-
                 self._sync_readiness_state()
         except Exception as e:
             self.log_and_exit(e)
@@ -1368,6 +1369,15 @@ class _ReportOperations:
             return
         self.show_loading_screen(import_plan=plan, action_started_at=action_started_at)
 
+    def _create_parse_worker(self, request):
+        worker = ParseReportsThread(request)
+        if self.database_source_binding is not None:
+            selected = worker.selected_database = self.database_source_binding(self.db_file)
+            if selected is not None and selected.identity is None:
+                worker.enable_creation_receipt_delivery()
+                self.destroyed.connect(worker.close_created_database, Qt.ConnectionType.DirectConnection)
+        return worker
+
     def _accept_import_operation(self, operation):
         if self._close_requested or (operation is not None and operation.terminal):
             return None
@@ -1440,7 +1450,7 @@ class _ReportOperations:
                 execution_request = import_plan
             elif self._preflight_result is not None:
                 execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
-            self.parse_thread = ParseReportsThread(execution_request)
+            self.parse_thread = self._create_parse_worker(execution_request)
             _operation.worker = self.parse_thread
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.finished.connect(
@@ -1503,14 +1513,24 @@ class _ReportOperations:
         operation = getattr(self, "import_operation", None)
         if operation is not None and operation.worker is stopped_thread:
             operation.terminal = True
-        if stopped_thread is self.parse_thread:
-            self.parse_thread = None
-            self.import_batch_finished.emit(getattr(stopped_thread, "last_import_batch", None))
+        try:
+            if stopped_thread is self.parse_thread:
+                self.parse_thread = None
+                self._emit_import_receipts(stopped_thread)
+        finally:
+            if (close_created_database := getattr(stopped_thread, "close_created_database", None)) is not None:
+                close_created_database()
         self._sync_readiness_state()
         if not self._close_requested:
             self.scan_button.setFocus()
         self._complete_deferred_close_if_idle()
 
+
+    def _emit_import_receipts(self, stopped_thread):
+        created = getattr(stopped_thread, "created_database", None)
+        if created is not None:
+            self.import_destination_created.emit(stopped_thread.selected_database, created)
+        self.import_batch_finished.emit(getattr(stopped_thread, "last_import_batch", None))
 
     @staticmethod
     def _report_file_label(count):
@@ -1541,12 +1561,12 @@ class _ReportOperations:
         """Handle parse completion, including cancellation and error paths."""
         try:
             worker = self.parse_thread
-            sender = self.sender()
             operation = getattr(self, "import_operation", None)
-            if (sender is not None and sender is not worker) or (
-                operation is not None and operation.worker is not worker
-            ):
-                return  # A retired or unbound worker cannot replace the current operation's UI.
+            if operation is not None and operation.worker is not worker:
+                return  # A disproven binding needs no Qt sender lookup.
+            sender = self.sender()
+            if sender is not None and sender is not worker:
+                return  # A retired worker cannot replace the current operation's UI.
             self._complete_parse_operation(worker)
         except Exception as e:
             self.log_and_exit(e)
@@ -1737,6 +1757,7 @@ class ReportsWorkspace(_ReportOperations, QWidget):
     database_change_requested = pyqtSignal(str)
     state_changed = pyqtSignal()
     import_batch_finished = pyqtSignal(object)
+    import_destination_created = pyqtSignal(object, object)
     shutdown_ready = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -1753,6 +1774,7 @@ class ParsingDialog(_ReportOperations, QDialog):
     database_change_requested = pyqtSignal(str)
     state_changed = pyqtSignal()
     import_batch_finished = pyqtSignal(object)
+    import_destination_created = pyqtSignal(object, object)
     shutdown_ready = pyqtSignal()
 
     def __init__(self, parent=None, directory=None, db_file=None):

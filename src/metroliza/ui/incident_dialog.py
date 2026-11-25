@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QListWidget,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -25,6 +26,8 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.shared.diagnostic_events import (
+    DiagnosticEvent,
+    RuntimeProvenanceEvent,
     StartupCallsite,
     StartupDiagnosticEvent,
     StartupOutcome,
@@ -67,6 +70,7 @@ _LOSS_EVICTED_FIELDS = (
     "age_evicted_events",
     "operation_evicted_events",
 )
+_TIMELINE_LIMIT = 40
 
 
 class IncidentDialog(QDialog):
@@ -120,6 +124,7 @@ class IncidentDialog(QDialog):
         self.status_label.setWordWrap(True)
         self.status_label.setProperty("secondary", True)
         self.refresh_button = QPushButton(self.tr("Refresh"), self)
+        self.capture_button = QPushButton(self.tr("Capture current state…"), self)
         self.export_button = QPushButton(self.tr("Export selected"), self)
         self.export_button.setEnabled(False)
         close_button = QPushButton(self.tr("Close"), self)
@@ -156,6 +161,7 @@ class IncidentDialog(QDialog):
         footer = QHBoxLayout()
         footer.addWidget(self.status_label, stretch=1)
         footer.addWidget(self.refresh_button)
+        footer.addWidget(self.capture_button)
         footer.addWidget(self.export_button)
         footer.addWidget(close_button)
 
@@ -171,6 +177,7 @@ class IncidentDialog(QDialog):
 
         self.reports_table.itemSelectionChanged.connect(self._load_selected)
         self.refresh_button.clicked.connect(self.refresh)
+        self.capture_button.clicked.connect(self._capture_current_state)
         self.export_button.clicked.connect(self._export_selected)
         close_button.clicked.connect(self.close)
 
@@ -305,7 +312,7 @@ class IncidentDialog(QDialog):
         self.export_button.setEnabled(True)
 
     def _render_incident(self, incident: DiagnosticIncident) -> str | None:
-        event_objects: list[object] = []
+        event_objects: list[DiagnosticEvent] = []
         try:
             for payload in incident.events:
                 event_objects.append(decode_event(payload))
@@ -354,7 +361,39 @@ class IncidentDialog(QDialog):
         lines.extend(self._history_lines(incident.ring_loss, observation.channel, len(event_objects)))
         lines.extend(("", self.tr("Native stack: Unavailable")))
         lines.extend(("", *self._latest_event_lines(event_objects)))
+        lines.extend(("", *self._timeline_lines(event_objects)))
         return "\n".join(lines)
+
+    def _timeline_lines(self, events: list[DiagnosticEvent]) -> list[str]:
+        lines = [self.tr("Recent event timeline")]
+        if not events:
+            return [*lines, self.tr("No recorded events are available.")]
+        omitted = max(0, len(events) - _TIMELINE_LIMIT)
+        if omitted:
+            lines.append(self.tr("Earlier recorded events omitted: {count}").format(count=omitted))
+        for position, event in enumerate(events[omitted:], start=omitted + 1):
+            lines.append(self.tr("{position}. {event}").format(position=position, event=self._timeline_event_text(event)))
+        return lines
+
+    def _timeline_event_text(self, event: DiagnosticEvent) -> str:
+        if type(event) is RuntimeProvenanceEvent:
+            return self.tr("Build provenance recorded")
+        if type(event) is StartupDiagnosticEvent:
+            boundary = self._startup_callsite_text(event.callsite)
+            outcome = self._startup_outcome_text(event.outcome)
+            if boundary is not None and outcome is not None:
+                return self.tr("Startup · {boundary} · {outcome}").format(boundary=boundary, outcome=outcome)
+        if type(event) is WorkflowDiagnosticEvent:
+            operation = self._workflow_operation_text(event.operation)
+            stage = self._workflow_stage_text(event.stage)
+            outcome = self._workflow_outcome_text(event.outcome)
+            if operation is not None and stage is not None and outcome is not None:
+                if stage == outcome:
+                    return self.tr("{operation} · {stage}").format(operation=operation, stage=stage)
+                return self.tr("{operation} · {stage} · {outcome}").format(
+                    operation=operation, stage=stage, outcome=outcome,
+                )
+        return self.tr("Diagnostic event details unavailable")
 
     def _bounded_count(self, value: int, maximum: int) -> str:
         # V1 reserves each timing/source-loss ceiling as a lower bound. The
@@ -397,7 +436,7 @@ class IncidentDialog(QDialog):
         except Exception:
             return self.tr("Export failure details could not be validated.")
 
-    def _latest_event_lines(self, events: list[object]) -> list[str]:
+    def _latest_event_lines(self, events: list[DiagnosticEvent]) -> list[str]:
         workflow = next(
             (event for event in reversed(events) if type(event) is WorkflowDiagnosticEvent),
             None,
@@ -463,6 +502,16 @@ class IncidentDialog(QDialog):
             self.tr("No startup or workflow boundary is available."),
             self.tr("Domain validation: No workflow validation result recorded"),
         ]
+
+    def _capture_current_state(self) -> None:
+        try:
+            from metroliza.ui.safe_bugreport_dialog import open_safe_bug_report_dialog
+
+            open_safe_bug_report_dialog(self)
+        except Exception:
+            QMessageBox.warning(
+                self, self.tr("Capture current state"), self.tr("The local report preview could not be opened."),
+            )
 
     def _export_selected(self) -> None:
         identifier = self._selected_report_id()
@@ -532,6 +581,7 @@ class IncidentDialog(QDialog):
         return {
             WorkflowOperation.SELECTED_IMPORT: self.tr("Selected report import"),
             WorkflowOperation.LOCAL_EXPORT: self.tr("Local export"),
+            WorkflowOperation.RECIPE_FLOW: self.tr("Recipe flow"),
         }.get(value)
 
     def _workflow_stage_text(self, value: WorkflowStage) -> str | None:

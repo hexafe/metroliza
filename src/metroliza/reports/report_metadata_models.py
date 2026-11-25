@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+USER_SOURCE_TYPE = "user_manual"
+SAMPLE_NUMBER_PROJECTION_WARNING_CODE = "sample_number_projected_from_stats_count"
+
+
 @dataclass(frozen=True)
 class MetadataExtractionContext:
     source_file_id: int | None
@@ -31,6 +35,25 @@ class MetadataCandidate:
     confidence: float
     evidence_text: str | None
     selected: bool = False
+
+    @classmethod
+    def from_manual_edit(
+        cls, field_name: str, value: str, *, source_detail: str,
+    ) -> MetadataCandidate:
+        return cls(
+            field_name=field_name,
+            raw_value=value,
+            normalized_value=value,
+            source_type=USER_SOURCE_TYPE,
+            source_detail=source_detail,
+            page_number=None,
+            region_name=source_detail,
+            label_text=None,
+            rule_id=f"user:{field_name}",
+            confidence=1.0,
+            evidence_text=None,
+            selected=True,
+        )
 
 
 @dataclass(frozen=True)

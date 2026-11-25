@@ -15,6 +15,14 @@ except (AttributeError, ImportError):  # pragma: no cover - optional local depen
 
 from metroliza.shared import diagnostic_store
 from metroliza.shared.diagnostic_events import (
+    BuildPackager,
+    RecipeFlowState,
+    RuntimeMode,
+    RuntimeProvenanceEvent,
+    StartupCallsite,
+    StartupDiagnosticEvent,
+    StartupMode,
+    StartupOutcome,
     ValidationStatus,
     WorkflowDiagnosticEvent,
     WorkflowOperation,
@@ -35,6 +43,8 @@ from metroliza.shared.diagnostic_ring import LOSS_ACCOUNTING_BYTES, RingLoss, Ri
 from metroliza.shared.diagnostic_store import IncidentStore, StoreResult, StoreStatus
 from metroliza.shared.diagnostic_transport import ChildRecorder
 from metroliza.shared.diagnostic_wire import decode_event, encode_event
+from metroliza.shared.safe_bugreport import BugReportAction, SafeBugReportRecorder
+from metroliza.ui import safe_bugreport_dialog
 from metroliza.ui.incident_dialog import IncidentDialog, open_incident_viewer
 
 
@@ -50,22 +60,25 @@ def _app() -> QApplication:
     return _APPLICATION
 
 
-def _incident(*, loss: bool = False):
-    event = encode_event(
-        WorkflowDiagnosticEvent(
-            invocation_id=SESSION_ID,
-            operation_id=OPERATION_ID,
-            sequence=1,
-            operation=WorkflowOperation.LOCAL_EXPORT,
-            stage=WorkflowStage.FINISHED,
-            outcome=WorkflowOutcome.COMPLETED,
-            validation_status=ValidationStatus.NOT_PERFORMED,
-            published_artifact_count=1,
-            duration_ms=25,
+def _incident(*, loss: bool = False, report_id: uuid.UUID = REPORT_ID, events: tuple[bytes, ...] | None = None):
+    if events is None:
+        events = (
+            encode_event(
+                WorkflowDiagnosticEvent(
+                    invocation_id=SESSION_ID,
+                    operation_id=OPERATION_ID,
+                    sequence=1,
+                    operation=WorkflowOperation.LOCAL_EXPORT,
+                    stage=WorkflowStage.FINISHED,
+                    outcome=WorkflowOutcome.COMPLETED,
+                    validation_status=ValidationStatus.NOT_PERFORMED,
+                    published_artifact_count=1,
+                    duration_ms=25,
+                )
+            ),
         )
-    )
     ring_loss = RingLoss(invalid_events=1, invalid_bytes=9) if loss else RingLoss()
-    history = RingSnapshot((event,), ring_loss, len(event) + LOSS_ACCOUNTING_BYTES)
+    history = RingSnapshot(events, ring_loss, sum(map(len, events)) + LOSS_ACCOUNTING_BYTES)
     observation = IncidentObservation(
         launch=LaunchState.STARTED,
         handshake=HandshakeState.ACCEPTED,
@@ -78,7 +91,7 @@ def _incident(*, loss: bool = False):
         elapsed_ms=30,
     )
     return build_incident(
-        report_id=REPORT_ID,
+        report_id=report_id,
         session_id=SESSION_ID,
         created_at_ms=time.time_ns() // 1_000_000,
         build_git_sha="a" * 40,
@@ -111,6 +124,123 @@ def test_viewer_lists_and_renders_only_closed_safe_summary(tmp_path) -> None:
     assert str(store.root) not in preview
     assert "{" not in preview
     dialog.close()
+
+
+def test_viewer_lists_stored_timeline_in_order_across_operations_and_selection(tmp_path) -> None:
+    _app()
+    store = IncidentStore(tmp_path / "diagnostics")
+    startup_id = uuid.UUID("44444444-4444-4444-8444-444444444444")
+    recipe_id = uuid.UUID("55555555-5555-4555-8555-555555555555")
+    export = WorkflowDiagnosticEvent(
+        SESSION_ID, OPERATION_ID, 1, WorkflowOperation.LOCAL_EXPORT, WorkflowStage.STARTED, WorkflowOutcome.STARTED,
+    )
+    events = tuple(map(encode_event, (
+        StartupDiagnosticEvent(SESSION_ID, startup_id, 1, StartupMode.UNKNOWN,
+                               StartupCallsite.BOOTSTRAP, StartupOutcome.INVOCATION_STARTED),
+        RuntimeProvenanceEvent(SESSION_ID, startup_id, 2, RuntimeMode.SOURCE, BuildPackager.SOURCE,
+                               release_version="0.8.0-dev.5"),
+        export,
+        WorkflowDiagnosticEvent(SESSION_ID, recipe_id, 1, WorkflowOperation.RECIPE_FLOW,
+                                WorkflowStage.STARTED, WorkflowOutcome.STARTED,
+                                flow_id=uuid.uuid4(), run_id=uuid.uuid4(), step_id=uuid.uuid4(),
+                                flow_state=RecipeFlowState.RUNNING),
+        dataclasses.replace(export, sequence=2, stage=WorkflowStage.FINISHED, outcome=WorkflowOutcome.COMPLETED,
+                            published_artifact_count=1),
+    )))
+    assert store.publish(_incident(events=events)).status is StoreStatus.SAVED
+    other_id = uuid.UUID("66666666-6666-4666-8666-666666666666")
+    assert store.publish(_incident(report_id=other_id)).status is StoreStatus.SAVED
+    dialog = IncidentDialog(store=store)
+    try:
+        assert dialog.reports_table.rowCount() == 2
+
+        def select(report_id):
+            dialog.reports_table.selectRow(next(
+                row for row in range(dialog.reports_table.rowCount())
+                if dialog.reports_table.item(row, 0).text() == report_id.hex
+            ))
+            return dialog.preview.toPlainText()
+
+        preview = select(REPORT_ID)
+        assert "Latest workflow: Local export" in preview
+        timeline = preview.split("Recent event timeline\n")[1]
+        assert timeline.splitlines() == [
+            "1. Startup · Bootstrap · Invocation started",
+            "2. Build provenance recorded",
+            "3. Local export · Started",
+            "4. Recipe flow · Started",
+            "5. Local export · Finished · Completed",
+        ]
+        assert recipe_id.hex not in timeline and "recipe_flow" not in timeline
+        assert dialog.export_button.isEnabled()
+
+        preview = select(other_id)
+        assert preview.split("Recent event timeline\n")[1] == "1. Local export · Finished · Completed"
+        assert REPORT_ID.hex not in preview
+    finally:
+        dialog.close()
+
+
+def test_viewer_bounds_timeline_and_shows_omitted_retained_events(tmp_path) -> None:
+    _app()
+    event = WorkflowDiagnosticEvent(
+        SESSION_ID, OPERATION_ID, 1, WorkflowOperation.LOCAL_EXPORT,
+        WorkflowStage.PROCESSING, WorkflowOutcome.MILESTONE,
+    )
+    events = tuple(encode_event(dataclasses.replace(event, sequence=step)) for step in range(1, 43))
+    store = IncidentStore(tmp_path / "diagnostics")
+    assert store.publish(_incident(events=events)).status is StoreStatus.SAVED
+    dialog = IncidentDialog(store=store)
+    try:
+        timeline = dialog.preview.toPlainText().split("Recent event timeline\n")[1].splitlines()
+        assert timeline[0] == "Earlier recorded events omitted: 2"
+        assert timeline[1:] == [f"{step}. Local export · Processing · Milestone observed" for step in range(3, 43)]
+    finally:
+        dialog.close()
+
+
+def test_capture_current_state_opens_the_authoritative_frozen_preview(tmp_path, monkeypatch) -> None:
+    _app()
+    recorder = SafeBugReportRecorder()
+    recorder.record(BugReportAction.CSV_OPENED)
+    monkeypatch.setattr(safe_bugreport_dialog, "recorder", recorder)
+    dialog = open_incident_viewer(store=IncidentStore(tmp_path / "diagnostics"))
+    safe_preview = None
+    try:
+        assert not dialog.export_button.isEnabled()
+        dialog.capture_button.click()
+        safe_preview = dialog.findChild(safe_bugreport_dialog.SafeBugReportDialog)
+        assert safe_preview is not None and safe_preview.isVisible()
+        assert safe_preview.parent() is dialog
+        assert "csv_opened" in safe_preview.preview.toPlainText()
+        recorder.record(BugReportAction.FILTER_APPLIED)
+        assert "filter_applied" not in safe_preview.preview.toPlainText()
+        safe_preview.refresh_button.click()
+        assert "filter_applied" in safe_preview.preview.toPlainText()
+        assert dialog.reports_table.rowCount() == 0
+    finally:
+        if safe_preview is not None:
+            safe_preview.close()
+        dialog.close()
+
+
+@pytest.mark.parametrize("invalid_fields", [{"event_code": "sentinel_unknown"}, {"raw_input": "sentinel_private"}])
+def test_invalid_retained_timeline_payload_clears_previous_preview_and_export(tmp_path, invalid_fields) -> None:
+    _app()
+    store = IncidentStore(tmp_path / "diagnostics")
+    assert store.publish(_incident()).status is StoreStatus.SAVED
+    dialog = IncidentDialog(store=store)
+    try:
+        assert dialog.export_button.isEnabled()
+        report = store.root / f"incident-{REPORT_ID.hex}.json"
+        payload = json.loads(report.read_bytes())
+        payload["events"][0].update(invalid_fields)
+        report.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="ascii")
+        dialog._load_selected()
+        assert dialog.preview.toPlainText() == "The selected incident could not be validated."
+        assert not dialog.export_button.isEnabled()
+    finally:
+        dialog.close()
 
 
 @pytest.mark.parametrize("offset", [-1, 0, 1])

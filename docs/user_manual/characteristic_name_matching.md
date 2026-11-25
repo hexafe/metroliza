@@ -131,9 +131,13 @@ Reference-specific matches are the safer choice when a short report name is reus
 
 1. Select a row in the saved matches table.
 2. Click **Delete selected**.
-3. Confirm deletion.
+3. If you may need to recover the rule, choose **Export CSV** and save a copy before continuing.
+4. Confirm deletion after checking the alias, common name, and scope.
 
 Deleting a match stops Metroliza from using that replacement rule in future work.
+Confirmed deletions also keep the previous rule in the local database for recovery.
+The database retains the latest 100 deleted rules. Import the saved CSV to restore
+a rule after checking its scope.
 
 ## Troubleshooting
 
@@ -185,6 +189,8 @@ Before saving, review the Added / Replaced / Unchanged counts and the old → ne
 for replacements. **Import only new** is the default; **Import and replace N** explicitly
 allows replacements. Cancel saves nothing. If affected rules change after preview, the
 import aborts without saving; preview the CSV again.
+Export the current rules to CSV first if you may need to restore a rule that the import
+replaces.
 
 This is useful when you already maintain a mapping list externally or want to load many matches at once.
 
