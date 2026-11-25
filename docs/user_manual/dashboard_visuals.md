@@ -34,11 +34,29 @@ inside that focused component and does nothing when there are no matches.
 
 An enlarged chart or Plot Visuals can be closed with its **Close** button or
 **Esc**. **Q** is an alternative while focus is inside that viewer, outside
-editable controls. Closing preserves the existing return to the opening control.
+editable controls. Closing returns focus to the opening control.
 The local E/Q alternatives do not act while typing in an input, textarea,
 select or editable content. Modified keys (including Shift and Ctrl+Alt/AltGr),
 composition and key repeat are ignored, so browser commands and text editing
 remain available. These alternatives do not apply to the whole page.
+
+## Open and review offline
+
+Open the exported `.html` file in Chromium or Firefox. If Metroliza created a
+companion assets folder, keep it next to the HTML when you move or share the
+export. A normal offline open loads the chart library and images from the export.
+
+When scripts are blocked or an interactive chart fails, the dashboard shows a
+status message. Where a chart image was exported, you can use that snapshot.
+Summary and evidence tables remain available. Hover, zoom, point search and
+point marking require an interactive chart. If the enlarged chart fails to
+render, the viewer stays open and shows a message. Close it to return to the
+dashboard and use the chart's image snapshot if one is available.
+
+For dense CSV Summary and Excel data, check the rendered and source row counts
+before interpreting individual chart points. Sampling affects the chart display.
+The statistics and workbook still use all selected rows. A static snapshot keeps
+the display produced at export time.
 
 ## Start with a recipe
 

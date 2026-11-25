@@ -403,8 +403,50 @@ class TestDefaultExportWorkbookEquivalence(unittest.TestCase):
     def test_default_export_workbooks_are_identical(self):
         assert_workbooks_equivalent(self, self.reference_path, self.candidate_path)
 
-    def test_streamed_snapshot_export_workbook_is_identical(self):
-        assert_workbooks_equivalent(self, self.reference_path, self.streamed_path)
+    def test_streamed_snapshot_preserves_workbook_and_adds_only_bound_provenance(self):
+        reference = read_package_parts(self.reference_path)
+        streamed = read_package_parts(self.streamed_path)
+        reference_sheets = sheet_part_paths(self.reference_path)
+        self.assertEqual(reference_sheets, sheet_part_paths(self.streamed_path))
+        self.assertEqual(reference.keys(), streamed.keys())
+        differences = {part for part in reference if reference[part] != streamed[part]}
+        self.assertEqual(differences, {'xl/sharedStrings.xml', 'xl/workbook.xml', reference_sheets['REPORT SCOPE']})
+
+        reference_view = describe_workbook(self.reference_path)
+        streamed_view = describe_workbook(self.streamed_path)
+        self.assertEqual(list(reference_view), list(streamed_view))
+        reference_scope = reference_view.pop('REPORT SCOPE')
+        streamed_scope = streamed_view.pop('REPORT SCOPE')
+        self.assertEqual(reference_view, streamed_view)
+
+        def rows(cells):
+            return [(cell[0], cells[f'B{address[1:]}'][0])
+                    for address, cell in cells.items() if address.startswith('A')]
+
+        additions = {
+            'Selected source reports': str(self.total_reports),
+            'Parser IDs': 'cmm',
+            'Data through (report date)': '2024-02-05',
+        }
+        reference_rows = rows(reference_scope['cells'])
+        streamed_rows = rows(streamed_scope['cells'])
+        for sheet, scope_rows in ((reference_scope, reference_rows), (streamed_scope, streamed_rows)):
+            self.assertEqual(sheet['dimensions'], f'A1:B{len(scope_rows)}')
+            self.assertEqual(sheet['auto_filter'], sheet['dimensions'])
+        before_range = f"'REPORT SCOPE'!$A$1:$B${len(reference_rows)}".encode()
+        after_range = f"'REPORT SCOPE'!$A$1:$B${len(streamed_rows)}".encode()
+        self.assertEqual(reference['xl/workbook.xml'].count(before_range), 1)
+        self.assertEqual(streamed['xl/workbook.xml'].count(after_range), 1)
+        self.assertEqual(reference['xl/workbook.xml'].replace(before_range, after_range), streamed['xl/workbook.xml'])
+        self.assertEqual(dict(reference_rows)['Report scope schema'], '2')
+        self.assertEqual(dict(streamed_rows)['Report scope schema'], '3')
+        self.assertTrue(additions.keys().isdisjoint(dict(reference_rows)))
+        self.assertEqual({label: value for label, value in streamed_rows if label in additions}, additions)
+        self.assertEqual(
+            [(label, value) for label, value in reference_rows if label != 'Report scope schema'],
+            [(label, value) for label, value in streamed_rows
+             if label != 'Report scope schema' and label not in additions],
+        )
 
     def test_group_analysis_run_keeps_the_in_memory_table_path_and_is_identical(self):
         tmp = Path(self._tmp.name)

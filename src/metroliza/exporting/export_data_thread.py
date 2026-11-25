@@ -62,9 +62,10 @@ from metroliza.exporting.export_outcomes import (
     export_failure_message,
 )
 from metroliza.exporting.report_export_context import (
+    REPORT_SCOPE_KEY,
     REPORT_SCOPE_SHEET,
-    report_scope_entries,
-    report_scope_warnings,
+    freeze_report_export_scope,
+    report_selection_from_snapshot,
 )
 from metroliza.exporting.google_drive_export import (
     GoogleDriveAuthError,
@@ -3706,6 +3707,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._export_failure_stage = ExportFailureStage.PREPARATION
         self._export_diagnostic_trace = None
         self._prepared_grouping_df = None
+        self._scope_measurement_rows = None
+        self._report_selection = ()
+        self._effective_group_scope = None
         self.completion_metadata = {
             "local_xlsx_path": self.excel_file,
             "converted_url": None,
@@ -3944,6 +3948,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         self._observe_export_failure_stage(ExportFailureStage.HTML_GENERATION)
         try:
+            report_scope = self._completed_report_scope()
             dashboard_result = write_dashboard_safely(
                 _write_export_html_dashboard,
                 diagnostic_stage=self._observe_export_failure_stage,
@@ -3968,8 +3973,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 dashboard_mode="html_only" if self.export_target == "html_dashboard" else "workbook_sidecar",
                 plotly_visual_settings=self.dashboard_plotly_visual_settings,
                 dashboard_visual_settings=self.dashboard_visual_settings,
-                report_scope=report_scope_entries(self._export_scope_request),
-                report_warnings=report_scope_warnings(self.completion_metadata),
+                report_scope=dict(report_scope.entries),
+                report_warnings=report_scope.warnings,
             )
         except OutputPublicationCanceled:
             raise
@@ -4162,6 +4167,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         if self._snapshot_partition_source is not None:
             self._snapshot_partition_source.invalidate()
         self._snapshot_partition_source = None
+        self._report_selection = ()
         if self._db_connection is None:
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -4197,12 +4203,20 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._sql_measurement_summary_cache.clear()
             return
 
+        self._report_selection = self._snapshot_report_selection(snapshot_table_name)
         self._snapshot_table_name = snapshot_table_name
         self._snapshot_partition_source = snapshot_source
         self._active_export_query = f'SELECT * FROM temp."{snapshot_table_name}"'
         self._cached_export_filtered_df = None
         self._partition_header_counts_cache = None
         self._sql_measurement_summary_cache.clear()
+
+    def _snapshot_report_selection(self, snapshot_table_name):
+        try:
+            return report_selection_from_snapshot(self._db_connection, snapshot_table_name)
+        except sqlite3.Error:
+            logger.warning('Report selection provenance is unavailable for the export snapshot.')
+            return ()
 
     def _index_export_snapshot(self, snapshot_table_name):
         if self._db_connection is None:
@@ -5001,14 +5015,26 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         return ExportStageOutcome.completed() if completed else ExportStageOutcome.canceled()
 
+    def _completed_report_scope(self):
+        if REPORT_SCOPE_KEY not in self.completion_metadata:
+            self.completion_metadata[REPORT_SCOPE_KEY] = freeze_report_export_scope(
+                self._export_scope_request,
+                self.completion_metadata,
+                measurement_rows=self._scope_measurement_rows,
+                effective_group_scope=self._effective_group_scope,
+                selection=self._report_selection,
+            )
+        return self.completion_metadata[REPORT_SCOPE_KEY]
+
     def _write_report_scope_sheet(self, excel_writer):
+        scope = self._completed_report_scope()
         rows = []
-        for label, value in report_scope_entries(self._export_scope_request).items():
+        for label, value in scope.entries:
             if label == "Filters":
                 rows.extend((label, line) for line in str(value).splitlines())
             else:
                 rows.append((label, str(value)))
-        rows.extend(("Warning", warning) for warning in report_scope_warnings(self.completion_metadata))
+        rows.extend(("Warning", warning) for warning in scope.warnings)
         self.write_data_to_excel(RowTable(rows=rows, columns=("Setting", "Value")), REPORT_SCOPE_SHEET, excel_writer)
 
     def run_html_dashboard_pipeline(self, dashboard_writer):
@@ -5364,6 +5390,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         'with HEADER and AX; review imported measurement metadata.'
                     )
             completed_header_units = 0
+            analysed_rows = 0
             measurement_stage_start = time.perf_counter()
             label_emit_every_headers = 10
             label_emit_min_interval_seconds = 0.4
@@ -5446,7 +5473,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     base_col = col
                     header_plan = write_bundle['header_plan']
                     write_start = time.perf_counter()
-                    measurement_plan = write_measurement_block(worksheet, write_bundle, formats, base_col=base_col)
+                    measurement_plan = write_measurement_block(
+                        worksheet, write_bundle, formats, base_col=base_col,
+                        cache_statistics=self.export_target != 'html_dashboard',
+                    )
 
                     col += 5
                     header_col_end = col - 1
@@ -5490,6 +5520,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                             worksheet.set_column(col - 3, col - 1, 0)
 
                     completed_header_units += 1
+                    analysed_rows += len(header_group)
                     if total_header_units > 0:
                         self._emit_stage_progress(
                             'measurement_sheets_charts',
@@ -5540,6 +5571,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
                 worksheet.freeze_panes(7, 0)
 
+            self._scope_measurement_rows = analysed_rows
             # Temporarily disabled for this RC run; resume in a future release cycle.
             # self._write_group_comparison_sheet(workbook, used_sheet_names)
 
@@ -6102,6 +6134,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
         finally:
             self._record_stage_timing('group_analysis_payload', time.perf_counter() - payload_start)
+        if payload.get("status") == "ready":
+            self._effective_group_scope = payload.get("effective_scope")
         missing_reference = 'REFERENCE' not in grouped_export_df.columns or any(
             value is None or (isinstance(value, str) and not value.strip())
             for value in grouped_export_df['REFERENCE']

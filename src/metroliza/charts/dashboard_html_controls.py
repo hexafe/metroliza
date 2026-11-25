@@ -284,6 +284,9 @@ def render_dashboard_semantic_css() -> str:
     .plotly-runtime-fallback[hidden] {
       display: none;
     }
+    :is(.plotly-chart, .lightbox-plotly-chart)[data-plotly-ready="error"] {
+      display: none;
+    }
     .plotly-expand-trigger:disabled {
       cursor: not-allowed;
       opacity: 0.58;

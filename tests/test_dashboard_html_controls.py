@@ -86,6 +86,8 @@ def test_dashboard_semantic_contract_covers_accessibility_print_and_runtime_fail
     assert "@media (forced-colors: active)" in css
     assert "@media print" in css
     assert ".skip-link:focus" in css
+    failed_plot_selector = ':is(.plotly-chart, .lightbox-plotly-chart)[data-plotly-ready="error"]'
+    assert 'display: none;' in _css_block(css, failed_plot_selector)
     assert "const showPlotlyRuntimeFallback" in runtime_js
     assert "runtime-unavailable" in runtime_js
     assert "trigger.disabled = true" in runtime_js

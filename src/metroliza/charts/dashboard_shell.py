@@ -267,6 +267,24 @@ def render_dashboard_compact_hero_css() -> str:
     """
 
 
+def render_dashboard_noscript_styles() -> str:
+    return (
+        "<noscript><style>"
+        ".dashboard-control-bar, .plotly-shell, .plotly-chart, .plotly-expand-trigger { display: none; }"
+        ".chart-card { min-height: 0; }"
+        "</style></noscript>"
+    )
+
+
+def render_dashboard_noscript_notice() -> str:
+    return (
+        '<noscript><p class="runtime-note dashboard-noscript-notice">'
+        'JavaScript is disabled. Interactive charts and dashboard controls are unavailable. '
+        'Use the section links, tables, and available image snapshots.'
+        '</p></noscript>'
+    )
+
+
 def render_dashboard_hero(
     *,
     eyebrow: str,

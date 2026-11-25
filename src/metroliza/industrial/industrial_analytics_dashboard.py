@@ -43,6 +43,8 @@ from metroliza.charts.dashboard_shell import (
     render_dashboard_compact_hero_css,
     render_dashboard_context,
     render_dashboard_message_section,
+    render_dashboard_noscript_notice,
+    render_dashboard_noscript_styles,
     render_dashboard_overview_cards,
     render_dashboard_takeaways_section,
 )
@@ -4009,13 +4011,11 @@ def _render_dashboard_html(
             replaced_noun = "chart" if replaced_specs == 1 else "charts"
             replaced_verb = "was" if replaced_specs == 1 else "were"
             embedded_noun = "chart" if embedded_specs == 1 else "charts"
-            embedded_verb = "remains" if embedded_specs == 1 else "remain"
             plotly_budget_notice = (
                 '<p class="runtime-note">'
                 f'{replaced_specs:,} interactive {replaced_noun} {replaced_verb} replaced with '
                 f'image snapshots to keep the saved dashboard{budget_text}. '
-                f'{embedded_specs:,} of {total_specs:,} interactive {embedded_noun} '
-                f'{embedded_verb} available.</p>'
+                f'The export includes interactive data for {embedded_specs:,} of {total_specs:,} {embedded_noun}.</p>'
             )
         else:
             plotly_budget_notice = (
@@ -4059,12 +4059,17 @@ def _render_dashboard_html(
         chart_sections.append(_render_chart_section(chart, section_id=section_id))
     chart_markup = "".join(chart_sections)
     nav_markup = render_section_nav(nav_items)
+    plotly_failure_notice = (
+        '<p id="plotly-runtime-unavailable" class="runtime-note" role="status" hidden>'
+        'Interactive charts could not load. Keep the dashboard and its assets folder together. '
+        'Available image snapshots and tables are shown below.</p>'
+    ) if plotly_charts else ""
     hero_markup = render_dashboard_hero(
         eyebrow=dashboard_title,
         headline=dashboard_headline,
         lede_markup=lede_markup,
         controls_markup=dashboard_controls_markup,
-        notice_markup=plotly_budget_notice,
+        notice_markup=plotly_budget_notice + plotly_failure_notice + render_dashboard_noscript_notice(),
         context_markup=context_markup,
         overview_markup=cards,
         nav_markup=nav_markup,
@@ -4594,7 +4599,15 @@ def _render_dashboard_html(
         height: 310px;
       }}
     }}
+    html[data-plotly-unavailable] :is(.plotly-chart, .plotly-expand-trigger, .visual-settings-trigger) {{
+      display: none;
+    }}
+    html[data-plotly-unavailable] .chart-card,
+    .chart-card[data-plotly-failed] {{
+      min-height: 0;
+    }}
   </style>
+{render_dashboard_noscript_styles()}
 </head>
 <body>
   <div class="shell">
@@ -4610,6 +4623,7 @@ def _render_dashboard_html(
   {lightbox_markup}
   {visual_dialog_markup}
 {plotly_runtime}
+{_render_dashboard_theme_runtime()}
 </body>
 </html>
 """
@@ -4709,6 +4723,8 @@ def _render_chart_lightbox() -> str:
         '<button type="button" id="chart-lightbox-close" class="chart-lightbox-close">Close (Esc; Q in viewer)</button>'
         '</div>'
         '<div id="chart-lightbox-plotly" class="chart-lightbox-plotly" aria-label="Enlarged interactive chart"></div>'
+        '<p class="plotly-chart-fallback runtime-note" role="status" hidden>'
+        'The enlarged interactive chart could not be displayed. Close this view to return to the dashboard.</p>'
         '</div>'
         '</dialog>'
     )
@@ -4772,20 +4788,13 @@ def _render_plotly_runtime(
         initial_settings=dashboard_visual_settings,
         preview_labels=preview_labels,
     )
-    theme_runtime_helpers = render_dashboard_theme_runtime_helpers(
-        storage_key_var="themeStorageKey",
-        indent="    ",
-    )
     return (
         f'\n  <script id="production-dashboard-charts" type="application/json">{charts_json}</script>\n'
         "  <script>\n"
         "    const chartData = JSON.parse(document.getElementById('production-dashboard-charts').textContent);\n"
         "    const chartById = new Map(chartData.map((chart) => [chart.id, chart]));\n"
-        f"    const themeStorageKey = {json.dumps(DASHBOARD_THEME_STORAGE_KEY)};\n"
         f"    const productionPlotlyThemeTokens = {theme_tokens_json};\n"
         + visual_runtime_js
-        + "\n"
-        + theme_runtime_helpers
         + """
     const currentPlotlyTheme = () => (
       productionPlotlyThemeTokens[document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light']
@@ -4889,14 +4898,6 @@ def _render_plotly_runtime(
       spec.layout = layout;
       return spec;
     };
-    const updateThemeControls = () => {
-      const choice = currentThemeChoice();
-      document.querySelectorAll('.theme-option').forEach((button) => {
-        const active = button.getAttribute('data-theme-choice') === choice;
-        button.setAttribute('aria-pressed', active ? 'true' : 'false');
-        button.dataset.active = active ? '1' : '0';
-      });
-    };
     const staticImageLayerIndexForTrace = (trace) => {
       if (!trace || typeof trace !== 'object') return null;
       if (typeof trace.metroliza_raw_layer_index === 'number') return trace.metroliza_raw_layer_index;
@@ -4932,31 +4933,52 @@ def _render_plotly_runtime(
         return !plotlySpecHasStaticImageLayer(spec);
       });
     };
-    function renderPlotlyChart(target, chart, configOverrides = {}, force = false) {
+    const plotlyRenderTokens = new WeakMap();
+    function showPlotlyRenderFailure(target) {
+      target.hidden = true;
+      target.dataset.plotlyReady = 'error';
+      const panel = target.closest('.chart-card, .chart-lightbox-panel');
+      panel.dataset.plotlyFailed = 'true';
+      panel.querySelector('.plotly-chart-fallback').hidden = false;
+      const expand = panel.querySelector('.plotly-expand-trigger');
+      if (expand) expand.disabled = true;
+      const snapshot = panel.querySelector('.chart-snapshot');
+      if (snapshot) snapshot.open = true;
+    }
+    async function renderPlotlyChart(target, chart, configOverrides = {}, force = false) {
       if (!target || !chart || !chart.plotly_spec || !window.Plotly) return;
-      const baseSpec = clonePlotlySpec(chart.plotly_spec);
-      const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
-      target.dataset.dashboardChartKey = String(chart.id || '');
-      const chartKey = typeof dashboardChartKeyForContainer === 'function'
-        ? dashboardChartKeyForContainer(target)
-        : String(chart.id || '');
-      const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
-        ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
-        : visualSpec;
-      const spec = applyThemeToPlotlySpec(markedSpec);
-      const config = Object.assign({}, spec.config || {}, configOverrides);
-      if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
-        config.doubleClick = 'reset';
-      }
-      if (force && target.dataset.plotlyReady === '1') {
-        Plotly.react(target, spec.data || [], spec.layout || {}, config);
-      } else {
-        Plotly.newPlot(target, spec.data || [], spec.layout || {}, config);
-      }
-      target.dataset.plotlyReady = '1';
-      attachRawLayerLegendHandler(target, chart);
-      if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {
-        window.metrolizaInstallVisualSelectionHandlers(target);
+      const token = Symbol();
+      plotlyRenderTokens.set(target, token);
+      try {
+        const baseSpec = clonePlotlySpec(chart.plotly_spec);
+        const visualSpec = applyDashboardVisualsToPlotlySpec(baseSpec);
+        target.dataset.dashboardChartKey = String(chart.id || '');
+        const chartKey = typeof dashboardChartKeyForContainer === 'function'
+          ? dashboardChartKeyForContainer(target)
+          : String(chart.id || '');
+        const markedSpec = typeof applyDashboardPointMarksToPlotlySpec === 'function'
+          ? applyDashboardPointMarksToPlotlySpec(visualSpec, chartKey)
+          : visualSpec;
+        const spec = applyThemeToPlotlySpec(markedSpec);
+        const config = Object.assign({}, spec.config || {}, configOverrides);
+        if (plotlySpecHasStaticImageLayer(spec) && !Object.prototype.hasOwnProperty.call(config, 'doubleClick')) {
+          config.doubleClick = 'reset';
+        }
+        if (force && target.dataset.plotlyReady === '1') {
+          await Plotly.react(target, spec.data || [], spec.layout || {}, config);
+        } else {
+          await Plotly.newPlot(target, spec.data || [], spec.layout || {}, config);
+        }
+        if (plotlyRenderTokens.get(target) !== token) return;
+        attachRawLayerLegendHandler(target, chart);
+        if (typeof window.metrolizaInstallVisualSelectionHandlers === 'function') {
+          window.metrolizaInstallVisualSelectionHandlers(target);
+        }
+        target.dataset.plotlyReady = '1';
+        return true;
+      } catch {
+        if (plotlyRenderTokens.get(target) === token) showPlotlyRenderFailure(target);
+        return false;
       }
     }
     function refreshPlotlyCharts() {
@@ -4971,29 +4993,19 @@ def _render_plotly_runtime(
     const lightboxPlotly = document.getElementById('chart-lightbox-plotly');
     const lightboxTitle = document.getElementById('chart-lightbox-title');
     const lightboxClose = document.getElementById('chart-lightbox-close');
-    function refreshOpenLightboxPlotly() {
+    async function refreshOpenLightboxPlotly() {
       if (!lightbox || !lightbox.open || !lightboxPlotly || !lightboxPlotly.dataset.chartId) return;
       const chart = chartById.get(lightboxPlotly.dataset.chartId);
-      if (!chart) return;
-      renderPlotlyChart(lightboxPlotly, chart, { responsive: true }, true);
-      window.setTimeout(() => Plotly.Plots.resize(lightboxPlotly), 0);
-    }
-    const applyThemeChoice = (choice, { persist = false, rerender = true } = {}) => {
-      const normalizedChoice = sanitizeThemeChoice(choice);
-      document.documentElement.dataset.themeChoice = normalizedChoice;
-      document.documentElement.dataset.theme = resolveTheme(normalizedChoice);
-      if (persist) persistThemeChoice(normalizedChoice);
-      updateThemeControls();
-      if (rerender) {
-        refreshPlotlyCharts();
-        refreshOpenLightboxPlotly();
+      if (chart && await renderPlotlyChart(lightboxPlotly, chart, { responsive: true }, true)
+          && lightbox.open && lightboxPlotly.dataset.chartId === chart.id) {
+        Plotly.Plots.resize(lightboxPlotly);
       }
-    };
+    }
     function closeLightbox() {
       if (!lightbox || !lightbox.open) return;
       lightbox.close();
     }
-    function openLightbox(chartId) {
+    async function openLightbox(chartId) {
       const chart = chartById.get(chartId);
       if (!chart || !lightbox || !lightboxPlotly) return;
       if (lightboxTitle) lightboxTitle.textContent = chart.title || chartId;
@@ -5002,40 +5014,35 @@ def _render_plotly_runtime(
       lightboxPlotly.removeAttribute('data-raw-legend-handler');
       delete lightboxPlotly.__metrolizaVisualSelectionHandlers;
       lightboxPlotly.dataset.chartId = chartId;
-      renderPlotlyChart(lightboxPlotly, chart, { responsive: true });
+      lightboxPlotly.hidden = false;
+      lightbox.querySelector('.plotly-chart-fallback').hidden = true;
       lightbox.showModal();
-      window.setTimeout(() => Plotly.Plots.resize(lightboxPlotly), 0);
-    }
-    initializeDashboardVisualControls();
-    applyThemeChoice(readStoredThemeChoice(), { rerender: false });
-    if (themeMedia) {
-      const onSystemThemeChange = () => {
-        if (currentThemeChoice() === 'auto') applyThemeChoice('auto');
-      };
-      if (typeof themeMedia.addEventListener === 'function') {
-        themeMedia.addEventListener('change', onSystemThemeChange);
-      } else if (typeof themeMedia.addListener === 'function') {
-        themeMedia.addListener(onSystemThemeChange);
+      if (await renderPlotlyChart(lightboxPlotly, chart, { responsive: true })
+          && lightbox.open && lightboxPlotly.dataset.chartId === chartId) {
+        Plotly.Plots.resize(lightboxPlotly);
       }
     }
-    for (const chart of chartData) {
-      const target = document.getElementById(chart.id);
-      renderPlotlyChart(target, chart);
-    }
-    document.querySelectorAll('.plotly-expand-trigger[data-chart-id]').forEach((trigger) => {
-      trigger.addEventListener('click', () => openLightbox(trigger.dataset.chartId));
-    });
-    document.querySelectorAll('.theme-option').forEach((button) => {
-      button.addEventListener('click', () => {
-        applyThemeChoice(button.getAttribute('data-theme-choice') || 'auto', { persist: true });
+    initializeDashboardVisualControls();
+    if (typeof window.Plotly?.newPlot === 'function') {
+      for (const chart of chartData) {
+        const target = document.getElementById(chart.id);
+        renderPlotlyChart(target, chart);
+      }
+      document.querySelectorAll('.plotly-expand-trigger[data-chart-id]').forEach((trigger) => {
+        trigger.addEventListener('click', () => openLightbox(trigger.dataset.chartId));
       });
-    });
+    } else {
+      document.documentElement.dataset.plotlyUnavailable = 'true';
+      document.getElementById('plotly-runtime-unavailable').hidden = false;
+      document.querySelectorAll('.plotly-chart').forEach(showPlotlyRenderFailure);
+    }
     if (lightbox) {
       lightbox.addEventListener('click', (event) => {
         if (event.target === lightbox) closeLightbox();
       });
       lightbox.addEventListener('close', () => {
         if (lightboxPlotly) {
+          plotlyRenderTokens.delete(lightboxPlotly);
           Plotly.purge(lightboxPlotly);
           lightboxPlotly.dataset.plotlyReady = '0';
           lightboxPlotly.removeAttribute('data-raw-legend-handler');
@@ -5048,6 +5055,51 @@ def _render_plotly_runtime(
       lightboxClose.addEventListener('click', closeLightbox);
     }
     bindDashboardComponentKeys(lightbox, { close: lightboxClose });
+  </script>
+"""
+    )
+
+
+def _render_dashboard_theme_runtime() -> str:
+    """Bind theme controls for both interactive and snapshot-only exports."""
+
+    return (
+        "  <script>\n"
+        "    (() => {\n"
+        f"      const themeStorageKey = {json.dumps(DASHBOARD_THEME_STORAGE_KEY)};\n"
+        + render_dashboard_theme_runtime_helpers()
+        + """
+      const themeOptions = document.querySelectorAll('.theme-option');
+      const applyThemeChoice = (choice, { persist = false, rerender = true } = {}) => {
+        const normalizedChoice = sanitizeThemeChoice(choice);
+        document.documentElement.dataset.themeChoice = normalizedChoice;
+        document.documentElement.dataset.theme = resolveTheme(normalizedChoice);
+        if (persist) persistThemeChoice(normalizedChoice);
+        themeOptions.forEach((button) => {
+          const active = button.getAttribute('data-theme-choice') === normalizedChoice;
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+          button.dataset.active = active ? '1' : '0';
+        });
+        if (rerender && typeof refreshPlotlyCharts === 'function') {
+          refreshPlotlyCharts();
+          refreshOpenLightboxPlotly();
+        }
+      };
+      applyThemeChoice(readStoredThemeChoice(), { rerender: false });
+      themeOptions.forEach((button) => {
+        button.addEventListener('click', () => {
+          applyThemeChoice(button.getAttribute('data-theme-choice') || 'auto', { persist: true });
+        });
+      });
+      const onSystemThemeChange = () => {
+        if (currentThemeChoice() === 'auto') applyThemeChoice('auto');
+      };
+      if (typeof themeMedia?.addEventListener === 'function') {
+        themeMedia.addEventListener('change', onSystemThemeChange);
+      } else if (typeof themeMedia?.addListener === 'function') {
+        themeMedia.addListener(onSystemThemeChange);
+      }
+    })();
   </script>
 """
     )
@@ -5918,6 +5970,20 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
         else ""
     )
     snapshot_markup = ""
+    fallback_markup = ""
+    if has_plotly:
+        fallback_markup = (
+            '<p class="plotly-chart-fallback runtime-note" role="status" hidden>'
+            'The interactive chart could not be displayed.'
+        )
+        if image.get("base64"):
+            fallback_markup += ' Use the image snapshot below.</p>'
+        else:
+            fallback_markup += (
+                ' No image snapshot is included for this chart.</p>'
+                '<noscript><p class="runtime-note chart-noscript-notice">'
+                'JavaScript is required to display this chart. No image snapshot is included.</p></noscript>'
+            )
     if image.get("base64"):
         alt = str(image.get("alt") or title)
         image_markup = (
@@ -5951,6 +6017,7 @@ def _render_chart_shell(chart: dict[str, Any]) -> str:
         f"{action_markup}"
         "</div>"
         f"{media_markup}"
+        f"{fallback_markup}"
         f"{snapshot_markup}"
         f"{notes_markup}"
         f"{stats_markup}"

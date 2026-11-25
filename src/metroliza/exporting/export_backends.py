@@ -23,11 +23,13 @@ from metroliza.exporting.output_publication import (
 from metroliza.exporting.xlsx_bulk_sheet import (
     BulkPlanBuilder,
     BulkRowsWorksheet,
+    LiteralSourceBulkWorksheet,
     bulk_block_fits,
     enable_bulk_rows,
     plan_bulk_rows,
 )
 from metroliza.exporting.xlsx_writer_policy import (
+    LiteralSourceWorksheet,
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
 )
@@ -72,8 +74,8 @@ class WorksheetContract(Protocol):
     def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
         """Write a scalar value to a worksheet cell."""
 
-    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None) -> None:
-        """Write an Excel formula string to a worksheet cell."""
+    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None, value: Any = 0) -> None:
+        """Write an Excel formula with its optional cached result."""
 
     def write_column(self, row: int, col: int, data: Any) -> None:
         """Write a vertical sequence starting at the given row/column."""
@@ -223,13 +225,21 @@ class XlsxWorksheetAdapter:
         """Expose worksheet names for writers that build chart series ranges."""
         return getattr(self._worksheet, 'name', '')
 
+    @property
+    def source_text_is_literal(self) -> bool:
+        """Report whether incoming strings can be excluded from formula inputs."""
+        sheet = self._worksheet
+        return isinstance(sheet, LiteralSourceWorksheet) and not (
+            sheet.strings_to_formulas or sheet.strings_to_urls or sheet.strings_to_numbers or sheet.write_handlers
+        )
+
     def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
         """Write a scalar value to a worksheet cell."""
         self._worksheet.write(row, col, value, cell_format)
 
-    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None) -> None:
-        """Write an Excel formula to a worksheet cell."""
-        self._worksheet.write_formula(row, col, formula, cell_format)
+    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None, value: Any = 0) -> None:
+        """Write an Excel formula with its optional cached result."""
+        self._worksheet.write_formula(row, col, formula, cell_format, value)
 
     def write_url(
         self,
@@ -390,7 +400,7 @@ class _NullWorksheetAdapter:
     def write(self, row: int, col: int, value: Any, cell_format: Any = None) -> None:
         return None
 
-    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None) -> None:
+    def write_formula(self, row: int, col: int, formula: str, cell_format: Any = None, value: Any = 0) -> None:
         return None
 
     def write_url(
@@ -593,7 +603,7 @@ def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], list[tuple[A
 
 
 def _bulk_sheet_available(writer: XlsxWorkbookWriter) -> bool:
-    return getattr(writer.book, "worksheet_class", None) is BulkRowsWorksheet
+    return getattr(writer.book, "worksheet_class", None) in (BulkRowsWorksheet, LiteralSourceBulkWorksheet)
 
 
 def _write_rows_cell_by_cell(worksheet: Any, rows: list[tuple[Any, ...]]) -> None:
@@ -617,6 +627,7 @@ class ExcelExportBackend:
         book = xlsxwriter.Workbook(excel_file, xlsxwriter_workbook_options())
         temporary_directory = None
         if isinstance(book, xlsxwriter.workbook.Workbook):
+            book.worksheet_class = LiteralSourceWorksheet
             temporary_directory = tempfile.TemporaryDirectory(
                 prefix=".xlsx-package-", dir=Path(excel_file).parent
             )
