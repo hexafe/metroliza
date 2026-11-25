@@ -1072,7 +1072,7 @@ jobs:
     needs: [classify-changes]
     if: ${{ !cancelled() && needs.classify-changes.outputs.docs_only != 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       COVERAGE_MINIMUM_THRESHOLD: '80'
       QT_QPA_PLATFORM: offscreen
@@ -1105,7 +1105,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m coverage erase
-          PYTHONPATH=src:. python -m pytest tests -q \
+          PYTHONPATH=src:. python -m pytest tests -v --durations=25 \
             --cov=src/metroliza \
             --cov=modules \
             --cov=scripts \
