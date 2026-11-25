@@ -242,8 +242,12 @@ the adjusted p-value alone.
 Metroliza chooses the comparison method automatically based on the data. The **Test rationale**
 explains why that method was selected or why the result needs caution.
 
-You do not need to choose the test yourself. Your job is to read the outcome, warnings, and action
-signals correctly.
+Read the test name, the sample size for each group and the corrected p-value together.
+The pairwise method can be Welch's t-test, Student's t-test or Mann–Whitney U. The displayed
+correction applies to the eligible comparisons in that analysis. Holm controls the risk of
+any false positive across those comparisons. If the report says Benjamini–Hochberg, read it
+as exploratory control of the expected fraction of false discoveries among flagged comparisons.
+Use the effect size and difference in the original units to judge practical importance.
 
 ## Reading Spec And Capability Context
 
@@ -277,8 +281,11 @@ Helpful reminders:
 - **Cp** reflects potential capability when the process is centered well.
 - **Cpk** reflects actual capability after centering is considered.
 - For one-sided specs, the dashboard may show a one-sided capability form instead of the usual
-  two-sided pair.
-- Capability needs caution when sample size is small or the distribution is strongly non-normal.
+  two-sided pair. `Cpu` uses the upper limit and `Cpl` uses the lower limit.
+- A `Cpk (ref)` label flags a reference estimate. Check the fitted model, the number of usable
+  observations and the quality warning before using it to make a process decision.
+- Read observed NOK separately from estimated NOK. The first counts measured failures in the
+  selected data. The second estimates tail risk with the displayed model and specification limits.
 
 ## Reading Distribution Context
 

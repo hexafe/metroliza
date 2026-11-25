@@ -431,6 +431,28 @@ def test_load_tabular_analytics_files_combines_multiple_csvs_in_sqlite(tmp_path)
     assert not sqlite_path.exists()
 
 
+def test_multi_csv_preserves_override_identity_and_invalid_numbers(tmp_path):
+    first = tmp_path / "line_a.csv"
+    first.write_text("Batch code,Reading\n0001,1.25\n0002,bad\n", encoding="utf-8")
+    second = tmp_path / "line_b.csv"
+    second.write_text("Reading,Batch code\n3.5,0003\ninvalid,0004\n", encoding="utf-8")
+    types = {("Batch code", 1): "text", ("Reading", 1): "number"}
+
+    result = load_tabular_analytics_files((first, second), column_types=types)
+    try:
+        assert result.column_types == types
+        assert result.dataframe["batch_code"].tolist() == ["0001", "0002", "0003", "0004"]
+        assert result.dataframe["reading"].dropna().tolist() == [1.25, 3.5]
+        assert result.invalid_numeric_counts["reading"] == 2
+        filtered = materialize_tabular_dataframe(
+            result, column_filters=(TabularColumnFilter("batch_code", selected_values=("0003",)),),
+            required_columns=("batch_code", "reading"),
+        )
+        assert filtered.dataframe.to_dict("records") == [{"batch_code": "0003", "reading": 3.5}]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
 def test_multi_csv_sqlite_uses_global_header_mapping_for_sanitized_collisions(tmp_path) -> None:
     first_file = tmp_path / "line_a.csv"
     second_file = tmp_path / "line_b.csv"

@@ -16,6 +16,7 @@ from metroliza.recipes.run_state import RunState
 from metroliza.recipes.ports import PreparationPhase, ResultCode
 from metroliza.recipes.validation import DATE_KEYS, RecipeDateError, normalize_recipe_dates
 from metroliza.reports.report_metadata_review import REVIEW_FIELDS, FIELD_LABELS
+from metroliza.ui.report_planner_metadata import cell_tooltip
 from metroliza.ui.recipe_labels import (
     CHOICE_LABELS, DATE_HINT, PARAMETER_LABELS, STEP_LABELS, RecipeSourceFilesEdit, choice_editor,
     date_error_message, date_hint, format_parameter_list, parse_parameter_list,
@@ -477,9 +478,11 @@ class RecipeRunnerPage(QWidget):
                 if not row.editable:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 note = self._review_field_note(row, field)
+                evidence = cell_tooltip(row, row.display_name, field)
+                detail = f"{note}\n{evidence}" if note else evidence
+                item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, detail)
+                item.setToolTip(detail)
                 if note:
-                    item.setData(Qt.ItemDataRole.AccessibleDescriptionRole, note)
-                    item.setToolTip(note)
                     item.setBackground(self.palette().alternateBase())
                     font = self.review_table.font()
                     font.setBold(True)

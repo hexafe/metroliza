@@ -521,12 +521,9 @@ class ExportDialog(QDialog):
             preset_options = self._preset_options(selected_preset)
             self.export_type_combobox.setCurrentText(preset_options['export_type'].title())
             self.sort_measurements_combobox.setCurrentText('Date' if preset_options['sorting_parameter'] == 'date' else 'Sample #')
-            apply_all_chart_values = (not getattr(self, "_chart_profile_loaded", False)
-                                      or self._custom_profile(selected_preset) is not None)
-            if apply_all_chart_values or not self.validate_violin_plot_min_samplesize_input():
-                self.violin_plot_min_samplesize.setText(str(preset_options['violin_plot_min_samplesize']))
-            if apply_all_chart_values or not self.validate_plot_scale_input():
-                self.summary_plot_scale.setText(str(preset_options['summary_plot_scale']))
+            violin, scale = self._projected_chart_limits(selected_preset, preset_options)
+            self.violin_plot_min_samplesize.setText(violin)
+            self.summary_plot_scale.setText(scale)
             self._chart_profile_loaded = True
             self.hide_ok_results_checkbox.setChecked(bool(preset_options['hide_ok_results']))
             self._apply_saved_output_choices(selected_preset)
@@ -736,6 +733,8 @@ class ExportDialog(QDialog):
                 label.hide()
             self.violin_plot_min_samplesize.textChanged.connect(self.validate_violin_plot_min_samplesize_input)
             self.summary_plot_scale.textChanged.connect(self.validate_plot_scale_input)
+            self.violin_plot_min_samplesize.textChanged.connect(self._preview_selected_preset)
+            self.summary_plot_scale.textChanged.connect(self._preview_selected_preset)
             self.chart_defaults_button = QPushButton("Use chart defaults")
             self.chart_defaults_button.clicked.connect(self._use_chart_defaults)
 
@@ -1153,6 +1152,17 @@ class ExportDialog(QDialog):
             self.include_google_sheets_checkbox.setChecked(profile.google_sheets)
             self.include_industrial_context_checkbox.setChecked(profile.industrial_context)
 
+    def _projected_chart_limits(self, preset_id, options):
+        use_profile = not getattr(self, "_chart_profile_loaded", False) or self._custom_profile(preset_id) is not None
+        violin = self.violin_plot_min_samplesize.text()
+        scale = self.summary_plot_scale.text()
+        return (
+            str(options["violin_plot_min_samplesize"])
+            if use_profile or self._chart_integer_is_valid(violin, 2) else violin,
+            str(options["summary_plot_scale"])
+            if use_profile or self._chart_integer_is_valid(scale, 0) else scale,
+        )
+
     def _preview_selected_preset(self, _label=None):
         preview = getattr(self, "preset_preview_label", None)
         if preview is None:
@@ -1164,11 +1174,14 @@ class ExportDialog(QDialog):
             description = get_export_preset_description(self._base_preset_id(requested))
             sort = "Date" if options["sorting_parameter"] == "date" else "Sample number"
             hide_ok = "On" if options["hide_ok_results"] else "Off"
+            violin, scale = self._projected_chart_limits(requested, options)
+            limits = (f"Violin min n: {violin}. Y-limit x: {scale}."
+                      if self._chart_integer_is_valid(violin, 2) and self._chart_integer_is_valid(scale, 0)
+                      else "Current chart limits need correction before exporting.")
             preview.setText(
                 f"Active preset: {self._preset_name(self._active_preset_id())}. {description}\n"
                 f"Chart type: {options['export_type'].title()}. Sort by: {sort}. "
-                f"Hide OK-only columns: {hide_ok}. Violin min n: {options['violin_plot_min_samplesize']}. "
-                f"Y-limit x: {options['summary_plot_scale']}."
+                f"Hide OK-only columns: {hide_ok}. {limits}"
                 + self._saved_output_description(requested)
             )
             preview.setAccessibleDescription(preview.text())
@@ -1550,12 +1563,16 @@ class ExportDialog(QDialog):
         )
 
     @staticmethod
-    def _validate_chart_integer(field, error_label, minimum):
-        text = field.text().strip()
+    def _chart_integer_is_valid(text, minimum):
+        text = text.strip()
         try:
-            valid = re.fullmatch(r"[+-]?[0-9]+", text) is not None and int(text) >= minimum
+            return re.fullmatch(r"[+-]?[0-9]+", text) is not None and int(text) >= minimum
         except ValueError:
-            valid = False
+            return False
+
+    @staticmethod
+    def _validate_chart_integer(field, error_label, minimum):
+        valid = ExportDialog._chart_integer_is_valid(field.text(), minimum)
         message = "" if valid else f"Enter a whole number of {minimum} or more."
         error_label.setText(message)
         error_label.setVisible(not valid)

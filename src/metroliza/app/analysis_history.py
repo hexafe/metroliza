@@ -1,7 +1,7 @@
 """Private successful-run receipts and portable bundles of generated outputs."""
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 import hashlib
 from heapq import heappush, heappushpop
 from html.parser import HTMLParser
@@ -30,13 +30,21 @@ _RECENT_LIMIT = 100
 _MAX_LIST_ENTRIES = 20_000
 _MAX_LIST_BYTES = 16 * 1024**2
 _MAX_LIST_SECONDS = 3
-# Listing limits never prune saved receipts. Storage retention is tracked by #949.
+_RECEIPT_TIME_FORMAT = "%Y%m%dT%H%M%S%fZ"
+_RECEIPT_NAME = re.compile(r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{32}\.json")
+
+
+@dataclass(frozen=True)
+class AnalysisReceiptReference:
+    name: str
+    sha256: str
 
 
 @dataclass(frozen=True)
 class AnalysisListing:
     receipts: tuple[dict, ...]
     partial: bool = False
+    references: tuple[AnalysisReceiptReference | None, ...] = ()
 
 
 def _history_directory():
@@ -92,7 +100,7 @@ def record_analysis(receipt, *, directory=None):
     current_stamp = None if "report_folder_revision" in receipt else capture_source_stamp(source)
     submitted_stamp = receipt.get("source_stamp", current_stamp)
     timestamp = datetime.now(timezone.utc)
-    name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid4().hex}.json"
+    name = f"{timestamp.strftime(_RECEIPT_TIME_FORMAT)}-{uuid4().hex}.json"
     entry = {
         "version": 1,
         "at": timestamp.isoformat(),
@@ -126,24 +134,33 @@ def record_analysis(receipt, *, directory=None):
     return entry
 
 
-def _recent_receipt_names(root, interrupted):
+def _recent_receipt_names(root, interrupted, day_bounds):
     names = []
+    partial = False
     try:
         with os.scandir(root) as children:
             for index, item in enumerate(children):
                 if index >= _MAX_LIST_ENTRIES or interrupted():
                     return names, True
-                if not item.name.endswith(".json") or not item.is_file(follow_symlinks=False):
+                name = item.name
+                if not name.endswith(".json"):
+                    continue
+                if day_bounds is not None and not (
+                    day_bounds[0] <= name < day_bounds[1] and _RECEIPT_NAME.fullmatch(name)
+                ):
+                    continue
+                if not item.is_file(follow_symlinks=False):
                     continue
                 if len(names) < _RECENT_LIMIT:
-                    heappush(names, item.name)
+                    heappush(names, name)
                 else:
-                    heappushpop(names, item.name)
+                    heappushpop(names, name)
+                    partial = day_bounds is not None
     except FileNotFoundError:
         return names, bool(names)
     except OSError:
         return names, True
-    return names, False
+    return names, partial
 
 
 def _read_receipt(path, budget):
@@ -157,36 +174,86 @@ def _read_receipt(path, budget):
         return stream.read(min(budget, _MAX_RECEIPT_BYTES) + 1)
 
 
-def load_recent_analyses(*, directory=None, cancelled=lambda: False):
-    """List recent receipts within bounded read budgets, retaining all history on disk."""
+def load_recent_analyses(*, directory=None, day=None, cancelled=lambda: False):
+    """List recent receipts overall or on a local calendar day within the same read budgets."""
     root = Path(directory) if directory is not None else _history_directory()
     deadline = monotonic() + _MAX_LIST_SECONDS
+    day_bounds = None
+    if day is not None:
+        try:
+            midnight = datetime.combine(day, time.min)
+            day_bounds = tuple(
+                instant.astimezone(timezone.utc).strftime(_RECEIPT_TIME_FORMAT)
+                for instant in (midnight, midnight + timedelta(days=1))
+            )
+        except (OSError, OverflowError, ValueError):
+            return AnalysisListing(())
 
     def interrupted():
         return cancelled() or monotonic() >= deadline
 
-    names, partial = _recent_receipt_names(root, interrupted)
+    names, partial = _recent_receipt_names(root, interrupted, day_bounds)
     budget = _MAX_LIST_BYTES
     receipts = []
+    references = []
     for name in sorted(names, reverse=True):
         if interrupted() or budget <= 0:
-            return AnalysisListing(tuple(receipts), partial=True)
+            partial = True
+            break
         try:
             content = _read_receipt(root / name, budget)
             budget -= len(content)
             if budget < 0:
-                return AnalysisListing(tuple(receipts), partial=True)
+                partial = True
+                break
             if 0 < len(content) <= _MAX_RECEIPT_BYTES:
                 receipt = json.loads(content)
-                if _readable_receipt(receipt):
+                if _readable_receipt(receipt) and (
+                    day is None or datetime.fromisoformat(receipt["at"]).astimezone().date() == day
+                ):
                     receipts.append(receipt)
+                    references.append(
+                        AnalysisReceiptReference(name, hashlib.sha256(content).hexdigest())
+                        if _RECEIPT_NAME.fullmatch(name) else None
+                    )
         except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError):
             continue
-    return AnalysisListing(tuple(receipts), partial or interrupted())
+    return AnalysisListing(tuple(receipts), partial or interrupted(), tuple(references))
 
 
 def recent_analyses(*, directory=None):
     yield from load_recent_analyses(directory=directory).receipts
+
+
+def remove_analysis(reference: AnalysisReceiptReference, *, directory=None):
+    """Remove the selected managed receipt if its recorded bytes still match."""
+    if not _RECEIPT_NAME.fullmatch(reference.name):
+        raise ValueError("This history entry cannot be removed.")
+    root = Path(directory) if directory is not None else _history_directory()
+    path = root / reference.name
+    try:
+        root_info = root.lstat()
+        if (not stat.S_ISDIR(root_info.st_mode)
+                or getattr(root_info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError("This history directory cannot be managed.")
+        original = path.lstat()
+        if (not stat.S_ISREG(original.st_mode)
+                or getattr(original, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise ValueError("The history entry changed. Refresh the list and select it again.")
+        content = _read_receipt(path, _MAX_RECEIPT_BYTES)
+        current = path.lstat()
+        if (not 0 < len(content) <= _MAX_RECEIPT_BYTES
+                or hashlib.sha256(content).hexdigest() != reference.sha256
+                or not os.path.samestat(root_info, root.lstat())
+                or not os.path.samestat(original, current)
+                or original.st_mtime_ns != current.st_mtime_ns or original.st_size != current.st_size):
+            raise ValueError("The history entry changed. Refresh the list and select it again.")
+        path.unlink()
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        raise OSError("Could not remove the selected history entry.") from error
+    return True
 
 
 def _readable_receipt(receipt):

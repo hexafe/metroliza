@@ -4,18 +4,22 @@ from datetime import datetime
 from functools import partial
 from pathlib import Path
 
-from PyQt6.QtCore import QSignalBlocker, QThread, Qt
+from PyQt6.QtCore import QDate, QSignalBlocker, QThread, Qt
 from PyQt6.QtWidgets import (
-    QDialog, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
-    QPushButton, QVBoxLayout,
+    QCheckBox, QDateEdit, QDialog, QFileDialog, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout,
 )
 
 from metroliza.app.analysis_history import (
-    analysis_is_stale, bundle_analysis, has_report_folder_revision, load_recent_analyses, result_still_matches,
+    analysis_is_stale, bundle_analysis, has_report_folder_revision, load_recent_analyses,
+    remove_analysis, result_still_matches,
 )
 from metroliza.exporting.output_publication import OutputConsent
 from metroliza.ui.local_file_task import LocalFileTask
 from metroliza.ui.result_actions import LastResultRow
+
+
+_RECEIPT_REFERENCE_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 def collect_output_consent(parent, path):
@@ -32,8 +36,9 @@ def collect_output_consent(parent, path):
     return (existing,) if answer == QMessageBox.StandardButton.Yes else None
 
 
-def _load_history(_generation):
-    return load_recent_analyses(cancelled=QThread.currentThread().isInterruptionRequested)
+def _load_history(_generation, day):
+    cancelled = QThread.currentThread().isInterruptionRequested
+    return load_recent_analyses(day=day, cancelled=cancelled)
 
 
 def _check_report_source(receipt, _generation):
@@ -52,6 +57,11 @@ class AnalysisHistoryDialog(QDialog):
         self.setWindowTitle("Analysis history")
         self.resize(690, 520)
 
+        self.date_filter = QCheckBox("Filter by date")
+        self.history_date = QDateEdit(QDate.currentDate(), calendarPopup=True)
+        self.history_date.setDisplayFormat("yyyy-MM-dd")
+        self.history_date.setAccessibleName("Analysis date")
+        self.history_date.setEnabled(False)
         self.runs = QListWidget()
         self.runs.setAccessibleName("Saved analyses")
         self.details = QPlainTextEdit()
@@ -59,6 +69,8 @@ class AnalysisHistoryDialog(QDialog):
         self.details.setAccessibleName("Analysis settings")
         self.result = LastResultRow(self, "Saved result")
         self.pack = QPushButton("Create ZIP of results…")
+        self.remove_button = QPushButton("Remove from history…")
+        self.remove_button.setAutoDefault(False)
         self.reload_button = QPushButton("Refresh list")
         self.close_button = QPushButton("Close")
         self.listing_notice = QLabel()
@@ -71,18 +83,27 @@ class AnalysisHistoryDialog(QDialog):
         self.status.setAccessibleName("Analysis history status")
 
         layout = QVBoxLayout(self)
+        filters = QHBoxLayout()
+        filters.addWidget(self.date_filter)
+        filters.addWidget(self.history_date)
+        filters.addStretch(1)
+        layout.addLayout(filters)
         layout.addWidget(self.runs)
         layout.addWidget(self.listing_notice)
         layout.addWidget(self.details)
         layout.addWidget(self.result)
         controls = QHBoxLayout()
-        for button in (self.pack, self.reload_button, self.close_button):
+        for button in (self.pack, self.remove_button, self.reload_button, self.close_button):
             controls.addWidget(button)
         layout.addLayout(controls)
         layout.addWidget(self.status)
         self.pack.clicked.connect(self._package)
+        self.remove_button.clicked.connect(self._remove)
         self.reload_button.clicked.connect(self.reload)
         self.close_button.clicked.connect(self.close)
+        self.date_filter.toggled.connect(self.history_date.setEnabled)
+        self.date_filter.toggled.connect(self.reload)
+        self.history_date.dateChanged.connect(self.reload)
         self.runs.currentItemChanged.connect(self._selection_changed)
         self._task = None
         self._listing_task = None
@@ -115,7 +136,8 @@ class AnalysisHistoryDialog(QDialog):
         if self._listing_task is not None or not self._listing_requested:
             return
         self._listing_requested = False
-        self._listing_task = LocalFileTask(_load_history, self._listing_generation)
+        day = self.history_date.date().toPyDate() if self.date_filter.isChecked() else None
+        self._listing_task = LocalFileTask(_load_history, self._listing_generation, day)
         self._listing_task.succeeded.connect(self._show_listing)
         self._listing_task.failed.connect(self._listing_failed)
         self._listing_task.start_owned(self, AnalysisHistoryDialog._listing_finished)
@@ -127,20 +149,26 @@ class AnalysisHistoryDialog(QDialog):
         if not self._listing_is_current(self.sender()):
             return
         with QSignalBlocker(self.runs):
-            for run in listing.receipts:
+            for index, run in enumerate(listing.receipts):
                 at = datetime.fromisoformat(run["at"]).astimezone().strftime("%Y-%m-%d %H:%M")
                 label = {"recipe": "Recipe", "csv": "CSV Summary", "reports": "Reports", "industrial": "Industrial"}.get(
                     run["kind"], run["kind"],
                 )
                 item = QListWidgetItem(f"{at} · {label} · {Path(run['files'][0]).name}")
                 item.setData(Qt.ItemDataRole.UserRole, run)
+                if listing.references:
+                    item.setData(_RECEIPT_REFERENCE_ROLE, listing.references[index])
                 self.runs.addItem(item)
             self.runs.setCurrentRow(0)
         self._selection_changed(self.runs.currentItem())
         if listing.partial:
-            self.listing_notice.setText("Partial history list. Some recent analyses may be missing. Saved receipts are retained.")
+            self.listing_notice.setText("Partial history list. Some saved analyses may be missing.")
         elif not listing.receipts:
-            self.listing_notice.setText("Completed exports will appear here.")
+            notice = (
+                "No saved analyses for this date." if self.date_filter.isChecked()
+                else "Completed exports will appear here."
+            )
+            self.listing_notice.setText(notice)
         else:
             self.listing_notice.hide()
 
@@ -171,6 +199,9 @@ class AnalysisHistoryDialog(QDialog):
     def _selection_changed(self, current, _previous=None):
         self._cancel_source_check()
         self.pack.setEnabled(current is not None and self._task is None)
+        self.remove_button.setEnabled(
+            current is not None and current.data(_RECEIPT_REFERENCE_ROLE) is not None and self._task is None
+        )
         if current is None:
             self.details.clear()
             self.result.clear()
@@ -258,6 +289,7 @@ class AnalysisHistoryDialog(QDialog):
             return
         if consents is not None:
             self.pack.setEnabled(False)
+            self.remove_button.setEnabled(False)
             self.status.setPlainText("Collecting the Excel and HTML output files and dashboard resources…")
             self._task = LocalFileTask(bundle_analysis, run, path, consents)
             self._task.succeeded.connect(self._packaged)
@@ -266,6 +298,32 @@ class AnalysisHistoryDialog(QDialog):
 
     def _packaged(self, path):
         self.status.setPlainText(f"Verified ZIP saved to {path}")
+
+    def _remove(self):
+        current = self.runs.currentItem()
+        if current is None or self._task is not None:
+            return
+        reference = current.data(_RECEIPT_REFERENCE_ROLE)
+        if reference is None:
+            return
+        answer = QMessageBox.question(
+            self, "Remove from history?", "Permanently remove the selected history entry and its saved settings?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes or self._task is not None:
+            return
+        self.pack.setEnabled(False)
+        self.remove_button.setEnabled(False)
+        self.status.setPlainText("Removing the selected history entry…")
+        self._task = LocalFileTask(remove_analysis, reference)
+        self._task.succeeded.connect(self._removed)
+        self._task.failed.connect(self.status.setPlainText)
+        self._task.start_owned(self, AnalysisHistoryDialog._task_finished)
+
+    def _removed(self, removed):
+        self.status.setPlainText("History entry removed." if removed else "History entry is already gone.")
+        self.reload()
 
     def _task_finished(self, task):
         self._task = None
