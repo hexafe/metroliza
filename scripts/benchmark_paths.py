@@ -3019,10 +3019,11 @@ def _enforce_cmm_parser_guardrail(results, args, receipt):
         raise RuntimeError("cmm_parser_backend_compare scenario missing from benchmark payload")
     if int(cmm["input_metrics"].get("native_available", 0)) != 1:
         raise RuntimeError("CMM parser guardrail requires the native parser extension")
-    if args.cmm_native_wheel:
-        from scripts.cmm_wheel_identity import verify_cmm_wheel
+    if not args.cmm_native_wheel:
+        raise RuntimeError("CMM parser guardrail requires --cmm-native-wheel for backend identity")
+    from scripts.cmm_wheel_identity import verify_cmm_wheel
 
-        receipt["wheel_identity"] = verify_cmm_wheel(args.cmm_native_wheel)
+    receipt["wheel_identity"] = verify_cmm_wheel(args.cmm_native_wheel)
     speedup_ratio = float(cmm["stage_timings_s"].get("native_speedup_ratio", 0.0))
     native_usage_rate = float(cmm["input_metrics"].get("native_parse_backend_rate", 0.0))
     if not args.cmm_native_min_speedup_ratio <= speedup_ratio < float("inf"):
@@ -3040,7 +3041,7 @@ def _enforce_cmm_parser_guardrail(results, args, receipt):
 
 
 def _collect_guardrail_receipts(results, args):
-    status = {}
+    status = {"cmm": {"status": "not_enforced"}, "chart": {"status": "not_enforced"}}
     errors = []
     if args.enforce_cmm_parser_guardrail:
         receipt = status["cmm"] = {"status": "failed", "wheel_identity": None}

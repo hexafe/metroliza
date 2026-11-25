@@ -60,9 +60,11 @@ def test_enforced_guardrail_fails_without_native_backend(tmp_path, monkeypatch, 
     ("incompatible", 1.25, "no unique compatible"),
     ("stale", 1.25, "different native parser extension"),
     ("missing", 1.25, "requires the native parser extension"),
+    ("unspecified", 1.25, "requires --cmm-native-wheel"),
     ("matching", 0.75, "below threshold"),
 ])
-def test_cmm_guardrail_binds_receipt_to_active_wheel(tmp_path, monkeypatch, wheel_case, speed, reason):
+@pytest.mark.parametrize("nested", [False, True])
+def test_cmm_guardrail_binds_receipt_to_active_wheel(tmp_path, monkeypatch, wheel_case, speed, reason, nested):
     from hashlib import sha256
     from importlib.machinery import EXTENSION_SUFFIXES, ExtensionFileLoader, ModuleSpec
     from types import ModuleType
@@ -71,7 +73,7 @@ def test_cmm_guardrail_binds_receipt_to_active_wheel(tmp_path, monkeypatch, whee
     from metroliza.native_bridges import cmm_native_parser
 
     top_level = "_metroliza_cmm_native"
-    native_name = f"{top_level}.{top_level}"
+    native_name = f"{top_level}.{top_level}" if nested else top_level
     extension = tmp_path / f"{top_level}{EXTENSION_SUFFIXES[0]}"
     data = b"inert synthetic binary; never imported"
     extension.write_bytes(data)
@@ -83,9 +85,12 @@ def test_cmm_guardrail_binds_receipt_to_active_wheel(tmp_path, monkeypatch, whee
     monkeypatch.setitem(sys.modules, native_name, native)
     monkeypatch.setattr(cmm_native_parser, "_native_parse_blocks", None if wheel_case == "missing" else native.parse_blocks)
     wheel = tmp_path / "synthetic.whl"
-    wheel_extension = extension.name if wheel_case != "incompatible" else f"{top_level}.py"
+    wheel_extension = extension.name
+    if wheel_case == "incompatible":
+        wheel_extension = f"{top_level}.cpython-310-incompatible{extension.suffix}"
+    member = f"{top_level}/{wheel_extension}" if nested else wheel_extension
     with ZipFile(wheel, "w") as archive:
-        archive.writestr(f"{top_level}/{wheel_extension}", b"wrong" if wheel_case == "stale" else data)
+        archive.writestr(member, b"wrong" if wheel_case == "stale" else data)
     scenario = "cmm_parser_backend_compare"
     monkeypatch.setattr(
         benchmark_paths, "benchmark_cmm_parser_backend_compare",
@@ -94,10 +99,11 @@ def test_cmm_guardrail_binds_receipt_to_active_wheel(tmp_path, monkeypatch, whee
             {"native_available": 1, "native_parse_backend_rate": 1.0},
         ),
     )
-    monkeypatch.setattr(sys, "argv", [
-        "benchmark_paths.py", "--output-dir", str(tmp_path), "--scenarios", scenario,
-        "--enforce-cmm-parser-guardrail", "--cmm-native-wheel", str(wheel),
-    ])
+    args = ["benchmark_paths.py", "--output-dir", str(tmp_path), "--scenarios", scenario,
+            "--enforce-cmm-parser-guardrail"]
+    if wheel_case != "unspecified":
+        args.extend(("--cmm-native-wheel", str(wheel)))
+    monkeypatch.setattr(sys, "argv", args)
     if reason:
         with pytest.raises(RuntimeError, match=reason):
             benchmark_paths.main()
