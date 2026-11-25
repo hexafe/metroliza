@@ -854,6 +854,60 @@ def test_mapping_instance_and_class_resolver_hooks_stay_on_gui(tmp_path, qapplic
         owner.close()
 
 
+def test_confirmed_delete_shows_rule_scope_impact_and_recovery_guidance(tmp_path, qapplication_session):
+    import importlib
+    native, owner = _impact_native_dialog(tmp_path)
+    service = importlib.import_module('metroliza.reports.characteristic_alias_service')
+    service.upsert_characteristic_alias(
+        owner.db_file, 'DIA - X', 'Diameter', 'reference', 'REF-1',
+    )
+    owner.load_aliases()
+    owner.alias_table.selectRow(0)
+
+    with patch.object(native.QMessageBox, 'question', return_value=native.QMessageBox.StandardButton.Yes) as confirm:
+        owner.delete_mapping()
+
+    confirmation_text = confirm.call_args.args[2]
+    assert 'DIA - X → Diameter' in confirmation_text
+    assert 'reference (REF-1)' in confirmation_text
+    assert 'Affects 0 measurement rows in 0 reports.' in confirmation_text
+    assert 'Export name matches to CSV' in confirmation_text
+    assert owner.alias_table.rowCount() == 0
+    assert service.fetch_all_characteristic_aliases(owner.db_file) == []
+    owner.close()
+
+
+def test_selected_mapping_cannot_be_deleted_from_replaced_database_context(tmp_path, qapplication_session):
+    import importlib
+    native, owner = _impact_native_dialog(tmp_path)
+    service = importlib.import_module('metroliza.reports.characteristic_alias_service')
+    mapping = {'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+               'scope_type': 'global', 'scope_value': None}
+    service.upsert_characteristic_alias(owner.db_file, **mapping)
+    owner.load_aliases()
+    owner.alias_table.selectRow(0)
+
+    replacement = str(tmp_path / 'replacement.sqlite')
+    service.ensure_characteristic_alias_schema(replacement)
+    service.upsert_characteristic_alias(replacement, **mapping)
+    from pathlib import Path
+    database_path = Path(owner.db_file)
+    database_path.rename(str(database_path) + '.previous')
+    Path(replacement).rename(database_path)
+    with patch.object(native.QMessageBox, 'warning') as warning:
+        owner.delete_mapping()
+
+    warning.assert_called_once()
+    assert 'changed after this list was loaded' in warning.call_args.args[2]
+    assert service.fetch_all_characteristic_aliases(str(database_path)) == [mapping]
+    database_path.write_bytes(b'not a SQLite database')
+    with patch.object(native.QMessageBox, 'critical'):
+        owner.load_aliases()
+    assert owner.alias_table.rowCount() == 0
+    assert owner._selected_mapping() is None
+    owner.close()
+
+
 def test_editor_legacy_standin_keeps_original_dispatch(qapplication_session):
     import importlib
     from types import SimpleNamespace

@@ -17,7 +17,12 @@ import math
 import re
 from metroliza.reports.import_persist_profile import measure_persist_stage, persist_stage
 from metroliza.reports.report_identity import build_report_identity_hash
-from metroliza.reports.report_metadata_models import CanonicalReportMetadata
+from metroliza.reports.report_metadata_models import (
+    CanonicalReportMetadata,
+    MetadataCandidate,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
+    USER_SOURCE_TYPE,
+)
 from metroliza.reports.report_schema import (
     is_report_schema_ready,
     is_report_schema_ready_cached,
@@ -264,6 +269,41 @@ def _get_value(value: Any, key: str, default: Any = None) -> Any:
 
 def _coerce_bool_int(value: Any) -> int:
     return 1 if bool(value) else 0
+
+
+def _metadata_candidate_evidence(candidate: Any) -> tuple[Any, ...]:
+    return (
+        _get_value(candidate, "field_name"),
+        _get_value(candidate, "raw_value"),
+        _get_value(candidate, "normalized_value"),
+        _get_value(candidate, "source_type"),
+        _get_value(candidate, "source_detail"),
+        _get_value(candidate, "page_number"),
+        _get_value(candidate, "region_name"),
+        _get_value(candidate, "label_text"),
+        _get_value(candidate, "rule_id"),
+        float(_get_value(candidate, "confidence", 0.0)),
+        _get_value(candidate, "evidence_text"),
+    )
+
+
+def _metadata_candidate_selected(candidate: Any) -> int:
+    return _coerce_bool_int(_get_value(candidate, "selected", _get_value(candidate, "is_selected", False)))
+
+
+def _manual_enrichment_candidates(metadata: Any) -> dict[str, MetadataCandidate | None]:
+    metadata_json = _json_object(_get_value(metadata, "metadata_json"))
+    overrides = _json_object(metadata_json.get("manual_overrides"))
+    result = {}
+    for name in sorted(REPORT_METADATA_EDITABLE_FIELDS.intersection(overrides)):
+        source = _get_value(overrides[name], "source")
+        if source not in ("manual", USER_SOURCE_TYPE, "metadata_review"):
+            continue
+        value = _get_value(metadata, name)
+        result[name] = (
+            None if value in (None, "") else MetadataCandidate.from_manual_edit(name, str(value), source_detail=source)
+        )
+    return result
 
 
 def _coerce_float(value: Any) -> float | None:
@@ -872,30 +912,20 @@ class ReportRepository:
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
 
-    def _replace_metadata_candidates(self, cursor, report_id: int, candidates: Iterable[Any]) -> None:
-        rows = []
-        created_at = utc_timestamp()
-        for candidate in candidates:
-            rows.append(
-                (
-                    int(report_id),
-                    _get_value(candidate, "field_name"),
-                    _get_value(candidate, "raw_value"),
-                    _get_value(candidate, "normalized_value"),
-                    _get_value(candidate, "source_type"),
-                    _get_value(candidate, "source_detail"),
-                    _get_value(candidate, "page_number"),
-                    _get_value(candidate, "region_name"),
-                    _get_value(candidate, "label_text"),
-                    _get_value(candidate, "rule_id"),
-                    float(_get_value(candidate, "confidence", 0.0)),
-                    _coerce_bool_int(_get_value(candidate, "selected", _get_value(candidate, "is_selected", False))),
-                    _get_value(candidate, "evidence_text"),
-                    created_at,
-                )
-            )
+    def _persist_metadata_candidates(
+        self, cursor, report_id: int, candidates: Iterable[Any], *, created_at: str, replace: bool = False,
+    ) -> None:
+        rows = [
+            (int(report_id), *_metadata_candidate_evidence(candidate), _metadata_candidate_selected(candidate), created_at)
+            for candidate in candidates
+        ]
 
-        cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (int(report_id),))
+        if replace:
+            cursor.execute("DELETE FROM report_metadata_candidates WHERE report_id = ?", (int(report_id),))
+        self._insert_metadata_candidate_rows(cursor, rows)
+
+    @staticmethod
+    def _insert_metadata_candidate_rows(cursor, rows) -> None:
         cursor.executemany(
             """
             INSERT INTO report_metadata_candidates (
@@ -910,14 +940,50 @@ class ReportRepository:
                 label_text,
                 rule_id,
                 confidence,
-                is_selected,
                 evidence_text,
+                is_selected,
                 created_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
+
+    def _replace_metadata_candidates(self, cursor, report_id: int, candidates: Iterable[Any]) -> None:
+        self._persist_metadata_candidates(
+            cursor, report_id, candidates, created_at=utc_timestamp(), replace=True,
+        )
+
+    @staticmethod
+    def _changed_manual_metadata_fields(cursor, report, fields):
+        updates, candidate_values = {}, {}
+        for name, value in fields.items():
+            selected_value = value
+            if name != "stats_count_int" and type(value) in (bool, int, float):
+                # Match SQLite's TEXT affinity without changing the caller's JSON value.
+                selected_value = cursor.execute("SELECT CAST(? AS TEXT)", (value,)).fetchone()[0]
+            if report[name] != selected_value:
+                updates[name] = value
+                candidate_values[name] = selected_value
+        return updates, candidate_values
+
+    def _update_manual_metadata_candidates(
+        self, cursor, report_id: int, fields: dict[str, Any], *, source: str, now: str,
+    ) -> None:
+        cursor.executemany(
+            """
+            UPDATE report_metadata_candidates
+            SET is_selected = 0
+            WHERE report_id = ? AND field_name = ? AND is_selected = 1
+            """,
+            ((int(report_id), name) for name in fields),
+        )
+        candidates = (
+            MetadataCandidate.from_manual_edit(name, str(value), source_detail=source)
+            for name, value in fields.items()
+            if value not in (None, "")
+        )
+        self._persist_metadata_candidates(cursor, report_id, candidates, created_at=now)
 
     def replace_metadata_candidates(self, report_id: int, candidates: Iterable[Any]) -> None:
         """Replace persisted metadata candidates for a parsed report."""
@@ -984,12 +1050,15 @@ class ReportRepository:
         identity_hash: str | None | object = _UNSET,
         raw_report_json: Any = _UNSET,
         approval: ReportEnrichmentApproval | None = None,
+        expected_metadata_json: str | None | object = _UNSET,
     ) -> None:
         """Replace enrichment; optional approval guards every transaction attempt.
 
         Guarded calls own the transaction on an owned or idle borrowed connection.
         An already-active borrowed transaction is rejected without committing or
         rolling back its caller's work. Unguarded callers retain legacy behavior.
+        The complete OCR workflow binds its metadata snapshot before replacing
+        candidates and retains existing evidence for manually overridden fields.
         """
 
         if approval is not None:
@@ -1001,6 +1070,8 @@ class ReportRepository:
 
         def _replace(cursor) -> None:
             self._validate_enrichment_target(cursor, report_id, approval)
+            if expected_metadata_json is not _UNSET:
+                self._verify_enrichment_metadata_snapshot(cursor, report_id, expected_metadata_json)
 
             self._replace_report_metadata(
                 cursor,
@@ -1010,7 +1081,10 @@ class ReportRepository:
                 metadata_profile_id=metadata_profile_id,
                 metadata_profile_version=metadata_profile_version,
             )
-            self._replace_metadata_candidates(cursor, report_id, candidate_values)
+            self._replace_enrichment_candidates(
+                cursor, report_id, metadata, candidate_values, now,
+                preserve_manual_history=expected_metadata_json is not _UNSET,
+            )
             self._replace_metadata_warnings(cursor, report_id, warning_values)
 
             cursor.execute(
@@ -1043,6 +1117,95 @@ class ReportRepository:
                 approval.verify_live()
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
+
+    @staticmethod
+    def _verify_enrichment_metadata_snapshot(cursor, report_id: int, expected) -> None:
+        if not cursor.connection.in_transaction:
+            cursor.execute("BEGIN IMMEDIATE")
+        row = cursor.execute(
+            "SELECT metadata_json FROM report_metadata WHERE report_id = ?", (int(report_id),),
+        ).fetchone()
+        if (row[0] if row else None) != expected:
+            raise ValueError("Report metadata changed before enrichment could be applied")
+
+    def _replace_enrichment_candidates(
+        self, cursor, report_id: int, metadata, candidates, now: str, *, preserve_manual_history: bool,
+    ) -> None:
+        manual = _manual_enrichment_candidates(metadata) if preserve_manual_history else {}
+        if not manual:
+            self._replace_metadata_candidates(cursor, report_id, candidates)
+            return
+
+        retained_fields = {}
+        metadata_json = _json_object(_get_value(metadata, "metadata_json"))
+        if "stats_count_int" in manual and "stats_count_raw" not in manual:
+            # Retain raw evidence even when fresh OCR agrees with the canonical value.
+            # Selection still requires a candidate for the merged value and its recorded source.
+            sources = _json_object(metadata_json.get("field_sources"))
+            raw_value = _get_value(metadata, "stats_count_raw")
+            raw_source = sources.get("stats_count_raw")
+            retained_fields["stats_count_raw"] = (raw_value, raw_source) if raw_value and raw_source else None
+        selections = {
+            name: (candidate.normalized_value, USER_SOURCE_TYPE) if candidate is not None else None
+            for name, candidate in manual.items()
+        }
+        selections.update(retained_fields)
+        selected_fields, known_evidence = self._retain_enrichment_candidate_history(
+            cursor, report_id, selections,
+        )
+        rows = []
+        for candidate in candidates:
+            evidence = _metadata_candidate_evidence(candidate)
+            name = evidence[0]
+            if name in selections:
+                if evidence in known_evidence:
+                    continue
+                known_evidence.add(evidence)
+                selected = name not in selected_fields and evidence[2:4] == retained_fields.get(name)
+                if selected:
+                    selected_fields.add(name)
+                rows.append((int(report_id), *evidence, int(selected), now))
+            else:
+                rows.append((int(report_id), *evidence, _metadata_candidate_selected(candidate), now))
+        for name, candidate in manual.items():
+            if candidate is not None and name not in selected_fields:
+                rows.append((int(report_id), *_metadata_candidate_evidence(candidate), 1, now))
+        self._insert_metadata_candidate_rows(cursor, rows)
+
+    @staticmethod
+    def _retain_enrichment_candidate_history(cursor, report_id: int, selections):
+        previous = cursor.execute(
+            """
+            SELECT id, is_selected, field_name, raw_value, normalized_value, source_type,
+                   source_detail, page_number, region_name, label_text, rule_id, confidence, evidence_text
+            FROM report_metadata_candidates
+            WHERE report_id = ?
+            ORDER BY is_selected DESC, id DESC
+            """,
+            (int(report_id),),
+        ).fetchall()
+        replaced_fields, selected_fields, evidence_seen = set(), set(), set()
+        selection_changes = []
+        for candidate_id, was_selected, *evidence in previous:
+            name, _raw, normalized, source, *_details = evidence
+            if name not in selections:
+                replaced_fields.add(name)
+                continue
+            evidence_seen.add(tuple(evidence))
+            selected = name not in selected_fields and (normalized, source) == selections[name]
+            if selected:
+                selected_fields.add(name)
+            if was_selected != selected:
+                selection_changes.append((int(selected), int(report_id), candidate_id))
+        cursor.executemany(
+            "DELETE FROM report_metadata_candidates WHERE report_id = ? AND field_name = ?",
+            ((int(report_id), name) for name in replaced_fields),
+        )
+        cursor.executemany(
+            "UPDATE report_metadata_candidates SET is_selected = ? WHERE report_id = ? AND id = ?",
+            selection_changes,
+        )
+        return selected_fields, evidence_seen
 
     @staticmethod
     def _validate_enrichment_target(cursor, report_id: int, approval: ReportEnrichmentApproval | None) -> None:
@@ -1211,6 +1374,49 @@ class ReportRepository:
             raise ValueError(f"Report {report_id} does not exist")
         return measurement_count, has_nok, nok_count
 
+    def _apply_report_metadata_updates(
+        self, cursor, report_id: int, report: dict[str, Any], updates: dict[str, Any], *,
+        source: str, reason: str | None, now: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        candidate_values = {}
+        if source in {"manual", USER_SOURCE_TYPE}:
+            updates, candidate_values = self._changed_manual_metadata_fields(cursor, report, updates)
+            if not updates:
+                return None
+
+        metadata_json = _json_object(report.get("metadata_json"))
+        field_sources = dict(metadata_json.get("field_sources") or {})
+        manual_overrides = dict(metadata_json.get("manual_overrides") or {})
+        for field_name, value in updates.items():
+            metadata_json[field_name] = value
+            field_sources[field_name] = source
+            override = {"value": value, "source": source, "updated_at": now}
+            if reason:
+                override["reason"] = reason
+            manual_overrides[field_name] = override
+            report[field_name] = value
+        metadata_json["field_sources"] = field_sources
+        metadata_json["manual_overrides"] = manual_overrides
+
+        if "sample_number" in candidate_values:
+            report["sample_number_kind"] = "unknown"
+            metadata_json["sample_number_provenance"] = source
+            cursor.execute("UPDATE report_metadata SET sample_number_kind = 'unknown' WHERE report_id = ?", (int(report_id),))
+            cursor.execute(
+                "DELETE FROM report_metadata_warnings WHERE report_id = ? AND field_name = 'sample_number' AND code = ?",
+                (int(report_id), SAMPLE_NUMBER_PROJECTION_WARNING_CODE),
+            )
+        for field_name, value in updates.items():
+            cursor.execute(REPORT_METADATA_FIELD_UPDATE_SQL[field_name], (value, int(report_id)))
+        cursor.execute(
+            "UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?",
+            (_to_json(metadata_json), int(report_id)),
+        )
+        upsert_report_parse_state(cursor, int(report_id), metadata_json)
+        if candidate_values:
+            self._update_manual_metadata_candidates(cursor, report_id, candidate_values, source=source, now=now)
+        return metadata_json, updates
+
     def update_report_metadata_fields(
         self,
         report_id: int,
@@ -1235,7 +1441,6 @@ class ReportRepository:
 
         now = utc_timestamp()
         source_value = _manual_source(source)
-        identity_changed = bool(REPORT_IDENTITY_FIELDS.intersection(normalized_fields))
 
         def _update(cursor) -> None:
             cursor.execute(
@@ -1276,35 +1481,14 @@ class ReportRepository:
             report = dict(zip(columns, row))
             if report["metadata_report_id"] is None:
                 raise ValueError(f"Report {report_id} has no metadata row to update")
-            metadata_json = _json_object(report.get("metadata_json"))
-            field_sources = dict(metadata_json.get("field_sources") or {})
-            manual_overrides = dict(metadata_json.get("manual_overrides") or {})
-            for field_name, value in normalized_fields.items():
-                metadata_json[field_name] = value
-                field_sources[field_name] = source_value
-                override_record = {
-                    "value": value,
-                    "source": source_value,
-                    "updated_at": now,
-                }
-                if reason:
-                    override_record["reason"] = reason
-                manual_overrides[field_name] = override_record
-                report[field_name] = value
-            metadata_json["field_sources"] = field_sources
-            metadata_json["manual_overrides"] = manual_overrides
-
-            for field_name, value in normalized_fields.items():
-                cursor.execute(
-                    REPORT_METADATA_FIELD_UPDATE_SQL[field_name],
-                    (value, int(report_id)),
-                )
-            cursor.execute(
-                "UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?",
-                (_to_json(metadata_json), int(report_id)),
+            applied = self._apply_report_metadata_updates(
+                cursor, report_id, report, normalized_fields, source=source_value, reason=reason, now=now,
             )
-            upsert_report_parse_state(cursor, int(report_id), metadata_json)
+            if applied is None:
+                return
+            metadata_json, updates = applied
 
+            identity_changed = bool(REPORT_IDENTITY_FIELDS.intersection(updates))
             new_identity_hash = report["identity_hash"]
             if identity_changed:
                 metadata = CanonicalReportMetadata(

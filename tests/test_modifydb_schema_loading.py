@@ -215,7 +215,10 @@ def test_modifydb_loads_current_database_after_schema_bootstrap(tmp_path):
             print(json.dumps({{
                 "storage_flavor": dialog._storage_flavor,
                 "reference_rows": dialog.reference_table.rowCount(),
-                "report_columns": dialog.report_records_table.columnCount(),
+                "report_columns": sum(
+                    not dialog.report_records_table.isColumnHidden(index)
+                    for index in range(dialog.report_records_table.columnCount())
+                ),
             }}, sort_keys=True))
         finally:
             dialog.close()
@@ -239,6 +242,11 @@ def test_modifydb_loads_current_database_after_schema_bootstrap(tmp_path):
                 "COMMENT",
                 "FILENAME",
                 "TEMPLATE_VARIANT",
+                "Source path",
+                "Parser",
+                "Parse status",
+                "Metadata profile",
+                "Review warnings",
             ]
         ),
     }

@@ -2,6 +2,10 @@ from contextlib import closing
 import json
 import sqlite3
 
+import pytest
+
+from metroliza.reports.report_edit_service import ReportEditService
+from metroliza.reports.report_metadata_models import MetadataCandidate
 from modules.characteristic_mapping_service import fetch_distinct_report_metric_names
 from modules.report_identity import build_report_identity_hash
 from modules.report_metadata_models import CanonicalReportMetadata
@@ -64,6 +68,7 @@ def _persist_basic_report(
     template_variant="variant",
     identity_hash=None,
     outtol=0.0,
+    candidates=(),
 ):
     source_path = tmp_path / file_name
     source_path.write_bytes(f"{file_name}-content".encode("utf-8"))
@@ -95,7 +100,7 @@ def _persist_basic_report(
             "operator_name": "Operator",
             "metadata_json": {"field_sources": {"reference": "header_exact"}},
         },
-        candidates=(),
+        candidates=candidates,
         warnings=(),
         measurements=[
             {
@@ -767,6 +772,220 @@ def test_update_report_metadata_identity_field_recomputes_hash_and_removes_stale
     assert metadata_json["field_sources"]["reference"] == "manual"
     assert metadata_json["manual_overrides"]["reference"]["reason"] == "operator correction"
     assert reference_source == "manual"
+
+
+@pytest.fixture
+def report_with_ocr_candidates(tmp_path):
+    database = str(tmp_path / "reports.db")
+    repository = ReportRepository(database)
+    repository.ensure_schema()
+    report_id = _persist_basic_report(
+        tmp_path,
+        repository,
+        candidates=tuple(
+            MetadataCandidate(
+                field_name=field,
+                raw_value=raw,
+                normalized_value=value,
+                source_type="header_exact",
+                source_detail="ocr",
+                page_number=1,
+                region_name="header",
+                label_text=field,
+                rule_id=f"ocr:{field}",
+                confidence=0.85,
+                evidence_text=f"detected {raw}",
+                selected=True,
+            )
+            for field, raw, value in (
+                ("reference", " REF-1 ", "REF-1"),
+                ("report_date", "01/01/2024", "2024-01-01"),
+                ("stats_count_raw", "004", "004"),
+            )
+        ),
+    )
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "UPDATE report_metadata SET stats_count_raw = '004', stats_count_int = 4, "
+            "metadata_json = ? WHERE report_id = ?",
+            (json.dumps({"field_sources": {"reference": "header_exact", "stats_count_raw": "header_exact"}}),
+             report_id),
+        )
+        connection.execute(
+            "UPDATE report_parse_state SET stats_count_source = 'header_exact' WHERE report_id = ?",
+            (report_id,),
+        )
+    return database, repository, report_id
+
+
+def _candidate_rows(database, report_id):
+    with closing(sqlite3.connect(database)) as connection:
+        connection.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM report_metadata_candidates WHERE report_id = ? ORDER BY id",
+                (report_id,),
+            )
+        ]
+
+
+def test_current_record_edit_keeps_ocr_and_selects_manual_value(report_with_ocr_candidates, monkeypatch):
+    database, repository, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    ReportEditService(database).apply_changes(
+        storage_flavor="current",
+        normalization_changes={},
+        report_updates=((report_id, {"reference": "REF-2", "report_date": "2024-01-01"}),),
+    )
+
+    after = _candidate_rows(database, report_id)
+    assert after[:3] == [dict(before[0], is_selected=0), *before[1:]]
+    manual, = after[3:]
+    assert manual["field_name"] == "reference"
+    assert manual["raw_value"] == manual["normalized_value"] == "REF-2"
+    assert (manual["source_type"], manual["rule_id"], manual["confidence"], manual["is_selected"]) == (
+        "user_manual", "user:reference", 1.0, 1,
+    )
+    assert manual["evidence_text"] is None
+    with closing(sqlite3.connect(database)) as connection:
+        snapshot = connection.execute(
+            "SELECT reference, reference_raw, metadata_json FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+    assert snapshot[:2] == ("REF-2", "REF-1")
+    assert json.loads(snapshot[2])["field_sources"] == {"reference": "manual", "stats_count_raw": "header_exact"}
+
+    monkeypatch.setattr("metroliza.reports.report_repository.utc_timestamp", lambda: "2027-01-01T00:00:00Z")
+    repository.update_report_metadata_fields(report_id, {"reference": "REF-2"}, source="manual")
+    assert _candidate_rows(database, report_id) == after
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute(
+            "SELECT reference, reference_raw, metadata_json FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone() == snapshot
+
+
+@pytest.mark.parametrize("cleared", [None, ""])
+def test_record_edit_clear_deselects_without_losing_ocr_evidence(report_with_ocr_candidates, cleared):
+    database, repository, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    repository.update_report_metadata_fields(report_id, {"reference": cleared})
+
+    assert _candidate_rows(database, report_id) == [dict(before[0], is_selected=0), *before[1:]]
+
+
+def test_manual_candidate_value_matches_sqlite_text_affinity(report_with_ocr_candidates):
+    database, repository, report_id = report_with_ocr_candidates
+
+    repository.update_report_metadata_fields(report_id, {"reference": True}, source="user_manual")
+    corrected = _candidate_rows(database, report_id)
+
+    assert corrected[-1]["normalized_value"] == "1"
+    with closing(sqlite3.connect(database)) as connection:
+        reference, metadata = connection.execute(
+            "SELECT reference, metadata_json FROM report_metadata WHERE report_id = ?", (report_id,),
+        ).fetchone()
+    assert reference == corrected[-1]["normalized_value"]
+    assert json.loads(metadata)["reference"] is True
+    assert json.loads(metadata)["field_sources"]["reference"] == "user_manual"
+    repository.update_report_metadata_fields(report_id, {"reference": True}, source="user_manual")
+    assert _candidate_rows(database, report_id) == corrected
+
+
+@pytest.mark.parametrize("value", ["6", None])
+def test_manual_integer_count_keeps_raw_candidate_and_source(report_with_ocr_candidates, value):
+    database, repository, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    repository.update_report_metadata_fields(report_id, {"stats_count_int": value})
+
+    after = _candidate_rows(database, report_id)
+    assert after[:3] == before
+    if value is None:
+        assert after == before
+    else:
+        manual, = after[3:]
+        assert (manual["field_name"], manual["normalized_value"], manual["source_type"], manual["is_selected"]) == (
+            "stats_count_int", "6", "user_manual", 1,
+        )
+    with closing(sqlite3.connect(database)) as connection:
+        raw, count, metadata = connection.execute(
+            "SELECT stats_count_raw, stats_count_int, metadata_json FROM report_metadata WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        state, = connection.execute(
+            "SELECT stats_count_source FROM report_parse_state WHERE report_id = ?", (report_id,),
+        ).fetchone()
+    expected_count = None if value is None else 6
+    assert (raw, count, state) == ("004", expected_count, "header_exact")
+    metadata = json.loads(metadata)
+    assert metadata["field_sources"]["stats_count_raw"] == "header_exact"
+    assert metadata["field_sources"]["stats_count_int"] == "manual"
+    assert metadata["manual_overrides"]["stats_count_int"]["value"] == expected_count
+    assert "stats_count_raw" not in metadata["manual_overrides"]
+
+    if value == "6":
+        repository.update_report_metadata_fields(report_id, {"stats_count_int": None})
+        assert _candidate_rows(database, report_id) == [*before, dict(manual, is_selected=0)]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"stats_count_raw": "006"},
+        {"stats_count_raw": "006", "stats_count_int": 6},
+    ],
+)
+def test_raw_count_edit_records_both_changed_fields(report_with_ocr_candidates, fields):
+    database, repository, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    repository.update_report_metadata_fields(report_id, fields)
+
+    after = _candidate_rows(database, report_id)
+    assert after[:3] == [*before[:2], dict(before[2], is_selected=0)]
+    assert {(row["field_name"], row["normalized_value"], row["is_selected"]) for row in after[3:]} == {
+        ("stats_count_raw", "006", 1), ("stats_count_int", "6", 1),
+    }
+
+
+def test_non_manual_record_update_retains_candidate_contract(report_with_ocr_candidates):
+    database, repository, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    repository.update_report_metadata_fields(
+        report_id, {"reference": "REF-2"}, source="ocr_review",
+    )
+
+    assert _candidate_rows(database, report_id) == before
+    with closing(sqlite3.connect(database)) as connection:
+        reference, metadata = connection.execute(
+            "SELECT reference, metadata_json FROM report_metadata WHERE report_id = ?", (report_id,),
+        ).fetchone()
+    assert reference == "REF-2"
+    assert json.loads(metadata)["field_sources"]["reference"] == "ocr_review"
+
+
+def test_failed_record_edit_batch_rolls_back_ocr_and_manual_candidates(report_with_ocr_candidates):
+    database, _, report_id = report_with_ocr_candidates
+    before = _candidate_rows(database, report_id)
+
+    with pytest.raises(ValueError, match="Measurement 999 does not exist"):
+        ReportEditService(database).apply_changes(
+            storage_flavor="current",
+            normalization_changes={},
+            report_updates=((report_id, {"reference": "REF-2"}),),
+            measurement_updates=((999, {"meas": 12}),),
+        )
+
+    assert _candidate_rows(database, report_id) == before
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute(
+            "SELECT reference FROM report_metadata WHERE report_id = ?", (report_id,),
+        ).fetchone() == ("REF-1",)
 
 
 def test_update_report_metadata_non_identity_field_keeps_hash(tmp_path):

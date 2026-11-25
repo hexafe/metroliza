@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import csv
+from html import escape
 from functools import partial
 import sqlite3
 import threading
 import time
 import weakref
+from pathlib import Path
 
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QThread, Qt, pyqtSignal
@@ -49,7 +51,7 @@ from metroliza.reports.characteristic_mapping_service import (
     fetch_distinct_report_metric_names,
     fetch_mapping_impact_counts,
 )
-from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite
+from metroliza.reports.db import _is_transient_sqlite_error, connect_sqlite, sqlite_file_identity
 from metroliza.reports.import_persist_profile import close_persist_connection
 from metroliza.shared.custom_logger import CustomLogger
 from metroliza.ui import detached_threads
@@ -173,6 +175,14 @@ def _delete_alias_csv_thread(owner_ref, thread_ref):
 
 def _has_selected_db_file(db_file: str) -> bool:
     return bool(str(db_file or '').strip())
+
+
+def _alias_database_binding(db_file: str) -> tuple[str, tuple[int, int]]:
+    path = Path(db_file).expanduser().resolve(strict=True)
+    identity = sqlite_file_identity(path)
+    if identity is None:
+        raise ValueError('The selected database is unavailable. Choose it again and reload name matches.')
+    return str(path), identity
 
 
 def _format_count(value) -> str:
@@ -587,6 +597,8 @@ class CharacteristicMappingDialog(QDialog):
         configure_window_size(self, minimum=(680, 480), initial=(1180, 740))
 
         self.db_file = db_file
+        self._loaded_alias_database_path: str | None = None
+        self._loaded_alias_database_identity: tuple[int, int] | None = None
         self.database_change_allowed = None
         self.metric_options: list[dict[str, object]] = []
         self.reference_options: list[dict[str, object]] = []
@@ -1007,6 +1019,7 @@ class CharacteristicMappingDialog(QDialog):
 
     def load_aliases(self):
         if not self.db_file:
+            self._invalidate_loaded_aliases()
             self.alias_table.setRowCount(0)
             self.empty_state_label.setVisible(True)
             self._sync_selection_actions()
@@ -1015,11 +1028,19 @@ class CharacteristicMappingDialog(QDialog):
 
         try:
             ensure_characteristic_alias_schema(self.db_file)
+            loaded_path, loaded_identity = _alias_database_binding(self.db_file)
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
+            if _alias_database_binding(self.db_file) != (loaded_path, loaded_identity):
+                raise ValueError('The selected database changed while name matches were loading. Reload the list.')
         except Exception as exc:
+            self._invalidate_loaded_aliases()
+            self.alias_table.setRowCount(0)
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Load error', f'Could not load name matches: {exc}')
             return
+
+        self._loaded_alias_database_path = loaded_path
+        self._loaded_alias_database_identity = loaded_identity
 
         self.alias_table.setRowCount(len(alias_rows))
         for row_index, row in enumerate(alias_rows):
@@ -1036,6 +1057,20 @@ class CharacteristicMappingDialog(QDialog):
         self.empty_state_label.setVisible(len(alias_rows) == 0)
         self._filter_alias_table()
         self._sync_warning_labels()
+
+    def _invalidate_loaded_aliases(self):
+        self._loaded_alias_database_path = None
+        self._loaded_alias_database_identity = None
+
+    def _loaded_alias_database_matches_current(self):
+        if self._loaded_alias_database_path is None or self._loaded_alias_database_identity is None:
+            return False
+        try:
+            return _alias_database_binding(self.db_file) == (
+                self._loaded_alias_database_path, self._loaded_alias_database_identity,
+            )
+        except (OSError, RuntimeError, ValueError):
+            return False
 
     def _filter_alias_table(self):
         needle = self.alias_search_input.text().strip().casefold()
@@ -1061,6 +1096,8 @@ class CharacteristicMappingDialog(QDialog):
         )
 
     def _selected_mapping(self):
+        if not self._loaded_alias_database_matches_current():
+            return None
         selected_rows = self.alias_table.selectionModel().selectedRows()
         if not selected_rows:
             return None
@@ -1126,27 +1163,70 @@ class CharacteristicMappingDialog(QDialog):
             return
         selected = self._selected_mapping()
         if selected is None:
+            if self.alias_table.selectionModel().selectedRows() and not self._loaded_alias_database_matches_current():
+                QMessageBox.warning(
+                    self, 'Database changed',
+                    'The selected database changed after this list was loaded. Reload the name matches and review the rule again.',
+                )
+                self.load_aliases()
             return
 
-        confirmation = QMessageBox.question(
-            self,
-            'Delete name match',
-            'Are you sure you want to delete this name match?\n\n'
-            'This will stop treating the selected report name as the chosen common name.',
+        loaded_database_path = self._loaded_alias_database_path
+        loaded_database_identity = self._loaded_alias_database_identity
+        alias_name = escape(selected['alias_name'])
+        canonical_name = escape(selected['canonical_name'])
+        scope_value = escape(selected['scope_value'] or '')
+        scope_detail = f" ({scope_value})" if scope_value else ''
+        try:
+            impact = self._resolve_impact_preview(
+                selected['alias_name'], selected['scope_type'], selected['scope_value'],
+            )
+            impact_detail = (
+                f"Affects {int(impact.get('measurement_count', 0))} measurement rows in "
+                f"{int(impact.get('report_count', 0))} reports."
+            )
+        except Exception:
+            impact_detail = 'The affected report and measurement count is unavailable.'
+        confirmation_text = (
+            f"Delete this saved rule?\n\n"
+            f"{alias_name} → {canonical_name}\n"
+            f"Scope: {escape(selected['scope_type'])}{scope_detail}\n\n"
+            f"{impact_detail}\n\n"
+            'Export name matches to CSV before deleting if you may need to restore the rule.\n'
+            'It will no longer be applied to future work.'
+        )
+        if QMessageBox.question(
+            self, 'Delete name match', confirmation_text,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
-        )
-        if confirmation != QMessageBox.StandardButton.Yes:
+        ) != QMessageBox.StandardButton.Yes:
+            return
+
+        if (
+            not self._loaded_alias_database_matches_current()
+            or (self._loaded_alias_database_path, self._loaded_alias_database_identity)
+            != (loaded_database_path, loaded_database_identity)
+        ):
+            QMessageBox.warning(
+                self, 'Database changed',
+                'The selected database changed while deletion was being confirmed. Reload the name matches and review the rule again.',
+            )
+            self.load_aliases()
             return
 
         try:
             delete_characteristic_alias(
-                self.db_file,
+                loaded_database_path,
                 alias_name=selected['alias_name'],
                 scope_type=selected['scope_type'],
                 scope_value=selected['scope_value'],
+                expected_mapping=selected,
+                expected_database_path=loaded_database_path,
+                expected_database_identity=loaded_database_identity,
             )
             self.load_aliases()
+        except ValueError as exc:
+            QMessageBox.warning(self, 'Name match changed', str(exc))
         except Exception as exc:
             CustomLogger(exc, reraise=False)
             QMessageBox.critical(self, 'Delete error', f'Could not delete name match: {exc}')

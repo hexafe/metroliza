@@ -937,6 +937,8 @@ def test_ci_workflow_keeps_native_windows_specialist_geometry_contract() -> None
         'tests/test_output_request_presentation.py',
         'tests/test_filter_presentation.py',
         'tests/test_curation_presentation.py',
+        'tests/test_wave0_modifydb_mapping.py::test_stored_report_review_filters_and_selected_context_are_read_only',
+        'tests/test_wave0_modifydb_mapping.py::test_external_record_update_keeps_pending_modify_db_draft',
         'tests/test_parser_profile_onboarding.py',
         'tests/test_industrial_onboarding_presentation.py',
         'tests/test_industrial_onboarding_delta.py',

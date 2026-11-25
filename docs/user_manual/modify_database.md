@@ -95,6 +95,12 @@ Editable fields include:
 
 Read-only context columns such as **REPORT_ID**, **FILENAME**, and **TEMPLATE_VARIANT** help identify the row.
 
+Search by source path, reference, sample number, date, parser or metadata profile.
+Use **With warnings** to find saved reports with warnings that may need attention.
+Select a report and open **Report details** to see its source, parser, measurement
+counts, stored warnings and selected metadata evidence. A warning can still be
+useful context after you have corrected a field.
+
 Changing report identity fields such as reference, date, time, part name, revision, or sample number also refreshes the report identity hash used for duplicate detection.
 
 ### Measurement rows
@@ -246,15 +252,16 @@ Common causes are a read-only database file, a database opened by another proces
 
 Be careful with broad renames and record edits. Once applied, these changes affect the stored data that later exports, filtering, grouping, workbook output, and HTML dashboard output will use.
 
-### Use this for cleanup, not for temporary filtering
+Before applying a broad normalization or replacing values across several records, keep a separate backup of the database. Review the record IDs, occurrence counts and before/after values in **Apply changes**. Keep the original PDF, CSV or Excel files to verify the source values or import them again.
 
-If you only want to narrow what appears in one export, use [Export filtering](export_filtering.md) instead.
+Run any analysis that used the edited database again to refresh its results.
 
-### This tool is different from Characteristic Name Matching
+### Match the command to the change you need
 
-Use **Modify database** to directly rename stored values.
-
-Use [Characteristic Name Matching](characteristic_name_matching.md) when you want the app to treat different characteristic names as the same characteristic during analysis/export without documenting this as a separate cleanup workflow.
+- Use **Modify database** to correct the values Metroliza has already stored, such as a report reference. A measurement edit also changes the stored measurement used in future analyses.
+- Use [Characteristic Name Matching](characteristic_name_matching.md) to group different characteristic names under the same name for analysis or export while retaining the stored names.
+- Use [Export filtering](export_filtering.md) to include or exclude records for one export or analysis while retaining them in the database.
+- To replace source data, correct a copy of the original file in the appropriate editor and import it through Reports. Modify database writes to SQLite and leaves the source file intact.
 
 ### Do not rely on hidden controls
 
@@ -272,3 +279,13 @@ values and record IDs or normalization occurrence counts. Apply includes every p
 change, including entries outside that sample. Friendly headers keep the technical
 field name in their tooltip. A successful Apply saves and closes; a failed transaction
 keeps the edits. Close offers Discard or Cancel while edits remain.
+
+If another operation changed a cell you are editing, changed the number of matches
+for a normalization, or replaced the selected database, reopen the editor to review
+the latest data. For overlapping normalizations that change the shown counts, apply
+one replacement at a time.
+
+Each successful Apply stores a sample of up to 12 changes, including before and after
+values where available, in the edited database. Metroliza keeps the latest 100 such
+records per database. Anyone who receives a copy of the database also receives its
+edit samples. Keep a separate backup if you need to restore an entire edit.

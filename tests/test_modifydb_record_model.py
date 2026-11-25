@@ -691,7 +691,8 @@ def test_dialog_prepares_search_cache_during_load_not_first_filter(tmp_path, mon
         assert model.total_row_count > 0 and batches
         assert all(row_count == cache_count for _, row_count, cache_count in batches)
         assert all((thread_id == gui_thread) == blocking for thread_id, _, _ in batches)
-        expected_cache = [records.row_haystack(row) for row in model._rows]
+        visible_columns = [index for index, _spec in enumerate(model.specs) if not slot.view.isColumnHidden(index)]
+        expected_cache = [records.row_haystack([row[index] for index in visible_columns]) for row in model._rows]
         assert model._haystack == expected_cache
         needle = "1"
         expected_rows = [row for row, text in enumerate(expected_cache) if needle in text]

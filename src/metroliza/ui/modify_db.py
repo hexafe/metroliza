@@ -14,6 +14,7 @@ import PyQt6.QtCore as QtCore
 from PyQt6.QtCore import QTimer, Qt, pyqtSignal
 from PyQt6 import sip
 from functools import partial
+from pathlib import Path
 import weakref
 from metroliza.ui import detached_threads
 import PyQt6.QtWidgets as QtWidgets
@@ -23,10 +24,13 @@ from metroliza.shared.custom_logger import CustomLogger, LOG_ONLY
 from metroliza.reports.db import (
     execute_select_with_columns,
     quote_identifier,
+    sqlite_file_identity,
 )
+from metroliza.reports.report_curation import DETAIL_ROW_LIMIT, load_stored_report_context, report_context_projections
 from metroliza.reports.report_edit_service import (
     LEGACY_MEASUREMENT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS,
     LEGACY_REPORT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_REPORT_FIELDS,
+    ReportEditExpectations,
     ReportEditService,
 )
 from metroliza.ui.curation_presentation import bind_button, short_value
@@ -50,6 +54,7 @@ from metroliza.ui.modify_db_records import (
     _NATIVE_RECORD_START,
 )
 from metroliza.reports.report_repository import ReportRepository, validate_manual_number
+from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -76,6 +81,7 @@ class ModifyDB(QDialog):
     """
 
     database_edited = pyqtSignal(str)
+    database_edit_receipt = pyqtSignal(object)
 
     REPORT_RECORD_COLUMNS = (
         {"label": "REPORT_ID", "field": "report_id", "source": "report_id", "editable": False, "key": True},
@@ -89,6 +95,12 @@ class ModifyDB(QDialog):
         {"label": "COMMENT", "field": "comment", "source": "comment", "editable": True},
         {"label": "FILENAME", "field": "file_name", "source": "file_name", "editable": False},
         {"label": "TEMPLATE_VARIANT", "field": "template_variant", "source": "template_variant", "editable": False},
+        {"label": "Source path", "field": "absolute_path", "source": "absolute_path", "editable": False},
+        {"label": "Parser", "field": "parser_id", "source": "parser_id", "editable": False},
+        {"label": "Parse status", "field": "parse_status", "source": "parse_status", "editable": False},
+        {"label": "Metadata profile", "field": "metadata_profile", "source": "metadata_profile", "editable": False},
+        {"label": "Review warnings", "field": "review_warning_count", "source": "review_warning_count", "editable": False},
+        {"label": "Source ID", "field": "source_file_id", "source": "source_file_id", "editable": False, "internal": True},
     )
 
     MEASUREMENT_RECORD_COLUMNS = (
@@ -165,6 +177,8 @@ class ModifyDB(QDialog):
         self._storage_flavor = "current"
         self._changes_committed = False
         self._discard_confirmed = False
+        self.report_warnings_filter = None
+        self.report_details_button = None
 
         self.setup_ui()
 
@@ -554,15 +568,80 @@ class ModifyDB(QDialog):
         return []
 
     def _show_selected_report_measurements(self):
+        report_id = self._selected_report_id()
+        if report_id is not None:
+            self._set_measurement_scope(report_id)
+            self.tab_widget.setCurrentWidget(self.measurement_rows_tab)
+
+    def _selected_report_id(self):
         view = self.report_records_table
         selected = view.currentIndex()
         if selected.isValid():
             model = view.model()
             key = next((i for i, spec in enumerate(model.specs) if spec.get("key")), None)
             if key is not None:
-                report_id = int(model.original_value(model.source_row(selected.row()), key))
-                self._set_measurement_scope(report_id)
-                self.tab_widget.setCurrentWidget(self.measurement_rows_tab)
+                return self._coerce_record_id(model.original_value(model.source_row(selected.row()), key))
+        return None
+
+    def _show_selected_report_details(self):
+        report_id = self._selected_report_id()
+        if report_id is None or self._uses_legacy_schema():
+            return
+        try:
+            context = load_stored_report_context(self.db_file, report_id)
+        except sqlite3.Error:
+            QMessageBox.warning(self, "Report details", "Could not read report details. Try again.")
+            return
+        if context is None:
+            QMessageBox.information(self, "Report details", "This report is no longer available.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Report details · #{report_id}")
+        configure_window_size(dialog, minimum=(500, 330), initial=(720, 490))
+        layout = QtWidgets.QVBoxLayout(dialog)
+        details = QtWidgets.QPlainTextEdit(dialog)
+        details.setReadOnly(True)
+        details.setAccessibleName("Stored report details")
+        details.setPlainText(self._report_details_text(context))
+        layout.addWidget(details)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
+
+    @staticmethod
+    def _report_details_text(context):
+        def bounded(value, limit=120):
+            return display_value(value)[:limit] + ("…" if value is not None and len(str(value)) > limit else "")
+
+        names = (
+            ("file_name", "Source file"), ("absolute_path", "Source path"), ("sha256", "Source SHA-256"),
+            ("parser_id", "Parser"), ("parser_version", "Parser version"), ("template_family", "Template family"),
+            ("template_variant", "Template variant"), ("metadata_profile", "Metadata profile"),
+            ("parse_status", "Parse status"), ("measurement_count", "Measurements"), ("nok_count", "NOK measurements"),
+        )
+        lines = [f"{label}: {context.report[field]}" for field, label in names if context.report.get(field) is not None]
+        count = context.report.get("review_warning_count")
+        if count is not None:
+            lines.extend(("", f"Review warnings: {count}"))
+            for severity, code, field, message in context.warnings:
+                scope = f" · {bounded(field)}" if field else ""
+                lines.append(f"{severity.capitalize()} · {bounded(code)}{scope}: {bounded(message, 600)}")
+            remaining = count - len(context.warnings)
+            if remaining:
+                lines.append(f"{remaining} more stored warning(s).")
+        if context.selected_fields:
+            lines.extend(("", "Selected metadata evidence"))
+            for field, source, detail, value in context.selected_fields[:DETAIL_ROW_LIMIT]:
+                source_label = "Manual" if source == USER_SOURCE_TYPE else bounded(source)
+                if detail:
+                    source_label += f" / {bounded(detail)}"
+                lines.append(f"{bounded(field)}: {bounded(value)} ({source_label})")
+            if len(context.selected_fields) > DETAIL_ROW_LIMIT:
+                lines.append("More stored metadata evidence is available.")
+        return "\n".join(lines)
 
     def _set_measurement_scope(self, report_id):
         self._measurement_report_id = report_id
@@ -645,6 +724,8 @@ class ModifyDB(QDialog):
             self._changes_committed = False
             self._discard_confirmed = False
             self._prepare_database_for_loading()
+            if type(self) is ModifyDB and type(self.tab_widget) is QtWidgets.QTabWidget and self.db_file:
+                self._edit_database_identity = sqlite_file_identity(Path(self.db_file).resolve())
 
             reference_source = ("REPORTS", "REFERENCE") if self._uses_legacy_schema() else ("report_metadata", "reference")
             sample_number_source = (
@@ -797,13 +878,22 @@ class ModifyDB(QDialog):
     def _plan_report_records(self):
         """Return ``(specs, query)`` for the report-level rows of the overview view."""
         available_columns = self._source_columns("vw_report_overview")
+        supplemental = {}
+        if "report_id" in available_columns:
+            supplemental = report_context_projections(
+                self._source_columns("report_metadata"), self._source_columns("report_metadata_warnings"),
+            )
+        available_columns.update(supplemental)
         specs = self._available_specs(self.REPORT_RECORD_COLUMNS, available_columns)
         if not specs:
             return [], ""
 
         select_exprs = self._select_exprs_for_specs(specs)
+        for index, spec in enumerate(specs):
+            if expression := supplemental.get(spec["source"].lower()):
+                select_exprs[index] = f"{expression} AS {self._quote_identifier(spec['field'])}"
         order_by = " ORDER BY report_id" if "report_id" in available_columns else ""
-        return specs, f"SELECT {', '.join(select_exprs)} FROM vw_report_overview{order_by};"
+        return specs, f"SELECT {', '.join(select_exprs)} FROM vw_report_overview AS report{order_by};"
 
     def _plan_measurement_records(self):
         """Return ``(specs, query)`` for measurement rows keyed by measurement id when exposed."""
@@ -856,6 +946,11 @@ class ModifyDB(QDialog):
 
     def _reset_record_tables(self):
         """Drop loaded record rows and pending fetches; the next tab visit reloads them."""
+        if self.report_warnings_filter is not None:
+            self.report_warnings_filter.hide()
+        if self.report_details_button is not None:
+            self.report_details_button.hide()
+            self.report_details_button.setEnabled(False)
         for slot in self._record_slots:
             self._cancel_record_load(slot)
             slot.state = "idle"
@@ -993,14 +1088,17 @@ class ModifyDB(QDialog):
     def _install_record_rows(self, slot, specs, record_rows):
         model = RecordTableModel(specs, record_rows.rows, record_rows.haystack)
         model.pendingChanged.connect(self._refresh_pending_status)
-        model.set_filter_text(slot.filter_edit.text())
+        if slot.kind == "report":
+            self._prepare_report_controls(specs)
+            model.set_filter_text(slot.filter_edit.text(), warnings_only=self._report_warnings_only())
+        else:
+            model.set_filter_text(slot.filter_edit.text())
         slot.view.set_record_model(model)
         if slot.kind == "measurement":
             model.set_report_scope(self._measurement_report_id)
         elif slot.kind == "report":
-            slot.view.selectionModel().currentChanged.connect(
-                lambda current, _previous: self.show_measurements_button.setEnabled(current.isValid()),
-            )
+            slot.view.selectionModel().currentChanged.connect(self._on_report_current_changed)
+            self._on_report_current_changed(slot.view.currentIndex(), None)
         self._configure_record_table(slot.view, specs)
         self._last_clicked_row_by_table.pop(slot.view, None)
         slot.state = "loaded"
@@ -1008,11 +1106,52 @@ class ModifyDB(QDialog):
         slot.banner.setVisible(False)
         self._refresh_pending_status()
 
+    def _prepare_report_controls(self, specs):
+        if self._uses_legacy_schema() or not any(spec.get("key") for spec in specs):
+            return
+        layout = self.report_records_tab.layout()
+        if self.report_details_button is None:
+            self.report_details_button = QPushButton("Report details", self.report_records_tab)
+            self.report_details_button.clicked.connect(self._show_selected_report_details)
+            layout.removeWidget(self.show_measurements_button)
+            actions = QHBoxLayout()
+            actions.addWidget(self.report_details_button)
+            actions.addWidget(self.show_measurements_button)
+            layout.addLayout(actions)
+        self.report_details_button.show()
+
+        if self._column_index_for_field(specs, "review_warning_count") is not None:
+            if self.report_warnings_filter is None:
+                self.report_warnings_filter = QtWidgets.QCheckBox("With warnings", self.report_records_tab)
+                self.report_warnings_filter.setToolTip("Show reports with saved warnings or errors.")
+                self.report_warnings_filter.toggled.connect(self._queue_report_warning_filter)
+                layout.removeWidget(self.report_filter_edit)
+                filters = QHBoxLayout()
+                filters.addWidget(self.report_filter_edit, 1)
+                filters.addWidget(self.report_warnings_filter)
+                layout.insertLayout(0, filters)
+            self.report_warnings_filter.show()
+
+    def _on_report_current_changed(self, current, _previous):
+        self.show_measurements_button.setEnabled(current.isValid())
+        if self.report_details_button is not None:
+            self.report_details_button.setEnabled(current.isValid())
+
+    def _report_warnings_only(self):
+        checkbox = self.report_warnings_filter
+        return checkbox is not None and not checkbox.isHidden() and checkbox.isChecked()
+
+    def _queue_report_warning_filter(self):
+        self._record_slots[0].filter_timer.start()
+
     def _apply_record_filter(self, slot):
         try:
             slot.filter_timer.stop()
-            if slot.view.try_apply_filter(slot.filter_edit.text()):
+            options = {"warnings_only": self._report_warnings_only()} if slot.kind == "report" else {}
+            if slot.view.try_apply_filter(slot.filter_edit.text(), **options):
                 self._last_clicked_row_by_table.pop(slot.view, None)
+                if slot.kind == "report":
+                    self._on_report_current_changed(slot.view.currentIndex(), None)
             else:
                 slot.filter_timer.start()
         except Exception as e:
@@ -1062,6 +1201,9 @@ class ModifyDB(QDialog):
     @staticmethod
     def _configure_record_table(table, specs):
         key_columns = tuple(index for index, spec in enumerate(specs) if spec.get("key"))
+        for index, spec in enumerate(specs):
+            if spec.get("internal"):
+                table.setColumnHidden(index, True)
         preferred_stretch_fields = (
             "comment",
             "description",
@@ -1122,6 +1264,8 @@ class ModifyDB(QDialog):
             self.collect_measurement_record_updates()
             modifications_text = self.pending_label.text() + "\n\n" + "\n".join(self.pending_preview())
             modifications_text += "\n\nShowing at most 12 changed cells/values; Apply includes all pending changes."
+            if self._uses_native_edit_service() and "_edit_database_identity" in vars(self) and self.has_pending_changes():
+                modifications_text += "\nA sample of previous and new values stays in this database and is copied with it."
             confirmation_dialog = QMessageBox(self)
             confirmation_dialog.setIcon(QMessageBox.Icon.Question)
             confirmation_dialog.setText(
@@ -1219,11 +1363,7 @@ class ModifyDB(QDialog):
         model = self._record_model(table)
         specs = model.specs
         editable_fields = {spec["field"]: spec for spec in specs if spec.get("editable")}
-        key_column = self._column_index_for_field(specs, key_field)
-        first_rows = {}
-        for source_row, _edits in model.edited_rows():
-            record_id = self._coerce_record_id(model.original_text(source_row, key_column))
-            first_rows.setdefault(record_id, source_row)
+        first_rows = self._first_edited_record_rows(model, key_field)
 
         lines = []
         for record_id, fields in updates:
@@ -1241,6 +1381,14 @@ class ModifyDB(QDialog):
         if not lines:
             return ""
         return "\n".join(lines)
+
+    def _first_edited_record_rows(self, model, key_field):
+        key_column = self._column_index_for_field(model.specs, key_field)
+        first_rows = {}
+        for source_row, _edits in model.edited_rows():
+            record_id = self._coerce_record_id(model.original_text(source_row, key_column))
+            first_rows.setdefault(record_id, source_row)
+        return first_rows
 
     def _original_value_for_record_field(self, model, first_rows, record_id, field_name):
         value_column = self._column_index_for_field(model.specs, field_name)
@@ -1266,20 +1414,22 @@ class ModifyDB(QDialog):
                 QMessageBox.information(self, "No changes", "No changes were detected.")
                 return
 
-            completed = self._apply_edit_payload(dict(
+            completed, receipt = self._apply_edit_payload(dict(
                 storage_flavor=self._storage_flavor,
                 normalization_changes=normalization_changes,
                 report_updates=report_updates,
                 measurement_updates=measurement_updates,
             ))
             if completed:
-                self._edit_succeeded()
+                self._edit_succeeded(receipt)
         except Exception as e:
             self._report_save_error(e)
 
-    def _edit_succeeded(self):
+    def _edit_succeeded(self, receipt=None):
         if isinstance(self, ModifyDB) and not sip.isdeleted(self):
             self.database_edited.emit(str(self.db_file))
+            if receipt is not None and not sip.isdeleted(self):
+                self.database_edit_receipt.emit(receipt)
         QMessageBox.information(self, "Changes applied", "Changes have been applied successfully.")
         if "_changes_committed" not in vars(self) or not sip.isdeleted(self):
             self._changes_committed = True
@@ -1292,17 +1442,77 @@ class ModifyDB(QDialog):
         CustomLogger(error, reraise=False, behavior=LOG_ONLY)
         QMessageBox.critical(self, "Nothing was saved", f"Nothing was saved. Pending edits were kept.\n\n{error}")
 
+    def _expected_record_values(self, table, key_field, updates):
+        if not updates:
+            return ()
+        model = self._record_model(table)
+        first_rows = self._first_edited_record_rows(model, key_field)
+        return tuple(
+            (record_id, {
+                field: self._original_value_for_record_field(model, first_rows, record_id, field)
+                for field in updates_by_field
+            })
+            for record_id, updates_by_field in updates if record_id in first_rows
+        )
+
+    def _expected_record_owners(self, table, key_field, owner_field, updates):
+        if not updates:
+            return ()
+        model = self._record_model(table)
+        column = self._column_index_for_field(model.specs, owner_field)
+        if column is None:
+            return ()
+        first_rows = self._first_edited_record_rows(model, key_field)
+        return tuple((record_id, model.original_value(row, column))
+                     for record_id, _fields in updates if (row := first_rows.get(record_id)) is not None)
+
+    def _edit_expectations(self, payload):
+        normalization_counts = {}
+        for field, table in (
+            ("reference", self.reference_table), ("sample_number", self.part_number_table), ("header", self.header_table),
+        ):
+            old_values = {old for _new, old in payload["normalization_changes"][field]}
+            if old_values:
+                counts = {}
+                for row in self._dirty_normalize_rows.get(table, ()):
+                    old = table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+                    if old in old_values:
+                        counts[old] = table.item(row, 2).data(Qt.ItemDataRole.UserRole)
+                normalization_counts[field] = counts
+        return ReportEditExpectations(
+            report_values=self._expected_record_values(self.report_records_table, "report_id", payload["report_updates"]),
+            measurement_values=self._expected_record_values(
+                self.measurement_records_table, "measurement_id", payload["measurement_updates"],
+            ),
+            report_sources=self._expected_record_owners(
+                self.report_records_table, "report_id", "source_file_id", payload["report_updates"],
+            ),
+            measurement_owners=self._expected_record_owners(
+                self.measurement_records_table, "measurement_id", "report_id", payload["measurement_updates"],
+            ),
+            normalization_counts=normalization_counts,
+            database_identity=self._edit_database_identity,
+        )
+
+    def _uses_native_edit_service(self):
+        return ("_changes_committed" in vars(self)
+                and type(self.db_file) is str
+                and ReportEditService is _DEFAULT_EDIT_SERVICE
+                and ReportRepository is _DEFAULT_EDIT_REPOSITORY
+                and ReportEditService.apply_changes is _DEFAULT_EDIT_APPLY
+                and all(name not in vars(self) and getattr(type(self), name) is method
+                        for name, method in _DEFAULT_EDIT_METHODS.items()))
+
     def _apply_edit_payload(self, payload):
-        native = ("_changes_committed" in vars(self)
-                  and type(self.db_file) is str
-                  and ReportEditService is _DEFAULT_EDIT_SERVICE
-                  and ReportRepository is _DEFAULT_EDIT_REPOSITORY
-                  and ReportEditService.apply_changes is _DEFAULT_EDIT_APPLY
-                  and all(name not in vars(self) and getattr(type(self), name) is method
-                          for name, method in _DEFAULT_EDIT_METHODS.items()))
-        if not native:
-            self._create_report_edit_service().apply_changes(**payload)
-            return True
+        if not self._uses_native_edit_service():
+            service = self._create_report_edit_service()
+            if (type(service) is _DEFAULT_EDIT_SERVICE
+                    and getattr(service.apply_changes, "__func__", None) is _DEFAULT_EDIT_APPLY):
+                return True, service.apply_changes_with_receipt(**payload)
+            service.apply_changes(**payload)
+            return True, None
+        if "_edit_database_identity" in vars(self):
+            payload["expected_edits"] = self._edit_expectations(payload)
         self._save_in_progress = True
         self._edit_thread, self._edit_progress = None, None
         self._edit_controls = [(control, control.isEnabled()) for control in
@@ -1329,13 +1539,14 @@ class ModifyDB(QDialog):
             if self._save_in_progress:
                 _release_edit(weakref.ref(self), weakref.ref(thread) if thread is not None else lambda: None)
             raise
-        return False
+        return False, None
 
     def _finish_edit(self, thread):
         if thread is not self._edit_thread:
             return
         self._save_in_progress = False
         error, thread.error = thread.error, None
+        receipt, thread.receipt = thread.receipt, None
         progress = self._edit_progress
         dismiss_worker_progress_dialog(progress, rejected=error is not None)
         self._edit_progress = None
@@ -1343,7 +1554,7 @@ class ModifyDB(QDialog):
         if error is not None:
             self._report_save_error(error)
         else:
-            self._edit_succeeded()
+            self._edit_succeeded(receipt)
 
     def _apply_update_statements(self, cursor, statements):
         ReportEditService.apply_update_statements(cursor, statements)
@@ -1457,6 +1668,10 @@ class ModifyDB(QDialog):
         return ReportRepository(self.db_file)
 
     def _create_report_edit_service(self):
+        if (ReportEditService is _DEFAULT_EDIT_SERVICE and ReportRepository is _DEFAULT_EDIT_REPOSITORY
+                and getattr(self._create_report_repository, "__func__", None)
+                is _DEFAULT_EDIT_METHODS["_create_report_repository"]):
+            return ReportEditService(self.db_file)
         return ReportEditService(
             self.db_file,
             repository_factory=lambda _database: self._create_report_repository(),
@@ -1581,4 +1796,5 @@ def _release_edit(owner_ref, thread_ref):
         owner._edit_controls = []
     if thread is not None:
         thread.error = None
+        thread.receipt = None
         detached_threads.delete_on_owner_thread(thread)

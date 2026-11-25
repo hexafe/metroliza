@@ -153,6 +153,21 @@ class AnalysisHistoryDialog(QDialog):
         task.deleteLater()
         self._start_listing()
 
+    def refresh_database_source(self, database):
+        """Recheck the displayed run after a committed edit to its input database."""
+        current = self.runs.currentItem()
+        if current is None:
+            return
+        source = current.data(Qt.ItemDataRole.UserRole).get("source")
+        if not isinstance(source, str) or not source:
+            return
+        try:
+            same_source = Path(source).resolve() == Path(database).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return
+        if same_source:
+            self._selection_changed(current)
+
     def _selection_changed(self, current, _previous=None):
         self._cancel_source_check()
         self.pack.setEnabled(current is not None and self._task is None)

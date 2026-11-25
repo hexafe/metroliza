@@ -1,7 +1,9 @@
 import csv
 from contextlib import closing
+import json
 import tempfile
 import unittest
+from pathlib import Path
 from sqlite3 import connect
 
 from modules.characteristic_alias_service import (
@@ -19,6 +21,7 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_alias,
     upsert_characteristic_aliases_bulk,
 )
+from metroliza.reports.db import sqlite_file_identity
 
 
 class TestCharacteristicAliasService(unittest.TestCase):
@@ -213,6 +216,118 @@ class TestCharacteristicAliasService(unittest.TestCase):
         )
         self.assertEqual(deleted_count, 1)
         self.assertEqual(resolve_characteristic_alias('DIA - X', 'REF-101', self.db_path), 'DIA - X')
+
+    def test_confirmed_delete_keeps_bounded_local_recovery_rule(self):
+        mapping = {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'reference', 'scope_value': 'REF-101',
+        }
+        upsert_characteristic_alias(self.db_path, **mapping)
+
+        self.assertEqual(delete_characteristic_alias(
+            self.db_path, mapping['alias_name'], mapping['scope_type'], mapping['scope_value'],
+            expected_mapping=mapping,
+        ), 1)
+
+        with connect(self.db_path) as connection:
+            deleted = connection.execute(
+                'SELECT schema_version, mapping_json FROM metroliza_characteristic_alias_deletions'
+            ).fetchone()
+        self.assertEqual(deleted[0], 1)
+        self.assertEqual(json.loads(deleted[1])['canonical_name'], 'Diameter')
+        self.assertEqual(json.loads(deleted[1])['scope_value'], 'REF-101')
+
+        with connect(self.db_path) as connection:
+            recoverable = connection.execute(
+                'SELECT mapping_json FROM metroliza_characteristic_alias_deletions'
+            ).fetchone()[0]
+        restored = json.loads(recoverable)
+        upsert_characteristic_alias(
+            self.db_path, restored['alias_name'], restored['canonical_name'],
+            restored['scope_type'], restored['scope_value'],
+        )
+        self.assertEqual(resolve_characteristic_alias('DIA - X', 'REF-101', self.db_path), 'Diameter')
+
+    def test_confirmed_delete_rejects_changed_rule_and_preserves_current_value(self):
+        mapping = {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'global', 'scope_value': None,
+        }
+        upsert_characteristic_alias(self.db_path, **mapping)
+        upsert_characteristic_alias(self.db_path, 'DIA - X', 'Width', 'global')
+
+        with self.assertRaisesRegex(ValueError, 'changed after it was loaded'):
+            delete_characteristic_alias(
+                self.db_path, 'DIA - X', 'global', expected_mapping=mapping,
+            )
+
+        self.assertEqual(resolve_characteristic_alias('DIA - X', None, self.db_path), 'Width')
+
+    def test_confirmed_delete_rejects_same_path_database_replacement(self):
+        mapping = {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'global', 'scope_value': None,
+        }
+        upsert_characteristic_alias(self.db_path, **mapping)
+        expected_identity = sqlite_file_identity(Path(self.db_path))
+        replacement = f'{self.db_path}.replacement'
+        ensure_characteristic_alias_schema(replacement)
+        upsert_characteristic_alias(replacement, **mapping)
+        Path(self.db_path).rename(f'{self.db_path}.original')
+        Path(replacement).rename(self.db_path)
+
+        with self.assertRaisesRegex(ValueError, 'selected database changed'):
+            delete_characteristic_alias(
+                self.db_path, 'DIA - X', 'global', expected_mapping=mapping,
+                expected_database_path=self.db_path, expected_database_identity=expected_identity,
+            )
+
+        self.assertEqual(resolve_characteristic_alias('DIA - X', None, self.db_path), 'Diameter')
+        with connect(self.db_path) as connection:
+            self.assertEqual(connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='metroliza_characteristic_alias_deletions'"
+            ).fetchone(), None)
+
+    def test_confirmed_delete_does_not_recreate_missing_loaded_database(self):
+        mapping = {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'global', 'scope_value': None,
+        }
+        upsert_characteristic_alias(self.db_path, **mapping)
+        expected_identity = sqlite_file_identity(Path(self.db_path))
+        Path(self.db_path).unlink()
+
+        with self.assertRaisesRegex(ValueError, 'selected database changed'):
+            delete_characteristic_alias(
+                self.db_path, 'DIA - X', 'global', expected_mapping=mapping,
+                expected_database_path=self.db_path, expected_database_identity=expected_identity,
+            )
+        self.assertFalse(Path(self.db_path).exists())
+
+    def test_confirmed_delete_rolls_back_local_recovery_record_if_delete_fails(self):
+        mapping = {
+            'alias_name': 'DIA - X', 'canonical_name': 'Diameter',
+            'scope_type': 'global', 'scope_value': None,
+        }
+        upsert_characteristic_alias(self.db_path, **mapping)
+        with connect(self.db_path) as connection:
+            connection.execute(
+                "CREATE TRIGGER refuse_alias_delete BEFORE DELETE ON CHARACTERISTIC_ALIASES "
+                "BEGIN SELECT RAISE(ABORT, 'protected alias'); END"
+            )
+
+        with self.assertRaisesRegex(Exception, 'protected alias'):
+            delete_characteristic_alias(
+                self.db_path, 'DIA - X', 'global', expected_mapping=mapping,
+            )
+
+        self.assertEqual(resolve_characteristic_alias('DIA - X', None, self.db_path), 'Diameter')
+        with connect(self.db_path) as connection:
+            self.assertIsNone(connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name='metroliza_characteristic_alias_deletions'"
+            ).fetchone())
 
     def test_fetch_all_characteristic_aliases_returns_deterministic_rows(self):
         upsert_characteristic_alias(
