@@ -32,17 +32,17 @@ def _write_onedir(root: Path) -> Path:
 
 
 def _fake_launcher(path: Path, files: dict[str, bytes], *, git_sha: str = GIT_SHA, gap: int = 0,
-                   version: str = "2026.09rc1_261031") -> None:
+                   version: str = "2026.09rc1_261031", entry: str = "metroliza.exe") -> None:
     """Write a stub + payload + trailer laid out like packaging/launcher/src/pack.rs (raw blobs)."""
     records, offset = [], 0
     for name, data in sorted(files.items()):
         records.append({"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
                         "compressed_size": len(data), "offset": offset})
         offset += len(data) + gap
-    content = release_zip.content_sha256("metroliza.exe", [(r["path"], r["size"], r["sha256"]) for r in records])
+    content = release_zip.content_sha256(entry, [(r["path"], r["size"], r["sha256"]) for r in records])
     manifest = json.dumps(
         {"format": 1, "version": f"{version}-{content[:12]}", "git_sha": git_sha,
-         "entry": "metroliza.exe", "chunk_size": 4194304, "files": records}
+         "entry": entry, "chunk_size": 4194304, "files": records}
     ).encode()
     stub = b"MZ" + b"\0" * 62
     blobs = b"".join(files[name] + b"\0" * gap for name in sorted(files))
@@ -148,6 +148,9 @@ def test_launcher_provenance_requires_matching_embedded_onedir(tmp_path, monkeyp
         stage()
     _fake_launcher(exe, files, git_sha="e" * 40)
     with pytest.raises(ValueError, match="payload source does not match"):
+        stage()
+    _fake_launcher(exe, files, entry="metroliza_application.exe")
+    with pytest.raises(ValueError, match="payload entry does not match"):
         stage()
     _fake_launcher(exe, files)
     sidecar, = stage()

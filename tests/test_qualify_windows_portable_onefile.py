@@ -121,6 +121,14 @@ def test_splash_receipt_requires_desktop_artwork_before_portable_entry(frame_pid
     assert observation["bootloader_visible_ms"] == [20.0]
     assert observation["splash_close_requested_ms"] == 150.0
     assert observation["first_qt_window_ms"] == 300.0
+    assert observation["splash_to_qt_first_window_ms"] == 280.0
+
+    # A matching frame at startup cannot pass if the splash vanished during verification.
+    events[1]["epoch_ms"] = 600
+    events[2]["epoch_ms"] = 640
+    assert not qualify._splash_observations(
+        windows, frames, events, {"launched_epoch_ms": 100, "process_id": 42, "status": "ok"},
+    )["passed"]
 
 
 def test_splash_image_comparison_rejects_a_blank_window():
@@ -131,3 +139,4 @@ def test_splash_image_comparison_rejects_a_blank_window():
     with Image.open(artwork) as image:
         assert splash_image_error(image, artwork) == 0.0
         assert splash_image_error(Image.new("RGB", image.size), artwork) > 6.0
+        assert splash_image_error(Image.new("RGB", image.size, (48, 48, 48)), artwork) > 6.0

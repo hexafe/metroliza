@@ -30,6 +30,9 @@ from metroliza.app.release_identity import VERSION_PATTERN, current_identity  # 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "tests/fixtures/pdf/cmm_smoke_fixture.pdf"
 FIXTURE_SHA256 = "ca500bd52afc2551560e7c0009851906a0d3bec6b35282e20703c1e298da608b"
+# The native sampler polls every 20 ms and sometimes reads artwork from the desktop.
+# Allow for scheduling between the last visible sample and the IPC request.
+SPLASH_CLOSE_SAMPLE_TOLERANCE_MS = 250
 
 
 def _receipt(root: Path, scenario: str) -> None:
@@ -166,7 +169,9 @@ def _verify_outer_splash(artifact: Path) -> None:
         if "/" not in name.replace("\\", "/")
         and (match := re.fullmatch(r"(tcl|tk)[0-9]+t?\.dll", name.lower()))
     }
-    if len(resources) != 1 or not archive.extract(resources[0]) or dlls != {"tcl", "tk"}:
+    scripts = {"_tcl_data/init.tcl", "_tk_data/tk.tcl"}
+    names = {name.replace("\\", "/") for name in archive.toc}
+    if not (len(resources) == 1 and archive.extract(resources[0]) and dlls == {"tcl", "tk"} and scripts <= names):
         raise RuntimeError("portable_outer_splash_or_runtime_missing")
 
 
@@ -198,11 +203,13 @@ def _splash_observations(windows: list[dict], frames: list[dict], events: list[d
         sample["epoch_ms"] for sample in windows
         if any(w["kind"] in ("qt_splash", "main_window") for w in sample.get("windows", ()))
     ]
+    desktop_gap = round(application[0] - visible[-1], 1) if application and visible else None
     return {
         "passed": bool(
             outcome["status"] == "ok" and None not in (started, entered, closed, painted)
             and visible and application and started <= visible[0] < entered <= closed <= painted
-            and visible[-1] <= painted
+            and closed - SPLASH_CLOSE_SAMPLE_TOLERANCE_MS <= visible[-1] <= painted
+            and entered <= application[0]
             and any(started <= timestamp < entered and error <= 6 for timestamp, error in artwork)
         ),
         "application_exit_code": outcome.get("exit_code"),
@@ -211,6 +218,7 @@ def _splash_observations(windows: list[dict], frames: list[dict], events: list[d
         "qt_first_paint_finished_ms": relative_time(painted),
         "bootloader_visible_ms": [relative_time(timestamp) for timestamp in visible],
         "first_qt_window_ms": relative_time(application[0]) if application else None,
+        "splash_to_qt_first_window_ms": desktop_gap,
         "artwork_samples": [{"ms": relative_time(timestamp), "error": error} for timestamp, error in artwork],
     }
 

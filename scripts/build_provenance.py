@@ -245,7 +245,7 @@ def _verify_portable_payload(artifact: Path, expected_records: list[tuple[str, i
 
 
 def _verify_wrapped_payload(
-    artifact: Path, onedir: Path, wrapper_format: str, provenance: BuildProvenance,
+    artifact: Path, onedir: Path, wrapper_format: str, provenance: BuildProvenance, launcher_entry: str,
 ) -> None:
     from scripts.release_zip import content_sha256, onedir_records, payload_content_sha256, read_payload_manifest
 
@@ -254,10 +254,11 @@ def _verify_wrapped_payload(
         _verify_portable_payload(artifact, records)
         return
     manifest = read_payload_manifest(artifact)
-    entry = manifest["entry"]
+    if manifest["entry"] != launcher_entry:
+        raise ValueError("Launcher payload entry does not match the build request")
     if manifest.get("git_sha") != provenance.git_sha:
         raise ValueError("Launcher payload source does not match the supplied onedir")
-    if payload_content_sha256(manifest) != content_sha256(entry, records):
+    if payload_content_sha256(manifest) != content_sha256(launcher_entry, records):
         raise ValueError("Launcher payload files do not match the supplied onedir")
 
 
@@ -268,6 +269,7 @@ def stage_artifact_provenance(
     repo_root: Path = REPO_ROOT,
     onedir: Path | None = None,
     wrapper_format: str | None = None,
+    launcher_entry: str = "metroliza.exe",
 ) -> tuple[Path, ...]:
     """Write one provenance sidecar for each explicitly named packaged binary."""
 
@@ -296,7 +298,7 @@ def stage_artifact_provenance(
         if not artifact.is_file():
             raise FileNotFoundError(f"Packaged artifact is missing: {artifact}")
         if onedir is not None:
-            _verify_wrapped_payload(artifact, onedir, wrapper_format, provenance)
+            _verify_wrapped_payload(artifact, onedir, wrapper_format, provenance, launcher_entry)
         elif _embedded_provenance(artifact) != provenance:
             raise ValueError(f"Manifest does not match the embedded build provenance in {artifact}")
         sidecar_payload = dict(payload)
@@ -327,6 +329,7 @@ def _parser() -> argparse.ArgumentParser:
     stage.add_argument("--artifact", action="append", required=True)
     stage.add_argument("--from-onedir", type=Path, help="Exact existing onedir being wrapped.")
     stage.add_argument("--wrapper-format", choices=("portable", "launcher"))
+    stage.add_argument("--launcher-entry", default="metroliza.exe", help="Expected native launcher entry.")
     return parser
 
 
@@ -359,6 +362,7 @@ def main(argv: list[str] | None = None) -> int:
 
     for sidecar in stage_artifact_provenance(
         args.manifest, args.artifact, onedir=args.from_onedir, wrapper_format=args.wrapper_format,
+        launcher_entry=args.launcher_entry,
     ):
         print(sidecar)
     return 0

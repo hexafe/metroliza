@@ -139,8 +139,13 @@ try {
         if ($LASTEXITCODE -ne 0 -or $payloadLabel -ne $version) {
             if ($Supervised) { throw 'The launcher provenance does not match the onedir and release' }
             $hasProvenance = $false
-            Write-Warning 'This onedir is outside the current release; exact release sidecars will be skipped.'
+            Write-Warning 'The supplied onedir provenance could not be verified against this build; release sidecars will be skipped.'
         }
+    }
+
+    if (-not $hasProvenance -and
+        ((Test-Path -LiteralPath "$Output.provenance.json") -or (Test-Path -LiteralPath "$Output.licenses"))) {
+        throw 'Choose an unused output path to avoid retaining an earlier release identity beside the new EXE'
     }
 
     if ($Supervised) {
@@ -262,7 +267,7 @@ try {
             Invoke-Checked -Executable $identityPython -Arguments @(
                 'scripts/build_provenance.py', 'stage',
                 '--manifest', $provenanceManifestPath,
-                '--from-onedir', $OnedirPath, '--wrapper-format', 'launcher',
+                '--from-onedir', $OnedirPath, '--wrapper-format', 'launcher', '--launcher-entry', $Entry,
                 '--artifact', $Output
             )
             Invoke-Checked -Executable $identityPython -Arguments @(

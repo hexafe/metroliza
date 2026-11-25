@@ -295,11 +295,19 @@ to its temporary directory. The outer process verifies the child manifest and
 launcher provenance, closes the splash, starts the existing supervisor, and
 stays alive until the supervisor exits. This preserves the private incident
 store under the user's application state. It does not reuse an installed cache,
-so startup and temporary disk use can be higher than onedir. The user receives
-only `metroliza_<release>_<build>.exe`; all inner executables are internal.
-Run `scripts/qualify_windows_portable_onefile.py` against the exact Windows EXE
-before claiming packaged behavior. Release still needs its own notice,
-clean-machine, independent-review and approval gates.
+so startup and temporary disk use can be higher than onedir. The portable build
+stages the versioned EXE, its provenance and its notice bundle together.
+The notice supplement verifies the exact Tcl/Tk DLLs shipped by CPython 3.11.9
+on Windows x64 and includes their license terms. Full release inventory and
+licensing review are separate gates.
+
+Run `scripts/qualify_windows_portable_onefile.py` against the exact Windows
+EXE. The splash receipt checks desktop artwork and visibility through extraction
+and records the interval before Qt becomes visible. That interval is a
+measurement without a release threshold. The separate native launcher verifies
+the declared payload against the onedir manifest at packaging time and checks
+each decompressed byte stream during its cold-start smoke. Retain exact binary
+hashes with the resulting receipts.
 For startup-sensitive Windows testing, prefer the onedir artifact: it avoids
 bootloader extraction of the full scientific/OCR payload on every cold launch
 and gives Windows Defender a more stable file set to cache. Treat both outputs
