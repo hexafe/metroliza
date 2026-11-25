@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -11,17 +13,31 @@ import pytest
 from metroliza.app.windows_candidate_profile import run_profile_probe
 from metroliza.app.windows_candidate_qualification import ScenarioFailure
 from metroliza.parsing.parser_plugin_paths import invalidate_parser_plugin_runtime
+from metroliza.parsing.preflight import ParsePreflightService
 from metroliza.ui.parser_preflight_worker import ParsePreflightThread
 from scripts.qualify_windows_candidate_core import (
-    CandidateFailure, _configure_profile_import_probe, _profile_import_probe_evidence, _verify_profile_import_probe,
+    CandidateFailure, SCENARIO_FILE, _child_failure_observation, _configure_profile_import_probe,
+    _profile_import_probe_evidence, _verify_profile_import_probe,
 )
 
 
-def test_real_reports_profile_probe_and_independent_oracle(qapplication_session, tmp_path, monkeypatch):
-    work = tmp_path / "qualification"
+@pytest.mark.parametrize("parent_alias", [False, True], ids=["direct", "aliased-parent"])
+def test_real_reports_profile_probe_and_independent_oracle(qapplication_session, tmp_path, monkeypatch, parent_alias):
+    private = tmp_path
+    if parent_alias:
+        real_parent = tmp_path / "real"
+        real_parent.mkdir()
+        alias = tmp_path / "parent alias"
+        try:
+            alias.symlink_to(real_parent, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("directory symlinks are unavailable")
+        private = alias / "private"
+        private.mkdir()
+    work = private / "qualification"
     child = work / ("core-" + "b" * 32)
     child.mkdir(parents=True)
-    profile_home = tmp_path / "profile-probe-home"
+    profile_home = private / "profile-probe-home"
     profile_home.mkdir()
     scratch = child / "profile-import"
     with monkeypatch.context() as environment:
@@ -49,7 +65,15 @@ def test_real_reports_profile_probe_and_independent_oracle(qapplication_session,
         _verify_profile_import_probe(work, payload)
 
 
-def test_failed_reports_scan_cannot_trigger_profile_approval(qapplication_session, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("fault", "failure"),
+    [
+        ("failed_scan", "profile_probe_unapproved_no_fresh_review"),
+        ("different_source", "profile_probe_unapproved_source_path"),
+        ("missing_source", "profile_probe_unapproved_source_unavailable"),
+    ],
+)
+def test_failed_reports_scan_cannot_trigger_profile_approval(qapplication_session, tmp_path, monkeypatch, fault, failure):
     profile_home = tmp_path / "profile-probe-home"
     profile_home.mkdir()
     scratch = tmp_path / "qualification"
@@ -59,6 +83,18 @@ def test_failed_reports_scan_cannot_trigger_profile_approval(qapplication_sessio
         scanned.append(Path(self.source_path))
         self.failed.emit("synthetic scanner failure")
 
+    inspect = ParsePreflightService._inspect_file
+
+    def change_inspected_source(path, **kwargs):
+        scanned.append(path.parent)
+        inspected = inspect(path, **kwargs)
+        other = scratch / "different-location" / path.name
+        if fault == "different_source":
+            other.parent.mkdir()
+            other.hardlink_to(path)
+            assert other.samefile(path) and other.resolve(strict=True) != path.resolve(strict=True)
+        return replace(inspected, source_path=str(other))
+
     def unexpected_approval(*args, **kwargs):
         pytest.fail("profile approval started after the Reports scan failed")
 
@@ -66,15 +102,40 @@ def test_failed_reports_scan_cannot_trigger_profile_approval(qapplication_sessio
         environment.setattr(Path, "home", classmethod(lambda cls: profile_home))
         environment.delenv("PARSER_EXTERNAL_PLUGIN_PATHS", raising=False)
         environment.delenv("PARSER_DISABLED_PLUGIN_IDS", raising=False)
-        environment.setattr(ParsePreflightThread, "run", fail_scan)
+        if fault == "failed_scan":
+            environment.setattr(ParsePreflightThread, "run", fail_scan)
+        else:
+            environment.setattr(ParsePreflightService, "_inspect_file", staticmethod(change_inspected_source))
         environment.setattr("metroliza.parsing.declarative_parser_profiles.install_profile", unexpected_approval)
         try:
-            with pytest.raises(ScenarioFailure, match="profile_probe_unapproved_selection"):
+            with pytest.raises(ScenarioFailure, match=f"^{failure}$"):
                 run_profile_probe(scratch, profile_home, qapplication_session)
         finally:
             invalidate_parser_plugin_runtime()
     assert scanned == [scratch / "samples"]
     assert not (profile_home / ".metroliza" / "parser_plugins" / "profiles" / "approved").exists()
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        ("profile_probe_unapproved_source_path", "valid_allowlisted"),
+        ("profile_probe_approved_status_unreadable", "valid_allowlisted"),
+        ("profile_probe_unapproved_C:/private/synthetic.pdf", "valid_unclassified"),
+    ],
+)
+def test_host_retains_only_closed_profile_probe_failures(tmp_path, failure, expected):
+    source = "a" * 40
+    (tmp_path / SCENARIO_FILE).write_text(json.dumps({
+        "schema": "metroliza-windows-candidate-core-v1", "schema_version": 1,
+        "scenario": "core", "stage": "profile_import", "status": "failed",
+        "source_sha": source, "failure": failure,
+    }), encoding="ascii")
+    observation = _child_failure_observation(tmp_path, source)
+    assert observation["receipt_state"] == expected and observation["producer_stage"] == "profile_import"
+    retained = failure if expected == "valid_allowlisted" else "unavailable"
+    assert observation["allowlisted_failure"] == retained
+    assert "C:/private/" not in json.dumps(observation)
 
 
 @pytest.mark.parametrize("unsafe_override", ["ambient_home", "external_path", "disabled_profile"])

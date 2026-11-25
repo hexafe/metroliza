@@ -126,11 +126,23 @@ _CLOSED_CHILD_FAILURES = frozenset({
     "closeout_privacy_failed", "closeout_shell_failed", "closeout_lifecycle_failed",
     "uiux_checks_failed", "uiux_observation_size", "uiux_data_failed",
     "uiux_reports_failed", "uiux_tabular_failed", "uiux_controls_failed", "uiux_deadline", "uiux_unexpected",
-    "profile_probe_home_mismatch", "profile_probe_reports_context", "profile_probe_unapproved_selection",
-    "profile_probe_approval", "profile_probe_approved_selection", "profile_probe_import_count", "profile_probe_input_changed",
+    "profile_probe_home_mismatch", "profile_probe_reports_context", "profile_probe_sample_path_unavailable",
+    "profile_probe_approval", "profile_probe_import_count", "profile_probe_input_changed",
+    "profile_probe_unapproved_parse_enabled",
     "TypeError", "ValueError", "KeyError", "OSError", "RuntimeError",
     "AssertionError", "OperationalError", "FileNotFoundError", "PermissionError",
 })
+
+_PROFILE_REVIEW_FAILURES = frozenset(
+    f"profile_probe_{phase}_{failure}"
+    for phase, unexpected_status in (("unapproved", "ready"), ("approved", "unsupported"))
+    for failure in (
+        "review_deadline", "no_fresh_review", "request_not_current", "file_count",
+        "status_invalid", "status_ambiguous", "status_duplicate", "status_unreadable",
+        f"status_{unexpected_status}", "source_unavailable", "source_path",
+        "occurrence", "fingerprint", "selection", "database_exists",
+    )
+)
 
 
 IMPORT_FAILURES = frozenset({
@@ -141,7 +153,7 @@ CLEANUP_FAILURES = frozenset({
     "candidate_report_worker_join_deadline", "candidate_report_owner_close_refused", "candidate_report_cleanup_failed",
 })
 
-_CLOSED_CHILD_FAILURES |= IMPORT_FAILURES | CLEANUP_FAILURES
+_CLOSED_CHILD_FAILURES |= IMPORT_FAILURES | CLEANUP_FAILURES | _PROFILE_REVIEW_FAILURES
 
 
 def _child_failure_details(payload, base_fields, failure):

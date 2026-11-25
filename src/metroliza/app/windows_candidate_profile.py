@@ -86,21 +86,51 @@ def _prepare_inputs(scratch: Path) -> tuple[Path, Path, Path]:
     return profile, expected, sample
 
 
-def _scan_matches(workspace, app, sample: Path, sample_sha256: str, status: ParsePreflightStatus) -> bool:
+def _review_mismatch(
+    workspace, previous, source: Path, occurrence: str, sample_sha256: str, status: ParsePreflightStatus,
+) -> str | None:
+    result = workspace._preflight_result
+    if result is None or result is previous:
+        return "no_fresh_review"
+    if not workspace._preflight_is_current():
+        return "request_not_current"
+    if len(result.files) != 1:
+        return "file_count"
+    item, = result.files
+    if item.status is not status:
+        return f"status_{item.status.value}" if isinstance(item.status, ParsePreflightStatus) else "status_invalid"
+    try:
+        observed_source = Path(item.source_path).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        return "source_unavailable"
+    if observed_source != source:
+        return "source_path"
+    if item.stable_occurrence_id != occurrence:
+        return "occurrence"
+    if item.fingerprint != f"sha256:{sample_sha256}":
+        return "fingerprint"
+    return None
+
+
+def _require_review(
+    workspace, app, source: Path, occurrence: str, sample_sha256: str, database: Path, *, approved: bool,
+) -> None:
+    phase = "approved" if approved else "unapproved"
+    status = ParsePreflightStatus.READY if approved else ParsePreflightStatus.UNSUPPORTED
     previous = workspace._preflight_result
     workspace.scan_button.click()
     _wait(app, lambda: workspace.preflight_thread is None and workspace.metadata_thread is None,
-          deadline_s=30, stage="review")
-    result = workspace._preflight_result
-    if result is previous or not workspace._preflight_is_current() or len(result.files) != 1:
-        return False
-    item, = result.files
-    return (
-        item.status is status
-        and Path(item.source_path) == sample
-        and item.stable_occurrence_id == sample.name
-        and item.fingerprint == f"sha256:{sample_sha256}"
-    )
+          deadline_s=30, stage=f"profile_probe_{phase}_review")
+    mismatch = _review_mismatch(workspace, previous, source, occurrence, sample_sha256, status)
+    if mismatch is not None:
+        raise ScenarioFailure(f"profile_probe_{phase}_{mismatch}")
+    selected = workspace.report_planner.model.selected_ids
+    if (approved and selected != (occurrence,)) or (not approved and selected):
+        raise ScenarioFailure(f"profile_probe_{phase}_selection")
+    if not approved and workspace.parse_button.isEnabled():
+        raise ScenarioFailure("profile_probe_unapproved_parse_enabled")
+    if database.exists():
+        raise ScenarioFailure(f"profile_probe_{phase}_database_exists")
 
 
 def run_profile_probe(scratch: Path, profile_home: Path, app) -> dict:
@@ -117,6 +147,10 @@ def run_profile_probe(scratch: Path, profile_home: Path, app) -> dict:
 
     approved = verify_profile_probe_home(profile_home)
     profile, expected, sample = _prepare_inputs(scratch)
+    try:
+        source = sample.resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        raise ScenarioFailure("profile_probe_sample_path_unavailable") from None
     input_paths = {"profile": profile, "expected": expected, "sample": sample}
     inputs = {name: _sha256(path) for name, path in input_paths.items()}
     database = scratch / "profile-import.sqlite"
@@ -130,19 +164,14 @@ def run_profile_probe(scratch: Path, profile_home: Path, app) -> dict:
             raise ScenarioFailure("profile_probe_reports_context")
         workspace = window.reports_workspace
         invalidate_parser_plugin_runtime()
-        if (not _scan_matches(workspace, app, sample, inputs["sample"], ParsePreflightStatus.UNSUPPORTED)
-                or workspace.report_planner.model.selected_ids or workspace.parse_button.isEnabled()
-                or database.exists()):
-            raise ScenarioFailure("profile_probe_unapproved_selection")
+        _require_review(workspace, app, source, sample.name, inputs["sample"], database, approved=False)
         installed = install_profile(
             profile, sample_paths=(sample,), expected_results_ref=expected, approved_by="synthetic-candidate"
         )
         if installed.approved_dir != approved or installed.sha256 != inputs["profile"] or installed.backup_dir:
             raise ScenarioFailure("profile_probe_approval")
         approval = _sha256(installed.approval_path)
-        if (not _scan_matches(workspace, app, sample, inputs["sample"], ParsePreflightStatus.READY)
-                or workspace.report_planner.model.selected_ids != (sample.name,) or database.exists()):
-            raise ScenarioFailure("profile_probe_approved_selection")
+        _require_review(workspace, app, source, sample.name, inputs["sample"], database, approved=True)
         result = run_ui_import(workspace, app)
         if result is None or result.imported_files != 1 or result.failed_files != 0:
             raise ScenarioFailure("profile_probe_import_count")
