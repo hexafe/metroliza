@@ -1,6 +1,10 @@
 # Changelog (for end users)
 
-## 0.8.0-dev.8 — current version
+## 0.8.0-dev.9 — current version
+
+- See the startup splash while the Windows portable EXE unpacks.
+
+## 0.8.0-dev.8 — previous development version
 
 - Run recipes across several CSV files and see the expected Excel and HTML outputs before starting.
 - Keep compatible CSV settings after a reload and preserve report corrections during another review.

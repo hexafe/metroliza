@@ -10,7 +10,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
     def test_load_metadata_has_required_fields(self):
         metadata = sync_release_metadata.load_metadata()
 
-        self.assertEqual(metadata.release_version, "0.8.0-dev.8")
+        self.assertEqual(metadata.release_version, "0.8.0-dev.9")
         self.assertEqual(metadata.build, "")
         self.assertEqual(metadata.version_label, metadata.release_version)
         self.assertEqual(metadata.public_version_label, metadata.release_version)
@@ -50,6 +50,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
         self.assertEqual(
             current_bullets,
             [
+                '- See the Metroliza splash while the Windows portable EXE unpacks<br>',
                 '- Run a CSV recipe on several files, see both output names up front, and keep compatible settings after refreshing the input<br>',
                 '- Keep report corrections after reviewing again and choose between reports containing NOK and only NOK measurements<br>',
                 '- Reopen a saved workspace, restore a database backup to a new file, and find recent results in analysis history<br>',
@@ -122,7 +123,7 @@ class ReleaseMetadataSyncTests(unittest.TestCase):
             updated = temp_readme.read_text(encoding="utf-8")
             self.assertIn(f"Current release highlight (`{metadata.public_version_label}`):", updated)
             self.assertIn(f"### Changelog highlights (release `{metadata.public_version_label}`)", updated)
-            self.assertIn("0.8.0-dev.8", updated)
+            self.assertIn("0.8.0-dev.9", updated)
             self.assertNotIn("2000.01rc1", updated)
 
     def test_sync_changelog_writes_current_header(self):

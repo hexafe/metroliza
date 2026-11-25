@@ -102,10 +102,58 @@ def test_artifact_sidecar_hashes_only_explicit_binary(tmp_path: Path, monkeypatc
     with pytest.raises(ValueError, match="does not match the embedded"):
         build_provenance.stage_artifact_provenance(manifest, (exact,))
 
-    # A wrapper preserves the embedded payload's original build time.
+    with pytest.raises(ValueError, match="explicit format"):
+        build_provenance.stage_artifact_provenance(embedded, (stale,), onedir=exact.parent)
+
+
+def test_portable_wrapper_stage_binds_contents_independent_of_filename(tmp_path, monkeypatch):
+    import sys
+    from types import ModuleType
+
+    onedir = tmp_path / "payload"
+    embedded = onedir / build_provenance.ONEDIR_MANIFEST
+    embedded.parent.mkdir(parents=True)
+    embedded.write_text(json.dumps(_manifest_payload()))
+    app = onedir / "metroliza.exe"
+    app.write_bytes(b"current application")
+    sidecar = app.with_suffix(".exe.provenance.json")
+    sidecar.write_text(json.dumps(_manifest_payload() | {"artifact": build_provenance._artifact_identity(app)}))
+    artifact = tmp_path / "renamed.exe"
+    artifact.write_bytes(b"synthetic portable")
+    manifest_name = f"metroliza_payload/{build_provenance.ONEDIR_MANIFEST.as_posix()}"
+    files = {
+        manifest_name: embedded.read_bytes(),
+        "metroliza_payload/metroliza.exe": app.read_bytes(),
+        "metroliza_payload/metroliza.exe.provenance.json": sidecar.read_bytes(),
+    }
+
+    class SyntheticArchive:
+        toc = files
+
+        def extract(self, name):
+            return files[name]
+
+    for name in ("PyInstaller", "PyInstaller.archive", "PyInstaller.archive.readers"):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setattr(sys.modules["PyInstaller.archive.readers"], "CArchiveReader",
+                        lambda _: SyntheticArchive(), raising=False)
+    monkeypatch.setattr(build_provenance, "inspect_git_identity", lambda _: ("a" * 40, False))
     monkeypatch.setenv(build_provenance.BUILD_TIMESTAMP_ENV, "2026-07-16T11:00:00Z")
-    wrapped = build_provenance.stage_artifact_provenance(embedded, (stale,), onedir=exact.parent)
-    assert json.loads(wrapped[0].read_text(encoding="utf-8"))["built_at_utc"] == _manifest_payload()["built_at_utc"]
+
+    wrapped = build_provenance.stage_artifact_provenance(
+        embedded, (artifact,), onedir=onedir, wrapper_format="portable",
+    )
+    assert json.loads(wrapped[0].read_text())["built_at_utc"] == _manifest_payload()["built_at_utc"]
+    files["metroliza_payload/metroliza.exe"] = b"stale application"
+    with pytest.raises(ValueError, match="does not match the supplied onedir: metroliza.exe"):
+        build_provenance.stage_artifact_provenance(
+            embedded, (artifact,), onedir=onedir, wrapper_format="portable",
+        )
+    files.pop("metroliza_payload/metroliza.exe")
+    with pytest.raises(ValueError, match="file list"):
+        build_provenance.stage_artifact_provenance(
+            embedded, (artifact,), onedir=onedir, wrapper_format="portable",
+        )
 
 
 def test_artifact_sidecar_requires_an_explicit_artifact(tmp_path: Path) -> None:

@@ -137,7 +137,9 @@ try {
     if ($hasProvenance) {
         $payloadLabel = & $identityPython scripts/build_provenance.py validate-onedir --onedir $OnedirPath
         if ($LASTEXITCODE -ne 0 -or $payloadLabel -ne $version) {
-            throw 'The launcher provenance does not match the onedir and release'
+            if ($Supervised) { throw 'The launcher provenance does not match the onedir and release' }
+            $hasProvenance = $false
+            Write-Warning 'This onedir is outside the current release; exact release sidecars will be skipped.'
         }
     }
 
@@ -260,7 +262,7 @@ try {
             Invoke-Checked -Executable $identityPython -Arguments @(
                 'scripts/build_provenance.py', 'stage',
                 '--manifest', $provenanceManifestPath,
-                '--from-onedir', $OnedirPath,
+                '--from-onedir', $OnedirPath, '--wrapper-format', 'launcher',
                 '--artifact', $Output
             )
             Invoke-Checked -Executable $identityPython -Arguments @(

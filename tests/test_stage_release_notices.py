@@ -88,3 +88,47 @@ def test_stale_inventory_blocks_notice_staging(tmp_path: Path) -> None:
         stage_release_notices(dist_dir=dist, inventory_path=stale)
 
     assert not dist.exists()
+
+
+def test_portable_notices_check_actual_outer_runtime_and_stage_its_terms(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+    from types import ModuleType
+
+    from scripts import stage_release_notices as stage
+
+    inventory = tmp_path / "portable-splash-inventory.json"
+    runtime = {"tcl86t.dll": b"tcl", "tk86t.dll": b"tk"}
+    files = {}
+    for dll, content in runtime.items():
+        terms = tmp_path / f"{dll[:2]}-license.terms"
+        terms.write_text("test license", encoding="utf-8")
+        files[dll] = {
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "license_file": terms.name,
+            "license_sha256_lf": hashlib.sha256(terms.read_bytes()).hexdigest(),
+        }
+    inventory.write_text(json.dumps({"files": files}))
+    monkeypatch.setattr(stage, "PORTABLE_SPLASH_INVENTORY", inventory)
+
+    class SyntheticArchive:
+        toc = runtime
+
+        def extract(self, name):
+            return runtime[name]
+
+    for name in ("PyInstaller", "PyInstaller.archive", "PyInstaller.archive.readers"):
+        monkeypatch.setitem(sys.modules, name, ModuleType(name))
+    monkeypatch.setattr(sys.modules["PyInstaller.archive.readers"], "CArchiveReader",
+                        lambda _: SyntheticArchive(), raising=False)
+    exe = tmp_path / "envelope.exe"
+    exe.write_bytes(b"synthetic")
+
+    _, manifest = stage_release_notices(dist_dir=tmp_path, artifacts=(exe,), portable_splash=True)
+    assert {item["name"] for item in json.loads(manifest.read_text())["files"]} >= {
+        inventory.name, *(item["license_file"] for item in files.values()),
+    }
+
+    runtime["tk86t.dll"] = b"other tk"
+    with pytest.raises(ValueError, match="tk86t.dll does not match its notice inventory"):
+        stage_release_notices(dist_dir=tmp_path, artifacts=(exe,), portable_splash=True)

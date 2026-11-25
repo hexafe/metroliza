@@ -210,8 +210,8 @@ def _artifact_identity(artifact: Path) -> dict[str, object]:
     }
 
 
-def _embedded_provenance(artifact: Path, *, wrapped: bool = False) -> BuildProvenance:
-    """Read a PyInstaller onedir or onefile's own manifest before staging."""
+def _embedded_provenance(artifact: Path) -> BuildProvenance:
+    """Read the manifest belonging to a direct PyInstaller build."""
 
     if artifact.stem == "metroliza":
         return validate_build_provenance_manifest(artifact.parent / ONEDIR_MANIFEST)
@@ -219,14 +219,46 @@ def _embedded_provenance(artifact: Path, *, wrapped: bool = False) -> BuildProve
     from PyInstaller.archive.readers import CArchiveReader
 
     archive = CArchiveReader(str(artifact))
-    expected_name = (
-        (Path("metroliza_payload") / ONEDIR_MANIFEST).as_posix()
-        if wrapped else ONEDIR_MANIFEST.relative_to("_internal").as_posix()
-    )
+    expected_name = ONEDIR_MANIFEST.relative_to("_internal").as_posix()
     names = [name for name in archive.toc if name.replace("\\", "/") == expected_name]
     if len(names) != 1:
         raise ValueError(f"Expected one embedded build provenance manifest in {artifact}")
     return _decode_provenance(archive.extract(names[0]))
+
+
+def _verify_portable_payload(artifact: Path, expected_records: list[tuple[str, int, str]]) -> None:
+    from PyInstaller.archive.readers import CArchiveReader
+
+    prefix = "metroliza_payload/"
+    archive = CArchiveReader(str(artifact))
+    names = {
+        normalized.removeprefix(prefix): name
+        for name in archive.toc
+        if (normalized := name.replace("\\", "/")).startswith(prefix)
+    }
+    if names.keys() != {name for name, _, _ in expected_records}:
+        raise ValueError("Portable payload file list does not match the supplied onedir")
+    for name, size, sha256 in expected_records:
+        content = archive.extract(names[name])
+        if len(content) != size or hashlib.sha256(content).hexdigest() != sha256:
+            raise ValueError(f"Portable payload file does not match the supplied onedir: {name}")
+
+
+def _verify_wrapped_payload(
+    artifact: Path, onedir: Path, wrapper_format: str, provenance: BuildProvenance,
+) -> None:
+    from scripts.release_zip import content_sha256, onedir_records, payload_content_sha256, read_payload_manifest
+
+    records = onedir_records(onedir)
+    if wrapper_format == "portable":
+        _verify_portable_payload(artifact, records)
+        return
+    manifest = read_payload_manifest(artifact)
+    entry = manifest["entry"]
+    if manifest.get("git_sha") != provenance.git_sha:
+        raise ValueError("Launcher payload source does not match the supplied onedir")
+    if payload_content_sha256(manifest) != content_sha256(entry, records):
+        raise ValueError("Launcher payload files do not match the supplied onedir")
 
 
 def stage_artifact_provenance(
@@ -235,11 +267,16 @@ def stage_artifact_provenance(
     *,
     repo_root: Path = REPO_ROOT,
     onedir: Path | None = None,
+    wrapper_format: str | None = None,
 ) -> tuple[Path, ...]:
     """Write one provenance sidecar for each explicitly named packaged binary."""
 
     if not artifacts:
         raise ValueError("At least one explicit artifact path is required")
+    if (onedir is None and wrapper_format is not None) or (
+        onedir is not None and wrapper_format not in {"portable", "launcher"}
+    ):
+        raise ValueError("Wrapper staging requires a payload onedir and its explicit format")
     manifest = Path(manifest_path).resolve()
     if onedir is None:
         # A direct spec invocation generates its own timestamp. Its exact embedded
@@ -258,9 +295,9 @@ def stage_artifact_provenance(
         artifact = Path(raw_artifact).resolve()
         if not artifact.is_file():
             raise FileNotFoundError(f"Packaged artifact is missing: {artifact}")
-        is_portable = artifact.name == current_identity(repo_root).portable_name
-        if ((onedir is None or is_portable)
-                and _embedded_provenance(artifact, wrapped=is_portable) != provenance):
+        if onedir is not None:
+            _verify_wrapped_payload(artifact, onedir, wrapper_format, provenance)
+        elif _embedded_provenance(artifact) != provenance:
             raise ValueError(f"Manifest does not match the embedded build provenance in {artifact}")
         sidecar_payload = dict(payload)
         sidecar_payload["artifact"] = _artifact_identity(artifact)
@@ -289,6 +326,7 @@ def _parser() -> argparse.ArgumentParser:
     stage.add_argument("--manifest", required=True)
     stage.add_argument("--artifact", action="append", required=True)
     stage.add_argument("--from-onedir", type=Path, help="Exact existing onedir being wrapped.")
+    stage.add_argument("--wrapper-format", choices=("portable", "launcher"))
     return parser
 
 
@@ -319,7 +357,9 @@ def main(argv: list[str] | None = None) -> int:
         print(validate_onedir_provenance(args.onedir).release_label)
         return 0
 
-    for sidecar in stage_artifact_provenance(args.manifest, args.artifact, onedir=args.from_onedir):
+    for sidecar in stage_artifact_provenance(
+        args.manifest, args.artifact, onedir=args.from_onedir, wrapper_format=args.wrapper_format,
+    ):
         print(sidecar)
     return 0
 

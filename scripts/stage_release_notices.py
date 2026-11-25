@@ -20,6 +20,9 @@ from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_file
 
 DEFAULT_NOTICE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
 DEFAULT_INVENTORY = REPO_ROOT / INVENTORY_PATH
+PORTABLE_SPLASH_INVENTORY = (
+    REPO_ROOT / "docs/release_checks/portable_splash_notices/portable-splash-inventory.json"
+)
 
 
 def _sha256(path: Path) -> str:
@@ -28,6 +31,24 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def portable_splash_notice_sources(artifact: Path) -> tuple[Path, ...]:
+    """Validate the outer Tcl/Tk libraries against the matching upstream notices."""
+    from PyInstaller.archive.readers import CArchiveReader
+
+    archive = CArchiveReader(str(artifact))
+    inventory = json.loads(PORTABLE_SPLASH_INVENTORY.read_text(encoding="utf-8"))
+    sources = [PORTABLE_SPLASH_INVENTORY]
+    for dll, item in inventory["files"].items():
+        if dll not in archive.toc or hashlib.sha256(archive.extract(dll)).hexdigest() != item["sha256"]:
+            raise ValueError(f"Portable splash {dll} does not match its notice inventory")
+        terms = PORTABLE_SPLASH_INVENTORY.with_name(item["license_file"])
+        content = terms.read_bytes().replace(b"\r\n", b"\n")
+        if hashlib.sha256(content).hexdigest() != item["license_sha256_lf"]:
+            raise ValueError(f"Portable splash notice does not match its inventory: {terms.name}")
+        sources.append(terms)
+    return tuple(sources)
 
 
 def _copy_notice_bundle(target_dir: Path, sources: tuple[Path, ...]) -> Path:
@@ -60,6 +81,7 @@ def stage_release_notices(
     artifacts: tuple[str | Path, ...] = (),
     notice_path: str | Path = DEFAULT_NOTICE,
     inventory_path: str | Path = DEFAULT_INVENTORY,
+    portable_splash: bool = False,
 ) -> tuple[Path, ...]:
     """Stage one root bundle plus an artifact-specific visible sidecar directory."""
 
@@ -73,15 +95,18 @@ def stage_release_notices(
     validate_inventory(inventory, REPO_ROOT)
     _, plotly_notice = verified_plotly_files(REPO_ROOT / "src" / PLOTLY_ASSET_DIRECTORY)
     sources = (notice, inventory, plotly_notice)
-    manifests = [_copy_notice_bundle(dist / "release-notices", sources)]
     candidates = {Path(path).resolve() for path in artifacts}
+    if portable_splash and len(candidates) != 1:
+        raise ValueError("Portable splash notices require one explicit envelope EXE")
     if not candidates:
         candidates.update(discover_release_artifacts(dist))
+    manifests = [_copy_notice_bundle(dist / "release-notices", sources)]
     for artifact in sorted(candidates):
         if not artifact.is_file():
             raise FileNotFoundError(f"Packaged artifact is missing: {artifact}")
+        artifact_sources = (*sources, *portable_splash_notice_sources(artifact)) if portable_splash else sources
         sidecar_dir = artifact.with_name(f"{artifact.name}.licenses")
-        manifests.append(_copy_notice_bundle(sidecar_dir, sources))
+        manifests.append(_copy_notice_bundle(sidecar_dir, artifact_sources))
     return tuple(manifests)
 
 
@@ -91,12 +116,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifact", action="append", default=[])
     parser.add_argument("--notice", default=str(DEFAULT_NOTICE))
     parser.add_argument("--inventory", default=str(DEFAULT_INVENTORY))
+    parser.add_argument("--portable-splash", action="store_true", help="Check and stage the envelope's Tcl/Tk notices.")
     args = parser.parse_args(argv)
     manifests = stage_release_notices(
         dist_dir=args.dist_dir,
         artifacts=tuple(args.artifact),
         notice_path=args.notice,
         inventory_path=args.inventory,
+        portable_splash=args.portable_splash,
     )
     for manifest in manifests:
         print(manifest)

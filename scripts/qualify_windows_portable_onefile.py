@@ -170,12 +170,58 @@ def _verify_outer_splash(artifact: Path) -> None:
         raise RuntimeError("portable_outer_splash_or_runtime_missing")
 
 
+def _read_observations(path: Path) -> list[dict]:
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+
+
+def _splash_observations(windows: list[dict], frames: list[dict], events: list[dict], outcome: dict) -> dict:
+    started = outcome.get("launched_epoch_ms")
+    pid = outcome.get("process_id")
+
+    def relative_time(epoch_ms):
+        return round(epoch_ms - started, 1) if started is not None and epoch_ms is not None else None
+
+    entered = next((e["epoch_ms"] for e in events if e["name"] == "portable_python_entry"), None)
+    closed = next((e["epoch_ms"] for e in events if e["name"] == "bootloader_splash_closed"
+                   and e.get("phase") == "portable_handoff"), None)
+    painted = next((e["epoch_ms"] for e in events if e["name"] == "splash_finished_after_first_paint"), None)
+    visible = [
+        sample["epoch_ms"] for sample in windows
+        if any(w["pid"] == pid and w["kind"] == "bootloader_splash" for w in sample.get("windows", ()))
+    ]
+    artwork = [
+        (f["epoch_ms"], f["bootloader_image_error"])
+        for f in frames
+        if pid is not None and f.get("bootloader_pid") == pid and "bootloader_image_error" in f
+    ]
+    application = [
+        sample["epoch_ms"] for sample in windows
+        if any(w["kind"] in ("qt_splash", "main_window") for w in sample.get("windows", ()))
+    ]
+    return {
+        "passed": bool(
+            outcome["status"] == "ok" and None not in (started, entered, closed, painted)
+            and visible and application and started <= visible[0] < entered <= closed <= painted
+            and visible[-1] <= painted
+            and any(started <= timestamp < entered and error <= 6 for timestamp, error in artwork)
+        ),
+        "application_exit_code": outcome.get("exit_code"),
+        "portable_python_entry_ms": relative_time(entered),
+        "splash_close_requested_ms": relative_time(closed),
+        "qt_first_paint_finished_ms": relative_time(painted),
+        "bootloader_visible_ms": [relative_time(timestamp) for timestamp in visible],
+        "first_qt_window_ms": relative_time(application[0]) if application else None,
+        "artwork_samples": [{"ms": relative_time(timestamp), "error": error} for timestamp, error in artwork],
+    }
+
+
 def _observe_cold_splash(artifact: Path, receipt: Path) -> None:
     from scripts.build_provenance import sha256_file
     from scripts.measure_windows_first_run_timeline import Timeline, load_events
 
     receipt.mkdir(parents=True, exist_ok=False)
-    timeline = Timeline(receipt, frames=False, frame_every_ms=0)
+    artwork = Path(__file__).resolve().parents[1] / "packaging" / "metroliza_bootloader_splash.png"
+    timeline = Timeline(receipt, frames=False, frame_every_ms=80, bootloader_image=artwork)
     try:
         fresh = timeline.work / artifact.name
         shutil.copy2(artifact, fresh)
@@ -188,31 +234,18 @@ def _observe_cold_splash(artifact: Path, receipt: Path) -> None:
             extra_env={"PYI_SPLASH_SUPPRESS": "0", "USERPROFILE": str(timeline.state)},
         )
         run = receipt / "runs" / "portable-cold"
-        samples_path = run / "window_samples.json"
-        windows = json.loads(samples_path.read_text(encoding="utf-8")) if samples_path.is_file() else []
-        events = load_events(run / "profile.jsonl")
-        entered = next((event["epoch_ms"] for event in events if event["name"] == "portable_python_entry"), None)
-        closed = next((event["epoch_ms"] for event in events if event["name"] == "bootloader_splash_closed"
-                       and event.get("phase") == "portable_handoff"), None)
-        painted = next((event["epoch_ms"] for event in events if event["name"] == "main_window_first_paint_tick"), None)
-        visible = [
-            sample["epoch_ms"] for sample in windows
-            if any(window["pid"] == outcome.get("process_id") and window["class"].casefold().startswith("tk")
-                   for window in sample["windows"])
-        ]
-        valid = bool(
-            outcome["status"] == "ok" and visible
-            and None not in (entered, closed, painted)
-            and min(visible) < entered <= closed <= painted and max(visible) <= painted
+        observation = _splash_observations(
+            _read_observations(run / "window_samples.json"),
+            _read_observations(run / "frames.json"),
+            load_events(run / "profile.jsonl"),
+            outcome,
         )
         _extraction_clean(timeline.temp)
         (receipt / "portable-splash.json").write_text(json.dumps({
-            "sha256": sha256, "size_bytes": fresh.stat().st_size, "visible_samples": len(visible),
-            "first_splash_ms_before_python": entered - min(visible) if visible and entered is not None else None,
-            "passed": valid,
+            "sha256": sha256, "size_bytes": fresh.stat().st_size, **observation,
         }, indent=2), encoding="utf-8")
-        if not valid:
-            raise RuntimeError("portable_splash_not_observed_before_python_and_through_handoff")
+        if not observation["passed"]:
+            raise RuntimeError("portable_splash_artwork_or_startup_handoff_not_observed")
     finally:
         timeline.close()
 

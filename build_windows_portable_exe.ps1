@@ -35,9 +35,9 @@ try {
     }
     & $python scripts/release_identity.py verify-pe --input $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable PE version mismatch' }
-    & $python scripts/build_provenance.py stage --manifest $provenancePath --from-onedir $onedir --artifact $outer
+    & $python scripts/build_provenance.py stage --manifest $provenancePath --from-onedir $onedir --wrapper-format portable --artifact $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable provenance staging failed' }
-    & $python scripts/stage_release_notices.py --dist-dir dist --artifact $outer
+    & $python scripts/stage_release_notices.py --dist-dir dist --artifact $outer --portable-splash
     if ($LASTEXITCODE -ne 0) { throw 'Portable notice staging failed' }
     Write-Host "Portable supervised EXE: $outer"
 }

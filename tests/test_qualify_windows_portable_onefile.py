@@ -94,3 +94,40 @@ def test_failure_detail_survives_a_missing_or_garbled_receipt(tmp_path: Path) ->
     assert qualify._failure_detail(tmp_path) == "no_failure_receipt"
     (tmp_path / "failure.json").write_text("{not json", encoding="ascii")
     assert qualify._failure_detail(tmp_path) == "no_failure_receipt"
+
+
+@pytest.mark.parametrize("frame_pid,error,frame_time,expected", [
+    (42, 0.0, 120, True),
+    (91, 0.0, 120, False),
+    (42, 20.0, 120, False),
+    (42, 0.0, 220, False),
+])
+def test_splash_receipt_requires_desktop_artwork_before_portable_entry(frame_pid, error, frame_time, expected):
+    windows = [
+        {"epoch_ms": 120, "windows": [{"pid": 42, "kind": "bootloader_splash"}]},
+        {"epoch_ms": 400, "windows": [{"pid": 43, "kind": "main_window"}]},
+    ]
+    frames = [{"epoch_ms": frame_time, "bootloader_pid": frame_pid, "bootloader_image_error": error}]
+    events = [
+        {"epoch_ms": 200, "name": "portable_python_entry"},
+        {"epoch_ms": 250, "name": "bootloader_splash_closed", "phase": "portable_handoff"},
+        {"epoch_ms": 425, "name": "splash_finished_after_first_paint"},
+    ]
+    observation = qualify._splash_observations(
+        windows, frames, events, {"launched_epoch_ms": 100, "process_id": 42, "status": "ok"},
+    )
+
+    assert observation["passed"] is expected
+    assert observation["bootloader_visible_ms"] == [20.0]
+    assert observation["splash_close_requested_ms"] == 150.0
+    assert observation["first_qt_window_ms"] == 300.0
+
+
+def test_splash_image_comparison_rejects_a_blank_window():
+    from PIL import Image
+    from scripts.measure_windows_first_run_timeline import splash_image_error
+
+    artwork = Path(__file__).resolve().parents[1] / "packaging" / "metroliza_bootloader_splash.png"
+    with Image.open(artwork) as image:
+        assert splash_image_error(image, artwork) == 0.0
+        assert splash_image_error(Image.new("RGB", image.size), artwork) > 6.0

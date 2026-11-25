@@ -217,6 +217,7 @@ jobs:
       - name: Qualify first launch, reopen, core outputs, incident and extraction cleanup
         shell: pwsh
         run: |
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
           $artifactNames = python scripts/release_identity.py names | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { throw 'Canonical artifact identity failed' }
           $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
@@ -325,12 +326,15 @@ jobs:
           if ((git rev-parse HEAD).Trim() -ne $env:GITHUB_SHA) { throw 'Source head changed' }
           if (@(git status --porcelain).Count -ne 0) { throw 'Source checkout became dirty' }
 
-      - name: Retain the single user-facing portable envelope EXE
+      - name: Retain the portable envelope and release sidecars
         if: success()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-supervised-portable-onefile
-          path: dist/Metroliza-*-windows-x64-portable.exe
+          path: |
+            dist/Metroliza-*-windows-x64-portable.exe
+            dist/Metroliza-*-windows-x64-portable.exe.provenance.json
+            dist/Metroliza-*-windows-x64-portable.exe.licenses/**
           if-no-files-found: error
 
       - name: Retain the portable startup splash receipt
