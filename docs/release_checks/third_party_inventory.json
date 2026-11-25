@@ -1,5 +1,28 @@
 {
   "generated_at": "2026-10-30T22:00:27.887430+00:00",
+  "provenance": {
+    "dependency_inputs": {
+      "packaging/launcher/Cargo.lock": "c10918070ce6e68601ee84d7080f8868fa6ed1037c8989b76d13779eb475055e",
+      "packaging/launcher/Cargo.toml": "52e4b17ae98c273b3e00ad50ef662dfc9f5788247612c99c8c96fa86173a952b",
+      "packaging/windows-rc-constraints.txt": "066a2269c6183e4a5e6a6bfc30b67d7756940640726c4a2f769846951f5c76a1",
+      "requirements-build.txt": "63b5fdbab9a862beac5ddd01887042a3f5d42a4ef45ea9dc61ba688d511a21ee",
+      "requirements-ocr-benchmark.txt": "a671bdfe1d9c924c996efa45ef0d1877d1c24df3472460bbc3a5037dc2932dfe",
+      "requirements-ocr.txt": "b96de4836c8948d46aa2c469f904c18b26ec9b355f1f8368b2a8eb94d107f88c",
+      "requirements.txt": "723cdfba0c8b22b41bbf118da283d79d282ee8f6e945001db9827a0e426045df",
+      "src/metroliza/native/chart_renderer/Cargo.lock": "48def1f573231d141e851e91112551356daf664a077b6ef92eff98652df38124",
+      "src/metroliza/native/chart_renderer/Cargo.toml": "191281958e6071ab06e876215f785feb112b93fb382856d175723b8a01b28ddd",
+      "src/metroliza/native/cmm_parser/Cargo.lock": "ae75b3232aa9183e4a7bd803547c0d749e677f6f835fde944d2b3fada1841d52",
+      "src/metroliza/native/cmm_parser/Cargo.toml": "1796bfe0fafa65c1188fff1397e877c8448ddabb9d153d840db5023c4db2e993",
+      "src/metroliza/native/comparison_stats_bootstrap/Cargo.lock": "b69f752c396375c7247a29d1fe03df1aa52a364d61bf0b97ace9a9a3c24315fa",
+      "src/metroliza/native/comparison_stats_bootstrap/Cargo.toml": "337d965ada9bfb029f86594941fe352a4f9ca49d5b0c9401e51383deb8097765",
+      "src/metroliza/native/distribution_fit_ad/Cargo.lock": "c6be11f6426f83b918b5fa49c95f35f79821f16aa12268576721e37ab1a4759a",
+      "src/metroliza/native/distribution_fit_ad/Cargo.toml": "b03b1d673a88ba7416a9046441709f96ef6faa0dc7a3021453e05b04d9ab064a",
+      "src/metroliza/native/group_stats_coercion/Cargo.lock": "22e6c8b33b5a3e0b78026e469927a4b15bd78e4d017f990226ec6d6401469f3d",
+      "src/metroliza/native/group_stats_coercion/Cargo.toml": "d049f1c4e7e93b0ffba5c6b7916365d8a080274de29a8d9c4dd65c462e0545f3"
+    },
+    "records_sha256": "23ef628445cde4796c4bccbbcc866ab163d9a0b19ef594e615c2e31151e7b509",
+    "release_label": "0.8.0-dev.8"
+  },
   "python": {
     "bundled_roots": [
       "google-auth",
@@ -1565,7 +1588,7 @@
     ],
     "warnings": []
   },
-  "schema_version": 1,
+  "schema_version": 2,
   "vendored_plotly": {
     "files": [
       {

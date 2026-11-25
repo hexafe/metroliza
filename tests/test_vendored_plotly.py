@@ -8,6 +8,7 @@ import pytest
 
 from metroliza.charts import plotly_runtime_assets
 from metroliza.charts.plotly_runtime_assets import copy_plotly_runtime_assets
+from scripts.third_party_inventory_contract import INVENTORY_PATH
 from scripts.vendored_plotly import (
     PLOTLY_ASSET_DIRECTORY,
     PLOTLY_ASSET_HASHES,
@@ -22,7 +23,7 @@ SOURCE_ASSETS = ROOT / "src" / PLOTLY_ASSET_DIRECTORY
 
 
 def test_release_inventory_matches_the_vendored_plotly_distribution():
-    inventory = json.loads((ROOT / "docs/release_checks/third_party_inventory.json").read_bytes())
+    inventory = json.loads((ROOT / INVENTORY_PATH).read_bytes())
 
     assert inventory["vendored_plotly"] == plotly_inventory(SOURCE_ASSETS)
 

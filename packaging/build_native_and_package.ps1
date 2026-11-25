@@ -37,6 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $originalBuildProvenancePath = $env:METROLIZA_BUILD_PROVENANCE_PATH
+$originalBuildTimestamp = $env:METROLIZA_BUILD_TIMESTAMP_UTC
 
 $invocationBoundParameters = @{}
 foreach ($entry in $PSBoundParameters.GetEnumerator()) {
@@ -438,6 +439,7 @@ try {
             $provenanceManifestPath = $env:METROLIZA_BUILD_PROVENANCE_PATH
             if ([string]::IsNullOrWhiteSpace($provenanceManifestPath)) {
                 $provenanceManifestPath = Join-Path $repoRoot 'build/provenance/build_provenance.json'
+                $env:METROLIZA_BUILD_TIMESTAMP_UTC = [DateTime]::UtcNow.ToString('o')
                 Invoke-CheckedPythonCommand -Arguments @(
                     'scripts/build_provenance.py',
                     'generate',
@@ -545,5 +547,6 @@ finally {
     else {
         $env:METROLIZA_BUILD_PROVENANCE_PATH = $originalBuildProvenancePath
     }
+    $env:METROLIZA_BUILD_TIMESTAMP_UTC = $originalBuildTimestamp
     Pop-Location
 }

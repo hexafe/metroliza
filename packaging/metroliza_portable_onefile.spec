@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT_DIR / "src"))
 from pyinstaller_common import read_version_label
 from metroliza_portable_entry import _verified_launcher
 from metroliza.app.release_identity import ReleaseIdentity
+from scripts.build_provenance import validate_onedir_provenance
 
 if sys.platform != "win32":
     raise RuntimeError("portable_onefile_is_windows_only")
@@ -24,6 +25,7 @@ OUTPUT_NAME = ReleaseIdentity.parse(VERSION_LABEL).portable_name.removesuffix(".
 INNER = Path(DISTPATH) / f"metroliza_P_{VERSION_LABEL}_onedir"
 if _verified_launcher(INNER) is None:
     raise ValueError("portable_onefile_requires_verified_supervised_onedir")
+validate_onedir_provenance(INNER, ROOT_DIR)
 
 analysis = Analysis(
     [str(SPEC_DIR / "metroliza_portable_entry.py")],
@@ -38,8 +40,19 @@ analysis = Analysis(
     noarchive=False,
 )
 pyz = PYZ(analysis.pure)
+# The envelope bootloader is the only process running while the onedir extracts.
+splash = Splash(
+    str(SPEC_DIR / "metroliza_bootloader_splash.png"),
+    binaries=analysis.binaries,
+    datas=analysis.datas,
+    text_pos=(28, 188),
+    text_size=13,
+    text_color="#f8fafc",
+    text_default="Uruchamianie Metrolizy...",
+)
 exe = EXE(
-    pyz, analysis.scripts, analysis.binaries, analysis.zipfiles, analysis.datas,
+    pyz, splash, analysis.scripts, analysis.binaries, analysis.zipfiles, analysis.datas,
+    splash.binaries,
     [], name=OUTPUT_NAME, debug=False, bootloader_ignore_signals=False,
     version=VERSION_RESOURCE,
     strip=False, upx=False, console=False, disable_windowed_traceback=True,

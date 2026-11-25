@@ -10,10 +10,13 @@ import re
 import sys
 from dataclasses import dataclass
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from metroliza.app.release_identity import ReleaseIdentity  # noqa: E402
-
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+for import_root in (REPO_ROOT, REPO_ROOT / "src"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
+from metroliza.app.release_identity import ReleaseIdentity  # noqa: E402
+from scripts.third_party_inventory_contract import INVENTORY_PATH, validate_inventory  # noqa: E402
+
 VERSION_MODULE = REPO_ROOT / "src" / "metroliza" / "app" / "version.py"
 README_PATH = REPO_ROOT / "README.md"
 CHANGELOG_PATH = REPO_ROOT / "CHANGELOG.md"
@@ -129,6 +132,12 @@ def main() -> int:
         help="Check consistency without writing files (fails if drift is detected).",
     )
     args = parser.parse_args()
+    if args.check:
+        try:
+            validate_inventory(REPO_ROOT / INVENTORY_PATH, REPO_ROOT)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
     return run_sync(apply=not args.check)
 
 

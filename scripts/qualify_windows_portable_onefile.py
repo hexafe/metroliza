@@ -156,14 +156,79 @@ def _run(
     print(f"{scenario}: exit {result.returncode}, elapsed {round(time.monotonic()-started, 2)}s{note}, extraction clean")
 
 
+def _verify_outer_splash(artifact: Path) -> None:
+    from PyInstaller.archive.readers import CArchiveReader
+
+    archive = CArchiveReader(str(artifact))
+    resources = [name for name, entry in archive.toc.items() if entry[-1] == "l"]
+    dlls = {
+        match.group(1) for name in archive.toc
+        if "/" not in name.replace("\\", "/")
+        and (match := re.fullmatch(r"(tcl|tk)[0-9]+t?\.dll", name.lower()))
+    }
+    if len(resources) != 1 or not archive.extract(resources[0]) or dlls != {"tcl", "tk"}:
+        raise RuntimeError("portable_outer_splash_or_runtime_missing")
+
+
+def _observe_cold_splash(artifact: Path, receipt: Path) -> None:
+    from scripts.build_provenance import sha256_file
+    from scripts.measure_windows_first_run_timeline import Timeline, load_events
+
+    receipt.mkdir(parents=True, exist_ok=False)
+    timeline = Timeline(receipt, frames=False, frame_every_ms=0)
+    try:
+        fresh = timeline.work / artifact.name
+        shutil.copy2(artifact, fresh)
+        sha256 = sha256_file(fresh)
+        if sha256 != sha256_file(artifact):
+            raise RuntimeError("portable_splash_artifact_copy_changed")
+        outcome = timeline.launch(
+            "portable", "cold", fresh, timeline.work / "unused-cache", smoke=False,
+            expect_cache=None, frames=False,
+            extra_env={"PYI_SPLASH_SUPPRESS": "0", "USERPROFILE": str(timeline.state)},
+        )
+        run = receipt / "runs" / "portable-cold"
+        samples_path = run / "window_samples.json"
+        windows = json.loads(samples_path.read_text(encoding="utf-8")) if samples_path.is_file() else []
+        events = load_events(run / "profile.jsonl")
+        entered = next((event["epoch_ms"] for event in events if event["name"] == "portable_python_entry"), None)
+        closed = next((event["epoch_ms"] for event in events if event["name"] == "bootloader_splash_closed"
+                       and event.get("phase") == "portable_handoff"), None)
+        painted = next((event["epoch_ms"] for event in events if event["name"] == "main_window_first_paint_tick"), None)
+        visible = [
+            sample["epoch_ms"] for sample in windows
+            if any(window["pid"] == outcome.get("process_id") and window["class"].casefold().startswith("tk")
+                   for window in sample["windows"])
+        ]
+        valid = bool(
+            outcome["status"] == "ok" and visible
+            and None not in (entered, closed, painted)
+            and min(visible) < entered <= closed <= painted and max(visible) <= painted
+        )
+        _extraction_clean(timeline.temp)
+        (receipt / "portable-splash.json").write_text(json.dumps({
+            "sha256": sha256, "size_bytes": fresh.stat().st_size, "visible_samples": len(visible),
+            "first_splash_ms_before_python": entered - min(visible) if visible and entered is not None else None,
+            "passed": valid,
+        }, indent=2), encoding="utf-8")
+        if not valid:
+            raise RuntimeError("portable_splash_not_observed_before_python_and_through_handoff")
+    finally:
+        timeline.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--artifact", required=True, type=Path)
     parser.add_argument("--kind", choices=("envelope", "launcher"), default="envelope")
+    parser.add_argument("--require-splash", action="store_true", help="Verify the envelope bootloader resources.")
+    parser.add_argument("--splash-receipt", type=Path, help="Observe a cold splash on the interactive Windows desktop.")
     args = parser.parse_args(argv)
     if sys.platform != "win32" or not args.artifact.is_file():
         raise RuntimeError("native_portable_artifact_required")
     is_launcher = args.kind == "launcher"
+    if is_launcher and (args.require_splash or args.splash_receipt):
+        parser.error("Splash checks apply to the PyInstaller envelope")
     identity = current_identity(Path(__file__).resolve().parents[1])
     expected_name = identity.launcher_name if is_launcher else identity.portable_name
     if args.artifact.name != expected_name:
@@ -172,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     from scripts.release_identity import verify_pe
 
     print(json.dumps({"actual_PE_version": verify_pe(args.artifact, identity)}, sort_keys=True))
+    if args.require_splash:
+        _verify_outer_splash(args.artifact)
+        print("Outer bootloader splash and Tcl/Tk resources: PASS")
+    if args.splash_receipt:
+        _observe_cold_splash(args.artifact.resolve(), args.splash_receipt)
     if hashlib.sha256(FIXTURE.read_bytes()).hexdigest() != FIXTURE_SHA256:
         raise RuntimeError("public_fixture_mismatch")
     with tempfile.TemporaryDirectory(prefix="metroliza-portable-qualification-") as private:

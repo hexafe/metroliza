@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
-from scripts.stage_release_notices import stage_release_notices
+from scripts.stage_release_notices import DEFAULT_INVENTORY, stage_release_notices
 from scripts.vendored_plotly import PLOTLY_ASSET_HASHES, PLOTLY_NOTICE_FILENAME
 
 
@@ -20,7 +21,7 @@ def test_stage_release_notices_adds_visible_bundle_for_each_artifact(tmp_path: P
     notice = tmp_path / "THIRD_PARTY_NOTICES.md"
     inventory = tmp_path / "inventory.json"
     notice.write_text("notice\n", encoding="utf-8")
-    inventory.write_text('{"packages": []}\n', encoding="utf-8")
+    shutil.copyfile(DEFAULT_INVENTORY, inventory)
 
     manifests = stage_release_notices(
         dist_dir=dist,
@@ -65,7 +66,7 @@ def test_explicit_release_artifact_does_not_pick_up_stale_dist_outputs(tmp_path:
     notice = tmp_path / "THIRD_PARTY_NOTICES.md"
     inventory = tmp_path / "inventory.json"
     notice.write_text("notice\n", encoding="utf-8")
-    inventory.write_text('{"packages": []}\n', encoding="utf-8")
+    shutil.copyfile(DEFAULT_INVENTORY, inventory)
 
     stage_release_notices(
         dist_dir=dist,
@@ -76,3 +77,14 @@ def test_explicit_release_artifact_does_not_pick_up_stale_dist_outputs(tmp_path:
 
     assert exact_artifact.with_name(f"{exact_artifact.name}.licenses").is_dir()
     assert not stale_artifact.with_name(f"{stale_artifact.name}.licenses").exists()
+
+
+def test_stale_inventory_blocks_notice_staging(tmp_path: Path) -> None:
+    stale = tmp_path / "inventory.json"
+    stale.write_text('{"schema_version": 1}', encoding="utf-8")
+    dist = tmp_path / "dist"
+
+    with pytest.raises(ValueError, match="Unsupported third-party inventory schema"):
+        stage_release_notices(dist_dir=dist, inventory_path=stale)
+
+    assert not dist.exists()

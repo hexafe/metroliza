@@ -54,20 +54,23 @@ def test_portable_entry_launches_only_verified_supervisor_and_waits(payload, mon
         calls.append((argv, kwargs))
         return Child()
 
+    monkeypatch.setattr(portable, "close_bootloader_splash", lambda *, phase: calls.append(phase))
     monkeypatch.setattr(portable.subprocess, "Popen", spawn)
     monkeypatch.setenv("PYTHONPATH", "untrusted")
     monkeypatch.setenv("PYTHONHOME", "untrusted")
     assert portable._launch(payload, ["--example"]) == 7
-    argv, options = calls[0]
+    assert calls[0] == "portable_handoff"
+    argv, options = calls[1]
     assert argv == [str(payload / "metroliza.exe"), "--example"]
     assert options["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
     assert "PYTHONPATH" not in options["env"] and "PYTHONHOME" not in options["env"]
     assert options["stdout"] == options["stderr"] == subprocess.DEVNULL
-    assert calls[1] == "wait"
+    assert calls[2] == "wait"
 
 
 @pytest.mark.parametrize("damage", ["launcher", "sidecar", "application", "release"])
 def test_portable_entry_refuses_mismatched_payload(payload, monkeypatch, damage):
+    closed = []
     if damage == "launcher":
         (payload / portable.LAUNCHER_NAME).write_bytes(b"tampered")
     elif damage == "sidecar":
@@ -79,8 +82,10 @@ def test_portable_entry_refuses_mismatched_payload(payload, monkeypatch, damage)
         value = json.loads(sidecar.read_text())
         value["release_label"] = "stale"
         sidecar.write_text(json.dumps(value))
+    monkeypatch.setattr(portable, "close_bootloader_splash", lambda *, phase: closed.append(phase))
     monkeypatch.setattr(portable.subprocess, "Popen", lambda *_a, **_k: pytest.fail("spawned"))
     assert portable._launch(payload, []) is None
+    assert closed == ["portable_handoff"]
 
 
 def test_portable_entry_does_not_import_gui_before_supervisor():

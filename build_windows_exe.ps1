@@ -11,6 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $originalBuildProvenancePath = $env:METROLIZA_BUILD_PROVENANCE_PATH
+$originalBuildTimestamp = $env:METROLIZA_BUILD_TIMESTAMP_UTC
 $originalVirtualEnv = $env:VIRTUAL_ENV
 
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -200,6 +201,7 @@ try {
     }
 
     Invoke-Step 'Generating build provenance' {
+        $env:METROLIZA_BUILD_TIMESTAMP_UTC = [DateTime]::UtcNow.ToString('o')
         Invoke-Checked -Executable $venvPython -Arguments @(
             'scripts/build_provenance.py',
             'generate',
@@ -311,5 +313,6 @@ finally {
     else {
         $env:METROLIZA_BUILD_PROVENANCE_PATH = $originalBuildProvenancePath
     }
+    $env:METROLIZA_BUILD_TIMESTAMP_UTC = $originalBuildTimestamp
     Pop-Location
 }

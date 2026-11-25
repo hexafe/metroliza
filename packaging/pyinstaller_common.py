@@ -22,6 +22,7 @@ from scripts.build_flavor import (  # noqa: E402
     flavor_includes_openvino,
     resolve_build_flavor,
 )
+from scripts.third_party_inventory_contract import INVENTORY_PATH, validate_inventory  # noqa: E402
 
 from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files  # noqa: E402
 
@@ -158,11 +159,13 @@ def prepare_build_provenance_manifest(root_dir: Path) -> Path:
     """Resolve or generate the manifest embedded into this exact build."""
 
     from scripts.build_provenance import (
+        BUILD_PROVENANCE_PATH_ENV,
         generate_build_provenance,
-        validate_build_provenance_manifest,
+        validate_active_pyinstaller_provenance,
     )
 
-    configured_path = os.getenv("METROLIZA_BUILD_PROVENANCE_PATH")
+    configured_path = os.getenv(BUILD_PROVENANCE_PATH_ENV)
+    default_path = root_dir / "build" / "provenance" / "build_provenance.json"
     if configured_path:
         manifest_path = Path(configured_path).resolve()
         if not manifest_path.is_file():
@@ -171,16 +174,19 @@ def prepare_build_provenance_manifest(root_dir: Path) -> Path:
             )
     else:
         manifest_path = generate_build_provenance(
-            root_dir / "build" / "provenance" / "build_provenance.json",
+            default_path,
             packager="pyinstaller",
             repo_root=root_dir,
         )
 
-    validate_build_provenance_manifest(
-        manifest_path,
-        expected_packager="pyinstaller",
-        expected_release_label=read_version_label(root_dir),
+    provenance = validate_active_pyinstaller_provenance(
+        manifest_path, repo_root=root_dir, require_attempt=bool(configured_path),
     )
+    if manifest_path.name != default_path.name:
+        # PyInstaller retains the source basename when it collects a data file.
+        default_path.parent.mkdir(parents=True, exist_ok=True)
+        default_path.write_text(json.dumps(provenance.to_mapping()) + "\n", encoding="utf-8")
+        return default_path
     return manifest_path
 
 
@@ -687,6 +693,8 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     """Return shared PyInstaller binaries, datas, and hidden imports."""
     plotly_assets = verified_plotly_files(root_dir / "src" / PLOTLY_ASSET_DIRECTORY)
     build_provenance_manifest = prepare_build_provenance_manifest(root_dir)
+    inventory_path = root_dir / INVENTORY_PATH
+    validate_inventory(inventory_path, root_dir)
     metroliza_hiddenimports = collect_submodules("metroliza")
     pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_required_runtime_assets(
         "pymupdf"
@@ -728,10 +736,7 @@ def build_pyinstaller_collection(root_dir: Path) -> dict[str, list]:
     html_dashboard_datas = [(str(path), PLOTLY_ASSET_DIRECTORY.as_posix()) for path in plotly_assets]
     third_party_notice_datas = [
         (str(root_dir / "THIRD_PARTY_NOTICES.md"), "."),
-        (
-            str(root_dir / "docs" / "release_checks" / "third_party_inventory.json"),
-            ".",
-        ),
+        (str(inventory_path), "."),
     ]
     build_provenance_datas = [
         (str(build_provenance_manifest), "metroliza/app"),

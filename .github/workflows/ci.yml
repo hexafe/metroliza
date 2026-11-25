@@ -222,7 +222,9 @@ jobs:
           $portable = @(Get-ChildItem -LiteralPath dist -File -Filter 'Metroliza-*.exe' |
             Where-Object { $_.Name -eq $artifactNames.portable })
           if ($portable.Count -ne 1) { throw 'Expected exactly one versioned portable EXE' }
-          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py --artifact $portable[0].FullName
+          $splashReceipt = Join-Path $env:RUNNER_TEMP 'portable-splash'
+          & .\.venv-build\Scripts\python.exe scripts/qualify_windows_portable_onefile.py `
+            --artifact $portable[0].FullName --require-splash --splash-receipt $splashReceipt
           if ($LASTEXITCODE -ne 0) { throw 'Portable supervised smoke failed' }
           $sha = (Get-FileHash -LiteralPath $portable[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "Portable EXE: $($portable[0].Name) SHA-256 $sha"
@@ -331,6 +333,14 @@ jobs:
           path: dist/Metroliza-*-windows-x64-portable.exe
           if-no-files-found: error
 
+      - name: Retain the portable startup splash receipt
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-portable-splash-receipt
+          path: ${{ runner.temp }}/portable-splash/portable-splash.json
+          if-no-files-found: warn
+
       - name: Retain the native launcher EXE for testers
         if: success()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -391,7 +401,7 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'metroliza-inventory-evidence'
           if (Test-Path -LiteralPath $out) { throw 'Inventory evidence root must be new' }
           & .\.venv-build\Scripts\python.exe scripts/verify_third_party_inventory.py `
-            --inventory docs/release_checks/third_party_inventory.json --onedir $package[0].FullName `
+            --onedir $package[0].FullName `
             --receipt (Join-Path $out 'third-party-inventory.json') --generated (Join-Path $out 'third-party-inventory-generated.json')
           $code = $LASTEXITCODE
           if (-not (Test-Path -LiteralPath (Join-Path $out 'third-party-inventory.json'))) { throw 'Inventory evidence was not written' }

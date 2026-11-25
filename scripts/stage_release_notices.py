@@ -10,14 +10,16 @@ import shutil
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if not __package__:
-    sys.path.insert(0, str(REPO_ROOT))
+for import_root in (REPO_ROOT, REPO_ROOT / "src"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
+from scripts.third_party_inventory_contract import INVENTORY_PATH, validate_inventory  # noqa: E402
 from scripts.vendored_plotly import PLOTLY_ASSET_DIRECTORY, verified_plotly_files  # noqa: E402
 
 
 DEFAULT_NOTICE = REPO_ROOT / "THIRD_PARTY_NOTICES.md"
-DEFAULT_INVENTORY = REPO_ROOT / "docs/release_checks/third_party_inventory.json"
+DEFAULT_INVENTORY = REPO_ROOT / INVENTORY_PATH
 
 
 def _sha256(path: Path) -> str:
@@ -68,6 +70,7 @@ def stage_release_notices(
         if not required.is_file():
             raise FileNotFoundError(f"Required release notice input is missing: {required}")
 
+    validate_inventory(inventory, REPO_ROOT)
     _, plotly_notice = verified_plotly_files(REPO_ROOT / "src" / PLOTLY_ASSET_DIRECTORY)
     sources = (notice, inventory, plotly_notice)
     manifests = [_copy_notice_bundle(dist / "release-notices", sources)]

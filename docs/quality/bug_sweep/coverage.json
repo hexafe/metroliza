@@ -2476,6 +2476,7 @@
         "scripts/vendored_plotly.py",
         "scripts/summarize_startup_profile.py",
         "scripts/sync_release_metadata.py",
+        "scripts/third_party_inventory_contract.py",
         "scripts/validate_packaged_pdf_parser.py",
         "scripts/validate_qt_runtime.py",
         "scripts/verify_third_party_inventory.py",

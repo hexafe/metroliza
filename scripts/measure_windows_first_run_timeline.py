@@ -444,6 +444,7 @@ class Timeline:
             started = time.perf_counter()
             process = subprocess.Popen([str(exe)], env=env, cwd=self.cwd, stdin=subprocess.DEVNULL,
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            record["process_id"] = process.pid
             try:
                 code = process.wait(timeout=LAUNCH_TIMEOUT_S)
                 record["exit_code"] = code

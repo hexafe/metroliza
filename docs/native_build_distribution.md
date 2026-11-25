@@ -290,9 +290,10 @@ does not provide the supervised incident history of the Windows onedir. For a
 single user-facing EXE **with** that history, run
 `build_windows_portable_exe.ps1`: it builds the current supervised onedir and
 then embeds the complete onedir inside a versioned, windowed outer EXE. On each
-launch PyInstaller extracts the payload to its temporary directory; the outer
-process verifies the child manifest and launcher provenance, starts the existing
-supervisor, and stays alive until it exits. This preserves the private incident
+launch the bootloader shows the splash while PyInstaller extracts the payload
+to its temporary directory. The outer process verifies the child manifest and
+launcher provenance, closes the splash, starts the existing supervisor, and
+stays alive until the supervisor exits. This preserves the private incident
 store under the user's application state. It does not reuse an installed cache,
 so startup and temporary disk use can be higher than onedir. The user receives
 only `metroliza_<release>_<build>.exe`; all inner executables are internal.

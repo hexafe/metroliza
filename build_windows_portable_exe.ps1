@@ -10,18 +10,19 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Supervised onedir build failed' }
 
     $python = Join-Path $root '.venv-build/Scripts/python.exe'
-    $provenancePath = Join-Path $root 'build/provenance/build_provenance.json'
-    if (-not (Test-Path -LiteralPath $python -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
-        throw 'The exact supervised onedir build is required first'
+    $names = & $python scripts/release_identity.py names | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Invalid canonical release identity' }
+    $onedir = Join-Path $root "dist/$($names.onedir)"
+    $provenancePath = Join-Path $onedir '_internal/metroliza/app/build_provenance.json'
+    if (-not (Test-Path -LiteralPath $provenancePath -PathType Leaf)) {
+        throw 'The exact supervised onedir provenance is required first'
     }
     $provenance = Get-Content -LiteralPath $provenancePath -Raw | ConvertFrom-Json
     $head = (git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $provenance.git_sha -ne $head -or $provenance.dirty) {
         throw 'Portable build requires a clean, exact-head supervised payload'
     }
-    $names = & $python scripts/release_identity.py names | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0 -or [string]$provenance.release_label -ne [string]$names.version) {
+    if ([string]$provenance.release_label -ne [string]$names.version) {
         throw 'Invalid canonical release identity or stale provenance'
     }
     $outerName = [string]$names.portable
@@ -34,7 +35,7 @@ try {
     }
     & $python scripts/release_identity.py verify-pe --input $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable PE version mismatch' }
-    & $python scripts/build_provenance.py stage --manifest $provenancePath --artifact $outer
+    & $python scripts/build_provenance.py stage --manifest $provenancePath --from-onedir $onedir --artifact $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable provenance staging failed' }
     & $python scripts/stage_release_notices.py --dist-dir dist --artifact $outer
     if ($LASTEXITCODE -ne 0) { throw 'Portable notice staging failed' }
