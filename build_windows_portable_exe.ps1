@@ -4,8 +4,10 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$previousPipConstraint = $env:PIP_CONSTRAINT
 Push-Location $root
 try {
+    $env:PIP_CONSTRAINT = Join-Path $root 'packaging/windows-rc-constraints.txt'
     & .\build_windows_exe.ps1 -Clean -WithNative -Mode onedir
     if ($LASTEXITCODE -ne 0) { throw 'Supervised onedir build failed' }
 
@@ -25,6 +27,12 @@ try {
     if ([string]$provenance.release_label -ne [string]$names.version) {
         throw 'Invalid canonical release identity or stale provenance'
     }
+    $inventoryEvidence = Join-Path $root 'build/provenance/portable-inventory'
+    & $python scripts/verify_third_party_inventory.py --onedir $onedir `
+        --receipt (Join-Path $inventoryEvidence 'third-party-inventory.json') `
+        --generated (Join-Path $inventoryEvidence 'third-party-inventory-generated.json')
+    if ($LASTEXITCODE -ne 0) { throw 'The actual portable payload does not match the third-party inventory' }
+
     $outerName = [string]$names.portable
     $outer = Join-Path $root "dist/$outerName"
     if (Test-Path -LiteralPath $outer) { Remove-Item -LiteralPath $outer -Force }
@@ -42,5 +50,6 @@ try {
     Write-Host "Portable supervised EXE: $outer"
 }
 finally {
+    $env:PIP_CONSTRAINT = $previousPipConstraint
     Pop-Location
 }

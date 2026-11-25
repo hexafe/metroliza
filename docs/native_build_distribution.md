@@ -297,6 +297,10 @@ stays alive until the supervisor exits. This preserves the private incident
 store under the user's application state. It does not reuse an installed cache,
 so startup and temporary disk use can be higher than onedir. The portable build
 stages the versioned EXE, its provenance and its notice bundle together.
+It uses the accepted Windows runtime constraints and compares the frozen onedir
+and its build environment against the committed inventory before creating the
+envelope. A mismatched Python or Rust package stops the build and leaves an
+inventory receipt for review.
 The notice supplement verifies the exact Tcl/Tk DLLs shipped by CPython 3.11.9
 on Windows x64 and includes their license terms. Full release inventory and
 licensing review are separate gates.

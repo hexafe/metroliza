@@ -193,6 +193,14 @@ jobs:
           METROLIZA_PYINSTALLER_SCANNER_PROBE: "1"
         run: .\build_windows_portable_exe.ps1
 
+      - name: Retain exact portable payload inventory evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: windows-portable-payload-inventory
+          path: build/provenance/portable-inventory/*.json
+          if-no-files-found: warn
+
       - name: Record package identity behavior on the built onedir (#1111 discriminator)
         shell: pwsh
         env:
