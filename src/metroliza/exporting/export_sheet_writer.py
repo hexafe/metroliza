@@ -1,3 +1,5 @@
+from math import isfinite
+
 from xlsxwriter.utility import xl_col_to_name
 from xlsxwriter.workbook import Workbook as XlsxWriterWorkbook
 
@@ -6,6 +8,8 @@ from metroliza.shared.stats_utils import is_one_sided_geometric_tolerance
 
 
 LEGACY_MEASUREMENT_CHART_INSERT_ROW = 7
+_XLSX_ROW_COUNT = 1_048_576
+_MAX_EXACT_THOUSANDTHS = 10**15 - 1
 
 
 def _get_col_name_cached(col_index, cache=None):
@@ -223,11 +227,12 @@ def build_measurement_write_bundle_cached(header, header_group, base_col, cache=
     row_count = len(header_group)
     usl_vector = [header_plan['usl']] * row_count
     lsl_vector = [header_plan['lsl']] * row_count
+    measurement_values = header_group['MEAS'].round(3)
 
     data_columns = [
         (measurement_plan['data_header_row'], base_col, 'Date', header_group['DATE'], None),
         (measurement_plan['data_header_row'], base_col + 1, 'Sample #', header_group['SAMPLE_NUMBER'], None),
-        (measurement_plan['data_header_row'], base_col + 2, header, header_group['MEAS'].round(3), 'wrap'),
+        (measurement_plan['data_header_row'], base_col + 2, header, measurement_values, 'wrap'),
         (measurement_plan['data_header_row'], base_col + 3, 'USL', usl_vector, None),
         (measurement_plan['data_header_row'], base_col + 4, 'LSL', lsl_vector, None),
     ]
@@ -236,6 +241,7 @@ def build_measurement_write_bundle_cached(header, header_group, base_col, cache=
         'header_plan': header_plan,
         'measurement_plan': measurement_plan,
         'static_rows': static_rows,
+        'measurement_values': measurement_values,
         'data_columns': data_columns,
     }
 
@@ -321,13 +327,88 @@ def create_measurement_formats(workbook):
     return cached
 
 
-def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
+def _mixed_sign_rounding_agrees(quotient, remainder, count, absolute_total, pair_sum):
+    # A conservative binary64 bound for input conversion, summing and dividing,
+    # in twice the thousandth-sum units used by the distance to the midpoint.
+    distance = abs(2 * remainder - count)
+    if (distance << 51) > absolute_total * (count + 2):
+        return True
+    if count != 2:
+        return False
+    # A two-value mean has no summation-order uncertainty. Compare the actual
+    # binary mean against the decimal midpoint without another rounded product.
+    numerator, denominator = abs(pair_sum / 2).as_integer_ratio()
+    binary_rounds_up = numerator * 2000 >= (2 * quotient + 1) * denominator
+    return binary_rounds_up == (2 * remainder >= count)
+
+
+def _measurement_formula_cache(values, *, source_text_is_literal=False):
+    """Cache the workbook's rounded mean and numeric count for supported cells."""
+    total = absolute_total = count = 0
+    pair_sum = 0.0
+    average_supported = True
+    max_measurement = _MAX_EXACT_THOUSANDTHS / 1000
+    for value in values:
+        if value is None:
+            continue
+        value_type = type(value)
+        # An unqualified writer may interpret source strings before storage.
+        literal_text = value_type is str and source_text_is_literal
+        if literal_text or value_type is bool or (value_type is float and not isfinite(value)):
+            # COUNT ignores text, booleans and the errors emitted for nonfinite cells.
+            average_supported = False
+            continue
+        if value_type not in (int, float):
+            return None, None
+        count += 1
+        if not average_supported or not -max_measurement <= value <= max_measurement:
+            average_supported = False
+            continue
+        thousandths = round(value * 1000)
+        absolute_total += abs(thousandths)
+        # Require exact thousandths and keep even an uncancelled sum within
+        # the workbook's 15 significant decimal digits.
+        if value != thousandths / 1000 or absolute_total > _MAX_EXACT_THOUSANDTHS:
+            average_supported = False
+            continue
+        total += thousandths
+        if count <= 2:
+            pair_sum += value
+    if not count or not average_supported:
+        return None, count
+    mean, remainder = divmod(abs(total), count)
+    if absolute_total != abs(total) and not _mixed_sign_rounding_agrees(
+        mean, remainder, count, absolute_total, pair_sum,
+    ):
+        return None, count
+    # Excel ROUND resolves halfway values away from zero.
+    rounded = mean + int(remainder * 2 >= count)
+    return (-rounded if total < 0 else rounded) / 1000, count
+
+
+def _worksheet_limit_preview(nominal, tolerance):
+    # These are the actual formula operands written above the limit cell.
+    operands = (nominal, tolerance)
+    if any(type(value) not in (int, float) or not isfinite(value) for value in operands):
+        return ''
+    if abs(nominal) + abs(tolerance) > _MAX_EXACT_THOUSANDTHS / 1000:
+        return ''
+    return nominal + tolerance
+
+
+def write_measurement_block(worksheet, write_bundle, formats, *, base_col, cache_statistics=True):
     header_plan = write_bundle['header_plan']
     measurement_plan = write_bundle['measurement_plan']
 
     stat_formulas = header_plan['stat_formulas']
     stats_label_col = measurement_plan['stats_label_column']
     stats_value_col = measurement_plan['stats_value_column']
+    average_result = sample_count = None
+    if cache_statistics and measurement_plan['last_data_row'] < _XLSX_ROW_COUNT:
+        average_result, sample_count = _measurement_formula_cache(
+            write_bundle['measurement_values'],
+            source_text_is_literal=getattr(worksheet, 'source_text_is_literal', False) is True,
+        )
 
     worksheet.write(0, base_col, 'NOM')
     worksheet.write(0, base_col + 1, header_plan['nom'])
@@ -336,28 +417,32 @@ def write_measurement_block(worksheet, write_bundle, formats, *, base_col):
     worksheet.write(2, base_col, '-TOL')
     worksheet.write(2, base_col + 1, header_plan['minus_tol'])
     worksheet.write(3, base_col, 'USL')
-    worksheet.write_formula(3, base_col + 1, header_plan['usl_formula'])
+    worksheet.write_formula(3, base_col + 1, header_plan['usl_formula'],
+                            value=_worksheet_limit_preview(header_plan['nom'], header_plan['plus_tol']))
     worksheet.write(4, base_col, 'LSL')
-    worksheet.write_formula(4, base_col + 1, header_plan['lsl_formula'])
+    worksheet.write_formula(4, base_col + 1, header_plan['lsl_formula'],
+                            value=_worksheet_limit_preview(header_plan['nom'], header_plan['minus_tol']))
     worksheet.write(5, base_col, 'NOK number')
-    worksheet.write_formula(5, base_col + 1, stat_formulas['nok_total'])
+    worksheet.write_formula(5, base_col + 1, stat_formulas['nok_total'], value='')
     worksheet.write(6, base_col, 'NOK %')
-    worksheet.write_formula(6, base_col + 1, stat_formulas['nok_percent'], formats['percent'])
+    worksheet.write_formula(6, base_col + 1, stat_formulas['nok_percent'], formats['percent'], value='')
 
     worksheet.write(0, stats_label_col, 'MIN')
-    worksheet.write_formula(0, stats_value_col, stat_formulas['min'])
+    worksheet.write_formula(0, stats_value_col, stat_formulas['min'], value='')
     worksheet.write(1, stats_label_col, 'AVG')
-    worksheet.write_formula(1, stats_value_col, stat_formulas['avg'])
+    worksheet.write_formula(1, stats_value_col, stat_formulas['avg'],
+                            value='' if average_result is None else average_result)
     worksheet.write(2, stats_label_col, 'MAX')
-    worksheet.write_formula(2, stats_value_col, stat_formulas['max'])
+    worksheet.write_formula(2, stats_value_col, stat_formulas['max'], value='')
     worksheet.write(3, stats_label_col, 'STD')
-    worksheet.write_formula(3, stats_value_col, stat_formulas['std'])
+    worksheet.write_formula(3, stats_value_col, stat_formulas['std'], value='')
     worksheet.write(4, stats_label_col, 'Cp')
-    worksheet.write_formula(4, stats_value_col, stat_formulas['cp'])
+    worksheet.write_formula(4, stats_value_col, stat_formulas['cp'], value='')
     worksheet.write(5, stats_label_col, 'Cpk')
-    worksheet.write_formula(5, stats_value_col, stat_formulas['cpk'])
+    worksheet.write_formula(5, stats_value_col, stat_formulas['cpk'], value='')
     worksheet.write(6, stats_label_col, 'Sample size')
-    worksheet.write_formula(6, stats_value_col, stat_formulas['sample_size'])
+    worksheet.write_formula(6, stats_value_col, stat_formulas['sample_size'],
+                            value='' if sample_count is None else sample_count)
 
     for data_header_row, data_col, data_label, data_values, data_style in write_bundle['data_columns']:
         if data_style == 'wrap':

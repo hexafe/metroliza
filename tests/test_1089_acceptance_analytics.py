@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from contextlib import closing
+from html.parser import HTMLParser
+import json
 import sqlite3
+from statistics import fmean
 import zipfile
 
 import pytest
 from openpyxl import load_workbook
+from openpyxl.utils.cell import range_boundaries
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication, QDialog, QInputDialog
 
 from metroliza.analytics.group_analysis_service import build_group_analysis_payload
+from metroliza.app.version import VERSION_LABEL
 from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
 from metroliza.exporting.export_outcomes import ExportRunStatus
 from metroliza.reports.report_repository import ReportRepository
@@ -24,7 +29,7 @@ from metroliza.exporting.export_data_thread import ExportDataThread
 _APP = None
 
 
-def _persist_report(repository, root, *, number, reference, header="FEATURE_1", ax="X", meas=10.1):
+def _persist_report(repository, root, *, number, reference, header="FEATURE_1", ax="X", meas=10.1, sample_number=None):
     source = root / f"public-synthetic-{number}.pdf"
     source.write_bytes(f"public-synthetic-report-{number}".encode())
     repository.persist_parsed_report(
@@ -40,7 +45,7 @@ def _persist_report(repository, root, *, number, reference, header="FEATURE_1", 
             "report_date": f"2024-01-0{number}",
             "part_name": f"Part {number}",
             "revision": "A",
-            "sample_number": str(number),
+            "sample_number": str(number) if sample_number is None else sample_number,
             "sample_number_kind": "explicit_sample_number",
             "stats_count_raw": str(number),
             "stats_count_int": number,
@@ -103,7 +108,61 @@ def _workbook_parts(path):
         return sorted(workbook.namelist())
 
 
+class _MeasurementPlots(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.specs = {}
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        key = attributes.get("data-dashboard-chart-key", "")
+        if tag == "div" and key.startswith("section-") and key.endswith(":chart-01"):
+            assert key not in self.specs
+            self.specs[key] = json.loads(attributes["data-plotly-spec-light"])
+
+
+def _series_values(sheet, series):
+    reference = series.val.numRef.f.partition("!")[2]
+    first_col, first_row, last_col, last_row = range_boundaries(reference)
+    assert first_col == last_col
+    return tuple(sheet.cell(row, first_col).value for row in range(first_row, last_row + 1))
+
+
+def _assert_published_measurement_parity(workbook_path, content):
+    charts = _MeasurementPlots()
+    charts.feed(content)
+    assert set(charts.specs) == {"section-001:chart-01", "section-002:chart-01"}
+    workbook = load_workbook(workbook_path, data_only=True)
+    try:
+        for sheet_name, chart_key, expected in (
+            ("REF-SHARED", "section-001:chart-01", (10.01, 10.07)),
+            ("Report 3 (no reference)", "section-002:chart-01", (9.94,)),
+        ):
+            sheet = workbook[sheet_name]
+            chart, = sheet._charts
+            readings, upper, lower = chart.series
+            spec = charts.specs[chart_key]
+            traces = {trace["name"].partition("=")[0]: trace["y"] for trace in spec["data"]}
+            assert readings.title.strRef.strCache.pt[0].v == spec["layout"]["yaxis"]["title"]["text"] == "SMOKE FEATURE - X"
+            assert _series_values(sheet, readings) == pytest.approx(expected)
+            assert traces["Points"] == pytest.approx(expected)
+            assert traces["Mean"] == pytest.approx((fmean(expected),) * 2)
+            assert fmean(_series_values(sheet, readings)) == pytest.approx(fmean(traces["Mean"]))
+            assert _series_values(sheet, upper) == pytest.approx((10.1,) * len(expected))
+            assert _series_values(sheet, lower) == pytest.approx((9.9,) * len(expected))
+            assert traces["USL"] == pytest.approx((10.1, 10.1))
+            assert traces["LSL"] == pytest.approx((9.9, 9.9))
+            assert sheet["B4"].value == pytest.approx(traces["USL"][0])
+            assert sheet["B5"].value == pytest.approx(traces["LSL"][0])
+            assert sheet["D2"].value == pytest.approx(fmean(expected))
+            assert sheet["D7"].value == len(expected)
+        return tuple(workbook.sheetnames), charts.specs
+    finally:
+        workbook.close()
+
+
 def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, monkeypatch, qapplication_session):
+    import html
     from pathlib import Path
     import fitz
     from PyQt6.QtTest import QTest
@@ -116,10 +175,14 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
     app = qapplication_session
     source = tmp_path / "source"
     source.mkdir()
-    fixture = Path(__file__).parent / "fixtures/pdf/cmm_smoke_fixture.pdf"
-    for number in (1, 2, 3):
-        with fitz.open(fixture) as document:
+    for number, reading, deviation in ((1, "10.01", "0.01"), (2, "10.07", "0.07"), (3, "9.94", "-0.06")):
+        with fitz.open() as document:
             document.set_metadata({"title": f"Synthetic report {number}"})
+            document.new_page().insert_text(
+                (72, 72),
+                "METROLIZA PDF PARSER SMOKE\nCMM REPORT\n#SMOKE FEATURE\nDIM\n"
+                f"X 10 0.1 -0.1 {reading} {deviation} 0",
+            )
             document.save(source / f"source-{number}.pdf")
     database = tmp_path / "reports.sqlite"
     workbook_path = tmp_path / "reports.xlsx"
@@ -128,7 +191,8 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_args: (str(workbook_path), ""))
     monkeypatch.setattr(export_dialog.ExportDialog, "_load_dialog_config", lambda self: {"selected_preset": "full_report"})
     monkeypatch.setattr(export_dialog, "save_export_dialog_config", lambda *_args: None)
-    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **_kwargs: None)
+    completion = []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **kwargs: completion.append(kwargs))
 
     parser = ParsingDialog(directory=str(source), db_file=str(database))
     parser.show()
@@ -146,6 +210,12 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
         with closing(sqlite3.connect(database)) as connection:
             assert connection.execute("SELECT count(*) FROM report_measurements").fetchone()[0] == 3
             assert connection.execute("SELECT COUNT(*) FROM report_metadata WHERE reference IS NULL OR reference = ''").fetchone()[0] == 1
+            imported_sources = connection.execute("SELECT id, parser_id FROM parsed_reports ORDER BY id").fetchall()
+        repo = ReportRepository(str(database))
+        for index, (report_id, _parser_id) in enumerate(imported_sources, 1):
+            repo.update_report_metadata_fields(report_id, {"report_date": f"2026-05-0{index}"})
+        # An additional stored Y measurement must stay outside the selected X analysis.
+        _persist_report(repo, tmp_path, number=4, reference="REF-EXCLUDED", ax="Y")
 
         export = export_dialog.ExportDialog(db_file=str(database))
         records = []
@@ -193,20 +263,59 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
         result = load_workbook(workbook)
         try:
             assert result["MEASUREMENTS"].max_row == 4
+            assert (result["REF-SHARED"]["B4"].value, result["REF-SHARED"]["B5"].value) == ("=(B1+B2)", "=(B1+B3)")
             assert sum(bool(result[sheet]._charts) for sheet in result.sheetnames) >= 2
             assert any(name.endswith("_summary") for name in result.sheetnames)
-            scope = dict(result["REPORT SCOPE"].values)
+            scope_rows = tuple(result["REPORT SCOPE"].values)
+            scope = dict(scope_rows)
+            warnings = tuple(value for label, value in scope_rows if label == "Warning")
             assert scope["Source database"] == database.name
             assert scope["Filters"] == "AX: X"
             assert "Batch B" in scope["Grouping"]
-            assert "without a reference" in scope["Warning"]
+            assert scope["Analysed measurement rows"] == "3"
+            assert scope["Analysis method"] == "Reports measurements by reference or report, header and axis"
+            assert scope["Analysis method version"] == "1"
+            assert scope["Group Analysis effective scope"] == "Single Reference"
+            assert scope["Selected source reports"] == "3"
+            assert scope["Parser IDs"] == ", ".join(sorted({parser_id for _, parser_id in imported_sources}))
+            assert scope["Data through (report date)"] == "2026-05-03"
+            assert scope["Metroliza version"] == VERSION_LABEL
+            assert any("without a reference" in warning for warning in warnings)
         finally:
             result.close()
         content = dashboard.read_text(encoding="utf-8")
-        assert "report-scope-title" in content and "AX: X" in content
-        assert "without a reference" in content and "Group comparison" in content
-        assert "Batch A" in content and "Batch B" in content
+        assert "report-scope-title" in content and "Group comparison" in content
+        assert content.count('<span class="pill">Sample size: 2</span>') == 1
+        assert content.count('<span class="pill">Sample size: 1</span>') == 1
+        measurement_structure = _assert_published_measurement_parity(workbook, content)
+        assert len(completion) == 1
+        gui_scope = completion[0]["report_scope_text"]
+        for field in ("Source database", "Report scope", "Filters", "Grouping", "Analysed measurement rows",
+                      "Analysis method", "Analysis method version", "Group Analysis effective scope",
+                      "Selected source reports", "Parser IDs",
+                      "Data through (report date)",
+                      "Metroliza version"):
+            expected = scope[field]
+            assert f"<dt>{field}</dt><dd>{html.escape(expected)}</dd>" in content
+            assert f"{field} — {expected}" in gui_scope
+            assert str(records[0]["settings"][field]) == expected
+        gui_warnings = tuple(line.removeprefix("- ") for line in gui_scope.partition("Analysis warnings\n")[2].splitlines())
+        assert gui_warnings == warnings
+        for warning in warnings:
+            assert f"<li>{html.escape(warning)}</li>" in content
+        assert "REF-EXCLUDED" not in content
         assert any(assets.glob("*.png"))
+
+        workbook_path = tmp_path / "reports-repeat.xlsx"
+        export.select_excel_file()
+        QTest.keyClick(export.export_button, Qt.Key.Key_Space)
+        wait_until(app, lambda: export.export_thread is None)
+        assert len(records) == len(completion) == 2
+        repeated_workbook, repeated_dashboard, _ = map(Path, records[1]["artifacts"])
+        assert repeated_workbook == workbook_path
+        repeated_content = repeated_dashboard.read_text(encoding="utf-8")
+        assert _workbook_parts(repeated_workbook) == _workbook_parts(workbook)
+        assert _assert_published_measurement_parity(repeated_workbook, repeated_content) == measurement_structure
     finally:
         for worker in (parser.preflight_thread, parser.parse_thread, parser.metadata_thread,
                        export.export_thread if export is not None else None):
@@ -216,6 +325,87 @@ def test_reports_import_filter_grouping_and_published_output_scope(tmp_path, mon
         if export is not None:
             export.close()
         parser.close()
+
+
+def test_report_scope_schema_revisions_require_the_analysed_population(tmp_path):
+    from metroliza.exporting.report_export_context import freeze_report_export_scope
+
+    request = ExportRequest(AppPaths(str(tmp_path / 'report.sqlite'), str(tmp_path / 'output.xlsx')), ExportOptions())
+    selection = (("Selected source reports", 1),)
+    before = dict(freeze_report_export_scope(request, {}, measurement_rows=None,
+                                             effective_group_scope=None, selection=selection).entries)
+    after = dict(freeze_report_export_scope(request, {}, measurement_rows=0,
+                                            effective_group_scope=None, selection=selection).entries)
+    assert before["Report scope schema"] == 1
+    assert "Selected source reports" not in before
+    assert after["Report scope schema"] == 3
+    assert after["Analysed measurement rows"] == 0 and after["Analysis method version"] == 1
+
+
+def test_snapshot_dates_mark_unavailable_dates_before_claiming_data_through():
+    from metroliza.exporting.report_export_context import report_selection_from_snapshot
+
+    with closing(sqlite3.connect(':memory:')) as connection:
+        connection.execute('CREATE TEMP TABLE selected (REPORT_ID, DATE, PARSER_ID)')
+        connection.executemany('INSERT INTO selected VALUES (?, ?, ?)', [
+            (1, '2026-05-03', 'cmm'), (2, '2026-05-04T12:00:00', 'cmm'),
+            (3, '2027-02-30', 'cmm'), (4, None, 'cmm'),
+        ])
+        report_scope = dict(report_selection_from_snapshot(connection, 'selected'))
+    assert report_scope["Selected source reports"] == 4
+    assert report_scope["Data through (report date)"] == "2026-05-03 (other report dates unavailable)"
+
+
+@pytest.mark.parametrize('approved', [False, True])
+def test_unavailable_provenance_keeps_the_frozen_snapshot(tmp_path, monkeypatch, approved):
+    from metroliza.exporting import export_data_thread as runtime
+
+    def unavailable(*args):
+        raise sqlite3.OperationalError('simulated summary failure')
+
+    monkeypatch.setattr(runtime, 'report_selection_from_snapshot', unavailable)
+    request = ExportRequest(AppPaths(':memory:', str(tmp_path / 'output.xlsx')), ExportOptions())
+    thread = ExportDataThread(request)
+    thread._approved_report_ids = (1,) if approved else ()
+    thread.filter_query = 'SELECT * FROM source_rows'
+    with closing(sqlite3.connect(':memory:')) as connection:
+        thread._db_connection = connection
+        connection.execute('CREATE TABLE source_rows (REPORT_ID, REFERENCE, HEADER, AX, MEAS)')
+        connection.execute("INSERT INTO source_rows VALUES (1, 'R1', 'H1', 'X', 12)")
+        thread._prepare_export_snapshot()
+        try:
+            assert thread._snapshot_table_name and thread._report_selection == ()
+            connection.execute('UPDATE source_rows SET MEAS = 13')
+            assert connection.execute(thread._active_export_query).fetchone()[-1] == 12
+        finally:
+            thread._cleanup_export_snapshot()
+
+
+def test_reports_export_keeps_formula_like_sample_numbers_literal(tmp_path):
+    database = tmp_path / "reports.sqlite"
+    ensure_report_schema(str(database))
+    sample_number = "{=2}"
+    _persist_report(
+        ReportRepository(str(database)), tmp_path, number=1, reference="REF-LITERAL",
+        sample_number=sample_number,
+    )
+    workbook_path = tmp_path / "reports.xlsx"
+    ExportDataThread(ExportRequest(
+        paths=AppPaths(db_file=str(database), excel_file=str(workbook_path)),
+        options=ExportOptions(generate_summary_sheet=False),
+    )).run()
+
+    workbook = load_workbook(workbook_path)
+    try:
+        worksheet = workbook["REF-LITERAL"]
+        assert worksheet["B22"].value == sample_number
+        assert worksheet["B22"].data_type == "s"
+        assert worksheet["D2"].value == "=ROUND(AVERAGE(C22:C22), 3)"
+        assert worksheet["D7"].value == "=COUNT(C22:C22)"
+        raw_header, raw_data = workbook["MEASUREMENTS"].values
+        assert raw_data[raw_header.index("SAMPLE_NUMBER")] == sample_number
+    finally:
+        workbook.close()
 
 
 def test_missing_reference_reports_keep_analytical_workbook_and_dashboard(tmp_path):
@@ -447,6 +637,7 @@ def test_filters_constrain_measurements_and_analytical_partitions_together(tmp_p
         workbook = load_workbook(workbook_path)
         assert workbook['MEASUREMENTS'].max_row - 1 == expected, name
         assert sum(bool(workbook[sheet]._charts) for sheet in workbook.sheetnames) == expected, name
+        assert dict(workbook["REPORT SCOPE"].values)["Analysed measurement rows"] == str(expected), name
 
 
 def test_html_only_keeps_missing_reference_sections(tmp_path):
@@ -472,6 +663,7 @@ def test_html_only_keeps_missing_reference_sections(tmp_path):
     html = html_path.read_text(encoding='utf-8')
     assert 'Report 1 (no reference)' in html
     assert 'Report 2 (no reference)' in html
+    assert '<dt>Analysed measurement rows</dt><dd>3</dd>' in html
     assert not list(tmp_path.glob('*.xlsx'))
 
 
@@ -520,3 +712,19 @@ def test_nonempty_scope_without_analytical_keys_fails_before_workbook_publicatio
     with pytest.raises(ValueError, match='no usable reference/report partition with HEADER and AX'):
         thread.get_export_backend().run(thread)
     assert not workbook_path.exists()
+
+
+
+def test_completion_scope_text_keeps_report_values_plain(qapplication_session):
+    from PyQt6.QtWidgets import QMessageBox
+    from metroliza.ui.export_dialog import _configure_export_result_dialog
+
+    dialog = QMessageBox()
+    _configure_export_result_dialog(
+        dialog, level="info", title="Export complete", message="Output https://example.test/result",
+        diagnostics="", report_scope_text="Filters — <untrusted> https://example.test/input",
+    )
+    assert '<a href="https://example.test/result">' in dialog.text()
+    assert "Filters — &lt;untrusted&gt; https://example.test/input" in dialog.text()
+    assert '<a href="https://example.test/input">' not in dialog.text()
+    dialog.deleteLater()

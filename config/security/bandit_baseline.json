@@ -67,7 +67,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "8548078e553a05793890a3ba34dfc3ef3bddcf89799d6540bd0156a8057dfd83",
+      "fingerprint": "214960bc3c42c4860c68884cbeaa19e72e5ff3e541669a5b603fc7f41e3bd309",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -76,7 +76,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "751c2b3c4e1b9e832af256f8f437a53b94fbeb49fe6a7e80680dcbd61bc28b6d",
+      "fingerprint": "1b547fce3fe2e846be4e6d977865abf3613dfbbd9705c155e041bae1901c6877",
       "test_id": "B608",
       "path": "src/metroliza/exporting/export_data_thread.py",
       "owner": "Security review",
@@ -1477,6 +1477,24 @@
       "owner": "Metroliza maintainers",
       "rationale": "_industrial_schema_scope: table iterates only the two literal keys of INDUSTRIAL_RUNTIME_TABLES; _identifier quotes that fixed identifier. The SELECT reads distinct scope keys after canonical cache-catalog validation, through the existing read-only comparison snapshot. No filename, database-provided object name, user value or external SQL fragment enters the statement. Scope values are compared in Python, not interpolated. This constant-table SELECT is a reviewed B608 false positive; changes to the enumeration or identifier quoting require reassessment.",
       "expires_on": "2027-01-24"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "3090f1588a347204ae9ba5b24af50d10df261cdc431c770147f54a11ba071101",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/report_export_context.py",
+      "owner": "Security review",
+      "rationale": "report_selection_from_snapshot: SQL reads a connection-owned TEMP export snapshot. The only interpolated part is its internally generated table identifier, quoted by quote_identifier. Column names and clauses are fixed. The parser display limit is a bound SQL parameter. Source values remain database values and cannot modify SQL.",
+      "expires_on": "2027-04-30"
+    },
+    {
+      "repository": "metroliza",
+      "fingerprint": "445aed6bf1db5ecd138bebff2b6cac7031be9696147d158860fd031059239e46",
+      "test_id": "B608",
+      "path": "src/metroliza/exporting/report_export_context.py",
+      "owner": "Security review",
+      "rationale": "report_selection_from_snapshot: SQL reads a connection-owned TEMP export snapshot. The only interpolated part is its internally generated table identifier, quoted by quote_identifier. Column names and clauses are fixed. The parser display limit is a bound SQL parameter. Source values remain database values and cannot modify SQL.",
+      "expires_on": "2027-04-30"
     }
   ]
 }

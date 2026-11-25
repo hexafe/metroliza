@@ -712,6 +712,31 @@ secrets are never embedded.
 - **Extension identity** — interface/type/id/version/hash/trust and capability metadata.
 - **Evidence bundle** — selected portable artifacts plus manifest/hashes/readme.
 
+### Reports export provenance
+
+Historical imports used flat report and measurement tables and a parser-owned metadata dictionary.
+The [metadata redesign audit](../archive/2026/feature-report-metadata-redesign/report_metadata_redesign_handoff.md)
+records the migration to content-addressed sources, parsed report identity, canonical metadata,
+candidate and warning evidence, and measurement views. The current repository and query services
+own storage and the projections consumed by Reports, grouping and export.
+
+For the PDF-to-Reports workflow, the completed report scope is a frozen set of display fields and
+warnings. It uses the approved export request and the measurement population that reached analysis.
+The Excel workbook, HTML dashboard and completion message consume it. Scope revision 1 contains
+the request and configuration. Revision 2 adds the analysed row count, method and method version.
+Revision 3 adds the distinct source-report count, bounded parser ID list and latest known report
+date from the connection-owned measurement snapshot. Application version comes from the run.
+The version of the analysis method changes when the calculation or population contract changes.
+The scope schema version tracks changes to the report metadata fields. Older outputs remain
+readable with their original fields. A missing method version in an older export is unknown.
+
+The selected population and chart sample sizes belong to the analysis result. Spreadsheet format
+policy controls worksheet number formats and precision. The workbook can refresh its own formulas
+from the displayed readings, and HTML preserves the precision of the chart values from analysis.
+Report dates use `YYYY-MM-DD`. The dashboard records its generation time in ISO 8601 with the
+local UTC offset. XLSX creation and modification times and the HTML generation time vary between
+runs and are excluded from structural output comparisons.
+
 ## 11. Target architecture and dependency direction
 
 ```text

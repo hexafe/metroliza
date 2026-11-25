@@ -21,7 +21,7 @@ from metroliza.industrial.industrial_analytics_dashboard import write_production
 
 
 _COMPACT_PRESENTATION_EMPTY_DASHBOARD_SHA256 = (
-    "e92579f04fae5a3ebf2efb4151eb7856bbcdfc1fb8fab27b276d4b751c80c44f"
+    "eb1b1959cf4cd477c1182b57798b73b69be0135daf6cfd15db2a52654d329edb"
 )
 
 
@@ -152,7 +152,7 @@ def test_empty_dashboard_html_matches_reviewed_compact_presentation(tmp_path) ->
     assert result["html_dashboard_plotly_spec_count"] == 0
     assert result["html_dashboard_embedded_plotly_spec_count"] == 0
 
-    assert result["html_dashboard_html_bytes"] == len(output_bytes) == 27_859
+    assert result["html_dashboard_html_bytes"] == len(output_bytes) == 31_194
     assert sha256(output_bytes).hexdigest() == _COMPACT_PRESENTATION_EMPTY_DASHBOARD_SHA256
 
 

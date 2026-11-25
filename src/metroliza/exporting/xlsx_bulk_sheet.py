@@ -32,6 +32,7 @@ from metroliza.exporting.xlsx_fast_paths import (
     fast_cell_markup,
     write_plain_column,
 )
+from metroliza.exporting.xlsx_writer_policy import LiteralSourceWorksheet
 from metroliza.shared.env_utils import env_bool
 
 BULK_WRITE_ENV = "METROLIZA_EXPORT_BULK_WRITE"
@@ -493,11 +494,18 @@ def _render_column(column: BulkColumn, markup: tuple, row_numbers: list, start: 
     ]
 
 
+class LiteralSourceBulkWorksheet(BulkRowsWorksheet, LiteralSourceWorksheet):
+    """Combine bulk row acceleration with the Reports literal-text policy."""
+
+
 def enable_bulk_rows(book: Any) -> bool:
     """Make ``book`` create :class:`BulkRowsWorksheet` sheets when supported."""
     if not bulk_write_enabled():
         return False
-    book.worksheet_class = BulkRowsWorksheet
+    if book.worksheet_class in (LiteralSourceWorksheet, LiteralSourceBulkWorksheet):
+        book.worksheet_class = LiteralSourceBulkWorksheet
+    else:
+        book.worksheet_class = BulkRowsWorksheet
     add_chart = book.add_chart
 
     def add_accelerated_chart(*args, **kwargs):
@@ -512,6 +520,7 @@ __all__ = [
     "BulkPlan",
     "BulkPlanBuilder",
     "BulkRowsWorksheet",
+    "LiteralSourceBulkWorksheet",
     "bulk_block_fits",
     "bulk_write_enabled",
     "enable_bulk_rows",

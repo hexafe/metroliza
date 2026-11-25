@@ -22,7 +22,7 @@ from metroliza.exporting.export_dialog_service import (
     normalize_html_dashboard_export_path,
 )
 from metroliza.exporting.export_outcomes import sanitize_export_diagnostics, derive_export_run_result
-from metroliza.exporting.report_export_context import export_settings
+from metroliza.exporting.report_export_context import REPORT_SCOPE_KEY, ReportExportScope, export_settings
 from metroliza.ui.result_actions import (
     LastResultRow, add_result_actions, export_result_files, open_local_link,
 )
@@ -166,14 +166,18 @@ def handle_export_result_link(parent, url, excel_file=None):
         QDesktopServices.openUrl(parsed)
 
 
-def _configure_export_result_dialog(dialog, *, level, title, message, diagnostics):
+def _configure_export_result_dialog(dialog, *, level, title, message, diagnostics, report_scope_text=""):
     icon = {
         "error": QMessageBox.Icon.Critical,
         "warning": QMessageBox.Icon.Warning,
     }.get(level, QMessageBox.Icon.Information)
     dialog.setIcon(icon)
     dialog.setWindowTitle(title)
-    dialog.setText(format_message_with_clickable_links(message))
+    rendered = format_message_with_clickable_links(message)
+    if report_scope_text:
+        scope_markup = html.escape(report_scope_text).replace("\n", "<br>")
+        rendered = f"{rendered}<br><br>{scope_markup}"
+    dialog.setText(rendered)
     if hasattr(dialog, "setTextFormat") and hasattr(Qt, "TextFormat"):
         dialog.setTextFormat(Qt.TextFormat.RichText)
     if hasattr(dialog, "setTextInteractionFlags") and hasattr(Qt, "TextInteractionFlag"):
@@ -231,6 +235,13 @@ def _handle_export_result_action(
             clipboard.setText(str(diagnostics))
 
 
+def _completed_report_message_kwargs(metadata, run_result, terminal_failure):
+    if run_result is None or terminal_failure or run_result.status.value not in {"complete", "complete_with_omissions"}:
+        return {}
+    scope = metadata.get(REPORT_SCOPE_KEY)
+    return {"report_scope_text": scope.completion_text()} if isinstance(scope, ReportExportScope) else {}
+
+
 def show_export_result_message(
     parent,
     level,
@@ -241,6 +252,7 @@ def show_export_result_message(
     artifacts=None,
     *,
     modeless=False,
+    report_scope_text="",
 ):
     """Display an export outcome with copyable diagnostics and output actions."""
     diagnostics = sanitize_export_diagnostics(diagnostics)
@@ -251,6 +263,7 @@ def show_export_result_message(
         title=title,
         message=message,
         diagnostics=diagnostics,
+        report_scope_text=report_scope_text,
     )
     open_output_button, copy_diagnostics_button = _add_export_result_actions(
         dialog,
@@ -2063,12 +2076,13 @@ class ExportDialog(QDialog):
             if asset_dir.is_dir() and any(path.suffix.lower() == ".html" and path.parent == asset_dir.parent
                                           for path in paths):
                 artifacts.append(str(asset_dir))
+        scope = metadata.get(REPORT_SCOPE_KEY)
         self.analysis_completed.emit({
             "kind": "reports",
             "source": request.paths.db_file,
             "source_stamp": source_stamp,
             "artifacts": artifacts,
-            "settings": export_settings(request),
+            "settings": dict(scope.entries) if isinstance(scope, ReportExportScope) else export_settings(request),
         })
 
     def on_export_finished(self):
@@ -2101,6 +2115,9 @@ class ExportDialog(QDialog):
                 return
             try:
                 show_kwargs = {"excel_file": result_path, "artifacts": paths, "modeless": True}
+                show_kwargs.update(_completed_report_message_kwargs(
+                    completion_metadata, run_result, self.export_error_message,
+                ))
                 if diagnostics:
                     show_kwargs["diagnostics"] = diagnostics
                 show_export_result_message(self, level, title, message, **show_kwargs)

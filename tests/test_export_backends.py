@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 import zipfile
 import pytest
+from openpyxl import load_workbook
 
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportOutcomeKind, ExportStageOutcome
@@ -158,6 +159,39 @@ class TestExcelExportBackend(unittest.TestCase):
 
             self.assertEqual(target_path.read_text(encoding='utf-8'), 'old workbook')
             self.assertFalse(Path(thread.writer_path).exists())
+
+
+@pytest.mark.parametrize("bulk_enabled", ["0", "1"])
+def test_reports_worksheet_writes_formula_like_source_as_literal(tmp_path, monkeypatch, bulk_enabled):
+    monkeypatch.setenv("METROLIZA_EXPORT_BULK_WRITE", bulk_enabled)
+    backend = ExcelExportBackend()
+    path = tmp_path / "literal-workbook.xlsx"
+    writer = backend.create_writer(str(path))
+    try:
+        sheet = backend.get_workbook(writer).add_worksheet("Source")
+        sheet.write(0, 0, "{=2}")
+        sheet.write_column(0, 1, ["{=2}", "", 5, "=2"])
+        sheet.merge_range(0, 2, 0, 3, "{=2}")
+        sheet.write_formula(0, 4, "=2", value=2)
+        sheet.write_url(0, 5, "internal:Source!A1", string="Go to source")
+        sheet.write_column(1, 0, ["Plain label", "Second label"])
+    finally:
+        backend.close_writer(writer)
+
+    workbook = load_workbook(path)
+    try:
+        sheet = workbook["Source"]
+        for coordinate in ("A1", "B1", "C1"):
+            assert sheet[coordinate].data_type == "s"
+            assert sheet[coordinate].value == "{=2}"
+        assert [sheet[f"B{row}"].value for row in range(2, 5)] == [None, 5, "=2"]
+        assert sheet["B4"].data_type == "s"
+        assert [sheet[f"A{row}"].value for row in range(2, 4)] == ["Plain label", "Second label"]
+        assert sheet["E1"].data_type == "f"
+        assert sheet["E1"].value == "=2"
+        assert sheet["F1"].hyperlink.location == "Source!A1"
+    finally:
+        workbook.close()
 
 
 class TestHtmlDashboardExportBackend(unittest.TestCase):
