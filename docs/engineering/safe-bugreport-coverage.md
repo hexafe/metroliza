@@ -39,15 +39,18 @@ chart completeness, or that the file remained available afterwards.
 Rejected temporary outputs emit a separate failed staging check, so they cannot
 be confused with failures after publication.
 
-The detailed timeline records observed creation, removal and transfer of owned
-analytics HTML and XLSX staging files. Each file gets an independent runtime token
-and shares the current analysis request token when one is available. Removal and
+The detailed timeline observes owned analytics HTML and XLSX staging files at
+transfer or cleanup. The `created` event timestamp marks that observation, after
+rendering. An interruption before transfer or cleanup can leave an incomplete
+staging history. Each observed file gets an independent runtime token and shares
+the current analysis request token when one is available. Successful removal and
 transfer include a size bucket of empty, under 1 MiB, 1 to under 16 MiB, at least
 16 MiB, or unknown. The recorder reads metadata only from the owned staging path
-and retains no file names, paths or exact sizes. A failed removal leaves any
-observed creation without a removal event. A transfer records the staging file
-leaving its temporary path. The final output checks and CSV Summary publication
-still provide the evidence about completed output.
+and retains no file names, paths or exact sizes. An observed file is reported as
+removed only after successful cleanup. If both observation and cleanup fail, the
+file leaves no lifecycle event. A transfer records the staging file leaving its
+temporary path. The final output checks and CSV Summary publication provide the
+evidence about completed output.
 
 Export failures additionally retain the validated stage, failure code, backend,
 cause category and bounded operating-system error numbers from the existing
