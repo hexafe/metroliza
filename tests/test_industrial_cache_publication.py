@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 
 import pytest
 
@@ -247,6 +248,43 @@ def test_commit_point_race_keeps_marker_and_source_without_replacement(
         cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
 
     assert destination.read_bytes() == marker
+    assert _database_snapshot(source) == source_snapshot
+    _assert_no_staging(destination)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux renameat2")
+@pytest.mark.parametrize("collision", [False, True])
+def test_hardlink_free_publication_uses_native_no_replace(monkeypatch, temporary_cache, tmp_path, collision):
+    from metroliza.shared import sqlite_snapshot
+    from metroliza.shared.atomic_file import rename_noreplace
+
+    probe = tmp_path / "probe"
+    probe.touch()
+    renamed = tmp_path / "renamed"
+    if not rename_noreplace(probe, renamed):
+        pytest.skip("filesystem does not support renameat2 no-replace")
+    renamed.unlink()
+
+    source = Path(temporary_cache.cache_db_file)
+    destination = tmp_path / "archive.sqlite"
+    source_snapshot = _database_snapshot(source)
+    marker = b"other writer"
+
+    def unavailable_link(_staging, final):
+        if collision:
+            Path(final).write_bytes(marker)
+        raise OSError(errno.EOPNOTSUPP, "hard links unavailable")
+
+    monkeypatch.setattr(sqlite_snapshot.os, "link", unavailable_link)
+    if collision:
+        with pytest.raises(FileExistsError):
+            cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+        assert destination.read_bytes() == marker
+    else:
+        cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+        assert _database_snapshot(destination)[1] == source_snapshot[1]
+        with closing(sqlite3.connect(destination)) as connection:
+            assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
     assert _database_snapshot(source) == source_snapshot
     _assert_no_staging(destination)
 

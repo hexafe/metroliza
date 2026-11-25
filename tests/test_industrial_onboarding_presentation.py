@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QLineEdit, QMessageBox, QVBox
 
 from metroliza.app.windows_candidate_ui_checks import _geometry_dialog
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
+from metroliza.industrial.industrial_credentials import IndustrialStoredCredentials
 from metroliza.industrial.industrial_workflow_state import IndustrialFilterState
 from metroliza.industrial.oznak_adapter import OznakAdapterFetchResult, OznakAdapterStatus
 from metroliza.industrial import industrial_workers as workers
@@ -159,6 +160,54 @@ def test_access_denial_is_observed_and_does_not_hide_cached_actions(ui, tmp_path
         assert parent.analyze_button.property('buttonRole') == 'primary'
     finally:
         assert dialog.close()
+
+
+def test_switching_sources_then_failing_a_streamed_fetch_keeps_last_cache(
+    ui, tmp_path, monkeypatch, qapplication_session,
+):
+    path, repository, (source_a, source_b) = cached_sources(tmp_path)
+    parent = ui(database=path)
+    parent.analysis_source_combo.setCurrentIndex(parent.analysis_source_combo.findData(source_a.id))
+    status = OznakAdapterStatus(available=True, fetch_available=True)
+    monkeypatch.setattr(workers, "get_oznak_adapter_status", lambda: status)
+    monkeypatch.setattr(workers, "create_oznak_cancellation_token", lambda: None)
+    monkeypatch.setattr(sync, "load_industrial_credentials", lambda _key: IndustrialStoredCredentials())
+    attempts = []
+
+    def fetch(profile, **kwargs):
+        kwargs["record_batch_callback"]((
+            {"source_record_key": "uiux_b-0", "reference": "changed", "value": 999},
+            {"source_record_key": "uiux_b-new", "reference": "new", "value": 998},
+        ))
+        attempts.append(profile.id)
+        return OznakAdapterFetchResult(
+            status=status, records=(), row_count=0, implemented=True, error="Synthetic refresh failed",
+        )
+
+    monkeypatch.setattr(workers, "fetch_oznak_records_for_source_profile", fetch)
+    with closing(sqlite3.connect(path)) as connection:
+        before = connection.execute("SELECT * FROM industrial_records ORDER BY id").fetchall()
+    dialog = ui("sync", path, report_db_file=None)
+    assert dialog.current_profile().id == source_a.id
+    dialog.profile_combo.setCurrentIndex(dialog.profile_combo.findText(source_b.profile_name))
+    dialog.select_current_source_only()
+    dialog.username_edit.setText("synthetic_operator")
+    dialog.password_edit.setText("synthetic_session_password")
+    dialog.sync_now_button.click()
+    wait_until(qapplication_session, lambda: attempts and dialog.oznak_sync_thread is None)
+
+    assert attempts == [source_b.id]
+    latest = repository.latest_sync_run()
+    assert latest.source_profile_id == source_b.id
+    assert latest.status == "failed"
+    with closing(sqlite3.connect(path)) as connection:
+        assert connection.execute("SELECT * FROM industrial_records ORDER BY id").fetchall() == before
+        assert connection.execute("SELECT COUNT(*) FROM industrial_sync_staging_records").fetchone() == (0,)
+
+    parent.refresh_status()
+    assert parent.analysis_source_combo.currentData() == source_a.id
+    assert parent.analyze_button.isEnabled() and parent.export_button.isEnabled()
+    assert "Last fetch failed; cached rows are still usable" in parent.next_action_label.text()
 
 
 def test_actual_stop_key_keeps_last_complete_cache_and_native_owner(ui, tmp_path, monkeypatch, qapplication_session):

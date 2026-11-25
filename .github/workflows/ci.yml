@@ -1105,10 +1105,11 @@ jobs:
       COVERAGE_MINIMUM_THRESHOLD: '80'
       QT_QPA_PLATFORM: offscreen
     steps:
-      - name: Checkout
+      - name: Checkout including historical audit snapshots
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Install Qt runtime system libraries
         run: |
@@ -1501,7 +1502,12 @@ jobs:
       - name: Build and install CMM native wheel
         run: |
           python -m maturin build --locked --manifest-path src/metroliza/native/cmm_parser/Cargo.toml --release --out dist/native
-          python -m pip install dist/native/*metroliza_cmm_native*.whl
+          wheels=(dist/native/metroliza_cmm_native-*.whl)
+          if [[ ${#wheels[@]} -ne 1 || ! -f "${wheels[0]}" ]]; then
+            echo 'Expected exactly one built CMM native wheel' >&2
+            exit 1
+          fi
+          python -m pip install --force-reinstall "${wheels[0]}"
 
       - name: Warmup CMM benchmark
         run: |
@@ -1515,6 +1521,7 @@ jobs:
       - name: Measured CMM benchmark runs (guardrail enforced)
         run: |
           mkdir -p benchmark_results/cmm_perf_gate/runs
+          wheels=(dist/native/metroliza_cmm_native-*.whl)
           for run_idx in 1 2 3; do
             run_dir="benchmark_results/cmm_perf_gate/runs/run-${run_idx}"
             mkdir -p "${run_dir}"
@@ -1524,6 +1531,7 @@ jobs:
               --cmm-bench-report-count 120 \
               --cmm-bench-measurements-per-report 120 \
               --enforce-cmm-parser-guardrail \
+              --cmm-native-wheel "${wheels[0]}" \
               --cmm-native-min-speedup-ratio 1.00 \
               --cmm-native-min-usage-rate 0.95
             cp "$(ls -1t ${run_dir}/benchmark-*.json | head -n 1)" "${run_dir}/benchmark-paths.json"

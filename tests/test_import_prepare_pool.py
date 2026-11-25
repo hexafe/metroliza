@@ -218,6 +218,36 @@ def _run_import(source: Path, database: Path) -> ParseReportsThread:
     return thread
 
 
+def test_cancelled_batch_can_be_replanned_without_duplicate_measurements(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    _write_synthetic_reports(source, 6, lines_per_page=9)
+    _pool_env(monkeypatch, "0")
+    monkeypatch.setenv("METROLIZA_PARSE_TWO_STAGE_PIPELINE", "0")
+    interrupted_db = tmp_path / "interrupted.db"
+    interrupted = ParseReportsThread(_plan(source, interrupted_db))
+    original = ReportRepository.import_report_if_absent
+    committed = 0
+
+    def cancel_after_two(repository, *args, **kwargs):
+        nonlocal committed
+        result = original(repository, *args, **kwargs)
+        committed += 1
+        if committed == 2:
+            interrupted.stop_parsing()
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ReportRepository, "import_report_if_absent", cancel_after_two)
+        interrupted.run()
+    assert interrupted.last_parse_result.imported_files == 2
+
+    resumed = _run_import(source, interrupted_db)
+    assert resumed.last_parse_result.imported_files == 4
+    reference_db = tmp_path / "complete.db"
+    assert _run_import(source, reference_db).last_parse_result.imported_files == 6
+    assert _dump_database(interrupted_db) == _dump_database(reference_db)
+
+
 def _dump_database(database: Path) -> dict[str, list[tuple]]:
     with closing(sqlite3.connect(database)) as connection:
         tables = [

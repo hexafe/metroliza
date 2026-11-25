@@ -520,14 +520,17 @@ def _start_interactive_bugreport_history() -> bool:
     return False
 
 
-def _finish_interactive_bugreport_history() -> None:
-    """Drain at most briefly when startup exits before Qt's aboutToQuit hook."""
+def _finish_interactive_bugreport_history(*, startup_failed: bool = False) -> None:
+    """Allow the startup-error receipt to drain before exiting without an event loop."""
     try:
         from metroliza.shared.safe_bugreport import recorder, remove_application_error_hook
 
         remove_application_error_hook()
         if recorder.history_is_running():
-            recorder.close_history(timeout=0.2)
+            if startup_failed:
+                recorder.close_history()
+            else:
+                recorder.close_history(timeout=0.2)
     except Exception:
         pass
 
@@ -563,6 +566,7 @@ def bootstrap_application() -> int:
 def run_application() -> int:
     """Run the original bootstrap flow with one optional invocation context."""
     token = None
+    startup_failed = False
     history_token = _BUGREPORT_HISTORY_OWNER.set(False)
     try:
         token = _begin_startup_context()
@@ -573,6 +577,8 @@ def run_application() -> int:
         try:
             exit_code = bootstrap_application()
         except Exception as exc:
+            context = _STARTUP_INVOCATION.get()
+            startup_failed = context is None or not context.startup_complete
             _startup_failure(exc)
             log_and_exit(exc)
             return 1
@@ -580,7 +586,7 @@ def run_application() -> int:
         return exit_code
     finally:
         if _BUGREPORT_HISTORY_OWNER.get():
-            _finish_interactive_bugreport_history()
+            _finish_interactive_bugreport_history(startup_failed=startup_failed)
         _BUGREPORT_HISTORY_OWNER.reset(history_token)
         if token is not None:
             _STARTUP_INVOCATION.reset(token)

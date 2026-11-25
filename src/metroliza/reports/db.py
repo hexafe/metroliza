@@ -16,6 +16,7 @@ from metroliza.reports.import_persist_profile import (
     observe_persist_checkpoint,
     persist_sqlite_options,
 )
+from metroliza.shared.sqlite_paths import sqlite_sidecar_path_problem
 
 
 TRANSIENT_SQLITE_ERRORS = (
@@ -104,10 +105,15 @@ class RowBatch:
         return [dict(zip(self.columns, row, strict=False)) for row in self.rows]
 
 
+class _SQLiteJournalNameError(sqlite3.OperationalError):
+    """SQLite could not open a database and the journal path exceeds a filesystem limit."""
+
+
 def _is_transient_sqlite_error(exc: sqlite3.OperationalError) -> bool:
     """Return True when the sqlite OperationalError message indicates a retryable lock/open issue."""
-    message = str(exc).lower()
-    return any(token in message for token in TRANSIENT_SQLITE_ERRORS)
+    return not isinstance(exc, _SQLiteJournalNameError) and any(
+        token in str(exc).lower() for token in TRANSIENT_SQLITE_ERRORS
+    )
 
 
 def _normalize_sql_params(params: tuple[Any, ...] | list[Any] | None) -> tuple[Any, ...]:
@@ -122,11 +128,13 @@ def _normalize_sql_params(params: tuple[Any, ...] | list[Any] | None) -> tuple[A
 
 def _apply_sqlite_pragmas(
     conn: sqlite3.Connection, pragma_config: SQLitePragmaConfig, *, initialize_wal: bool = True,
+    database_path: Path | None = None,
 ) -> None:
     """Apply deterministic PRAGMAs for predictable runtime behavior across all call sites."""
     with closing(conn.cursor()) as cursor:
         if initialize_wal:
-            cursor.execute('PRAGMA journal_mode=WAL')
+            with _explain_sqlite_write_open_error(database_path):
+                cursor.execute('PRAGMA journal_mode=WAL')
         cursor.execute(f'PRAGMA synchronous={pragma_config.synchronous}')
         cursor.execute('PRAGMA temp_store=MEMORY')
         cursor.execute('PRAGMA foreign_keys=ON')
@@ -146,6 +154,23 @@ def _managed_connect_options():
     return options
 
 
+def _validate_new_database_name(path: Path) -> None:
+    if problem := sqlite_sidecar_path_problem(path):
+        raise sqlite3.OperationalError(problem)
+
+
+@contextmanager
+def _explain_sqlite_write_open_error(path: Path | None):
+    try:
+        yield
+    except sqlite3.OperationalError as exc:
+        error_code = getattr(exc, "sqlite_errorcode", 0)
+        if path is not None and error_code & 0xff == sqlite3.SQLITE_CANTOPEN:
+            if problem := sqlite_sidecar_path_problem(path):
+                raise _SQLiteJournalNameError(f"{exc}. Path check: {problem}") from exc
+        raise
+
+
 def connect_sqlite(
     db_path: str,
     timeout_s: float = 5.0,
@@ -155,12 +180,14 @@ def connect_sqlite(
     existing_identity: tuple[int, int] | None = None,
 ) -> sqlite3.Connection:
     """Create a SQLite connection and apply deterministic PRAGMAs on open."""
+    path = None if str(db_path) == ":memory:" else Path(db_path).resolve()
     with measure_persist_stage("connection_open"):
-        path = None if str(db_path) == ":memory:" else Path(db_path).resolve()
         before = sqlite_file_identity(path) if path is not None else None
         if existing_identity is not None:
             _require_database_identity(path, existing_identity, include_empty=True)
         if existing_identity is None:
+            if path is not None and before is None and not path.exists():
+                _validate_new_database_name(path)
             connection = sqlite3.connect(db_path, timeout=timeout_s, **_managed_connect_options())
         else:
             uri = f"file:{quote(str(Path(db_path).absolute()))}?mode=rw"
@@ -168,7 +195,7 @@ def connect_sqlite(
         try:
             if existing_identity is not None:
                 _require_database_identity(path, existing_identity, include_empty=True)
-            _apply_sqlite_pragmas(connection, pragma_config, initialize_wal=initialize_wal)
+            _apply_sqlite_pragmas(connection, pragma_config, initialize_wal=initialize_wal, database_path=path)
             # WAL setup initializes the header when this handle creates the file.
             opened = sqlite_file_identity(path) if path is not None else None
             if (
@@ -240,6 +267,7 @@ class _CreatedReportDatabase:
 
 def _reserve_selected_report_database(db_path, binding):
     binding.require(db_path)
+    _validate_new_database_name(binding.path)
     try:
         stream = binding.path.open("xb")
     except FileExistsError as exc:
@@ -293,7 +321,7 @@ def _require_existing_report_schema(connection) -> None:
 def _connect_existing_report_database(db_path, identity):
     _require_database_identity(db_path, identity)
     database_uri = f"file:{quote(str(Path(db_path).absolute()))}?mode=rw"
-    with measure_persist_stage("connection_open"):
+    with measure_persist_stage("connection_open"), _explain_sqlite_write_open_error(Path(db_path)):
         connection = sqlite3.connect(database_uri, uri=True, timeout=5.0, **_managed_connect_options())
         try:
             _require_database_identity(db_path, identity)

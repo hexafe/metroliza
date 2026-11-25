@@ -1,5 +1,6 @@
 """Saved workspace relinking and bundled outputs from private run history."""
 
+from datetime import date, datetime, time, timedelta, timezone
 from hashlib import sha256
 import json
 import shutil
@@ -276,6 +277,81 @@ def test_recent_history_limits_large_malformed_ledger_without_pruning(tmp_path, 
     assert folder.exists()
 
 
+def test_history_date_search_finds_receipts_outside_recent_limit(tmp_path, monkeypatch):
+    from metroliza.app import analysis_history
+
+    root = tmp_path / "history"
+    output = tmp_path / "analysis.xlsx"
+    output.touch()
+    newest = record_analysis({"kind": "csv", "artifacts": [output]}, directory=root)
+    day = date(2024, 1, 2)
+    before = datetime.combine(day, time.min).astimezone(timezone.utc) - timedelta(microseconds=1)
+    first = before + timedelta(microseconds=1)
+    after = datetime.combine(day + timedelta(days=1), time.min).astimezone(timezone.utc)
+    for order, timestamp in enumerate((before, first, after)):
+        receipt = {**newest, "at": timestamp.isoformat(), "settings": {"order": order}}
+        name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{order:032x}.json"
+        (root / name).write_text(json.dumps(receipt), encoding="utf-8")
+
+    monkeypatch.setattr(analysis_history, "_RECENT_LIMIT", 1)
+    assert [row["at"] for row in load_recent_analyses(directory=root).receipts] == [newest["at"]]
+    listing = load_recent_analyses(directory=root, day=day)
+    assert [row["settings"]["order"] for row in listing.receipts] == [1]
+    assert listing.partial is False
+
+    last = after - timedelta(microseconds=1)
+    name = f"{last.strftime('%Y%m%dT%H%M%S%fZ')}-{'4' * 32}.json"
+    (root / name).write_text(json.dumps({**newest, "at": last.isoformat()}), encoding="utf-8")
+    assert load_recent_analyses(directory=root, day=day).partial is True
+    assert load_recent_analyses(directory=root, day=day, cancelled=lambda: True).partial is True
+
+
+def test_history_dialog_filters_without_mutating_saved_receipts(
+    tmp_path, monkeypatch, qapplication_session,
+):
+    from PyQt6.QtCore import QDate, QSignalBlocker
+
+    from metroliza.app import analysis_history
+    from metroliza.ui import analysis_history_dialog as ui
+
+    root = tmp_path / "history"
+    old, new = tmp_path / "earlier.xlsx", tmp_path / "newest.xlsx"
+    old.touch()
+    new.touch()
+    earlier = record_analysis({"kind": "csv", "artifacts": [old]}, directory=root)
+    timestamp = datetime(2024, 3, 1, 12).astimezone(timezone.utc)
+    earlier_name = f"{timestamp.strftime('%Y%m%dT%H%M%S%fZ')}-{'1' * 32}.json"
+    previous, = root.glob("*.json")
+    earlier_receipt = root / earlier_name
+    previous.rename(earlier_receipt)
+    earlier_receipt.write_text(json.dumps({**earlier, "at": timestamp.isoformat()}), encoding="utf-8")
+    record_analysis({"kind": "csv", "artifacts": [new]}, directory=root)
+    monkeypatch.setattr(analysis_history, "_history_directory", lambda: root)
+    dialog = ui.AnalysisHistoryDialog(None)
+    try:
+        _finish_history_task(dialog._listing_task)
+        assert dialog.runs.count() == 2
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
+
+        assert dialog.history_date.accessibleName() == "Analysis date"
+        assert not dialog.history_date.isEnabled()
+        with QSignalBlocker(dialog.history_date):
+            dialog.history_date.setDate(QDate(2024, 3, 1))
+        QTest.keyClick(dialog.date_filter, Qt.Key.Key_Space)
+        assert dialog.date_filter.isChecked()
+        assert dialog.history_date.isEnabled()
+        _finish_history_task(dialog._listing_task)
+        assert dialog.runs.count() == 1
+        assert "earlier.xlsx" in dialog.runs.currentItem().text()
+
+        assert earlier_receipt.exists()
+        assert len(tuple(root.glob("*.json"))) == 2
+        assert old.exists() and new.exists()
+    finally:
+        dialog.close()
+
+
 def test_history_refresh_rejects_previous_listing_and_displays_partial_state(
     tmp_path, monkeypatch, qapplication_session,
 ):
@@ -294,8 +370,9 @@ def test_history_refresh_rejects_previous_listing_and_displays_partial_state(
     second = record_analysis({"kind": "csv", "artifacts": [current]}, directory=history)
     entered, release = Event(), Event()
     called = []
-    def load(*, cancelled):
+    def load(*, cancelled, day):
         called.append(QThread.currentThread() is qapplication_session.thread())
+        assert day is None
         if len(called) == 1:
             entered.set()
             release.wait(3)
