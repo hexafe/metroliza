@@ -16,6 +16,7 @@ from metroliza.reports.import_persist_profile import (
     observe_persist_checkpoint,
     persist_sqlite_options,
 )
+from metroliza.shared.sqlite_paths import sqlite_sidecar_path_problem
 
 
 TRANSIENT_SQLITE_ERRORS = (
@@ -146,6 +147,23 @@ def _managed_connect_options():
     return options
 
 
+def _validate_new_database_name(path: Path) -> None:
+    if problem := sqlite_sidecar_path_problem(path):
+        raise sqlite3.OperationalError(problem)
+
+
+@contextmanager
+def _explain_sqlite_write_open_error(path: Path | None):
+    try:
+        yield
+    except sqlite3.OperationalError as exc:
+        error_code = getattr(exc, "sqlite_errorcode", 0)
+        if path is not None and error_code & 0xff == sqlite3.SQLITE_CANTOPEN:
+            if problem := sqlite_sidecar_path_problem(path):
+                raise sqlite3.OperationalError(problem) from exc
+        raise
+
+
 def connect_sqlite(
     db_path: str,
     timeout_s: float = 5.0,
@@ -155,12 +173,14 @@ def connect_sqlite(
     existing_identity: tuple[int, int] | None = None,
 ) -> sqlite3.Connection:
     """Create a SQLite connection and apply deterministic PRAGMAs on open."""
-    with measure_persist_stage("connection_open"):
-        path = None if str(db_path) == ":memory:" else Path(db_path).resolve()
+    path = None if str(db_path) == ":memory:" else Path(db_path).resolve()
+    with measure_persist_stage("connection_open"), _explain_sqlite_write_open_error(path):
         before = sqlite_file_identity(path) if path is not None else None
         if existing_identity is not None:
             _require_database_identity(path, existing_identity, include_empty=True)
         if existing_identity is None:
+            if path is not None and before is None and not path.exists():
+                _validate_new_database_name(path)
             connection = sqlite3.connect(db_path, timeout=timeout_s, **_managed_connect_options())
         else:
             uri = f"file:{quote(str(Path(db_path).absolute()))}?mode=rw"
@@ -240,6 +260,7 @@ class _CreatedReportDatabase:
 
 def _reserve_selected_report_database(db_path, binding):
     binding.require(db_path)
+    _validate_new_database_name(binding.path)
     try:
         stream = binding.path.open("xb")
     except FileExistsError as exc:
@@ -293,7 +314,7 @@ def _require_existing_report_schema(connection) -> None:
 def _connect_existing_report_database(db_path, identity):
     _require_database_identity(db_path, identity)
     database_uri = f"file:{quote(str(Path(db_path).absolute()))}?mode=rw"
-    with measure_persist_stage("connection_open"):
+    with measure_persist_stage("connection_open"), _explain_sqlite_write_open_error(Path(db_path)):
         connection = sqlite3.connect(database_uri, uri=True, timeout=5.0, **_managed_connect_options())
         try:
             _require_database_identity(db_path, identity)

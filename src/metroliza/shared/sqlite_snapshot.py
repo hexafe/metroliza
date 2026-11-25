@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import errno
 import os
 from pathlib import Path
 import stat
 import tempfile
 
+from metroliza.shared.atomic_file import rename_noreplace
 
 _SQLITE_SIDECAR_SUFFIXES = ("-wal", "-shm", "-journal")
 _PRIVATE_DIRECTORY_MODE = 0o700
@@ -130,7 +132,13 @@ def atomic_publish_no_replace(staging_path: Path, destination_path: Path, *, pla
             os.rename(staging_path, destination_path)
         elif platform == "posix":
             # A hard link creates the final name only when it is still absent.
-            os.link(staging_path, destination_path)
+            try:
+                os.link(staging_path, destination_path)
+            except OSError as exc:
+                if exc.errno not in {errno.EPERM, errno.ENOSYS, errno.EOPNOTSUPP, errno.EMLINK}:
+                    raise
+                if not rename_noreplace(staging_path, destination_path):
+                    raise
         else:
             raise RuntimeError("No supported atomic no-replace publication primitive")
     except FileExistsError as exc:
