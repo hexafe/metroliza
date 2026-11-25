@@ -9,6 +9,7 @@ from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER, sqlite_database_path
 from metroliza.ui.filter_dialog import FilterDialog
 from metroliza.ui.data_grouping import DataGrouping
+from metroliza.ui.detached_threads import native_thread_done_now
 import metroliza.shared.custom_logger as custom_logger
 from metroliza.exporting.export_dialog_service import (
     build_export_completion_diagnostics,
@@ -2119,12 +2120,12 @@ class ExportDialog(QDialog):
 
     def on_export_thread_stopped(self):
         """Restore export UI when the worker stops without a success/cancel signal."""
-        from PyQt6.QtCore import QDeadlineTimer, QThread, QTimer
+        from PyQt6.QtCore import QThread, QTimer
 
         stopped_thread = self.export_thread
         if stopped_thread is None:
             return
-        if isinstance(stopped_thread, QThread) and not stopped_thread.wait(QDeadlineTimer.current(Qt.TimerType.PreciseTimer)):
+        if isinstance(stopped_thread, QThread) and not native_thread_done_now(stopped_thread):
             QTimer.singleShot(10, self.on_export_thread_stopped)
             return
         try:

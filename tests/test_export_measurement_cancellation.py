@@ -80,9 +80,18 @@ def test_stream_measurements_sheet_fallback_requires_no_cancellation(
                 assert not list(tmp_path.glob('.cancelled.tmp-*.xlsx'))
             else:
                 fallback.assert_called_once_with()
-                write_dataframe.assert_called_once()
-                assert write_dataframe.call_args.args[0] is fallback.return_value
-                assert write_dataframe.call_args.args[1] == 'MEASUREMENTS'
+                measurements, scope = (call.args for call in write_dataframe.call_args_list)
+                assert measurements[0] is fallback.return_value
+                assert measurements[1] == 'MEASUREMENTS'
+                scope_rows, scope_sheet_name, scope_writer = scope
+                assert scope_sheet_name == 'REPORT SCOPE'
+                assert scope_writer is measurements[2]
+                assert scope_rows.columns == ('Setting', 'Value')
+                assert scope_rows.rows[:3] == [
+                    ('Source database', 'unused.db'),
+                    ('Report scope', 'Selected database'),
+                    ('Filters', 'All measurements in the report scope'),
+                ]
                 assert outcome.kind is ExportOutcomeKind.COMPLETED
                 assert not thread.export_canceled
                 assert cancelled_signals == []
