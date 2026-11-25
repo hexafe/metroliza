@@ -192,8 +192,11 @@ class ParserPluginWizardDialog(QDialog):
         layout.setSpacing(8)
         attach_help_menu_to_layout(layout, self, [("Parser profiles manual", "parser_profiles")])
         self.task_tabs = _ProfileTaskTabs()
-        manage = QWidget()
-        manage_layout = QVBoxLayout(manage)
+        manage = QScrollArea()
+        manage.setWidgetResizable(True)
+        manage.setFrameShape(QScrollArea.Shape.NoFrame)
+        manage_body = QWidget()
+        manage_layout = QVBoxLayout(manage_body)
         manage_layout.addWidget(section_label("Manage installed profiles"))
         manage_layout.addWidget(self.store_status_label)
         self.store_path_label.setWordWrap(True)
@@ -206,6 +209,7 @@ class ParserPluginWizardDialog(QDialog):
         manage_actions.addWidget(self.rollback_button, 1, 0, 1, 2)
         manage_actions.addWidget(self.refresh_button, 2, 0, 1, 2)
         manage_layout.addLayout(manage_actions)
+        manage.setWidget(manage_body)
         self.task_tabs.addTab(manage, "Manage installed profiles")
 
         add = QWidget()
@@ -268,7 +272,7 @@ class ParserPluginWizardDialog(QDialog):
         self.profile_list.currentItemChanged.connect(self._sync_manage_actions)
         self.next_button.clicked.connect(lambda: self._next_control.click())
         self.close_button.clicked.connect(self.accept)
-        order = (self.profile_list, self.enable_button, self.disable_button, self.refresh_button,
+        order = (self.profile_list, self.enable_button, self.disable_button, self.rollback_button, self.refresh_button,
                  self.plugin_id_edit, self.display_name_edit, self.source_format_combo, self.create_button,
                  self.open_folder_button, self.copy_path_button, self.check_package_button, self.validate_button,
                  self.install_button, self.diagnose_button, self.repair_button, self.next_button, self.close_button)
