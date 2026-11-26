@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PyQt6 import sip
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
@@ -240,7 +241,7 @@ class SafeBugReportDialog(QDialog):
             self.tr("ZIP archive (*.zip)"),
             options=QFileDialog.Option.DontConfirmOverwrite,
         )
-        if not filename:
+        if not filename or sip.isdeleted(self):
             return
         current = self._checked_preview()
         if current is None:
@@ -255,6 +256,9 @@ class SafeBugReportDialog(QDialog):
         messages = {
             StoreStatus.EXPORTED: self.tr("Diagnostic ZIP saved."),
             StoreStatus.DESTINATION_EXISTS: self.tr("That file already exists. Choose a new filename."),
+            StoreStatus.PUBLISH_INCOMPLETE: self.tr(
+                "The ZIP could not be verified. Check the destination before sharing it."
+            ),
         }
         self.status_label.setText(messages.get(result, self.tr("The diagnostic ZIP could not be saved.")))
 

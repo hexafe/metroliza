@@ -447,6 +447,15 @@ def _commit_stage_no_replace(stage: Path, final: Path) -> None:
         os.link(stage, final, follow_symlinks=False)
 
 
+def _sync_publication_parent(path: Path) -> None:
+    if os.name != "nt":
+        descriptor = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def _publish_stage(stage: Path, final: Path) -> tuple[int, int]:
     if final.exists() or final.is_symlink():
         raise FileExistsError("diagnostic_target_exists")
@@ -456,12 +465,7 @@ def _publish_stage(stage: Path, final: Path) -> tuple[int, int]:
     try:
         if os.name != "nt":
             stage.unlink()
-        if os.name != "nt":
-            descriptor = os.open(final.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+        _sync_publication_parent(final)
         metadata = final.lstat()
         if (
             (metadata.st_dev, metadata.st_ino) != identity
@@ -624,25 +628,51 @@ def export_safe_bug_report(report: str, destination: Path | None) -> StoreStatus
         return StoreStatus.ROOT_UNAVAILABLE
     files = {"report.md": report.encode("utf-8")}
     manifest = _bundle_manifest("metroliza_safe_bug_report_v1", files)
+    archive = _bundle_archive({**files, "manifest.json": manifest})
+    return _publish_safe_bug_report_archive(destination, archive)
+
+
+def _publish_safe_bug_report_archive(destination: Path, archive: bytes) -> StoreStatus:
     stage = None
     try:
         if not destination.parent.is_dir() or not _existing_ancestors_safe(destination.parent):
             return StoreStatus.ROOT_UNAVAILABLE
         if os.path.lexists(destination):
             return StoreStatus.DESTINATION_EXISTS
-        stage = _write_stage(destination.parent, _bundle_archive({**files, "manifest.json": manifest}))
+        stage = _write_stage(destination.parent, archive)
+        staged = stage.lstat()
+        if _safe_file_bytes(stage, len(archive)) != archive:
+            return StoreStatus.IO_FAILED
         _commit_stage_no_replace(stage, destination)
     except FileExistsError:
         return StoreStatus.DESTINATION_EXISTS
     except (OSError, ValueError):
         return StoreStatus.IO_FAILED
+    else:
+        committed_stage, stage = stage, None
+        return _verify_published_bug_report(committed_stage, destination, staged, archive)
     finally:
         if stage is not None:
-            # A successful no-replace commit owns the destination from here.
-            # Only the private staging name may be cleaned up.
             with contextlib.suppress(OSError):
                 stage.unlink(missing_ok=True)
-    return StoreStatus.EXPORTED
+
+
+def _verify_published_bug_report(
+    stage: Path, destination: Path, staged: os.stat_result, archive: bytes,
+) -> StoreStatus:
+    try:
+        stage.unlink(missing_ok=True)
+        _sync_publication_parent(destination)
+        final = destination.lstat()
+        if (final.st_dev, final.st_ino) != (staged.st_dev, staged.st_ino):
+            return StoreStatus.PUBLISH_INCOMPLETE
+        if _safe_file_bytes(destination, len(archive)) == archive:
+            return StoreStatus.EXPORTED
+    except OSError:
+        pass
+    # Publication already committed. Never remove the destination after that
+    # point: another process may have changed what the pathname denotes.
+    return StoreStatus.PUBLISH_INCOMPLETE
 
 
 class IncidentStore:

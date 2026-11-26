@@ -1,5 +1,7 @@
 import hashlib
 import json
+import os
+from pathlib import Path
 import zipfile
 
 import pytest
@@ -118,6 +120,28 @@ def test_changing_preview_while_save_picker_is_open_requires_review(
         dialog.close()
 
 
+def test_clearing_history_while_save_picker_is_open_requires_review(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    recorder = SafeBugReportRecorder()
+    monkeypatch.setattr(dialog_module, "recorder", recorder)
+    dialog = SafeBugReportDialog()
+
+    def clear_during_picker(*_a, **_kw):
+        monkeypatch.setattr(recorder, "history_generation", lambda: 1)
+        return str(tmp_path / "diagnostic.zip"), ""
+
+    monkeypatch.setattr(dialog_module.QFileDialog, "getSaveFileName", clear_during_picker)
+    try:
+        original = dialog.preview.toPlainText()
+        dialog.save_button.click()
+        assert "History was cleared" in dialog.status_label.text()
+        assert dialog.preview.toPlainText() == original
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        dialog.close()
+
+
 @pytest.mark.parametrize("colliding_file", [False, True])
 def test_diagnostic_zip_failure_cleans_staging_and_preserves_foreign_file(
     qapplication_session, monkeypatch, tmp_path, colliding_file,
@@ -163,6 +187,56 @@ def test_diagnostic_zip_rejects_non_schema_preview_values(qapplication_session, 
     )
     assert list(tmp_path.iterdir()) == []
 
+
+def test_diagnostic_zip_does_not_delete_target_after_verification_failure(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    dialog = SafeBugReportDialog()
+    destination = tmp_path / "diagnostic.zip"
+    read_bytes = diagnostic_store._safe_file_bytes
+
+    def fail_readback(path, maximum):
+        if path == destination:
+            raise OSError("simulated read-back failure")
+        return read_bytes(path, maximum)
+
+    monkeypatch.setattr(diagnostic_store, "_safe_file_bytes", fail_readback)
+    try:
+        report = dialog.preview.toPlainText()
+        result = diagnostic_store.export_safe_bug_report(report, destination)
+        assert result is diagnostic_store.StoreStatus.PUBLISH_INCOMPLETE
+        assert list(tmp_path.iterdir()) == [destination]
+        with zipfile.ZipFile(destination) as bundle:
+            assert bundle.read("report.md") == report.encode("utf-8")
+    finally:
+        dialog.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows moves rather than links the staging name")
+def test_diagnostic_zip_reports_staging_cleanup_failure(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    dialog = SafeBugReportDialog()
+    destination = tmp_path / "diagnostic.zip"
+    unlink = Path.unlink
+
+    def fail_stage_cleanup(path, *args, **kwargs):
+        if path.parent == tmp_path and path.name.startswith(".stage-"):
+            raise PermissionError("simulated cleanup failure")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_stage_cleanup)
+    try:
+        report = dialog.preview.toPlainText()
+        result = diagnostic_store.export_safe_bug_report(report, destination)
+        assert result is diagnostic_store.StoreStatus.PUBLISH_INCOMPLETE
+        assert destination.stat().st_nlink == 2
+        for stage in tmp_path.glob(".stage-*.tmp"):
+            unlink(stage)
+        with zipfile.ZipFile(destination) as bundle:
+            assert bundle.read("report.md") == report.encode("utf-8")
+    finally:
+        dialog.close()
 
 def test_start_history_offers_previous_activity_without_calling_it_a_crash(
     qapplication_session, monkeypatch, tmp_path,

@@ -20,11 +20,12 @@ Storage is bounded to 20 reports, 32 MiB in total, and 14 days. Each report is a
 
 Open **Help > Report a problem…**, choose the affected area and symptom, and read the
 preview. **Save diagnostic ZIP…** writes the preview as `report.md` with a
-`manifest.json` containing its size and SHA-256 checksum. The file picker can be
-cancelled and the ZIP always uses a new filename.
+`manifest.json` containing its size and SHA-256 checksum. You can cancel the file
+picker. Choose an unused filename to save the ZIP.
 
 The preview includes the application version, build facts and approved diagnostic
-codes. Paths, report and customer identifiers, passwords, SQL and measurement
+codes. Its generated diagnostic identifiers and relative times can connect events
+from the same operation or session. Paths, report and customer identifiers, passwords, SQL and measurement
 values are excluded. Review the preview and your organization's sharing rules
 before attaching the ZIP to a support request. Keep original input files and raw
 logs private.
