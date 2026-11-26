@@ -307,6 +307,22 @@ def test_native_windows_cache_publication_preserves_required_real_lifecycle() ->
     assert 'Run native Windows cache lifecycle tests' in policy
 
 
+def test_windows_filesystem_matrix_is_owner_dispatch_only() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['run_windows_cache_filesystem_matrix']['default'] == '0'
+    job = workflow['jobs']['windows-cache-filesystem-matrix']
+    assert job['runs-on'] == 'windows-latest'
+    assert job['if'] == (
+        "github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_cache_filesystem_matrix == '1' && github.actor == github.repository_owner"
+    )
+    assert any('qualify_windows_cache_filesystems.ps1' in step.get('run', '') for step in job['steps'])
+    assert 'continue-on-error' not in job
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 

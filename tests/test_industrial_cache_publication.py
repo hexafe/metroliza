@@ -1,19 +1,39 @@
-"""Real SQLite publication regressions for temporary industrial archives."""
+"""Real SQLite publication regressions for temporary industrial archives.
+
+For issue #1006, set METROLIZA_CACHE_FS_NTFS, METROLIZA_CACHE_FS_FAT,
+METROLIZA_CACHE_FS_EXFAT and METROLIZA_CACHE_FS_SMB on Windows to existing
+writable, isolated scratch directories on the corresponding storage. The FAT
+case records FAT or FAT32 as actually observed. Supply an explicit UNC for SMB
+and use a session able to read its own connection with Get-SmbConnection.
+
+From the clean checkout, record `git rev-parse HEAD 'HEAD^{tree}'` and run
+`python -m pytest -v -s tests/test_industrial_cache_publication.py -k native_windows_cache_filesystem`.
+Retain the pytest result and the cache_storage_qualification JSON line for each
+storage class. For SMB, record the server implementation and whether the share
+was loopback or on a separate host. A missing, skipped or failing row leaves
+that class unqualified. A safe refusal qualifies only refusal on that setup.
+"""
 
 from __future__ import annotations
 
 from contextlib import closing
 import errno
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
+import platform
 import sqlite3
 import stat
 import sys
+from tempfile import TemporaryDirectory
 
 import pytest
 
 import metroliza.industrial.industrial_cache_target as cache_target
+from metroliza.shared.sqlite_snapshot import SQLiteSnapshotPublicationError, atomic_publish_no_replace
+from metroliza.reports import db
+from tests.industrial_cache_windows_storage import windows_scratch_root, windows_storage_identity
 
 
 @pytest.fixture
@@ -349,3 +369,220 @@ def test_long_cache_destination_keeps_source_and_cleans_owned_staging(temporary_
             cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
         assert _database_snapshot(destination)[1:] == before[1:]
     assert _database_snapshot(source) == before
+
+
+def _native_refusal(exc: RuntimeError) -> dict[str, object]:
+    cause = exc.__cause__
+    if not isinstance(cause, OSError):
+        raise exc
+    if isinstance(exc, SQLiteSnapshotPublicationError):
+        stage = "rename"
+    elif str(exc) == "Could not apply private staging permissions":
+        stage = "flush"
+    else:
+        raise exc
+    winerror = getattr(cause, "winerror", None)
+    if winerror in {1, 17, 50, 120} or cause.errno in {errno.ENOSYS, errno.EOPNOTSUPP, errno.EXDEV}:
+        reason = "unsupported_operation"
+    elif winerror == 5 or (winerror is None and isinstance(cause, PermissionError)):
+        reason = "permission_denied"
+    else:
+        raise exc
+    if stage == "rename":
+        assert exc.reason == reason
+    return {**_exception_receipt(stage, cause), "status": "refused_safely", "reason": reason}
+
+
+@pytest.mark.parametrize(("error", "reason", "message"), [
+    (PermissionError(errno.EACCES, "blocked"), "permission_denied", "Permission denied"),
+    (OSError(errno.EOPNOTSUPP, "unavailable"), "unsupported_operation", "does not support"),
+    (OSError(errno.EIO, "failure"), "io_failed", "Could not publish"),
+])
+def test_publish_distinguishes_native_refusal(monkeypatch, tmp_path, error, reason, message):
+    stage = tmp_path / "stage.sqlite"
+    destination = tmp_path / "archive.sqlite"
+    stage.write_bytes(b"untouched")
+
+    def refuse(_stage, _destination):
+        raise error
+
+    monkeypatch.setattr(os, "rename", refuse)
+    with pytest.raises(SQLiteSnapshotPublicationError, match=message) as failure:
+        atomic_publish_no_replace(stage, destination, platform="nt")
+    assert failure.value.reason == reason
+    assert failure.value.__cause__ is error
+    assert stage.read_bytes() == b"untouched"
+    assert not destination.exists()
+
+
+def _qualify_unused_destination(monkeypatch, target, destination, source_snapshot, storage):
+    captured_staging = None
+    primitive = "rename" if os.name == "nt" else "link"
+    real_primitive = getattr(os, primitive)
+
+    def observe_publication(staging, final):
+        nonlocal captured_staging
+        captured_staging = staging.read_bytes()
+        real_primitive(staging, final)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, primitive, observe_publication)
+        try:
+            archive = cache_target.persist_temporary_industrial_cache(target, destination)
+        except RuntimeError as exc:
+            assert not list(destination.parent.iterdir())
+            if storage not in {"FAT", "EXFAT", "SMB"}:
+                raise
+            refusal = _native_refusal(exc)
+            assert (captured_staging is not None) == (refusal["stage"] == "rename")
+            return refusal
+    assert archive.mode == "persistent"
+    assert Path(archive.cache_db_file) == destination
+    archive_bytes, *archive_contents = _database_snapshot(destination)
+    assert archive_contents == list(source_snapshot[1:])
+    assert captured_staging is not None and archive_bytes == captured_staging
+    assert set(destination.parent.iterdir()) == {destination}
+    return {"status": "published", "archive_sha256": sha256(archive_bytes).hexdigest()}
+
+
+def _qualify_destination_rejections(monkeypatch, target, directory, unused_result):
+    originals = {}
+    marker = b"foreign destination entry"
+    real_backup = cache_target.backup_sqlite_database
+    for phase in ("existing", "after-backup"):
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            destination = directory / f"{phase}{suffix}.sqlite"
+            conflict = Path(f"{destination}{suffix}")
+
+            def introduce_conflict(conflict=conflict):
+                with conflict.open("xb") as handle:
+                    handle.write(marker)
+                originals[conflict] = marker
+
+            def backup_with_conflict(source, staged):
+                real_backup(source, staged)
+                introduce_conflict()
+
+            with monkeypatch.context() as patch:
+                if phase == "existing":
+                    introduce_conflict()
+                else:
+                    patch.setattr(cache_target, "backup_sqlite_database", backup_with_conflict)
+                detail = "sidecar already exists" if suffix else "Destination already exists"
+                with pytest.raises(FileExistsError, match=detail):
+                    cache_target.persist_temporary_industrial_cache(target, destination)
+            assert conflict in originals
+            assert not suffix or not destination.exists()
+
+    destination = directory / "at-rename.sqlite"
+    primitive = "rename" if os.name == "nt" else "link"
+    real_primitive = getattr(os, primitive)
+
+    def publish_with_conflict(staged, final):
+        with final.open("xb") as handle:
+            handle.write(marker)
+        originals[final] = marker
+        real_primitive(staged, final)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, primitive, publish_with_conflict)
+        try:
+            cache_target.persist_temporary_industrial_cache(target, destination)
+        except FileExistsError as exc:
+            assert isinstance(exc.__cause__, FileExistsError)
+            late_result = {**_exception_receipt("rename", exc.__cause__), "status": "rejected_existing"}
+        except RuntimeError as exc:
+            late_result = _native_refusal(exc)
+            assert late_result["stage"] == unused_result.get("stage") == "rename"
+            assert late_result["reason"] == unused_result["reason"]
+        else:
+            pytest.fail("Publication succeeded over a filename created at the commit point")
+    assert destination in originals
+    assert set(directory.iterdir()) == set(originals)
+    assert all(path.read_bytes() == original for path, original in originals.items())
+    return late_result
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires the native POSIX publication primitive")
+def test_posix_cache_filesystem_contract(monkeypatch, temporary_cache, tmp_path):
+    source = Path(temporary_cache.cache_db_file)
+    source_snapshot = _database_snapshot(source)
+    unused, collisions = tmp_path / "unused", tmp_path / "collisions"
+    unused.mkdir()
+    collisions.mkdir()
+    published = _qualify_unused_destination(
+        monkeypatch, temporary_cache, unused / "archive µ.sqlite", source_snapshot, "POSIX",
+    )
+    late = _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
+    assert published["status"] == "published"
+    assert late["status"] == "rejected_existing"
+    assert _database_snapshot(source) == source_snapshot
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires real Windows storage")
+@pytest.mark.parametrize("storage", ("NTFS", "FAT", "EXFAT", "SMB"))
+def test_native_windows_cache_filesystem(monkeypatch, temporary_cache, storage):
+    option = f"METROLIZA_CACHE_FS_{storage}"
+    if not (configured := os.environ.get(option)):
+        pytest.skip(f"{option} must name an existing synthetic scratch directory")
+    root = windows_scratch_root(configured, storage)
+    source = Path(temporary_cache.cache_db_file)
+    source_snapshot = _database_snapshot(source)
+    with TemporaryDirectory(prefix="mz-cache-fs-", dir=root) as scratch:
+        trial = Path(scratch).resolve(strict=True)
+        identity = windows_storage_identity(trial, storage)
+        print(json.dumps({"probe": "cache_storage_identity", "requested": storage, **identity}))
+        unused, collisions = trial / "unused", trial / "collisions"
+        unused.mkdir()
+        collisions.mkdir()
+        try:
+            published = _qualify_unused_destination(
+                monkeypatch, temporary_cache, unused / "archive µ.sqlite", source_snapshot, storage,
+            )
+            assert _database_snapshot(source) == source_snapshot
+            print(json.dumps({
+                "probe": "cache_storage_unused_destination",
+                "requested": storage,
+                **published,
+                "source_preserved": True,
+            }, sort_keys=True))
+            late = _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
+        finally:
+            assert _database_snapshot(source) == source_snapshot
+            assert sorted(path.name for path in source.parent.iterdir()) == [source.name]
+    assert not trial.exists()
+    print(json.dumps({
+        "probe": "cache_storage_qualification",
+        "requested": storage,
+        **identity,
+        "windows": platform.version(),
+        "python": platform.python_version(),
+        "sqlite": sqlite3.sqlite_version,
+        "source_sha256": sha256(source_snapshot[0]).hexdigest(),
+        "unused_destination": published,
+        "existing_entries_preserved": True,
+        "precommit_sidecar_suffixes": ["-wal", "-shm", "-journal"],
+        "commit_point_collision": late,
+        "source_preserved": True,
+        "staging_removed": True,
+        "scratch_removed": True,
+    }, sort_keys=True))
+
+
+def test_failed_backup_verification_preserves_cache_and_cleans_staging(
+    monkeypatch, temporary_cache, tmp_path,
+):
+    source = Path(temporary_cache.cache_db_file)
+    source_snapshot = _database_snapshot(source)
+    destination = tmp_path / "verification-failed.sqlite"
+    real_check = db.check_sqlite_integrity
+
+    def reject_completed_backup(connection):
+        real_check(connection)
+        raise RuntimeError("SQLite backup failed integrity validation")
+
+    monkeypatch.setattr(db, "check_sqlite_integrity", reject_completed_backup)
+    with pytest.raises(RuntimeError, match="SQLite backup failed integrity validation"):
+        cache_target.persist_temporary_industrial_cache(temporary_cache, destination)
+    assert _database_snapshot(source) == source_snapshot
+    assert set(tmp_path.iterdir()) == {source}

@@ -29,6 +29,10 @@ on:
         description: "Set to 1 for owner-only bounded Windows incident feature qualification"
         required: false
         default: "0"
+      run_windows_cache_filesystem_matrix:
+        description: "Set to 1 for an owner-only cache publication trial on disposable Windows volumes and loopback SMB"
+        required: false
+        default: "0"
       run_windows_candidate_acceptance:
         description: "Set to 1 for the authorized combined diagnostic/core Windows candidate acceptance"
         required: false
@@ -64,6 +68,33 @@ concurrency:
   cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || inputs.run_windows_nuitka_qualification == '1')) }}
 
 jobs:
+  windows-cache-filesystem-matrix:
+    name: Windows cache filesystem matrix (manual/opt-in)
+    if: github.event_name == 'workflow_dispatch' && inputs.run_windows_cache_filesystem_matrix == '1' && github.actor == github.repository_owner
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Qualify the Windows cache filesystem matrix
+        shell: pwsh
+        env:
+          PYTHONPATH: src;.
+        run: .\scripts\qualify_windows_cache_filesystems.ps1
+
   windows-launcher-qualification:
     name: Native launcher qualification (manual/opt-in)
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_launcher_qualification == '1' && github.actor == github.repository_owner && github.event.repository.private == false

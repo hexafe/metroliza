@@ -274,10 +274,14 @@ production source produced the rows and when the fetch last ran.
 Cached rows are snapshots. If production data changes after the fetch, run **Fetch to
 cache** again to refresh the local copy.
 
-When saving the cache database, choose an unused name. If a removable drive or
-network share refuses the save, save to a local folder under your account first.
-The cache stays available to retry. Once the local archive is closed, copy it to
-the other drive or share without replacing any existing archive.
+When saving the cache database, choose an unused name. If that name or a matching
+SQLite companion file (`-wal`, `-shm`, or `-journal`) already exists, choose a
+different name. Keep other tools from creating, moving, or deleting those files
+while the save is in progress.
+
+If a removable drive or network share refuses the save, the temporary cache stays
+available. Retry in a writable local folder under your account. Once the local
+archive is closed, you can copy it to the other drive or share using an unused name.
 
 ## The Source Column
 
