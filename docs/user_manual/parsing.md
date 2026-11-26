@@ -62,23 +62,28 @@ A successful import does not imply enrichment succeeded.
 
 After import the table switches to read-only **last import results**, one row per reviewed
 occurrence. **Saved** and **Already present** require that report's persistence receipt.
-**Skipped** means it was not submitted (the reason identifies an intentional exclusion or
-review finding). **Failed** identifies a report-processing failure. **Unknown** means
-per-report completion was not confirmed, including unfinished cancelled work or a failed
-persistence checkpoint; check the destination before retrying. Aggregate totals never assign
-success to a particular row. Reports with the same filename in different folders keep their
-separate source-relative identities.
+**Skipped** means it was not submitted. **Failed** identifies a report-processing failure.
+**Cancelled** identifies a report confirmed to be unfinished when import stopped. **Unknown**
+means the outcome for that report could not be confirmed. Check the destination before retrying.
+Reports with the same filename in different folders keep their separate source-relative identities.
 
 Counters describe results, and **Needs attention**, status, parser and search filters still
-work. Historical rows cannot be checked or edited and contain no approved plan or content
-fingerprints. **Review again** obtains fresh source/parser/database approval before another
-import; changing context clears the prior result table. Use **Eksportuj partię (N)** to export the reports saved in that import,
-or **Eksportuj całą bazę** to work with the full database.
+work. Historical rows cannot be checked or edited. Use **Eksportuj partię (N)** to export the
+reports saved by the latest attempt, or **Eksportuj całą bazę** to work with the full database.
 
-Changing the source, destination or metadata detail invalidates the complete review and
-selection. After import, review again before another import. Source content and parser
-approvals are checked again by the import worker; **Changed since review** items cannot be
-silently imported using stale approval.
+### Resume import
+
+When the planner can verify which selected reports finished, **Resume import (N)** retries
+the cancelled or failed reports from that selection, including their approved metadata
+edits. Reports already saved or confirmed present are left untouched. The outcome includes
+the reports completed in earlier attempts. A resumed attempt runs the chosen metadata mode
+for its own reports.
+
+The worker rechecks the remaining source files and parser approvals, and verifies that the
+destination is still the same file. Choose **Review again** if the source or parser has changed,
+the destination was replaced, or the previous outcome could not be confirmed. Changing the
+source, destination or metadata detail clears the resume action. The action is available in
+the current session after cancellation or a report failure.
 
 **Report details** shows parser identifiers, confidence, reason codes, competing parsers and
 bounded technical evidence. It does not show raw report contents or raw parser exceptions.

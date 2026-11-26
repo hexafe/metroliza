@@ -6,6 +6,7 @@ import logging
 import os
 import time
 import traceback
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from metroliza.parsing import report_parser_factory
@@ -16,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
+from metroliza.reports.db import DatabaseSourceChanged, SQLiteFileBinding, execute_with_retry, lazy_sqlite_connection_scope
 from metroliza.reports.db import checkpoint_pending_import_commits
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
@@ -100,6 +101,32 @@ class ReportImportReceipt:
 
     occurrence_id: str
     state: str
+
+
+def _pending_import_reports(plan, result, receipts, committed_reports):
+    """Identify unfinished occurrences only from reconciled execution evidence."""
+    if result.preflight_changed_files or result.skipped_files:
+        return None
+    selected = {item.occurrence_id: item for item in plan.selected_reports}
+    expected = Counter(saved=result.imported_files, already_present=result.already_present_files,
+                       failed=result.failed_files)
+    recorded = {receipt.occurrence_id: receipt.state for receipt in receipts}
+    if (
+        len(recorded) != len(receipts)
+        or not recorded.keys() <= selected.keys()
+        or Counter(recorded.values()) != expected
+        or result.selected_files != len(selected)
+        or len(selected) - len(recorded) != result.cancelled_files
+        or result.parsed_files != result.imported_files + result.already_present_files
+    ):
+        return None
+    saved_digests = {
+        _sha256_from_fingerprint(selected[key].fingerprint)
+        for key, state in recorded.items() if state == "saved"
+    }
+    if len(committed_reports) != result.imported_files or set(committed_reports.values()) != saved_digests:
+        return None
+    return tuple(item for key, item in selected.items() if recorded.get(key) in (None, "failed"))
 
 
 @dataclass(frozen=True)
@@ -1407,7 +1434,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         # Initialize the thread with validated request values
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
-        self.selected_database = None
+        self.selected_database = import_plan.resume_database if import_plan is not None else None
         self.created_database = None
         self._creation_delivery_lock = Lock()
         self._creation_receiver_active = False
@@ -1423,6 +1450,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.import_plan = import_plan
         self.last_parse_result = ParseBatchResult(parsed_files=0, total_files=0)
         self.last_report_outcomes: tuple[ReportImportReceipt, ...] = ()
+        self.last_resume_plan: ImportPlan | None = None
         self.last_import_batch: ImportedReportBatch | None = None
         self.last_enrichment_result: MetadataEnrichmentBatchResult | None = None
         self._last_emitted_progress = -1
@@ -1630,10 +1658,11 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 report,
                 source_format=infer_source_format(report),
             )
-            inspection.adopt_reviewed_sha256(
-                _sha256_from_fingerprint(selected_identity.fingerprint),
-                reviewed_item.stat_signature,
-            )
+            if plan.resume_database is None:
+                inspection.adopt_reviewed_sha256(
+                    _sha256_from_fingerprint(selected_identity.fingerprint),
+                    reviewed_item.stat_signature,
+                )
             sha256_value = inspection.sha256
             fingerprint = f"sha256:{sha256_value}" if sha256_value else None
             if fingerprint != selected_identity.fingerprint:
@@ -2009,9 +2038,14 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         committed_reports: dict[int, str] = {}
         connection = None
         self.last_report_outcomes = ()
+        self.last_resume_plan = None
         self.last_import_batch = None
         try:
             plan = self._validated_import_plan()
+            if plan.resume_database is not None:
+                plan.resume_database.require(self.db_file)
+                if self.selected_database != plan.resume_database:
+                    raise DatabaseSourceChanged("The resume destination no longer matches the selected database.")
             preflight = plan.preflight_result
             preflight_counts = preflight.status_counts
             selected_files = len(plan.selected_reports)
@@ -2042,6 +2076,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                         cancel_flag=True,
                     )
                 )
+                self._publish_resume_evidence(plan, receipts, committed_reports)
                 self._complete_requested_enrichment([], None)
                 self.parsing_finished.emit()
                 return
@@ -2052,7 +2087,8 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             )
             reports_to_parse = list(filter_result.approved_reports)
             append_identity = plan.existing_database_identity
-            if self.parsing_canceled or not reports_to_parse or (append_identity and filter_result.changed_files):
+            strict_validation = append_identity is not None or plan.resume_database is not None
+            if self.parsing_canceled or not reports_to_parse or (strict_validation and filter_result.changed_files):
                 self.last_parse_result = ParseBatchResult(
                     parsed_files=0,
                     total_files=self._preflight_reviewed_total,
@@ -2084,6 +2120,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                     ),
                     preflight_changed_files=filter_result.changed_files,
                 )
+                self._publish_resume_evidence(plan, receipts, committed_reports)
                 self._emit_stage_progress('parse_reports', 1.0)
                 self._complete_requested_enrichment([], None)
                 self.parsing_finished.emit()
@@ -2344,7 +2381,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.last_parse_result = result
                 # Enrichment can run for minutes without committing; sync the import first.
                 checkpoint_pending_import_commits(connection)
-                self.last_report_outcomes = tuple(receipts)
+                self._publish_resume_evidence(plan, receipts, committed_reports, connection.opened_database)
                 diagnostic.stage(WorkflowStage.PERSISTENCE_COMPLETE)
 
                 self._complete_requested_enrichment(list(accepted_reports.values()), connection)
@@ -2371,6 +2408,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
 
             self.parsing_finished.emit()
         except Exception as e:
+            self.last_resume_plan = None
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(e)
         finally:
@@ -2379,6 +2417,40 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
                 self.last_import_batch = ImportedReportBatch(database, identity, tuple(committed_reports.items()))
             _release_report_inspections(reports_to_parse)
             self._finish_import_resources(diagnostic)
+
+    def _publish_resume_evidence(self, plan, receipts, committed_reports, opened_database=None):
+        self.last_report_outcomes = tuple(receipts)
+        result = self.last_parse_result
+        if not (result.cancelled_files or result.failed_files):
+            return
+        pending = _pending_import_reports(plan, result, receipts, committed_reports)
+        if not pending:
+            return
+        reported = {receipt.occurrence_id for receipt in receipts}
+        self.last_report_outcomes += tuple(
+            ReportImportReceipt(item.occurrence_id, "cancelled")
+            for item in pending if item.occurrence_id not in reported
+        )
+        binding = self.selected_database
+        if binding is None:
+            return
+        if opened_database is not None:
+            # A selected database can only be created through the exclusive
+            # reservation in the shared SQLite connection scope.
+            opened = SQLiteFileBinding(*opened_database)
+            if binding.path != opened.path or (binding.identity is not None and binding != opened):
+                return
+            binding = opened
+        try:
+            binding.require(self.db_file)
+        except (DatabaseSourceChanged, OSError, RuntimeError):
+            return
+        kept = frozenset(item.occurrence_id for item in pending)
+        self.last_resume_plan = replace(
+            plan, selected_reports=pending, resume_database=binding,
+            metadata_overrides=tuple(item for item in plan.metadata_overrides if item.occurrence_id in kept),
+            reviewed_ocr=tuple(item for item in plan.reviewed_ocr if item.identity.occurrence_id in kept),
+        )
 
     def _import_database_scope(self, append_identity):
         options = {"existing_identity": append_identity} if append_identity is not None else {}
@@ -2413,6 +2485,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         try:
             self._close_prepare_pool()
         except Exception as exc:
+            self.last_resume_plan = None
             diagnostic.fail(WorkflowError.PROCESSING_FAILED)
             self.log_and_exit(exc)
         finally:

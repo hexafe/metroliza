@@ -1,7 +1,9 @@
 """Execution facts survive import without becoming another approved import plan."""
 
+from contextlib import closing
 from dataclasses import fields, replace
 from pathlib import Path
+import sqlite3
 from types import SimpleNamespace
 
 import fitz
@@ -17,6 +19,7 @@ from metroliza.ui.report_planner_model import (
 )
 from tests.test_report_planner_integration import app as app, reports as reports, wait_until
 from tests.test_report_planner_model import _review
+from tests.test_report_workspace_shell import prepare_review, window as window
 
 
 def test_execution_rows_require_exact_unambiguous_receipts(app):
@@ -122,7 +125,7 @@ def test_twelve_reports_keep_result_rows_then_require_fresh_review(app, dialog):
 
 
 def test_partial_failure_results_match_exact_occurrence_and_attention(app, dialog, monkeypatch):
-    owner, _source, _database = dialog
+    owner, _source, database = dialog
     get_parser = backend.get_parser
 
     def parser(path, *args, **kwargs):
@@ -138,12 +141,29 @@ def test_partial_failure_results_match_exact_occurrence_and_attention(app, dialo
     planner.attention_filter.setChecked(True)
     assert planner.proxy.rowCount() == 1
     assert planner.proxy.index(0, planner.model.LOCATION_COLUMN).data() == "report-1.pdf"
-    assert not owner.import_succeeded and not owner.parse_button.isEnabled()
+    assert not owner.import_succeeded and owner.parse_button.text() == "Resume import (1)"
     assert "untrusted" not in planner.model.details_text(1)
 
+    attempted = []
 
-def test_cancel_keeps_proven_success_and_marks_unproven_reports_unknown(app, dialog, monkeypatch):
-    owner, _source, _database = dialog
+    def record_resume(path, *args, **kwargs):
+        attempted.append(Path(path).name)
+        return get_parser(path, *args, **kwargs)
+
+    monkeypatch.setattr(backend, "get_parser", record_resume)
+    owner.parse_button.click()
+    wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert attempted == ["report-1.pdf"]
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT count(*) FROM parsed_reports").fetchone() == (5,)
+    assert planner.model.execution_counts == {"saved": 5}
+    assert "Saved: 5 report files" in planner.outcome.toPlainText()
+    assert "Intentionally not selected" not in planner.outcome.toPlainText()
+    assert owner.import_succeeded and not owner.parse_button.isEnabled()
+
+
+def test_cancel_keeps_proven_success_and_resumes_in_reports_workspace(app, window, reports, monkeypatch):
+    owner, _source, database = prepare_review(app, window, reports)
     parse = backend.parse_new_reports
 
     def cancel_after_first(*args, **kwargs):
@@ -159,11 +179,46 @@ def test_cancel_keeps_proven_success_and_marks_unproven_reports_unknown(app, dia
         kwargs["should_cancel"] = lambda: bool(accepted) or cancelled()
         return parse(*args, **kwargs)
 
-    monkeypatch.setattr(backend, "parse_new_reports", cancel_after_first)
-    worker = review_and_import(app, owner)
-    assert worker.last_parse_result.cancelled_files == 4
-    assert owner.report_planner.model.execution_counts == {"saved": 1, "unknown": 4}
-    assert not owner.import_succeeded and not owner.parse_button.isEnabled()
+    assert not database.exists()
+    planner = owner.report_planner
+    model = planner.model
+    model.clear_selection()
+    for row in (0, 2, 4):
+        assert model.setData(model.index(row, 0), Qt.CheckState.Checked, Qt.ItemDataRole.CheckStateRole)
+    assert model.setData(model.index(2, model.column_for_field("reference")), "RESUME-APPROVED")
+    planner.search.setText("report-4")
+    assert planner.proxy.rowCount() == 1
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "parse_new_reports", cancel_after_first)
+        owner.parse_button.click()
+        worker = owner.parse_thread
+        assert worker is not None
+        wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert worker.last_parse_result.cancelled_files == 2
+    assert model.execution_counts == {"saved": 1, "cancelled": 2, "skipped": 2}
+    assert not owner.import_succeeded and owner.parse_button.isEnabled()
+    assert "Resume import (2)" in owner.parse_button.accessibleName()
+    assert [item.occurrence_id for item in worker.last_resume_plan.selected_reports] == ["report-2.pdf", "report-4.pdf"]
+    assert worker.last_resume_plan.resume_database == window._database_source_binding(database)
+
+    owner.parse_button.click()
+    retry = owner.parse_thread
+    assert retry is not None
+    wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert retry.last_parse_result.imported_files == 2
+    assert model.execution_counts == {"saved": 3, "skipped": 2}
+    assert "Saved: 3 report files" in planner.outcome.toPlainText()
+    assert "Intentionally not selected: 2 report files" in planner.outcome.toPlainText()
+    with closing(sqlite3.connect(database)) as connection:
+        rows = connection.execute(
+            "SELECT loc.file_name, metadata.reference FROM source_file_locations AS loc "
+            "JOIN parsed_reports AS pr ON pr.source_file_id = loc.source_file_id "
+            "JOIN report_metadata AS metadata ON metadata.report_id = pr.id "
+            "ORDER BY loc.file_name"
+        ).fetchall()
+    assert [name for name, _reference in rows] == ["report-0.pdf", "report-2.pdf", "report-4.pdf"]
+    assert rows[1][1] == "RESUME-APPROVED"
+    assert not owner.parse_button.isEnabled()
 
 
 def test_checkpoint_failure_publishes_no_saved_receipts(app, dialog, monkeypatch):
@@ -176,8 +231,10 @@ def test_checkpoint_failure_publishes_no_saved_receipts(app, dialog, monkeypatch
     worker = review_and_import(app, owner)
     assert worker.last_parse_result.imported_files == 5
     assert worker.last_report_outcomes == ()
+    assert worker.last_resume_plan is None
     assert owner.report_planner.model.execution_counts == {"unknown": 5}
     assert not owner.import_succeeded
+    assert not owner.parse_button.isEnabled()
     assert "Import failed" in owner.report_planner.outcome.toPlainText()
 
 

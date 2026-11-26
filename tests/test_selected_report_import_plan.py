@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError, replace
 import hashlib
 import json
 from itertools import product
+import os
 from pathlib import Path
 import sqlite3
 from threading import get_ident
@@ -23,6 +24,7 @@ from metroliza.parsing.preflight import (
     validate_import_plan,
 )
 from metroliza.shared.parse_contracts import ParseRequest
+from metroliza.reports.db import SQLiteFileBinding
 from metroliza.reports.report_repository import ReportEnrichmentApproval, ReportImportDisposition, ReportRepository
 
 
@@ -2040,6 +2042,114 @@ def test_cancellation_keeps_completed_atomic_report_and_truthful_counts(tmp_path
         cancelled=2,
         excluded=0,
     )
+
+
+@pytest.mark.parametrize("drift", (None, "source", "generation", "destination"))
+def test_bound_resume_revalidates_pending_selection_and_preserves_the_database(tmp_path, monkeypatch, drift):
+    source = tmp_path / "reports"
+    reports = _write_unique_reports(source, 4)
+    database = tmp_path / "resumable.db"
+    preflight = _preflight(source, database)
+    assert not database.exists()
+    selected = tuple(report.name for report in reports[:3])
+    plan = ImportPlan.from_preflight(_request(source, database), preflight, selected_occurrence_ids=selected)
+    first = ParseReportsThread(plan)
+    first.selected_database = SQLiteFileBinding.capture(database)
+    persist = ReportRepository.import_report_if_absent
+
+    def cancel_after_commit(repository, **kwargs):
+        outcome = persist(repository, **kwargs)
+        first.stop_parsing()
+        return outcome
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ReportRepository, "import_report_if_absent", cancel_after_commit)
+        first.run()
+    assert first.last_parse_result.imported_files == 1
+    assert first.last_parse_result.cancelled_files == 2
+    assert first.last_report_outcomes == (
+        ReportImportReceipt(selected[0], "saved"),
+        ReportImportReceipt(selected[1], "cancelled"),
+        ReportImportReceipt(selected[2], "cancelled"),
+    )
+    before = _enrichment_graph(database)
+    database_bytes = database.read_bytes()
+    # A repeat preflight can observe the committed report without changing the database.
+    assert _preflight(source, database).count(ParsePreflightStatus.DUPLICATE) == 1
+    assert database.read_bytes() == database_bytes
+    assert _enrichment_graph(database) == before
+    resume = first.last_resume_plan
+    assert resume.preflight_result is preflight
+    assert resume.selected_reports == plan.selected_reports[1:]
+
+    original_database = database
+    if drift == "source":
+        changed_report = reports[2]
+        original_stat = changed_report.stat()
+        contents = changed_report.read_bytes()
+        changed_report.write_bytes(contents[:-1] + b"X")
+        os.utime(changed_report, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        assert changed_report.stat().st_mtime_ns == original_stat.st_mtime_ns
+    elif drift == "generation":
+        approved = resume.selected_reports[-1]
+        resolve = report_parser_factory.resolve_parser_with_diagnostics
+
+        def changed_resolution(report, **kwargs):
+            evidence = resolve(report, **kwargs)
+            if Path(report).name == approved.occurrence_id:
+                return replace(evidence, registry_generation_id=approved.registry_generation_id + 1)
+            return evidence
+
+        monkeypatch.setattr(report_parser_factory, "resolve_parser_with_diagnostics", changed_resolution)
+    elif drift == "destination":
+        original_database = database.rename(tmp_path / "original.db")
+        database.write_bytes(b"unrelated replacement destination")
+
+    retry = ParseReportsThread(resume)
+    retry.run()
+    assert retry.last_resume_plan is None
+    if drift:
+        assert retry.last_parse_result.imported_files == 0
+        assert retry.last_parse_result.preflight_changed_files == (drift != "destination")
+        assert _enrichment_graph(original_database) == before
+        if drift == "destination":
+            assert database.read_bytes() == b"unrelated replacement destination"
+        return
+
+    assert retry.last_parse_result.imported_files == 2
+    assert retry.last_parse_result.cancelled_files == 0
+    assert _stored_source_hashes(database) == {
+        hashlib.sha256(report.read_bytes()).hexdigest() for report in reports[:3]
+    }
+    after = _enrichment_graph(database)
+    for table in ("source_file_locations", "parsed_reports", "report_metadata", "report_measurements"):
+        assert set(before[table]) <= set(after[table])
+    repeat = ParseReportsThread(resume)
+    repeat.run()
+    assert repeat.last_parse_result.imported_files == 0
+    assert repeat.last_parse_result.already_present_files == 2
+    assert _enrichment_graph(database) == after
+
+
+def test_resume_requires_agreement_between_receipts_and_committed_reports(tmp_path, monkeypatch):
+    source = tmp_path / "reports"
+    first_report, _pending = _write_unique_reports(source, 2)
+    database = tmp_path / "uncertain.db"
+    worker = ParseReportsThread(ImportPlan.all_ready(_request(source, database), _preflight(source, database)))
+    worker.selected_database = SQLiteFileBinding.capture(database)
+    persist = ReportRepository.import_report_if_absent
+
+    def fail_after_commit(repository, **kwargs):
+        persist(repository, **kwargs)
+        worker.stop_parsing()
+        raise RuntimeError("Synthetic failure before delivering the per-report disposition")
+
+    monkeypatch.setattr(ReportRepository, "import_report_if_absent", fail_after_commit)
+    worker.run()
+    assert _stored_source_hashes(database) == {hashlib.sha256(first_report.read_bytes()).hexdigest()}
+    assert worker.last_parse_result.failed_files == 1
+    assert worker.last_parse_result.cancelled_files == 1
+    assert worker.last_resume_plan is None
 
 
 def test_two_stage_cancellation_keeps_completed_atomic_report_and_exact_counts(

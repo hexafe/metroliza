@@ -3,7 +3,7 @@
 from metroliza.parsing import report_parser_factory
 
 from metroliza.shared.progress_status import build_three_line_status
-from metroliza.parsing.parse_reports_thread import ParseReportsThread
+from metroliza.parsing.parse_reports_thread import ParseBatchResult, ParseReportsThread
 from metroliza.parsing.metadata_review import (
     MODE_FAST,
     MODE_OCR,
@@ -11,7 +11,7 @@ from metroliza.parsing.metadata_review import (
     ocr_unavailable_reason,
 )
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightStatus
-from metroliza.reports.db import sqlite_file_identity
+from metroliza.reports.db import DatabaseSourceChanged, SQLiteFileBinding, sqlite_file_identity
 from metroliza.reports.report_metadata_review import ROW_PENDING, build_overrides
 try:
     from metroliza.ui.parser_preflight_worker import ParsePreflightThread
@@ -32,7 +32,7 @@ from PyQt6.QtWidgets import (
 import logging
 from functools import partial
 import weakref
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from metroliza.shared.parse_contracts import DEFAULT_REPORTS_METADATA_MODE, ParseRequest, validate_parse_request
 try:
     from metroliza.ui.worker_progress_dialog import (
@@ -342,6 +342,24 @@ class _ImportOperation:
     failed: bool = False
     cancelled: bool = False
     terminal: bool = False
+    prior_rows: tuple = ()
+
+
+def _resume_summary_result(result, prior_rows):
+    """Keep earlier confirmed outcomes in the summary of a resumed selection."""
+    if not prior_rows or not isinstance(result, ParseBatchResult) or not result.selected_files:
+        return result
+    saved = sum(row.status is ExecutionStatus.SAVED for row in prior_rows)
+    already_present = sum(row.status is ExecutionStatus.ALREADY_PRESENT for row in prior_rows)
+    completed = saved + already_present
+    return replace(
+        result,
+        parsed_files=result.parsed_files + completed,
+        imported_files=result.imported_files + saved,
+        already_present_files=result.already_present_files + already_present,
+        selected_files=result.selected_files + completed,
+        intentionally_excluded_files=max(0, result.intentionally_excluded_files - completed),
+    )
 
 
 class _UiThrottle:
@@ -511,6 +529,7 @@ class _ReportOperations:
         # Initialize thread and flag
         self.parse_thread = None
         self.import_operation = None
+        self._resume_plan = None
         self.parsing_canceled = False
         self.parse_error_message = None
         self._pending_modeless_metadata_enrichment = False
@@ -618,10 +637,12 @@ class _ReportOperations:
         if current and count and not selectable_approved:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             return self._sync_readiness_state()
-        approved = current and bool(count) and selectable_approved
+        resume = self._resume_plan
+        approved = (current and bool(count) and selectable_approved) or resume is not None
         ocr_running = self._metadata_mode() == MODE_OCR
         stopping = self._start_pending
-        caption = f"Import {count} selected report{'s' if count != 1 else ''}"
+        caption = (f"Resume import ({len(resume.selected_reports)})" if resume is not None else
+                   f"Import {count} selected report{'s' if count != 1 else ''}")
         self.parse_button.setText(caption)
         self.parse_button.setAccessibleName(caption)
         self.parse_button.setEnabled(bool(approved and not busy and not ocr_running and not stopping))
@@ -645,6 +666,8 @@ class _ReportOperations:
         self.readiness_label.setAccessibleDescription(message)
         self.readiness_label.setToolTip(summary if current else message)
         self.parse_button.setToolTip(
+            "Retry only unfinished reports using the original selection and metadata edits."
+            if resume is not None else
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
             if approved and not busy and not ocr_running and not stopping else message
         )
@@ -820,6 +843,7 @@ class _ReportOperations:
                 if self._preflight_result is not None else ""
             )
         self.import_succeeded = False
+        self._resume_plan = None
         carried = (
             self.report_planner.model.metadata_rows
             if keep_metadata and self._preflight_result is not None
@@ -840,7 +864,7 @@ class _ReportOperations:
         self.report_planner.invalidate()
 
     def refresh_review_after_append(self):
-        if self._preflight_result is not None:
+        if self._preflight_result is not None or self._resume_plan is not None:
             self._invalidate_preflight("The recipe updated this database. Review the reports again.", keep_metadata=True)
             self._sync_readiness_state()
 
@@ -1349,6 +1373,9 @@ class _ReportOperations:
         if not self.parse_button.isEnabled():
             return
         self.import_succeeded = False
+        if self._resume_plan is not None:
+            self._resume_reviewed_import(action_started_at)
+            return
         # A still-running fast read is stopped by show_loading_screen (cooperative
         # cancel, never awaited): the import does not depend on it.
         metadata, enrich, _modeless = self._build_parse_request_fields()
@@ -1369,22 +1396,48 @@ class _ReportOperations:
             return
         self.show_loading_screen(import_plan=plan, action_started_at=action_started_at)
 
-    def _create_parse_worker(self, request):
+    def _resume_reviewed_import(self, action_started_at):
+        plan = self._resume_plan
+        if not self._resume_context_matches(plan):
+            self._resume_plan = None
+            self._review_status = "Inputs changed. Review reports again before importing."
+            self._sync_readiness_state()
+            return
+        self.show_loading_screen(import_plan=plan, action_started_at=action_started_at)
+
+    def _resume_context_matches(self, plan):
+        metadata, enrich, _modeless = self._build_parse_request_fields()
+        return bool(
+            self.directory and self.db_file and enrich == plan.run_background_metadata_enrichment
+            and plan.preflight_result.matches_request(
+                source_path=self.directory, database_path=self.db_file, metadata_parsing_mode=metadata,
+            )
+        )
+
+    def _create_parse_worker(self, request, *, bind_destination=False):
         worker = ParseReportsThread(request)
+        selected = None
         if self.database_source_binding is not None:
-            selected = worker.selected_database = self.database_source_binding(self.db_file)
-            if selected is not None and selected.identity is None:
-                worker.enable_creation_receipt_delivery()
-                self.destroyed.connect(worker.close_created_database, Qt.ConnectionType.DirectConnection)
+            selected = self.database_source_binding(self.db_file)
+        resume = request.resume_database if isinstance(request, ImportPlan) else None
+        if resume is not None and selected is not None and resume != selected:
+            raise DatabaseSourceChanged("The resume destination no longer matches the selected database.")
+        if selected is not None and selected.identity is None:
+            worker.enable_creation_receipt_delivery()
+            self.destroyed.connect(worker.close_created_database, Qt.ConnectionType.DirectConnection)
+        if selected is not None or bind_destination:
+            worker.selected_database = resume or selected or SQLiteFileBinding.capture(request.database_path)
         return worker
 
-    def _accept_import_operation(self, operation):
+    def _accept_import_operation(self, operation, import_plan):
         if self._close_requested or (operation is not None and operation.terminal):
             return None
         if operation is None:
             if self._start_pending:
                 return None
             operation = self.import_operation = _ImportOperation()
+            if self._resume_plan is not None and import_plan is self._resume_plan:
+                operation.prior_rows = self.report_planner.model.execution_rows
         return operation
 
     @pyqtSlot()
@@ -1396,7 +1449,7 @@ class _ReportOperations:
             if _operation is not None:
                 _operation.terminal = _operation.cancelled = True
             return
-        _operation = self._accept_import_operation(_operation)
+        _operation = self._accept_import_operation(_operation, import_plan)
         if _operation is None:
             return
         if self._defer_until_metadata_idle(
@@ -1450,7 +1503,7 @@ class _ReportOperations:
                 execution_request = import_plan
             elif self._preflight_result is not None:
                 execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
-            self.parse_thread = self._create_parse_worker(execution_request)
+            self.parse_thread = self._create_parse_worker(execution_request, bind_destination=import_plan is not None)
             _operation.worker = self.parse_thread
             self.parse_thread.finished.connect(self.on_parse_finished)
             self.parse_thread.finished.connect(
@@ -1522,7 +1575,7 @@ class _ReportOperations:
                 close_created_database()
         self._sync_readiness_state()
         if not self._close_requested:
-            self.scan_button.setFocus()
+            (self.parse_button if self._resume_plan is not None else self.scan_button).setFocus()
         self._complete_deferred_close_if_idle()
 
 
@@ -1576,7 +1629,7 @@ class _ReportOperations:
         try:
             close_requested = getattr(self, "_close_requested", False)
             # Retain both stage outcomes before stopped-thread cleanup or flag resets.
-            result = getattr(worker, "last_parse_result", None)
+            result = self._parse_completion_result(worker)
             execution_rows = self._submitted_execution_rows(worker)
             self._record_import_outcome(result)
             enrichment_result = getattr(self.parse_thread, "last_enrichment_result", None)
@@ -1613,6 +1666,8 @@ class _ReportOperations:
             if not close_requested and not self._external_context:
                 self._show_parse_completion(feedback, enrichment_requested, should_request_modeless_enrichment)
 
+            resume = self._confirmed_resume_plan(worker, close_requested=close_requested)
+
             # Reset parse state flags
             self.parsing_canceled = False
             self.parse_error_message = None
@@ -1623,7 +1678,7 @@ class _ReportOperations:
                 if parent is not None and hasattr(parent, "set_db_file"):
                     parent.set_db_file(self.db_file)
 
-            self._invalidate_after_import(worker, execution_rows)
+            self._invalidate_after_import(worker, execution_rows, resume=resume)
             self.report_planner.show_execution_rows(execution_rows)
             self._sync_readiness_state()
 
@@ -1632,8 +1687,8 @@ class _ReportOperations:
         except Exception as e:
             self.log_and_exit(e)
 
-    def _invalidate_after_import(self, worker, execution_rows):
-        """Require a fresh duplicate/content scan and keep edits for unfinished reports."""
+    def _invalidate_after_import(self, worker, execution_rows, *, resume=None):
+        """Keep unfinished edits and retain only a worker-verified resume plan."""
         confirmed_success = self.import_succeeded
         batch = getattr(worker, "last_import_batch", None)
         if self._metadata_database_identity is None and batch is not None and batch.matches_database(self.db_file):
@@ -1645,6 +1700,9 @@ class _ReportOperations:
             completed_ids=(row.stable_occurrence_id for row in execution_rows
                            if row.status in (ExecutionStatus.SAVED, ExecutionStatus.ALREADY_PRESENT)),
         )
+        self._resume_plan = resume
+        if resume is not None:
+            self._review_status = "Resume the unfinished reports or review the source again."
         self.import_succeeded = confirmed_success
 
     def _submitted_execution_rows(self, worker):
@@ -1653,10 +1711,25 @@ class _ReportOperations:
         plan = getattr(worker, "import_plan", None)
         if operation is None or operation.worker is not worker or not isinstance(plan, ImportPlan):
             return ()
-        return build_execution_rows(
-            plan.preflight_result, (identity.occurrence_id for identity in plan.selected_reports),
-            getattr(worker, "last_report_outcomes", ()),
-        )
+        submitted = {identity.occurrence_id for identity in plan.selected_reports}
+        rows = build_execution_rows(plan.preflight_result, submitted, getattr(worker, "last_report_outcomes", ()))
+        prior_rows = {row.stable_occurrence_id: row for row in operation.prior_rows}
+        return tuple(row if row.stable_occurrence_id in submitted else prior_rows.get(row.stable_occurrence_id, row)
+                     for row in rows)
+
+    def _parse_completion_result(self, worker):
+        operation = getattr(self, "import_operation", None)
+        result = getattr(worker, "last_parse_result", None)
+        if operation is not None and operation.worker is worker:
+            return _resume_summary_result(result, operation.prior_rows)
+        return result
+
+    def _confirmed_resume_plan(self, worker, *, close_requested):
+        operation = getattr(self, "import_operation", None)
+        if close_requested or operation is None or operation.worker is not worker or self.parse_error_message:
+            return None
+        plan = getattr(worker, "last_resume_plan", None)
+        return plan if isinstance(plan, ImportPlan) and self._resume_context_matches(plan) else None
 
     def _record_import_outcome(self, result):
         operation = getattr(self, "import_operation", None)
