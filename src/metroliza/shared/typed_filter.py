@@ -46,6 +46,9 @@ _SYMBOLS = {
 _NEGATIVE = frozenset({"not_equals", "not_contains", "not_in", "is_blank"})
 _GLOB_LITERALS = str.maketrans({"?": "[?]", "[": "[[]", "]": "[]]"})
 _SQLITE_FUNCTION = "mz_reference_filter_match"
+_MAX_DEPTH = 32
+_MAX_NODES = 128
+_MAX_OPERANDS = 1024
 
 
 class FilterValidationError(ValueError):
@@ -119,30 +122,80 @@ class CompiledSqliteFilter:
     parameters: tuple[str, ...]
 
 
+@dataclass
+class _FilterBudget:
+    nodes: int = 0
+    operands: int = 0
+
+    def add_node(self, depth: int = 1) -> None:
+        _check_depth(depth)
+        self.nodes += 1
+        if self.nodes > _MAX_NODES:
+            raise FilterValidationError(
+                "too_many_nodes", f"Use at most {_MAX_NODES} groups and conditions in total.",
+            )
+
+    def add_operands(self, count: int) -> None:
+        self.operands += count
+        if self.operands > _MAX_OPERANDS:
+            raise FilterValidationError("too_many_operands", f"Use at most {_MAX_OPERANDS} filter values in total.")
+
+
+def _check_depth(depth: int) -> None:
+    if depth > _MAX_DEPTH:
+        raise FilterValidationError("nested_expression", f"Reduce filter nesting to {_MAX_DEPTH} levels or fewer.")
+
+
+def _check_token_depth(tokens) -> None:
+    depth = 0
+    for token in tokens:
+        if token.kind == "LPAREN":
+            depth += 1
+            _check_depth(depth)
+        elif token.kind == "RPAREN":
+            depth -= 1
+
+
+def _check_tree_budget(node: DataFrameFilterSpec, budget: _FilterBudget, depth: int = 1) -> None:
+    budget.add_node(depth)
+    if isinstance(node, FilterExpressionGroup):
+        for child in node.children:
+            _check_tree_budget(child, budget, depth + 1)
+    elif isinstance(node, FilterCondition):
+        budget.add_operands(len(node.values))
+
+
 def parse_typed_filter(
     expression: str, fields: Iterable[FilterField], *, dayfirst: bool = False,
 ) -> DataFrameFilterSpec | None:
     """Apply the Magic grammar with field types chosen by the catalog."""
 
     catalog = _catalog(fields)
+    budget = _FilterBudget()
 
     def condition(field, operator, values):
+        budget.add_node()
+        budget.add_operands(len(values))
         item = _resolve_field(field, catalog)
         return _make_condition(
             item, _SYMBOLS.get(operator, operator), values,
             wildcards=item.kind == "text", dayfirst=dayfirst and item.kind == "date",
         )
 
-    try:
-        return parse_filter_expression(expression, catalog, condition_factory=condition).expression
-    except RecursionError as exc:
-        raise FilterValidationError("nested_expression", "The filter is nested too deeply.") from exc
+    root = parse_filter_expression(
+        expression, catalog, condition_factory=condition, token_preflight=_check_token_depth,
+    ).expression
+    if root is not None:
+        _check_tree_budget(root, _FilterBudget())
+    return root
 
 
 def dump_typed_filter(expression: DataFrameFilterSpec | None) -> dict[str, Any]:
     """Encode the expression as a locale-independent versioned JSON document."""
 
-    return {"version": FILTER_VERSION, "expression": _encode(expression) if expression else None}
+    if expression is not None:
+        _check_tree_budget(expression, _FilterBudget())
+    return {"version": FILTER_VERSION, "expression": _encode(expression) if expression is not None else None}
 
 
 def load_typed_filter(
@@ -157,10 +210,7 @@ def load_typed_filter(
     root = document["expression"]
     if root is None:
         return None
-    try:
-        return _decode(root, catalog, remap or {}, {})
-    except RecursionError as exc:
-        raise FilterValidationError("nested_expression", "The filter is nested too deeply.") from exc
+    return _decode(root, catalog, remap or {}, {}, _FilterBudget())
 
 
 def compile_typed_filter_sqlite(
@@ -170,6 +220,8 @@ def compile_typed_filter_sqlite(
 
     if not _valid_identifier(table_alias):
         raise ValueError("Expected a valid SQLite source alias.")
+    if expression is not None:
+        _check_tree_budget(expression, _FilterBudget())
     params = []
     sql = _compile_node(expression, columns, _quote(table_alias), params) if expression is not None else "1"
     return CompiledSqliteFilter(sql, tuple(params))
@@ -233,19 +285,23 @@ def _encode(node):
     }
 
 
-def _decode(node, catalog, remap, used_targets):
+def _decode(node, catalog, remap, used_targets, budget, depth=1):
+    budget.add_node(depth)
     if isinstance(node, dict) and "children" in node:
         _require_keys(node, {"operator", "children"})
         op, children = node["operator"], node["children"]
         if op not in ("and", "or") or not isinstance(children, list) or not children:
             raise FilterValidationError("invalid_group", "Expected a nonempty AND or OR group.")
         return FilterExpressionGroup(
-            op, tuple(_decode(child, catalog, remap, used_targets) for child in children),
+            op, tuple(_decode(child, catalog, remap, used_targets, budget, depth + 1) for child in children),
         )
     _require_keys(node, {"field", "kind", "operator", "values", "case_sensitive", "wildcards", "dayfirst"})
     field = _bind_field(node, catalog, remap, used_targets)
+    values = node["values"]
+    if isinstance(values, (list, tuple)):
+        budget.add_operands(len(values))
     return _make_condition(
-        field, node["operator"], node["values"], case_sensitive=node["case_sensitive"],
+        field, node["operator"], values, case_sensitive=node["case_sensitive"],
         wildcards=node["wildcards"], dayfirst=node["dayfirst"],
     )
 

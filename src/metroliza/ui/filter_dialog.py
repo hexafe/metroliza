@@ -947,7 +947,7 @@ class FilterDialog(QDialog):
         menu = QtWidgets.QMenu(self)
         save = menu.addAction("Save filter draft as…")
         save.setEnabled(self.apply_button.isEnabled())
-        save.triggered.connect(lambda: self._save_filter_draft(store, presets))
+        save.triggered.connect(lambda: self._save_filter_draft(store))
         menu.addSeparator()
         for name, state in presets:
             label = name.replace("&", "&&")
@@ -969,18 +969,20 @@ class FilterDialog(QDialog):
         message.setText(reason)
         message.exec()
 
-    def _save_filter_draft(self, store, presets):
+    def _save_filter_draft(self, store):
         name, accepted = QtWidgets.QInputDialog.getText(self, "Save filter", "Filter name")
         if not accepted:
             return
         name = name.strip()
-        if any(name.casefold() == old_name.casefold() for old_name, _state in presets):
-            replace = QtWidgets.QMessageBox.question(self, "Replace saved filter?", f"Replace the saved filter {name!r}?",
-                         QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-                         QtWidgets.QMessageBox.StandardButton.No)
-            if replace != QtWidgets.QMessageBox.StandardButton.Yes:
-                return
         try:
+            if store.contains_name(name):
+                replace = QtWidgets.QMessageBox.question(
+                    self, "Replace saved filter?", f"Replace the saved filter {name!r}?",
+                    QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+                    QtWidgets.QMessageBox.StandardButton.No,
+                )
+                if replace != QtWidgets.QMessageBox.StandardButton.Yes:
+                    return
             store.save(name, self._current_filter_state())
         except (OSError, ValueError):
             QtWidgets.QMessageBox.warning(self, "Save filter", "Could not save the filter. Check its name and conditions.")

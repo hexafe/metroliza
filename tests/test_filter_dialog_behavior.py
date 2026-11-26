@@ -152,6 +152,49 @@ def test_named_filter_roundtrip_retains_unavailable_values_until_explicit_apply(
         owner.close()
 
 
+@pytest.mark.parametrize("unavailable", [True, False])
+def test_replacing_saved_filter_requires_consent(monkeypatch, tmp_path, unavailable):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    path = tmp_path / "filters" / "reports.ini"
+    store = ReportFilterPresets(path)
+    store.save("January", FilterState(header_values=("WIDTH",)))
+    if unavailable:
+        settings = store._settings()
+        settings.setValue(store._key("January"), "invalid JSON")
+        settings.sync()
+    assert bool(store.load()[1]) == unavailable
+    original = path.read_bytes()
+
+    monkeypatch.setattr("metroliza.ui.report_filter_presets.local_metroliza_directory", lambda: tmp_path)
+    widgets = filter_dialog.QtWidgets
+    monkeypatch.setattr(widgets.QMenu, "exec", lambda menu, _pos: menu.actions()[0].trigger())
+    monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: (" january ", True))
+    no = widgets.QMessageBox.StandardButton.No
+    yes = widgets.QMessageBox.StandardButton.Yes
+    responses = iter((no, yes))
+    prompts = []
+
+    def question(_dialog, _heading, text, _choices, default):
+        prompts.append((text, default))
+        return next(responses)
+
+    monkeypatch.setattr(widgets.QMessageBox, "question", question)
+    dialog = _build_dialog(monkeypatch)
+    try:
+        _select_list_value(dialog.header_list, "LENGTH")
+        expected = dialog._current_filter_state()
+        dialog._show_saved_filters()
+        assert path.read_bytes() == original
+        dialog._show_saved_filters()
+        assert path.read_bytes() != original
+        assert store.load() == ([("january", expected)], [])
+        assert prompts == [("Replace the saved filter 'january'?", no)] * 2
+    finally:
+        dialog.close()
+
+
 def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):
     from contextlib import closing
     import sqlite3

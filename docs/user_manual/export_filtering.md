@@ -236,6 +236,7 @@ Use **Clear filters** in the Export dialog to reset the export back to the defau
 If you want to revise filters instead, reopen the dialog, change the selections, and click **Apply filters** again.
 
 Use **Saved filters… → Save filter draft as…** to keep the current conditions under a name.
+Reusing a name asks for confirmation even if the saved entry is unavailable. Choose **No** to keep the existing entry.
 Selecting a saved filter loads it as a draft. Review the selections and choose **Apply Filters** to use it.
 The draft identifies any values that are unavailable in the loaded choices.
 
@@ -350,6 +351,11 @@ and blank checks through the structured document.
 The JSON document contains `version: 1` and `expression`. An empty expression is
 `null`. Groups contain `operator` and `children`. Conditions contain `field`,
 `kind`, `operator`, `values`, `case_sensitive`, `wildcards` and `dayfirst`.
+Typed expressions allow at most 32 levels, counting the root as level 1, with
+128 groups and conditions combined and 1,024 values across all conditions.
+Typed expression text also allows up to 32 levels of nested parentheses.
+These limits keep accepted expressions small enough for reference evaluation
+and compilation. Reduce nesting, conditions or values if a limit is reached.
 Group operators are `and` and `or`. Common condition operators are `equals`,
 `not_equals`, `in`, `not_in`, `is_blank` and `is_not_blank`. Numbers and dates
 also allow `less_than`, `less_or_equal`, `greater_than`, `greater_or_equal`

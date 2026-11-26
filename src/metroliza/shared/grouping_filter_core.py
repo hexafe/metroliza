@@ -571,19 +571,24 @@ def parse_filter_expression(
     dayfirst: bool = False,
     aliases: FilterAliases | None = None,
     condition_factory: Callable[[str, str, tuple[str, ...]], DataFrameFilterSpec] | None = None,
+    token_preflight: Callable[[tuple[_FilterToken, ...]], None] | None = None,
 ) -> ParsedFilterExpression:
     """Parse ``Column >= value AND (Other = value OR Third != x*)`` expressions.
 
     A condition factory can bind the parsed field, operator and operands to an
     explicit schema. The default builds the legacy value-inferred specs.
+    Token preflight can enforce caller-specific limits before parsing.
     """
 
     text = str(expression or "").strip()
     if not text:
         return ParsedFilterExpression(specs=(), match_mode="and")
 
+    tokens = _tokenize_filter_expression(text)
+    if token_preflight is not None:
+        token_preflight(tokens)
     parser = _FilterExpressionParser(
-        _tokenize_filter_expression(text),
+        tokens,
         columns,
         dayfirst=dayfirst,
         aliases=aliases,

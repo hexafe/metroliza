@@ -6,7 +6,11 @@ import sqlite3
 import pandas as pd
 import pytest
 
-from metroliza.shared.grouping_filter_core import build_filter_mask, parse_filter_expression
+from metroliza.shared.grouping_filter_core import (
+    FilterExpressionGroup,
+    build_filter_mask,
+    parse_filter_expression,
+)
 from metroliza.shared.typed_filter import (
     FilterField,
     FilterValidationError,
@@ -193,6 +197,70 @@ def test_document_validation_rejects_wrong_version_shape_and_options():
     ):
         with pytest.raises(FilterValidationError):
             load_typed_filter(raw, FIELDS)
+
+
+def _nested_condition(group_count):
+    node = condition("n", "number", "equals", 0)
+    for _ in range(group_count):
+        node = {"operator": "and", "children": [node]}
+    return node
+
+
+def test_typed_depth_is_bounded_before_mask_and_compile(selected_rows):
+    selected_rows(load_typed_filter(document(_nested_condition(31)), FIELDS), [6])
+    selected_rows(parse_typed_filter("(" * 32 + "Measurement = 0" + ")" * 32, FIELDS), [6])
+    quoted_parentheses = "(" * 33
+    selected_rows(parse_typed_filter(f'Label = "{quoted_parentheses}"', FIELDS), [])
+    for depth in (32, 400):
+        with pytest.raises(FilterValidationError, match="32") as failure:
+            load_typed_filter(document(_nested_condition(depth)), FIELDS)
+        assert failure.value.code == "nested_expression"
+    too_deep = "(" * 33 + "Measurement = 0" + ")" * 33
+    with pytest.raises(FilterValidationError, match="32") as failure:
+        parse_typed_filter(too_deep, FIELDS)
+    assert failure.value.code == "nested_expression"
+    assert parse_filter_expression(too_deep, ["Measurement"]).expression is not None
+
+
+@pytest.mark.parametrize("operator", ["and", "or"])
+def test_typed_node_count_includes_group_and_leaves(selected_rows, operator):
+    def expression(count):
+        return f" {operator} ".join(["Measurement = 0"] * count)
+
+    leaf = condition("n", "number", "equals", 0)
+    selected_rows(parse_typed_filter(expression(127), FIELDS), [6])
+    selected_rows(load_typed_filter(document({"operator": operator, "children": [leaf] * 127}), FIELDS), [6])
+    with pytest.raises(FilterValidationError, match="128") as parsed:
+        parse_typed_filter(expression(128), FIELDS)
+    with pytest.raises(FilterValidationError, match="128") as loaded:
+        load_typed_filter(document({"operator": operator, "children": [leaf] * 128}), FIELDS)
+    assert parsed.value.code == loaded.value.code == "too_many_nodes"
+
+
+def test_typed_operand_count_is_aggregate(selected_rows):
+    def expression(count):
+        return "Measurement IN (" + ",".join(["0"] * count) + ")"
+
+    selected_rows(parse_typed_filter(expression(1024), FIELDS), [6])
+    selected_rows(load_typed_filter(document(condition("n", "number", "in", *([0] * 1024))), FIELDS), [6])
+    with pytest.raises(FilterValidationError, match="1024") as parsed:
+        parse_typed_filter(f"{expression(512)} OR {expression(513)}", FIELDS)
+    node = {"operator": "or", "children": [
+        condition("n", "number", "in", *([0] * count)) for count in (512, 513)
+    ]}
+    with pytest.raises(FilterValidationError, match="1024") as loaded:
+        load_typed_filter(document(node), FIELDS)
+    assert parsed.value.code == loaded.value.code == "too_many_operands"
+
+
+def test_typed_dump_and_compile_reject_an_oversized_ast():
+    leaf = parse_typed_filter("Measurement = 0", FIELDS)
+    expression = FilterExpressionGroup("and", (leaf,) * 128)
+    with pytest.raises(FilterValidationError, match="128") as dumped:
+        dump_typed_filter(expression)
+    with pytest.raises(FilterValidationError, match="128") as compiled:
+        compile_typed_filter_sqlite(expression, COLUMNS, table_alias="s")
+    assert dumped.value.code == compiled.value.code == "too_many_nodes"
 
 
 def test_sql_binds_operands_and_requires_existing_qualified_column():

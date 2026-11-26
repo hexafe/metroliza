@@ -32,6 +32,10 @@ class ReportFilterPresets:
     def _key(name):
         return sha256(name.casefold().encode("utf-8")).hexdigest()
 
+    def contains_name(self, name):
+        """Check the storage key even for entries that cannot be read."""
+        return self._settings().contains(self._key(name))
+
     def load(self):
         presets = []
         unavailable = []
