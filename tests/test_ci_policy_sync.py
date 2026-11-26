@@ -321,6 +321,11 @@ def test_windows_filesystem_matrix_is_owner_dispatch_only() -> None:
     )
     assert any('qualify_windows_cache_filesystems.ps1' in step.get('run', '') for step in job['steps'])
     assert 'continue-on-error' not in job
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    script = Path('scripts/qualify_windows_cache_filesystems.ps1').read_text(encoding='utf-8')
+    assert "$save -eq 'published'" in script
+    assert "$collision -ne 'rejected_existing'" in script
+    assert "$save -ne 'refused_safely' -or $receipt.requested -eq 'NTFS'" in script
 
 
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
@@ -732,7 +737,7 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
         "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
         "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || "
         "inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || "
-        "inputs.run_windows_nuitka_qualification == '1')) }}"
+        "inputs.run_windows_nuitka_qualification == '1' || inputs.run_windows_cache_filesystem_matrix == '1')) }}"
     ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
@@ -1068,12 +1073,14 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
         "inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}"
         "${{ github.event_name == 'workflow_dispatch' && "
         "inputs.run_windows_nuitka_qualification == '1' && '-nuitka' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_cache_filesystem_matrix == '1' && '-cache-filesystems' || '' }}"
     )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
     assert workflow['concurrency']['cancel-in-progress'] == (
         "${{ !(github.event_name == 'workflow_dispatch' && "
         "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || "
         "inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || "
-        "inputs.run_windows_nuitka_qualification == '1')) }}"
+        "inputs.run_windows_nuitka_qualification == '1' || inputs.run_windows_cache_filesystem_matrix == '1')) }}"
     )
     for step in job['steps']:
         assert 'actions/upload-artifact@' not in step.get('uses', '')

@@ -64,8 +64,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_nuitka_qualification == '1' && '-nuitka' || '' }}
-  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || inputs.run_windows_nuitka_qualification == '1')) }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_wrapper_diagnostics == '1' && '-wrapper' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_diagnostic_qualification == '1' && '-diagnostics' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_candidate_acceptance == '1' && '-candidate' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_nuitka_qualification == '1' && '-nuitka' || '' }}${{ github.event_name == 'workflow_dispatch' && inputs.run_windows_cache_filesystem_matrix == '1' && '-cache-filesystems' || '' }}
+  cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || inputs.run_windows_nuitka_qualification == '1' || inputs.run_windows_cache_filesystem_matrix == '1')) }}
 
 jobs:
   windows-cache-filesystem-matrix:
@@ -73,6 +73,9 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.run_windows_cache_filesystem_matrix == '1' && github.actor == github.repository_owner
     runs-on: windows-latest
     timeout-minutes: 12
+    concurrency:
+      group: windows-cache-filesystem-matrix-${{ github.repository }}
+      cancel-in-progress: false
     steps:
       - name: Checkout
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

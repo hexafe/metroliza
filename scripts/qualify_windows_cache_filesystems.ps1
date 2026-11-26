@@ -72,6 +72,7 @@ try {
         throw 'The disposable share did not report the expected one-account access.'
     }
     $env:METROLIZA_CACHE_FS_SMB = "\\localhost\$shareName"
+    Write-Host 'SMB fixture uses the local Windows Server SMB service through loopback.'
 
     $selector = 'tests/test_industrial_cache_publication.py::test_native_windows_cache_filesystem'
     $lines = @(& python -m pytest -v -s $selector)
@@ -87,6 +88,23 @@ try {
     if ($receipts.Count -ne 4 -or (Compare-Object @('FAT', 'EXFAT', 'NTFS', 'SMB') $sections)) {
         throw 'Expected a native receipt for each of the four storage classes.'
     }
+    foreach ($receipt in $receipts) {
+        $save = $receipt.unused_destination.status
+        $collision = $receipt.commit_point_collision.status
+        if (-not ($receipt.source_preserved -and $receipt.existing_entries_preserved -and
+                  $receipt.staging_removed -and $receipt.scratch_removed)) {
+            throw "Missing preservation or cleanup receipt for $($receipt.requested)."
+        }
+        if ($save -eq 'published') {
+            if ($collision -ne 'rejected_existing') { throw 'Missing native no-replace collision proof.' }
+        } elseif ($save -ne 'refused_safely' -or $receipt.requested -eq 'NTFS') {
+            throw "Invalid publication result for $($receipt.requested)."
+        }
+        Write-Host "Storage $($receipt.requested) save=$save collision=$collision"
+    }
+} catch {
+    Write-Host "Cache filesystem trial failed before cleanup. $($_.Exception.Message)"
+    throw
 } finally {
     if ($null -ne $share) {
         try {

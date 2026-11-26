@@ -29,8 +29,11 @@ The owner-only `run_windows_cache_filesystem_matrix=1` dispatch exercises the
 normal cache archive service with synthetic data on a hosted Windows runner.
 It uses the runner's local NTFS volume, two newly created FAT32 and exFAT disk
 images, and an account-restricted loopback SMB share. It verifies four native
-receipts and removes the disposable resources. The standard PR and branch lanes
-continue to run the local Windows publication tests.
+receipts and removes the disposable resources. Each receipt labels the requested
+filesystem as `published` or `refused_safely` with source retention and collision
+results. A successful job confirms the measured behavior of each fixture.
+`published` is the evidence of successful write support for that fixture. The
+standard PR and branch lanes continue to run the local Windows publication tests.
 
 ## Tier 0: docs-only classification
 
