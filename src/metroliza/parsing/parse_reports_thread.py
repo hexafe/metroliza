@@ -1435,6 +1435,7 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
         self.directory = validated_request.source_directory
         self.db_file = validated_request.db_file
         self.selected_database = import_plan.resume_database if import_plan is not None else None
+        self.standalone_resume_database: SQLiteFileBinding | None = None
         self.created_database = None
         self._creation_delivery_lock = Lock()
         self._creation_receiver_active = False
@@ -2432,11 +2433,15 @@ class ParseReportsThread(MonotonicProgressEmitterMixin, QThread):
             for item in pending if item.occurrence_id not in reported
         )
         binding = self.selected_database
+        if opened_database is not None:
+            # An existing standalone destination may use the legacy schema
+            # upgrade path on its first attempt. Require proof of that open.
+            binding = binding or self.standalone_resume_database
         if binding is None:
             return
         if opened_database is not None:
-            # A selected database can only be created through the exclusive
-            # reservation in the shared SQLite connection scope.
+            # A missing destination can only be created through the exclusive
+            # reservation of a selected database.
             opened = SQLiteFileBinding(*opened_database)
             if binding.path != opened.path or (binding.identity is not None and binding != opened):
                 return

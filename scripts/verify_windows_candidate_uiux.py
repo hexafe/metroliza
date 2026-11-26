@@ -25,7 +25,7 @@ MAX_ASSET = 8 * 1024 * 1024
 MAX_TOTAL = 32 * 1024 * 1024
 FIXTURES = {
     'reports/reports-12.zip': '99f2a0af7269e52e82ac60a784e29aa82153a37b72357dc3844019d487c22041',
-    'reports/oracles.json': '2ebad1ab90578f926f608e40652c516f36aaa5c55de918228ffd0b735551e1d4',
+    'reports/oracles.json': '557b093b0f52983034a05692a9936f3409fdd3663ab382d1c3415ed59cb87d8e',
     'tabular/analysis.csv': '764c2776b85b24c373b094b5095c7e043dee3fa2f3af48fb063781f5f4bbaef0',
     'tabular/grouping.csv': 'b04ea4ba08ee70e6a12e5fd709467ebf3049f21cd252ceea77a738bb9b07fb4e',
     'tabular/saved-groups.csv': '02770298bcb61b07fbc9bee9f0c38b4a86e2a0d8be8815e09ebdf9b31be7e54d',
@@ -379,10 +379,9 @@ def reports(value, oracle, *, packaged, dpr, qpa):
         wanted_rows, wanted_receipts, wanted_digests = [], {}, {}
         for name in sorted(item['name'] for item in oracle['expected']['reports'].values()):
             state = 'failed' if case == 'B' and name == 'REF006_0006.pdf' else (
-                'unknown' if case == 'C' and name != 'REF001_0001.pdf' else 'saved')
+                'cancelled' if case == 'C' and name != 'REF001_0001.pdf' else 'saved')
             wanted_rows.append(dict(name=name, occurrence_id=name, state=state, readonly=True, attention=state != 'saved'))
-            if state != 'unknown':
-                wanted_receipts[name] = state
+            wanted_receipts[name] = state
             if state == 'saved':
                 wanted_digests[name] = next(v['measurements_sha256'] for v in oracle['expected']['reports'].values() if v['name'] == name)
         literal(row['row_facts'], wanted_rows)
@@ -569,10 +568,10 @@ def snapshot_assets(root, captures, data, *, dpr, diagnostic=False):
 
 
 CAPTURE_STATES = {
-    'reports-saved-top': dict(rows=12, saved=12, failed=0, unknown=0, attention=0, viewport='top'),
-    'reports-saved-bottom': dict(rows=12, saved=12, failed=0, unknown=0, attention=0, viewport='bottom'),
-    'reports-partial-error': dict(rows=12, saved=11, failed=1, unknown=0, attention=1, viewport='top'),
-    'reports-partial-cancel': dict(rows=12, saved=1, failed=0, unknown=11, attention=11, viewport='top'),
+    'reports-saved-top': dict(rows=12, saved=12, failed=0, cancelled=0, unknown=0, attention=0, viewport='top'),
+    'reports-saved-bottom': dict(rows=12, saved=12, failed=0, cancelled=0, unknown=0, attention=0, viewport='bottom'),
+    'reports-partial-error': dict(rows=12, saved=11, failed=1, cancelled=0, unknown=0, attention=1, viewport='top'),
+    'reports-partial-cancel': dict(rows=12, saved=1, failed=0, cancelled=11, unknown=0, attention=11, viewport='top'),
     'csv-busy': dict(worker_running=True, modal_blocker=False, source_rows=8, selected_rows=4),
     'csv-resumed': dict(completed=True, rows=4, formats=['html', 'xlsx']),
     'grouping-members': dict(source_rows=3000, ids=[1, 13, 25], date_field='captured_at'),

@@ -638,7 +638,8 @@ class _ReportOperations:
             self._invalidate_preflight("Changed since review. Review reports again before importing.")
             return self._sync_readiness_state()
         resume = self._resume_plan
-        approved = (current and bool(count) and selectable_approved) or resume is not None
+        review_approved = current and bool(count) and selectable_approved
+        approved = review_approved or resume is not None
         ocr_running = self._metadata_mode() == MODE_OCR
         stopping = self._start_pending
         caption = (f"Resume import ({len(resume.selected_reports)})" if resume is not None else
@@ -671,7 +672,7 @@ class _ReportOperations:
             f"Import exactly {count} selected reports, including selected rows hidden by filters."
             if approved and not busy and not ocr_running and not stopping else message
         )
-        set_status_variant(self.readiness_label, "success" if approved or (self.import_succeeded and not busy) else "warning")
+        set_status_variant(self.readiness_label, "success" if review_approved or (self.import_succeeded and not busy) else "warning")
         self._review_primary = self.parse_button if approved else self.scan_button
         configure_dialog_button_roles(
             primary=self._review_primary,
@@ -1425,8 +1426,14 @@ class _ReportOperations:
         if selected is not None and selected.identity is None:
             worker.enable_creation_receipt_delivery()
             self.destroyed.connect(worker.close_created_database, Qt.ConnectionType.DirectConnection)
-        if selected is not None or bind_destination:
-            worker.selected_database = resume or selected or SQLiteFileBinding.capture(request.database_path)
+        if selected is not None or resume is not None:
+            worker.selected_database = resume or selected
+        elif bind_destination:
+            binding = SQLiteFileBinding.capture(request.database_path)
+            if binding.identity is None:
+                worker.selected_database = binding
+            else:
+                worker.standalone_resume_database = binding
         return worker
 
     def _accept_import_operation(self, operation, import_plan):

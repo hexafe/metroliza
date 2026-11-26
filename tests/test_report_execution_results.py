@@ -162,6 +162,41 @@ def test_partial_failure_results_match_exact_occurrence_and_attention(app, dialo
     assert owner.import_succeeded and not owner.parse_button.isEnabled()
 
 
+def test_standalone_import_preserves_historical_database_upgrade(app, dialog, monkeypatch):
+    owner, _source, database = dialog
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.executescript(
+            "CREATE TABLE REPORTS (ID INTEGER PRIMARY KEY, REFERENCE TEXT);"
+            "CREATE TABLE MEASUREMENTS (ID INTEGER PRIMARY KEY, REPORT_ID INTEGER, MEAS REAL);"
+            "INSERT INTO REPORTS VALUES (7, 'LEGACY-REFERENCE');"
+            "INSERT INTO MEASUREMENTS VALUES (70, 7, 10.02);"
+        )
+    get_parser = backend.get_parser
+
+    def fail_one_report(path, *args, **kwargs):
+        if Path(path).name == "report-4.pdf":
+            raise ValueError("synthetic temporary parser failure")
+        return get_parser(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "get_parser", fail_one_report)
+        worker = review_and_import(app, owner)
+    assert worker.last_parse_result.imported_files == 4
+    assert worker.last_parse_result.failed_files == 1
+    assert owner.parse_button.text() == "Resume import (1)"
+    worker.last_resume_plan.resume_database.require(database)
+    owner.parse_button.click()
+    retry = owner.parse_thread
+    assert retry is not None
+    wait_until(app, lambda: owner.parse_thread is None, parse_dialog=owner)
+    assert retry.last_parse_result.imported_files == 1
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT count(*) FROM parsed_reports").fetchone() == (6,)
+        assert connection.execute(
+            "SELECT count(*) FROM report_metadata WHERE reference = 'LEGACY-REFERENCE'"
+        ).fetchone() == (1,)
+
+
 def test_cancel_keeps_proven_success_and_resumes_in_reports_workspace(app, window, reports, monkeypatch):
     owner, _source, database = prepare_review(app, window, reports)
     parse = backend.parse_new_reports

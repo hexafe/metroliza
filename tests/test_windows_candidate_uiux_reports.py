@@ -13,6 +13,8 @@ import zipfile
 import pytest
 
 from metroliza.app import windows_candidate_uiux_reports as checks
+from metroliza.app.windows_candidate_uiux_controls import make_capture
+from scripts import verify_windows_candidate_uiux
 
 FIXTURES = Path(__file__).parent / 'fixtures/windows_uiux/reports'
 
@@ -41,7 +43,7 @@ def test_exact_fixtures_and_independent_literal_oracles(tmp_path):
     assert oracle['expected']['counts'] == {'parsed_reports': 12, 'report_measurements': 1728, 'report_metadata': 12}
     assert oracle['scenarios'] == {'A': {'saved': 12, 'failed': 0, 'unknown': 0, 'cancelled': 0},
         'B': {'saved': 11, 'failed': 1, 'unknown': 0, 'cancelled': 0, 'failed_name': 'REF006_0006.pdf'},
-        'C': {'saved': 1, 'failed': 0, 'unknown': 11, 'cancelled': 11, 'saved_name': 'REF001_0001.pdf'}}
+        'C': {'saved': 1, 'failed': 0, 'unknown': 0, 'cancelled': 11, 'saved_name': 'REF001_0001.pdf'}}
     assert all(item['declared'] == item['actual'] == 144 for item in oracle['expected']['reports'].values())
     assert {p.name for p in (tmp_path / 'pdf').iterdir()} == {f'REF{i:03d}_{i:04d}.pdf' for i in range(1, 13)}
 
@@ -110,8 +112,9 @@ def test_real_twelve_report_journeys_sql_receipts_cancel_and_captures(tmp_path, 
     app = qapplication_session
     print('REPORTS_SURFACE', app.platformName(), app.primaryScreen().geometry().getRect(),
           app.primaryScreen().availableGeometry().getRect(), app.primaryScreen().devicePixelRatio())
-    outcome = checks.run_reports_checks(tmp_path, FIXTURES,
-        expected_dpr=float(app.primaryScreen().devicePixelRatio()), capture=capture_to(tmp_path))
+    dpr = float(app.primaryScreen().devicePixelRatio())
+    capture = make_capture(tmp_path, expected_dpr=dpr)
+    outcome = checks.run_reports_checks(tmp_path, FIXTURES, expected_dpr=dpr, capture=capture)
     (tmp_path / 'reports-observation.json').write_text(json.dumps(outcome, indent=2) + '\n')
     print('REPORTS_OBSERVATION', tmp_path / 'reports-observation.json', outcome['status'],
           outcome['error_codes'], outcome['evidence']['summaries'])
@@ -123,27 +126,36 @@ def test_real_twelve_report_journeys_sql_receipts_cancel_and_captures(tmp_path, 
     assert set(evidence) == {'fixture_hashes', 'context', 'A', 'B', 'C', 'summaries', 'captures', 'cleanup', 'failure'}
     assert set(evidence['captures']) == set(checks.CAPTURE_STATES)
     expected = {'A': (12, 0, 0), 'B': (11, 1, 0), 'C': (1, 0, 11)}
-    for case, (saved, failed, unknown) in expected.items():
+    for case, (saved, failed, cancelled) in expected.items():
         result = evidence[case]
         assert set(result) == set(checks.CASE_KEYS)
         assert set(result['context']) == set(checks.CONTEXT_KEYS)
         assert result['review_counts'] == {'ready': 12, 'duplicate': 0, 'selected': 12}
-        assert result['batch_counts'] == {'saved': saved, 'failed': failed, 'cancelled': unknown, 'total': 12}
+        assert result['batch_counts'] == {'saved': saved, 'failed': failed, 'cancelled': cancelled, 'total': 12}
         assert result['rereview_counts'] == {'ready': 12 - saved, 'duplicate': saved, 'selected': 12 - saved}
         assert result['database_counts'] == {'parsed_reports': saved, 'report_measurements': saved * 144, 'report_metadata': saved}
         rows = result['row_facts']
         assert len(rows) == 12
         assert [row['occurrence_id'] for row in rows] == [f'REF{i:03d}_{i:04d}.pdf' for i in range(1, 13)]
         assert all(set(row) == {'name', 'occurrence_id', 'state', 'readonly', 'attention'} and row['readonly'] for row in rows)
-        assert dict(Counter(row['state'] for row in rows)) == {k: v for k, v in [('saved', saved), ('failed', failed), ('unknown', unknown)] if v}
-        assert sum(row['attention'] for row in rows) == failed + unknown
-        assert len(result['receipt_states']) == saved + failed
+        assert dict(Counter(row['state'] for row in rows)) == {
+            k: v for k, v in [('saved', saved), ('failed', failed), ('cancelled', cancelled)] if v
+        }
+        assert sum(row['attention'] for row in rows) == failed + cancelled
+        assert result['receipt_states'] == {row['occurrence_id']: row['state'] for row in rows}
         assert len(result['numeric_digests']) == saved
         assert all(result['preservation'][key] for key in ('rereview_unchanged', 'seed_unchanged', 'sources_unchanged'))
     assert evidence['A']['context']['approval_invalidated'] and evidence['A']['context']['same_owner'] and evidence['A']['context']['same_result']
     assert all(evidence['C']['context'][key] for key in ('worker_running_at_cancel', 'cancel_clicked', 'cancel_flag', 'released', 'terminal'))
     assert evidence['C']['context']['first_accepted'] == 'REF001_0001.pdf'
     assert not evidence['C']['context']['barrier_expired']
+    cancelled_capture = capture.observations['reports-partial-cancel']['observed_state']
+    assert cancelled_capture['cancelled'] == 11 and cancelled_capture['unknown'] == 0
+    assert not capture.snapshot(require_complete=False)['error_codes']
+    oracle = verify_windows_candidate_uiux.load_json(FIXTURES / 'oracles.json')
+    assert verify_windows_candidate_uiux.reports(
+        outcome, oracle, packaged=False, dpr=dpr, qpa=app.platformName(),
+    ) is evidence
     assert evidence['cleanup'] == {'joined': True, 'closed': True, 'sources_unchanged': True, 'callback_errors': []}
     assert evidence['failure'] is None and len(json.dumps(outcome).encode()) <= 24 * 1024
     assert app.activeModalWidget() is None
