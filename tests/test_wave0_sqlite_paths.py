@@ -113,9 +113,12 @@ def test_windows_unicode_database_names_preserve_data_and_distinguish_wal_headro
     limit = _windows_volume_component_limit(tmp_path)
     rejected = tmp_path / _unicode_windows_database_name(limit - len("-journal") + 1)
     boundary = tmp_path / _unicode_windows_database_name(limit - len("-journal"))
-    with pytest.raises(sqlite3.OperationalError, match="shorter database filename"):
+    with pytest.raises(sqlite3.OperationalError) as creation_failure:
         with sqlite_connection_scope(str(rejected)):
             pytest.fail("a new database needs space for its rollback journal")
+    assert "shorter database filename" in str(creation_failure.value), (
+        getattr(creation_failure.value, "sqlite_errorname", None), creation_failure.value,
+    )
     assert list(tmp_path.iterdir()) == []
 
     with sqlite_connection_scope(str(boundary)) as connection:
@@ -141,9 +144,12 @@ def test_windows_unicode_database_names_preserve_data_and_distinguish_wal_headro
     original = rejected.read_bytes()
     with sqlite_readonly_connection_scope(str(rejected)) as connection:
         assert connection.execute("SELECT value FROM sample").fetchone() == (9,)
-    with pytest.raises(sqlite3.OperationalError, match="shorter database filename") as failure:
+    with pytest.raises(sqlite3.OperationalError) as failure:
         with sqlite_connection_scope(str(rejected)):
             pytest.fail("an existing DELETE-mode database needs a journal to enter WAL")
+    assert "shorter database filename" in str(failure.value), (
+        getattr(failure.value, "sqlite_errorname", None), failure.value,
+    )
     assert not _is_transient_sqlite_error(failure.value)
     assert isinstance(failure.value.__cause__, sqlite3.OperationalError)
     assert rejected.read_bytes() == original
