@@ -855,6 +855,58 @@ def test_sqlite_group_preview_search_treats_wildcards_literally(tmp_path) -> Non
         cleanup_tabular_load_result(result)
 
 
+def test_sqlite_grouping_preview_survives_locked_optional_optimization(tmp_path, monkeypatch):
+    path = tmp_path / "preview.db"
+    store = canonical_tabular_service.TabularSqliteStore(
+        str(path), "tabular_rows", ("station",), ("station",), 400,
+    )
+    optimize_errors = []
+
+    with closing(sqlite3.connect(path, isolation_level=None)) as writer:
+        writer.execute("PRAGMA journal_mode=WAL").close()
+        writer.execute("CREATE TABLE tabular_rows (station TEXT)").close()
+        writer.executemany("INSERT INTO tabular_rows VALUES (?)", [(" A ",), ("B",)] * 200).close()
+
+        class CompetingWriterConnection(sqlite3.Connection):
+            def execute(self, sql, parameters=()):
+                if sql != "PRAGMA optimize":
+                    return super().execute(sql, parameters)
+                # Mark the new expression index as useful to this connection's query planner.
+                super().execute(
+                    "SELECT COUNT(*) FROM tabular_rows "
+                    "WHERE COALESCE(NULLIF(TRIM(CAST(station AS TEXT)), ''), '(blank)') = ?",
+                    ("A",),
+                ).close()
+                writer.execute("BEGIN IMMEDIATE").close()
+                try:
+                    return super().execute(sql)
+                except sqlite3.OperationalError as exc:
+                    optimize_errors.append(exc.sqlite_errorcode & 0xff)
+                    raise
+                finally:
+                    writer.rollback()
+
+        @contextmanager
+        def competing_scope(database):
+            with closing(sqlite3.connect(database, timeout=0.01, factory=CompetingWriterConnection)) as connection:
+                yield connection
+
+        with monkeypatch.context() as patch:
+            patch.setattr(canonical_tabular_service, "sqlite_connection_scope", competing_scope)
+            store._ensure_grouping_column_indexes(("station",))
+
+        assert optimize_errors == [sqlite3.SQLITE_BUSY]
+        assert writer.execute("PRAGMA quick_check").fetchone() == ("ok",)
+        indexes = writer.execute("PRAGMA index_list(tabular_rows)").fetchall()
+        assert [index[1] for index in indexes] == ["idx_tabular_rows_group_station"]
+    rows, total = store.preview_value_rows("station", limit=2)
+    assert total == 2
+    assert rows == [
+        {"key": ("A",), "label": "A", "row_count": 200},
+        {"key": ("B",), "label": "B", "row_count": 200},
+    ]
+
+
 def test_sqlite_value_preview_uses_window_total_without_extra_group_count(
     tmp_path,
     monkeypatch,

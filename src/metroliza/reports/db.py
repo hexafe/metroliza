@@ -165,7 +165,7 @@ def _explain_sqlite_write_open_error(path: Path | None):
         yield
     except sqlite3.OperationalError as exc:
         error_code = getattr(exc, "sqlite_errorcode", 0)
-        if path is not None and error_code & 0xff == sqlite3.SQLITE_CANTOPEN:
+        if path is not None and error_code & 0xff in (sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_IOERR):
             if problem := sqlite_sidecar_path_problem(path):
                 raise _SQLiteJournalNameError(f"{exc}. Path check: {problem}") from exc
         raise

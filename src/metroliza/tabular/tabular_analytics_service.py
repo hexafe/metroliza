@@ -2892,7 +2892,13 @@ def _create_sqlite_grouping_indexes(
         )
         created = True
     if created:
-        connection.execute("PRAGMA optimize")
+        try:
+            connection.execute("PRAGMA optimize")
+        except sqlite3.OperationalError as exc:
+            # The index already exists. Another writer can defer SQLite's statistics refresh.
+            code = getattr(exc, "sqlite_errorcode", 0) & 0xff
+            if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise
 
 
 def _update_metric_stats(
