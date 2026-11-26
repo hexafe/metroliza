@@ -262,7 +262,10 @@ problem…** with a fresh activity snapshot.
 Choose a problem category, affected module, symptom, expected behaviour and
 observed behaviour using the closed choices. Unspecified details remain unknown;
 no free-text field collects company information. Use **Copy report** to copy the
-displayed text into a support conversation. The report contains fixed activity
+displayed text or **Save diagnostic ZIP…** to save the same preview locally with
+its integrity manifest. [Diagnostic ZIP guidance](diagnostic_incidents.md#save-the-current-preview)
+
+The report contains fixed activity
 codes and selected true/false checks across application
 workflows, including reports, database editing, CSV Summary, export, industrial
 data, monitoring and parser profiles. Coverage is selective: not every click,

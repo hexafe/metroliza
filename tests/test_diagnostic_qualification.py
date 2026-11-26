@@ -553,6 +553,9 @@ def test_next_actual_entry_previews_and_exports_previous_surviving_incident(
         assert set(bundle.namelist()) == {"incident.json", "manifest.json", "summary.json"}
         incident = json.loads(bundle.read("incident.json"))
         assert incident["session_id"] == crashed.observation.session_id
+    with zipfile.ZipFile(work / "safe-report.zip") as bundle:
+        assert sorted(bundle.namelist()) == ["manifest.json", "report.md"]
+        assert bundle.read("report.md").startswith(b"# Metroliza bug report v2\n")
 
 
 def test_real_qualification_work_waits_for_host_to_observe_startup(tmp_path, monkeypatch):
