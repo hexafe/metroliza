@@ -326,6 +326,11 @@ def test_windows_filesystem_matrix_is_owner_dispatch_only() -> None:
     assert "$save -eq 'published'" in script
     assert "$collision -ne 'rejected_existing'" in script
     assert "$save -ne 'refused_safely' -or $receipt.requested -eq 'NTFS'" in script
+    assert "$flushRefused = $save -eq 'refused_safely' -and $saveStage -eq 'flush'" in script
+    assert "foreach ($entry in @('main', '-wal', '-shm', '-journal'))" in script
+    assert "$check -ne 'rejected_existing' -and -not ($flushRefused -and $check -eq 'not_reached')" in script
+    assert "$collision -ne 'not_reached' -or $commit.stage -ne 'flush'" in script
+    assert "$commit.winerror -ne $receipt.unused_destination.winerror" in script
 
 
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:

@@ -447,6 +447,7 @@ def _qualify_unused_destination(monkeypatch, target, destination, source_snapsho
 
 def _qualify_destination_rejections(monkeypatch, target, directory, unused_result):
     originals = {}
+    precommit = {}
     marker = b"foreign destination entry"
     real_backup = cache_target.backup_sqlite_database
     for phase in ("existing", "after-backup"):
@@ -469,10 +470,23 @@ def _qualify_destination_rejections(monkeypatch, target, directory, unused_resul
                 else:
                     patch.setattr(cache_target, "backup_sqlite_database", backup_with_conflict)
                 detail = "sidecar already exists" if suffix else "Destination already exists"
-                with pytest.raises(FileExistsError, match=detail):
+                try:
                     cache_target.persist_temporary_industrial_cache(target, destination)
+                except FileExistsError as exc:
+                    assert detail in str(exc)
+                    result = "rejected_existing"
+                except RuntimeError as exc:
+                    if phase != "after-backup" or unused_result.get("stage") != "flush":
+                        raise
+                    if _native_refusal(exc) != unused_result:
+                        raise
+                    result = "not_reached"
+                else:
+                    pytest.fail(f"Expected the {phase} conflict for {conflict.name} to block publication")
             assert conflict in originals
             assert not suffix or not destination.exists()
+            if phase == "after-backup":
+                precommit[suffix or "main"] = result
 
     destination = directory / "at-rename.sqlite"
     primitive = "rename" if os.name == "nt" else "link"
@@ -493,14 +507,17 @@ def _qualify_destination_rejections(monkeypatch, target, directory, unused_resul
             late_result = {**_exception_receipt("rename", exc.__cause__), "status": "rejected_existing"}
         except RuntimeError as exc:
             late_result = _native_refusal(exc)
-            assert late_result["stage"] == unused_result.get("stage") == "rename"
-            assert late_result["reason"] == unused_result["reason"]
+            if late_result["stage"] == "flush" and late_result == unused_result:
+                late_result["status"] = "not_reached"
+            else:
+                assert late_result["stage"] == unused_result.get("stage") == "rename"
+                assert late_result["reason"] == unused_result["reason"]
         else:
             pytest.fail("Publication succeeded over a filename created at the commit point")
-    assert destination in originals
+    assert (destination in originals) == (late_result["status"] != "not_reached")
     assert set(directory.iterdir()) == set(originals)
     assert all(path.read_bytes() == original for path, original in originals.items())
-    return late_result
+    return {"precommit_collisions": precommit, "commit_point_collision": late_result}
 
 
 @pytest.mark.skipif(os.name != "posix", reason="requires the native POSIX publication primitive")
@@ -513,9 +530,68 @@ def test_posix_cache_filesystem_contract(monkeypatch, temporary_cache, tmp_path)
     published = _qualify_unused_destination(
         monkeypatch, temporary_cache, unused / "archive µ.sqlite", source_snapshot, "POSIX",
     )
-    late = _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
+    rejection = _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
     assert published["status"] == "published"
-    assert late["status"] == "rejected_existing"
+    assert rejection["precommit_collisions"] == dict.fromkeys(
+        ("main", "-wal", "-shm", "-journal"), "rejected_existing",
+    )
+    assert rejection["commit_point_collision"]["status"] == "rejected_existing"
+    assert _database_snapshot(source) == source_snapshot
+
+
+@pytest.mark.parametrize(
+    "later_errno",
+    [errno.EOPNOTSUPP, None, errno.EACCES],
+    ids=["persistent", "first-attempt-only", "different-error"],
+)
+def test_cache_filesystem_flush_refusal_receipt(monkeypatch, temporary_cache, tmp_path, later_errno):
+    source = Path(temporary_cache.cache_db_file)
+    source_snapshot = _database_snapshot(source)
+    unused, collisions = tmp_path / "unused", tmp_path / "collisions"
+    unused.mkdir()
+    collisions.mkdir()
+    real_fsync = os.fsync
+    flushes = []
+
+    def refuse_flush(descriptor):
+        flushes.append(descriptor)
+        error = errno.EOPNOTSUPP if len(flushes) == 1 else later_errno
+        if error is not None:
+            raise OSError(error, "synthetic flush refusal")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", refuse_flush)
+    published = _qualify_unused_destination(
+        monkeypatch, temporary_cache, unused / "archive.sqlite", source_snapshot, "FAT",
+    )
+    assert published == {
+        "stage": "flush",
+        "status": "refused_safely",
+        "class": "OSError",
+        "errno": errno.EOPNOTSUPP,
+        "winerror": None,
+        "reason": "unsupported_operation",
+    }
+    if later_errno == errno.EACCES:
+        with pytest.raises(RuntimeError, match="Could not apply private staging permissions") as failure:
+            _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
+        assert failure.value.__cause__.errno == errno.EACCES
+        _assert_no_staging(collisions / "after-backup.sqlite")
+        assert _database_snapshot(source) == source_snapshot
+        return
+
+    collisions_result = _qualify_destination_rejections(
+        monkeypatch, temporary_cache, collisions, published,
+    )
+    expected = "not_reached" if later_errno is not None else "rejected_existing"
+    assert collisions_result["precommit_collisions"] == dict.fromkeys(
+        ("main", "-wal", "-shm", "-journal"), expected,
+    )
+    commit = collisions_result["commit_point_collision"]
+    assert commit["status"] == expected
+    if later_errno is not None:
+        assert commit == {**published, "status": "not_reached"}
+    assert len(flushes) == 6  # One empty target, four late precommit markers, one commit probe.
     assert _database_snapshot(source) == source_snapshot
 
 
@@ -546,7 +622,9 @@ def test_native_windows_cache_filesystem(monkeypatch, temporary_cache, storage):
                 **published,
                 "source_preserved": True,
             }, sort_keys=True))
-            late = _qualify_destination_rejections(monkeypatch, temporary_cache, collisions, published)
+            rejection = _qualify_destination_rejections(
+                monkeypatch, temporary_cache, collisions, published,
+            )
         finally:
             assert _database_snapshot(source) == source_snapshot
             assert sorted(path.name for path in source.parent.iterdir()) == [source.name]
@@ -561,8 +639,11 @@ def test_native_windows_cache_filesystem(monkeypatch, temporary_cache, storage):
         "source_sha256": sha256(source_snapshot[0]).hexdigest(),
         "unused_destination": published,
         "existing_entries_preserved": True,
-        "precommit_sidecar_suffixes": ["-wal", "-shm", "-journal"],
-        "commit_point_collision": late,
+        "precommit_sidecar_suffixes": [
+            suffix for suffix in ("-wal", "-shm", "-journal")
+            if rejection["precommit_collisions"][suffix] == "rejected_existing"
+        ],
+        **rejection,
         "source_preserved": True,
         "staging_removed": True,
         "scratch_removed": True,
