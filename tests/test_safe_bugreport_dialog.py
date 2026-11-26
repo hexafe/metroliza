@@ -1,3 +1,11 @@
+import hashlib
+import json
+import os
+from pathlib import Path
+import zipfile
+
+import pytest
+
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox, QWidget
@@ -14,6 +22,7 @@ from metroliza.shared.safe_bugreport import (
 )
 import metroliza.ui.safe_bugreport_dialog as dialog_module
 import metroliza.shared.safe_bugreport as report_module
+from metroliza.shared import diagnostic_store
 from metroliza.shared.safe_bugreport_context import SafeBugReportContextSnapshot
 from metroliza.ui.safe_bugreport_dialog import SafeBugReportDialog
 
@@ -47,11 +56,187 @@ def test_safe_bug_report_fails_closed_when_snapshot_cannot_be_built(qapplication
         dialog._refresh_preview()
         assert dialog.preview.toPlainText() == ""
         assert not dialog.copy_button.isEnabled()
+        assert not dialog.save_button.isEnabled()
         dialog.copy_report()
         assert "unavailable" in dialog.status_label.text().lower()
     finally:
         dialog.close()
 
+
+def test_save_diagnostic_zip_preserves_reviewed_bytes(qapplication_session, monkeypatch, tmp_path):
+    recorder = SafeBugReportRecorder()
+    recorder.record(BugReportAction.CSV_OPENED)
+    monkeypatch.setattr(dialog_module, "recorder", recorder)
+    destination = tmp_path / "diagnostic.zip"
+    choices = iter(("", str(destination.with_suffix("")), str(destination)))
+    monkeypatch.setattr(dialog_module.QFileDialog, "getSaveFileName", lambda *_a, **_kw: (next(choices), ""))
+    dialog = SafeBugReportDialog()
+    try:
+        shown = dialog.preview.toPlainText().encode("utf-8")
+        recorder.record(BugReportAction.FILTER_APPLIED)
+        dialog.save_button.click()
+        assert list(tmp_path.iterdir()) == []
+
+        dialog.save_button.click()
+        assert "saved" in dialog.status_label.text()
+        with zipfile.ZipFile(destination) as archive:
+            assert archive.namelist() == ["report.md", "manifest.json"]
+            assert archive.read("report.md") == shown
+            assert json.loads(archive.read("manifest.json")) == {
+                "schema_version": 1,
+                "bundle_format": "metroliza_safe_bug_report_v1",
+                "files": [{"name": "report.md", "size_bytes": len(shown), "sha256": hashlib.sha256(shown).hexdigest()}],
+            }
+
+        original_bytes = destination.read_bytes()
+        dialog.refresh_snapshot()
+        assert b"filter_applied" in dialog.preview.toPlainText().encode("utf-8")
+        dialog.save_button.click()
+        assert "already exists" in dialog.status_label.text()
+        assert destination.read_bytes() == original_bytes
+        assert list(tmp_path.iterdir()) == [destination]
+    finally:
+        dialog.close()
+
+
+def test_changing_preview_while_save_picker_is_open_requires_review(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    recorder = SafeBugReportRecorder()
+    monkeypatch.setattr(dialog_module, "recorder", recorder)
+    dialog = SafeBugReportDialog()
+
+    def change_preview(*_a, **_kw):
+        recorder.record(BugReportAction.CSV_OPENED)
+        dialog.refresh_snapshot()
+        return str(tmp_path / "diagnostic.zip"), ""
+
+    monkeypatch.setattr(dialog_module.QFileDialog, "getSaveFileName", change_preview)
+    try:
+        dialog.save_button.click()
+        assert "preview changed" in dialog.status_label.text()
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        dialog.close()
+
+
+def test_clearing_history_while_save_picker_is_open_requires_review(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    recorder = SafeBugReportRecorder()
+    monkeypatch.setattr(dialog_module, "recorder", recorder)
+    dialog = SafeBugReportDialog()
+
+    def clear_during_picker(*_a, **_kw):
+        monkeypatch.setattr(recorder, "history_generation", lambda: 1)
+        return str(tmp_path / "diagnostic.zip"), ""
+
+    monkeypatch.setattr(dialog_module.QFileDialog, "getSaveFileName", clear_during_picker)
+    try:
+        original = dialog.preview.toPlainText()
+        dialog.save_button.click()
+        assert "History was cleared" in dialog.status_label.text()
+        assert dialog.preview.toPlainText() == original
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize("colliding_file", [False, True])
+def test_diagnostic_zip_failure_cleans_staging_and_preserves_foreign_file(
+    qapplication_session, monkeypatch, tmp_path, colliding_file,
+):
+    dialog = SafeBugReportDialog()
+    try:
+        report = dialog.preview.toPlainText()
+    finally:
+        dialog.close()
+    destination = tmp_path / "diagnostic.zip"
+    real_commit = diagnostic_store._commit_stage_no_replace
+
+    def fail_commit(stage, target):
+        assert stage.is_file()
+        if colliding_file:
+            target.write_bytes(b"unrelated")
+            real_commit(stage, target)
+        raise OSError("simulated failure")
+
+    monkeypatch.setattr(diagnostic_store, "_commit_stage_no_replace", fail_commit)
+    status = diagnostic_store.export_safe_bug_report(report, destination)
+    if colliding_file:
+        assert status is diagnostic_store.StoreStatus.DESTINATION_EXISTS
+        assert destination.read_bytes() == b"unrelated"
+        assert list(tmp_path.iterdir()) == [destination]
+    else:
+        assert status is diagnostic_store.StoreStatus.IO_FAILED
+        assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("field", ["password", "sql", "customer", "measurement", "environment"])
+def test_diagnostic_zip_rejects_non_schema_preview_values(qapplication_session, tmp_path, field):
+    dialog = SafeBugReportDialog()
+    try:
+        report = dialog.preview.toPlainText().replace(
+            'json\n{\n', f'json\n{{\n  "{field}": {{"nested": "synthetic confidential text"}},\n', 1,
+        )
+    finally:
+        dialog.close()
+    assert "synthetic confidential text" in report
+    assert diagnostic_store.export_safe_bug_report(report, tmp_path / "diagnostic.zip") is (
+        diagnostic_store.StoreStatus.INVALID
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_diagnostic_zip_does_not_delete_target_after_verification_failure(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    dialog = SafeBugReportDialog()
+    destination = tmp_path / "diagnostic.zip"
+    read_bytes = diagnostic_store._safe_file_bytes
+
+    def fail_readback(path, maximum):
+        if path == destination:
+            raise OSError("simulated read-back failure")
+        return read_bytes(path, maximum)
+
+    monkeypatch.setattr(diagnostic_store, "_safe_file_bytes", fail_readback)
+    try:
+        report = dialog.preview.toPlainText()
+        result = diagnostic_store.export_safe_bug_report(report, destination)
+        assert result is diagnostic_store.StoreStatus.PUBLISH_INCOMPLETE
+        assert list(tmp_path.iterdir()) == [destination]
+        with zipfile.ZipFile(destination) as bundle:
+            assert bundle.read("report.md") == report.encode("utf-8")
+    finally:
+        dialog.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows moves rather than links the staging name")
+def test_diagnostic_zip_reports_staging_cleanup_failure(
+    qapplication_session, monkeypatch, tmp_path,
+):
+    dialog = SafeBugReportDialog()
+    destination = tmp_path / "diagnostic.zip"
+    unlink = Path.unlink
+
+    def fail_stage_cleanup(path, *args, **kwargs):
+        if path.parent == tmp_path and path.name.startswith(".stage-"):
+            raise PermissionError("simulated cleanup failure")
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_stage_cleanup)
+    try:
+        report = dialog.preview.toPlainText()
+        result = diagnostic_store.export_safe_bug_report(report, destination)
+        assert result is diagnostic_store.StoreStatus.PUBLISH_INCOMPLETE
+        assert destination.stat().st_nlink == 2
+        for stage in tmp_path.glob(".stage-*.tmp"):
+            unlink(stage)
+        with zipfile.ZipFile(destination) as bundle:
+            assert bundle.read("report.md") == report.encode("utf-8")
+    finally:
+        dialog.close()
 
 def test_start_history_offers_previous_activity_without_calling_it_a_crash(
     qapplication_session, monkeypatch, tmp_path,
