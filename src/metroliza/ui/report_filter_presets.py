@@ -34,20 +34,23 @@ class ReportFilterPresets:
 
     def load(self):
         presets = []
-        unavailable = 0
+        unavailable = []
         settings = self._settings()
         for key in settings.childKeys():
+            name = None
             try:
                 raw = settings.value(key, "", type=str)
                 if len(raw) > 131072:
                     raise ValueError("Saved report filter is too large.")
                 payload = json.loads(raw)
-                name = payload["name"]
-                if not isinstance(name, str) or not 1 <= len(name) <= 80 or self._key(name) != key:
+                candidate = payload["name"]
+                if not isinstance(candidate, str) or not 1 <= len(candidate) <= 80 or self._key(candidate) != key:
                     raise ValueError("Invalid report filter name.")
+                name = candidate
                 presets.append((name, _decode_filter(payload["filter"])))
-            except (KeyError, TypeError, ValueError, RecursionError):
-                unavailable += 1
+            except (KeyError, TypeError, ValueError, RecursionError) as error:
+                detail = str(error.args[0])[:240] if name and error.args else "The saved entry could not be read."
+                unavailable.append((name or "Saved filter", detail))
         return sorted(presets, key=lambda entry: entry[0].casefold()), unavailable
 
     def save(self, name, state):

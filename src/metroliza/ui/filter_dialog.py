@@ -954,10 +954,20 @@ class FilterDialog(QDialog):
             action = menu.addAction(f"Load as draft: {label}")
             action.setEnabled(not self._values_loading)
             action.triggered.connect(lambda _checked, value=state: self._load_saved_filter(value))
-        if not presets or unavailable:
-            text = f"{unavailable} saved filters unavailable" if unavailable else "No saved filters"
-            menu.addAction(text).setEnabled(False)
+        if not presets and not unavailable:
+            menu.addAction("No saved filters").setEnabled(False)
+        for name, detail in unavailable:
+            label = " ".join(name.split()).replace("&", "&&")
+            message = menu.addAction(f"Unavailable: {label}…")
+            message.triggered.connect(lambda _checked, reason=detail: self._show_unavailable_filter(reason))
         menu.exec(self.saved_filters_button.mapToGlobal(self.saved_filters_button.rect().bottomLeft()))
+
+    def _show_unavailable_filter(self, reason):
+        message = QtWidgets.QMessageBox(self)
+        message.setWindowTitle("Saved filter unavailable")
+        message.setTextFormat(Qt.TextFormat.PlainText)
+        message.setText(reason)
+        message.exec()
 
     def _save_filter_draft(self, store, presets):
         name, accepted = QtWidgets.QInputDialog.getText(self, "Save filter", "Filter name")

@@ -103,6 +103,8 @@ def test_filter_dialog_construction_controls_and_summary(monkeypatch):
 def test_named_filter_roundtrip_retains_unavailable_values_until_explicit_apply(monkeypatch, tmp_path):
     from metroliza.shared.filter_state import FilterState
     from metroliza.ui.report_filter_presets import ReportFilterPresets
+    from dataclasses import asdict
+    import json
 
     class Owner(QDialog):
         def set_filter_query(self, query):
@@ -119,9 +121,15 @@ def test_named_filter_roundtrip_retains_unavailable_values_until_explicit_apply(
     store.save("January NOK", expected)
     settings = store._settings()
     settings.setValue("invalid-entry", "not valid JSON")
+    obsolete = "Obsolete field"
+    settings.setValue(store._key(obsolete), json.dumps({
+        "name": obsolete, "filter": {**asdict(expected), "old_measurement_field": []},
+    }))
     settings.sync()
     presets, unavailable = ReportFilterPresets(path).load()
-    assert presets == [("January NOK", expected)] and unavailable == 1
+    assert presets == [("January NOK", expected)]
+    assert len(unavailable) == 2
+    assert "old_measurement_field" in dict(unavailable)[obsolete]
 
     owner = Owner()
     prior_query = "previous query"
