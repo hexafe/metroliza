@@ -97,3 +97,64 @@ def test_cold_analytics_import_does_not_load_exporting_or_pandas(tmp_path: Path)
             "PYTHONPATH": f"{REPO_ROOT / 'src'}{os.pathsep}{REPO_ROOT}",
         },
     )
+
+
+def test_gui_export_factory_defers_scientific_imports(tmp_path: Path) -> None:
+    script = """
+import importlib.abc
+import importlib.util
+import sys
+
+from PyQt6.QtWidgets import QApplication
+from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+from metroliza.ui.export_dialog import create_export_data_thread
+
+deferred = {
+    'scipy.stats',
+    'seaborn',
+    'metroliza.analytics.distribution_fit_service',
+    'metroliza.analytics.group_analysis_service',
+    'metroliza.exporting.group_analysis_writer',
+}
+assert not deferred.intersection(sys.modules)
+attempts = []
+
+class DeferredImportGuard(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname in deferred:
+            return importlib.util.spec_from_loader(fullname, self)
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        attempts.append(module.__name__)
+        raise ImportError(module.__name__)
+
+guard = DeferredImportGuard()
+sys.meta_path.insert(0, guard)
+app = QApplication([])
+request = ExportRequest(AppPaths('reports.sqlite', 'export.xlsx'), ExportOptions())
+worker = create_export_data_thread(request)
+assert worker.thread() is app.thread()
+assert not attempts, attempts
+assert not deferred.intersection(sys.modules)
+sys.meta_path.remove(guard)
+
+# Request the original callable through both supported import paths.
+from metroliza.analytics.distribution_fit_service import fit_measurement_distribution
+from metroliza.exporting import export_data_thread
+from modules import export_data_thread as legacy
+
+assert legacy is export_data_thread
+assert legacy.fit_measurement_distribution is fit_measurement_distribution
+"""
+    env = {
+        **os.environ,
+        "MPLCONFIGDIR": str(tmp_path / "mpl"),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": f"{REPO_ROOT / 'src'}{os.pathsep}{REPO_ROOT}",
+        "QT_QPA_PLATFORM": "offscreen",
+    }
+    env.pop("QT_QPA_PLATFORMTHEME", None)
+    subprocess.run([sys.executable, "-c", script], check=True, cwd=tmp_path, env=env, timeout=30)
