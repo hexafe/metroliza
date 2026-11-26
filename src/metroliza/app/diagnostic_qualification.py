@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import uuid
+import zipfile
 from importlib import import_module
 from pathlib import Path
 
@@ -317,6 +318,7 @@ def _complete_preview_save_dialog(app, chosen: Path, deadline: float, automation
         if time.monotonic() >= deadline:
             buttons.button(QDialogButtonBox.StandardButton.Cancel).click()
             return
+        widget.setDirectory(str(chosen.parent))
         widget.selectFile(chosen.name)
         filename = widget.findChild(QLineEdit, "fileNameEdit")
         if filename is None:
@@ -406,7 +408,7 @@ def _close_preview_windows(window) -> str:
     return status
 
 
-def _verify_incident_capture(app, dialog) -> None:
+def _verify_incident_capture(app, dialog, root: Path) -> None:
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QMessageBox
 
@@ -443,24 +445,20 @@ def _verify_incident_capture(app, dialog) -> None:
             or not preview.copy_button.isVisible() or not preview.copy_button.isEnabled()
         ):
             raise ValueError
+        chosen = root / "safe-report.zip"
+        _save_qualification_zip(app, preview, preview.save_button, chosen)
+        _verify_saved_preview(chosen, shown)
         if not preview.close() or preview.isVisible():
             raise ValueError
     except Exception:
         raise ValueError("qualification_preview_unavailable") from None
 
 
-def _export_preview_dialog(app, dialog, root: Path) -> None:
-    from PyQt6.QtCore import Qt, QTimer
+def _save_qualification_zip(app, dialog, button, chosen: Path) -> None:
+    from PyQt6.QtCore import QTimer
 
-    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-    if dialog.reports_table.rowCount() < 1:
-        raise ValueError("qualification_incident_missing")
-    dialog.reports_table.selectRow(0)
-    app.processEvents()
-    if not dialog.preview.toPlainText() or not dialog.export_button.isEnabled():
-        raise ValueError("qualification_preview_unavailable")
-    _verify_incident_capture(app, dialog)
-    chosen = root / "selected.zip"
+    if not button.isVisible() or not button.isEnabled():
+        raise ValueError("qualification_export_unavailable")
     timer = QTimer(dialog)
     timer.setInterval(50)
     deadline = time.monotonic() + 5
@@ -471,12 +469,47 @@ def _export_preview_dialog(app, dialog, root: Path) -> None:
 
     timer.timeout.connect(choose_file)
     timer.start()
-    dialog.export_button.click()
-    timer.stop()
+    try:
+        button.click()
+    finally:
+        timer.stop()
+        timer.deleteLater()
     if not automation["filename_control_available"]:
         raise ValueError("qualification_filename_control_unavailable")
     if not chosen.is_file():
         raise ValueError("qualification_export_unavailable")
+
+
+def _verify_saved_preview(path: Path, preview: str) -> None:
+    expected = preview.encode("utf-8")
+    with zipfile.ZipFile(path) as bundle:
+        if sorted(bundle.namelist()) != ["manifest.json", "report.md"]:
+            raise ValueError("qualification_export_unavailable")
+        manifest = json.loads(bundle.read("manifest.json"))
+        if bundle.read("report.md") != expected or manifest != {
+            "schema_version": 1,
+            "bundle_format": "metroliza_safe_bug_report_v1",
+            "files": [{
+                "name": "report.md",
+                "size_bytes": len(expected),
+                "sha256": hashlib.sha256(expected).hexdigest(),
+            }],
+        }:
+            raise ValueError("qualification_export_unavailable")
+
+
+def _export_preview_dialog(app, dialog, root: Path) -> None:
+    from PyQt6.QtCore import Qt
+
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+    if dialog.reports_table.rowCount() < 1:
+        raise ValueError("qualification_incident_missing")
+    dialog.reports_table.selectRow(0)
+    app.processEvents()
+    if not dialog.preview.toPlainText() or not dialog.export_button.isEnabled():
+        raise ValueError("qualification_preview_unavailable")
+    _verify_incident_capture(app, dialog, root)
+    _save_qualification_zip(app, dialog, dialog.export_button, root / "selected.zip")
 
 
 def _preview_export(root: Path) -> None:

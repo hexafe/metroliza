@@ -1,12 +1,15 @@
-"""Local, fixed-schema bug report for copying into a coding assistant."""
+"""Preview, copy and save a local, fixed-schema bug report."""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -17,7 +20,7 @@ from PyQt6.QtWidgets import (
 
 from metroliza.app.version import RELEASE_VERSION
 from metroliza.app.bugreport_provenance import collect_bugreport_build_facts
-from metroliza.shared.diagnostic_store import IncidentStore
+from metroliza.shared.diagnostic_store import IncidentStore, StoreStatus, export_safe_bug_report
 from metroliza.shared.safe_bugreport import (
     BUG_REPORT_UNAVAILABLE,
     BugReportAction,
@@ -43,7 +46,7 @@ _CATEGORY_CHOICES = (
 
 
 class SafeBugReportDialog(QDialog):
-    """Preview and copy only the versioned, allowlisted local report."""
+    """Show the exact report that will be copied or saved."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,7 +73,7 @@ class SafeBugReportDialog(QDialog):
                 "The report includes technical build facts, fixed diagnostic codes and option states. "
                 "It excludes files, names, paths, entered values and report data. "
                 "This snapshot stays fixed while you review it. Use Refresh to capture later activity. "
-                "A freeze or abrupt exit may leave missing activity. Review before pasting."
+                "A saved ZIP contains this preview (report.md) and its checksum (manifest.json)."
             ),
             self,
         )
@@ -88,14 +91,16 @@ class SafeBugReportDialog(QDialog):
         self._clear_polling = False
 
         self.copy_button = QPushButton(self.tr("Copy report"), self)
+        self.save_button = QPushButton(self.tr("Save diagnostic ZIP…"), self)
         self.refresh_button = QPushButton(self.tr("Refresh snapshot"), self)
         self.clear_button = QPushButton(self.tr("Clear activity history"), self)
         close_button = QPushButton(self.tr("Close"), self)
         buttons = QHBoxLayout()
-        buttons.addWidget(self.status_label, stretch=1)
         buttons.addWidget(self.copy_button)
+        buttons.addWidget(self.save_button)
         buttons.addWidget(self.refresh_button)
         buttons.addWidget(self.clear_button)
+        buttons.addStretch()
         buttons.addWidget(close_button)
 
         layout = QVBoxLayout(self)
@@ -111,10 +116,12 @@ class SafeBugReportDialog(QDialog):
             combo.currentIndexChanged.connect(self._refresh_preview)
         layout.addWidget(QLabel(self.tr("Report preview"), self))
         layout.addWidget(self.preview, stretch=1)
+        layout.addWidget(self.status_label)
         layout.addLayout(buttons)
 
         self.category_combo.currentIndexChanged.connect(self._refresh_preview)
         self.copy_button.clicked.connect(self.copy_report)
+        self.save_button.clicked.connect(self.save_report)
         self.refresh_button.clicked.connect(self.refresh_snapshot)
         self.clear_button.clicked.connect(self.clear_history)
         close_button.clicked.connect(self.close)
@@ -166,15 +173,11 @@ class SafeBugReportDialog(QDialog):
         try:
             clear_state = getattr(recorder.snapshot(), "clear_state", None)
         except Exception:
-            self._preview_report = None
-            self.preview.clear()
-            self.copy_button.setEnabled(False)
+            self._set_preview(None)
             self.status_label.setText(self.tr("A safe report is unavailable."))
             return
         if clear_state == "pending":
-            self._preview_report = None
-            self.preview.clear()
-            self.copy_button.setEnabled(False)
+            self._set_preview(None)
             self.clear_button.setEnabled(False)
             self.status_label.setText(self.tr("Clearing local history…"))
             if not self._clear_polling:
@@ -183,36 +186,41 @@ class SafeBugReportDialog(QDialog):
             return
         report = self._report_text()
         if report is None or report == BUG_REPORT_UNAVAILABLE:
-            self._preview_report = None
-            self.preview.clear()
-            self.copy_button.setEnabled(False)
+            self._set_preview(None)
             self.status_label.setText(self.tr("A safe report is unavailable."))
             return
-        self.preview.setPlainText(report)
-        self._preview_report = report
-        self.copy_button.setEnabled(True)
+        self._set_preview(report)
         self.status_label.setText("")
 
-    def copy_report(self) -> None:
+    def _set_preview(self, report: str | None) -> None:
+        self._preview_report = report
+        self.preview.setPlainText(report or "")
+        self.copy_button.setEnabled(report is not None)
+        self.save_button.setEnabled(report is not None)
+
+    def _checked_preview(self) -> str | None:
         report = self._preview_report
-        if report is None or report == BUG_REPORT_UNAVAILABLE:
+        if report is None or self._captured_context is None:
             self.status_label.setText(self.tr("A safe report is unavailable."))
-            return
+            return None
         try:
             clear_state = recorder.snapshot().clear_state
             current_generation = recorder.history_generation()
         except Exception:
             self.status_label.setText(self.tr("A safe report is unavailable."))
-            return
+            return None
         if clear_state == "pending":
             self._refresh_preview()
-            return
-        if self._captured_context is None:
-            self.status_label.setText(self.tr("A safe report is unavailable."))
-            return
+            return None
         if current_generation != self._captured_context.generation:
             self.refresh_snapshot()
-            self.status_label.setText(self.tr("History was cleared. Review the new snapshot before copying."))
+            self.status_label.setText(self.tr("History was cleared. Review the new snapshot."))
+            return None
+        return report
+
+    def copy_report(self) -> None:
+        report = self._checked_preview()
+        if report is None:
             return
         clipboard = QGuiApplication.clipboard()
         if clipboard is None:
@@ -222,6 +230,33 @@ class SafeBugReportDialog(QDialog):
         self.status_label.setText(
             self.tr("Copied locally. Review the report before pasting it into an assistant.")
         )
+
+    def save_report(self) -> None:
+        report = self._checked_preview()
+        if report is None:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, self.tr("Save diagnostic ZIP"), "metroliza-diagnostic.zip",
+            self.tr("ZIP archive (*.zip)"),
+            options=QFileDialog.Option.DontConfirmOverwrite,
+        )
+        if not filename:
+            return
+        current = self._checked_preview()
+        if current is None:
+            return
+        if current != report:
+            self.status_label.setText(self.tr("The preview changed. Review it before saving."))
+            return
+        target = Path(filename)
+        if target.suffix.lower() != ".zip":
+            target = target.with_name(target.name + ".zip")
+        result = export_safe_bug_report(report, target)
+        messages = {
+            StoreStatus.EXPORTED: self.tr("Diagnostic ZIP saved."),
+            StoreStatus.DESTINATION_EXISTS: self.tr("That file already exists. Choose a new filename."),
+        }
+        self.status_label.setText(messages.get(result, self.tr("The diagnostic ZIP could not be saved.")))
 
     def clear_history(self) -> None:
         """Queue a clear; report success only after the local writer confirms it."""

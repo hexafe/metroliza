@@ -8,6 +8,7 @@ body:
     attributes:
       value: |
         Provide enough evidence to reproduce and triage the defect. Do not attach credentials, OAuth tokens, proprietary customer reports, or unredacted production extracts.
+        For diagnostic context, review the **Help > Report a problem…** preview before sharing it. [Safe diagnostic ZIP guidance](https://github.com/hexafe/metroliza/blob/dev/docs/user_manual/diagnostic_incidents.md#save-the-current-preview)
 
   - type: dropdown
     id: priority

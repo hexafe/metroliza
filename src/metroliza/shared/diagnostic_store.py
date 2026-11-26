@@ -24,6 +24,7 @@ from metroliza.shared.diagnostic_incident import (
     decode_incident,
     encode_incident,
 )
+from metroliza.shared.safe_bugreport_context import parse_v2_report
 
 MAX_REPORTS = 20
 MAX_MARKERS = 32
@@ -437,17 +438,21 @@ def _write_stage(root: Path, data: bytes) -> Path:
     return path
 
 
-def _publish_stage(stage: Path, final: Path) -> tuple[int, int]:
-    if final.exists() or final.is_symlink():
-        raise FileExistsError("diagnostic_target_exists")
-    staged = stage.lstat()
-    identity = (staged.st_dev, staged.st_ino)
+def _commit_stage_no_replace(stage: Path, final: Path) -> None:
     if os.name == "nt":
         # Windows rename is atomic and fails when the destination exists. It
         # avoids retaining a hidden hardlink beside a selected export on crash.
         os.rename(stage, final)
     else:
         os.link(stage, final, follow_symlinks=False)
+
+
+def _publish_stage(stage: Path, final: Path) -> tuple[int, int]:
+    if final.exists() or final.is_symlink():
+        raise FileExistsError("diagnostic_target_exists")
+    staged = stage.lstat()
+    identity = (staged.st_dev, staged.st_ino)
+    _commit_stage_no_replace(stage, final)
     try:
         if os.name != "nt":
             stage.unlink()
@@ -582,6 +587,62 @@ def _recover_publication_pairs(root: Path) -> bool:
         return True
     except OSError:
         return False
+
+
+def _bundle_manifest(bundle_format: str, files: dict[str, bytes]) -> bytes:
+    payload = {
+        "schema_version": 1,
+        "bundle_format": bundle_format,
+        "files": [
+            {"name": name, "size_bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+            for name, data in files.items()
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False).encode("ascii")
+
+
+def _bundle_archive(files: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        for name, data in files.items():
+            member = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+            member.compress_type = zipfile.ZIP_DEFLATED
+            member.external_attr = 0o600 << 16
+            bundle.writestr(member, data)
+    return output.getvalue()
+
+
+def export_safe_bug_report(report: str, destination: Path | None) -> StoreStatus:
+    """Save the exact reviewed, canonical v2 preview to a new ZIP file."""
+    if destination is None:
+        return StoreStatus.CANCELLED
+    try:
+        parse_v2_report(report)
+    except (ValueError, RecursionError):
+        return StoreStatus.INVALID
+    if not destination.is_absolute() or destination.suffix.lower() != ".zip":
+        return StoreStatus.ROOT_UNAVAILABLE
+    files = {"report.md": report.encode("utf-8")}
+    manifest = _bundle_manifest("metroliza_safe_bug_report_v1", files)
+    stage = None
+    try:
+        if not destination.parent.is_dir() or not _existing_ancestors_safe(destination.parent):
+            return StoreStatus.ROOT_UNAVAILABLE
+        if os.path.lexists(destination):
+            return StoreStatus.DESTINATION_EXISTS
+        stage = _write_stage(destination.parent, _bundle_archive({**files, "manifest.json": manifest}))
+        _commit_stage_no_replace(stage, destination)
+    except FileExistsError:
+        return StoreStatus.DESTINATION_EXISTS
+    except (OSError, ValueError):
+        return StoreStatus.IO_FAILED
+    finally:
+        if stage is not None:
+            # A successful no-replace commit owns the destination from here.
+            # Only the private staging name may be cleaned up.
+            with contextlib.suppress(OSError):
+                stage.unlink(missing_ok=True)
+    return StoreStatus.EXPORTED
 
 
 class IncidentStore:
@@ -838,8 +899,9 @@ class IncidentStore:
             return StoreResult(loaded.status, identifier)
         incident_bytes = encode_incident(loaded.incident)
         summary = self._summary_bytes(loaded.incident)
-        manifest = self._manifest_bytes(incident_bytes, summary)
-        bundle = self._bundle_bytes(incident_bytes, manifest, summary)
+        files = {"incident.json": incident_bytes, "summary.json": summary}
+        manifest = _bundle_manifest("metroliza_safe_incident_v1", files)
+        bundle = _bundle_archive({"incident.json": incident_bytes, "manifest.json": manifest, "summary.json": summary})
         stage: Path | None = None
         published_identity: tuple[int, int] | None = None
         try:
@@ -878,45 +940,6 @@ class IncidentStore:
         return json.dumps(
             payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False
         ).encode("ascii")
-
-    @staticmethod
-    def _manifest_bytes(incident: bytes, summary: bytes) -> bytes:
-        payload = {
-            "schema_version": 1,
-            "bundle_format": "metroliza_safe_incident_v1",
-            "files": [
-                {
-                    "name": "incident.json",
-                    "size_bytes": len(incident),
-                    "sha256": hashlib.sha256(incident).hexdigest(),
-                },
-                {
-                    "name": "summary.json",
-                    "size_bytes": len(summary),
-                    "sha256": hashlib.sha256(summary).hexdigest(),
-                },
-            ],
-        }
-        return json.dumps(
-            payload, ensure_ascii=True, separators=(",", ":"), allow_nan=False
-        ).encode("ascii")
-
-    @staticmethod
-    def _bundle_bytes(incident: bytes, manifest: bytes, summary: bytes) -> bytes:
-        output = io.BytesIO()
-        with zipfile.ZipFile(
-            output, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6
-        ) as bundle:
-            for name, data in (
-                ("incident.json", incident),
-                ("manifest.json", manifest),
-                ("summary.json", summary),
-            ):
-                info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
-                info.external_attr = 0o600 << 16
-                bundle.writestr(info, data)
-        return output.getvalue()
 
     def begin_session(
         self, session_id: uuid.UUID | str, build_git_sha: str = "unknown"

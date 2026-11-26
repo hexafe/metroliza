@@ -15,3 +15,16 @@ Incidents remain only on the local computer unless you export one. **Export sele
 Exported copies remain where you chose to save them and are outside automatic incident retention.
 
 Storage is bounded to 20 reports, 32 MiB in total, and 14 days. Each report is at most 3 MiB. In-memory recording is bounded to 2 MiB, 2,000 events, and 300 seconds; the viewer states when those limits caused history loss.
+
+## Save the current preview
+
+Open **Help > Report a problem…**, choose the affected area and symptom, and read the
+preview. **Save diagnostic ZIP…** writes the preview as `report.md` with a
+`manifest.json` containing its size and SHA-256 checksum. The file picker can be
+cancelled and the ZIP always uses a new filename.
+
+The preview includes the application version, build facts and approved diagnostic
+codes. Paths, report and customer identifiers, passwords, SQL and measurement
+values are excluded. Review the preview and your organization's sharing rules
+before attaching the ZIP to a support request. Keep original input files and raw
+logs private.
