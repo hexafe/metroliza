@@ -1428,8 +1428,8 @@ class ExportDialog(QDialog):
         self._refresh_draft_request_summary()
 
     def _scope_for_query(self, query):
-        if getattr(self, "_typed_report_scope", None) is not None:
-            return "Typed report filter"
+        if (scope := getattr(self, "_typed_report_scope", None)) is not None:
+            return scope.describe()
         if not query or query == DEFAULT_FILTER_QUERY:
             return "all rows"
         if query is getattr(self, "_described_filter_query", None):

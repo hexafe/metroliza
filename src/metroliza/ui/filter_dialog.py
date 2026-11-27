@@ -449,7 +449,8 @@ class FilterDialog(QDialog):
                 self.typed_mode_button.setCheckable(True)
                 self.typed_mode_button.setToolTip(
                     "Use typed fields. Text such as 001 keeps its leading zeros. Available fields: "
-                    "Reference (Ref), Dimension, Axis, Status, Measurement (meas), Date."
+                    "Reference (Ref), Dimension, Axis, Status, Measurement (meas), Date. "
+                    "Available with Whole database, Main plots and local XLSX."
                 )
                 self.typed_preview_button = QPushButton("Preview rows…")
                 self.typed_preview_button.setEnabled(False)

@@ -12,7 +12,7 @@ from metroliza.reports.db import (
     sqlite_readonly_connection_scope,
 )
 from metroliza.reports.report_query_service import build_measurement_filter_query
-from metroliza.shared.filter_state import FilterState, REPORT_FILTER_FIELDS, decode_filter_state
+from metroliza.shared.filter_state import FilterState, REPORT_FILTER_FIELDS, decode_filter_state, summarize_filter_state
 from metroliza.shared.typed_filter import (
     FilterField,
     compile_typed_filter_sqlite,
@@ -55,6 +55,10 @@ class ReportTypedFilterScope:
     def require_current_database(self, database) -> None:
         if Path(database).resolve() != self.database or _database_stamp(self.database) != self.stamp:
             raise ValueError("The report database changed. Preview the typed draft again.")
+
+    def describe(self) -> str:
+        _, details = summarize_filter_state(self.state)
+        return f"Typed filter\n{details}"
 
 
 @dataclass(frozen=True)

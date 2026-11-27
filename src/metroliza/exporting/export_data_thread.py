@@ -4255,6 +4255,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         try:
             connection.execute(statement, typed.query.params)
             typed.require_current_database(self.db_file)
+        except sqlite3.OperationalError as error:
+            if self.export_canceled and getattr(error, "sqlite_errorcode", None) == sqlite3.SQLITE_INTERRUPT:
+                raise OutputPublicationCanceled() from error
+            raise
         finally:
             connection.set_progress_handler(None, 0)
 
@@ -5362,8 +5366,6 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
-            if getattr(self, "_typed_report_scope", None) is not None and self._check_canceled():
-                return
             if type(e) is XlsxWorksheetCapacityError and self._check_canceled():
                 return
             self._observe_export_failure_stage(exception=e)

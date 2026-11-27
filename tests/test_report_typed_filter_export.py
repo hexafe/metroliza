@@ -72,7 +72,9 @@ def test_report_typed_preview_and_real_xlsx_use_one_bound_scope(report_database,
         assert [(row[headings.index("MEASUREMENT_ID")], row[headings.index("REFERENCE")]) for row in rows] == [
             (1, "001")
         ]
-        assert dict(workbook["REPORT SCOPE"].values)["Filters"] == "Typed report filter"
+        filters = [value for label, value in workbook["REPORT SCOPE"].values if label == "Filters"]
+        assert filters[0] == "Typed filter"
+        assert 'Expression: Ref IN ("001")' in filters and "Header: Width" in filters
     finally:
         workbook.close()
     assert report_database.read_bytes() == snapshot
@@ -106,6 +108,20 @@ def test_typed_report_preview_caps_the_ordered_prefix(tmp_path):
     assert [row[0] for row in preview.rows] == [f"{index:02}" for index in range(1, 21)]
 
 
+def test_typed_report_counts_and_samples_in_the_same_read_snapshot(report_database, filter_state, monkeypatch):
+    from metroliza.reports import report_typed_filter
+
+    read_sample = report_typed_filter.read_query_scope_result
+
+    def assert_snapshot_started(*args, connection, **kwargs):
+        assert connection.in_transaction
+        return read_sample(*args, connection=connection, **kwargs)
+
+    monkeypatch.setattr(report_typed_filter, "read_query_scope_result", assert_snapshot_started)
+    scope = prepare_report_typed_filter(report_database, filter_state)
+    assert preview_report_typed_filter(scope).matching_count == 1
+
+
 @pytest.mark.parametrize("failure", ["changed_database", "snapshot"])
 def test_typed_report_snapshot_failure_retains_existing_xlsx(report_database, filter_state, tmp_path, failure,
                                                              monkeypatch):
@@ -121,6 +137,7 @@ def test_typed_report_snapshot_failure_retains_existing_xlsx(report_database, fi
     worker = ExportDataThread(_request(report_database, output, scope))
     if failure == "snapshot":
         def fail_snapshot_index(_table_name):
+            worker.export_canceled = True
             raise sqlite3.OperationalError("Synthetic failure preparing the snapshot index")
 
         monkeypatch.setattr(worker, "_index_export_snapshot", fail_snapshot_index)

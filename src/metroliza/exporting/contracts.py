@@ -132,7 +132,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         approved_source_digests=request.approved_source_digests,
         approved_report_ids=request.approved_report_ids,
         filter_description=(request.filter_description.strip()[:2000]
-                            or ("Typed report filter" if request.typed_report_scope is not None else "")),
+                            or (request.typed_report_scope.describe()[:2000]
+                                if request.typed_report_scope is not None else "")),
         application_version=request.application_version.strip()[:64],
         typed_report_scope=request.typed_report_scope,
     )
