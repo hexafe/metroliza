@@ -30,11 +30,11 @@ def _source_profile(db_path: str):
     )
 
 
-def _statistical_replay(database, *, batch_size=7, segment_fields=tuple(OUTLIER_SEGMENT)):
+def _statistical_replay(database, *, batch_size=7, segment_fields=tuple(OUTLIER_SEGMENT), enabled=True):
     profile = _source_profile(database)
     signal = RealtimeSampleRepository(database).upsert_signal_definition(SignalDefinition(
         source_profile_id=profile.id, signal_key="cycle_time", metric_name="cycle_time_s",
-        unit="s", nominal=100, segment_fields=segment_fields,
+        unit="s", nominal=100, segment_fields=segment_fields, enabled=enabled,
     ))
     request = ReplayRequest(
         input_file=str(FIXTURE_DIR / "single_high_outlier.csv"),
@@ -119,13 +119,62 @@ def test_statistical_replay_uses_configured_segment_fields(tmp_path, segment_fie
     assert {event.context["baseline_id"] for event in AnomalyEventRepository(database).list_events()} == {expected_id}
 
 
+def test_default_replay_preserves_signal_for_next_statistical_replay(tmp_path):
+    database = str(tmp_path / "default-then-statistical.db")
+    request, baseline = _statistical_replay(database, segment_fields=("station",), enabled=False)
+    baselines = BaselineRepository(database)
+    station_baseline_id = baselines.insert_baseline(baseline)
+    baselines.insert_baseline(replace(baseline, segment_key={}, iqr=50, mad=50))
+    source = tmp_path / "spec-only.csv"
+    source.write_text(
+        "event_id,event_time,cycle_time_s,station,part_number\n"
+        "SPEC1,2026-06-13T09:00:00Z,115,S1,PN-100\n",
+        encoding="utf-8",
+    )
+    default_request = ReplayRequest(
+        input_file=str(source),
+        database=database,
+        source_profile_id=request.source_profile_id,
+        signal_key=request.signal_key,
+        metric_column=request.metric_column,
+        event_time_column=request.event_time_column,
+        record_key_column=request.record_key_column,
+        usl=110,
+    )
+    default_summary = replay_industrial_stream(default_request)
+    assert default_summary.samples_inserted == 1 and default_summary.event_counts == {"spec_limits/critical": 1}
+    repository = RealtimeSampleRepository(database)
+    after_default = repository.get_signal_definition(
+        source_profile_id=request.source_profile_id, signal_key=request.signal_key,
+    )
+    spec_event, = AnomalyEventRepository(database).list_events()
+    assert spec_event.expected_value is None
+    assert spec_event.score == 5 and spec_event.threshold["usl"] == 110
+
+    statistical_summary = replay_industrial_stream(request)
+    assert statistical_summary.samples_inserted == 36
+    assert statistical_summary.event_counts == {"iqr/major": 1, "mad_zscore/major": 1}
+    scored = [event for event in AnomalyEventRepository(database).list_events() if event.id != spec_event.id]
+    assert len(scored) == 2 and {event.context["baseline_id"] for event in scored} == {station_baseline_id}
+    after_statistical = repository.get_signal_definition(
+        source_profile_id=request.source_profile_id, signal_key=request.signal_key,
+    )
+    for signal in (after_default, after_statistical):
+        assert (signal.unit, signal.nominal, signal.segment_fields, signal.enabled) == ("s", 100, ("station",), False)
+        assert signal.usl == 110
+    for sample in repository.list_recent_samples(signal_id=baseline.signal_id):
+        expected_segment = {"station": "S1"}
+        if sample.source_record_key == "SPEC1":
+            expected_segment["part_number"] = "PN-100"
+        assert sample.segment_key == expected_segment
+
+
 def test_statistical_replay_reuses_a_legacy_superset_without_rewriting_samples(tmp_path):
     database = str(tmp_path / "legacy-segment.db")
     request, baseline = _statistical_replay(database, segment_fields=("station",))
     samples = RealtimeSampleRepository(database)
     signal = samples.get_signal_definition(source_profile_id=request.source_profile_id, signal_key=request.signal_key)
     assert replay_industrial_stream(replace(request, detectors=("spec_limits",))).samples_inserted == 36
-    samples.upsert_signal_definition(signal)
     before = samples.list_recent_samples(signal_id=signal.id)
     assert len(before) == 36 and all(sample.segment_key == OUTLIER_SEGMENT for sample in before)
     baseline_id = BaselineRepository(database).insert_baseline(baseline)
@@ -164,7 +213,6 @@ def test_statistical_replay_does_not_guess_missing_legacy_or_blank_segment_value
     samples = RealtimeSampleRepository(database)
     signal = samples.get_signal_definition(source_profile_id=request.source_profile_id, signal_key=request.signal_key)
     assert replay_industrial_stream(replace(request, detectors=("spec_limits",))).samples_inserted == 1
-    samples.upsert_signal_definition(signal)
     baselines = BaselineRepository(database)
     baselines.insert_baseline(baseline)
     baselines.insert_baseline(replace(baseline, segment_key={}))

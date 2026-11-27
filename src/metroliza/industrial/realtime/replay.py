@@ -336,10 +336,10 @@ def _replay_ordered_stream(request: ReplayRequest, cursor, *, needs_baselines: b
         source_profile_id=request.source_profile_id,
         signal_key=request.signal_key,
         metric_name=request.metric_column,
-        unit=_signal_attr(statistical_signal, "unit"),
-        nominal=_signal_attr(statistical_signal, "nominal"),
-        segment_fields=_signal_attr(statistical_signal, "segment_fields") or (),
-        enabled=statistical_signal.enabled if statistical_signal is not None else True,
+        unit=_signal_attr(existing_signal, "unit"),
+        nominal=_signal_attr(existing_signal, "nominal"),
+        segment_fields=_signal_attr(existing_signal, "segment_fields") or (),
+        enabled=existing_signal.enabled if existing_signal is not None else True,
         lsl=request.lsl if request.lsl is not None else _signal_attr(existing_signal, "lsl"),
         usl=request.usl if request.usl is not None else _signal_attr(existing_signal, "usl"),
         lower_warning=(
@@ -358,9 +358,11 @@ def _replay_ordered_stream(request: ReplayRequest, cursor, *, needs_baselines: b
     else:
         signal = sample_repository.upsert_signal_definition(signal_candidate)
     assert signal.id is not None
+    # Spec-only replay has historically emitted no nominal expected value.
+    detector_signal = signal if needs_baselines else replace(signal, nominal=None)
     batch_size = request.batch_size
     detector_session = _ReplayDetectorSession(
-        signal=signal,
+        signal=detector_signal,
         detectors=request.detectors,
         now=request.now,
         baseline_lookup=baseline_lookup,
