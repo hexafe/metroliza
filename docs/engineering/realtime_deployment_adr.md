@@ -19,6 +19,12 @@ Reconsider a separate worker process or service when a supported unattended use 
 independent uptime or measurements show the desktop cannot meet its responsiveness or
 resource budget. Keep the existing local event log and consumer checkpoint boundary.
 
+| Deployment | Benefit and cost for the MVP |
+| --- | --- |
+| Desktop process with a background worker | Reuses the operator session, source approvals and local SQLite ownership. Monitoring stops with the desktop. |
+| Local worker process | Isolates worker failures from the GUI. Requires supervision, an IPC protocol and explicit ownership of worker and database shutdown. |
+| Independently managed service | Enables unattended acquisition and independent restart. Requires a service identity, deployment and monitoring, durable handoff and a reviewed authentication boundary. |
+
 Defer Isolation Forest deployment. The optional experiment below trains and scores in
 memory. The production detector registry remains limited to supported deterministic detectors,
 and loading legacy pickle-backed model artifacts stays disabled. Reconsider ML after a
@@ -45,15 +51,21 @@ must have an alert from the configured specification rule.
 | --- | --- |
 | Sample identity and time | Source profile, signal and source record key identify a sample. Event time is the process timestamp normalized to UTC. Ingest time records observation by Metroliza. A source timestamp without an offset uses the source's configured timezone. |
 | Live ordering and late data | Poll with the saved source cursor and its record-key tie-breaker when configured. Accept a timestamp on the saved watermark-minus-lateness boundary. Count and skip older values while advancing past consumed source rows. Score each admitted batch by event time and stored sample ID. Previously stored alerts stay immutable when a late row arrives. |
-| Ordered replay | Consume CSV records in chronological order. Reject decreasing event times before writing. For equal timestamps preserve CSV order. Repeating against the same destination deduplicates samples and detector events. Use a fresh destination when evaluating a different configuration. |
-| State and warm-up | Score a point before updating detector state. Rolling z-score needs 30 valid earlier values and retains up to 500 per signal and segment. With no variance it skips scoring. IQR and MAD require enough observations and usable statistics in a stored baseline for the exact signal and segment. Ordered replay uses the baselines available at run start. |
+| Ordered replay | Reject decreasing event times before writing. Within a batch, dry run breaks ties by source record key and persisted replay breaks ties by stored sample ID. Stateful results at tied times can differ with mode or batch size. Keep a fixed batch size and use distinct UTC timestamps when comparing the reference modes. Repeating against the same destination deduplicates samples and detector events. Use a fresh destination when evaluating a different configuration. |
+| State and warm-up | Score a point before updating detector state. Rolling z-score needs 30 valid earlier values, retains up to 500 and skips scoring with zero variance. Live consumption keeps histories by signal and segment. Ordered CSV replay currently keeps one rolling history per detector for the replayed signal. Compare rolling output on single-segment fixtures until replay isolates segment histories. IQR and MAD use stored statistics for the exact signal and segment from the baselines available at replay start. |
 | Missing values and reset | Skip missing values according to the input contract and keep counters or warnings for skipped live rows. A fresh replay starts with empty rolling history. Live restart resumes the durable source and consumer checkpoints, and rolling detection reconstructs its history from persisted samples. The stream validity and offset rules apply during a deliberate reset or reseed. |
 | Alert evidence | Retain sample and signal identity, detector identity, observed value, threshold, severity and explanation. Stored IQR and MAD replay adds baseline identity, version and available bounds. A reproducible live alert also needs the exact effective configuration revision and applicable rolling-window or baseline identity. Current consumer retries can read newer signal settings or baselines. Pin that evidence before treating replay as a reconstruction of historical live alerts. |
 
+| Input mode | Ordering, recovery and tradeoff |
+| --- | --- |
+| Ordered CSV replay | A repeatable local fixture and a bounded batch size support detector comparisons. The file is already ordered and acquisition lateness is outside this path. |
+| Cyclic read-only polling | Reuses source queries and a durable cursor. Freshness is limited by the poll interval. Late arrivals need a saved watermark and explicit admission policy. |
+| Push or streaming updates | Could improve freshness. The producer and consumer would need stable event IDs, durable offsets and a convention for duplicate and reordered delivery. Defer this input mode until a source requires it and replay can verify its restart behavior. |
+
 The [SQLite event-stream design](../roadmaps/sqlite_realtime_event_stream.md) describes
-at-least-once handling and idempotence. Live cyclic polling and ordered CSV replay share
-scoring rules. Live admission and window contents can differ when rows arrive late or a
-baseline changes. The [branch audit](../project/branch_audit.md#featurerealtime-industrial-ml-anomaly-historical)
+at-least-once handling and idempotence. Pin the effective configuration and baseline,
+define a tie-break shared by stored and dry-run replay, and bound isolated segment histories
+before using replay to reproduce historical live alerts. The [branch audit](../project/branch_audit.md#featurerealtime-industrial-ml-anomaly-historical)
 records the integrated historical source and preserves operator monitoring under #941.
 
 ## Synthetic comparison
