@@ -36,7 +36,6 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
 )
 
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
-_ALIAS_SCOPE_MATCH = "alias_name = ? AND scope_type = ? AND (scope_type = 'global' OR scope_value IS ?)"
 
 
 class CharacteristicAliasImportValidationError(ValueError):
@@ -351,8 +350,13 @@ def conflicting_alias_targets(alias_name, names) -> bool:
 
 def _stored_scope_rows(cursor, key):
     return tuple(cursor.execute(
-        f"SELECT id, alias_name, canonical_name, scope_type, scope_value FROM CHARACTERISTIC_ALIASES "
-        f"WHERE {_ALIAS_SCOPE_MATCH} ORDER BY id", key,
+        """
+        SELECT id, alias_name, canonical_name, scope_type, scope_value
+        FROM CHARACTERISTIC_ALIASES
+        WHERE alias_name = ? AND scope_type = ? AND (scope_type = 'global' OR scope_value IS ?)
+        ORDER BY id
+        """,
+        key,
     ).fetchall())
 
 

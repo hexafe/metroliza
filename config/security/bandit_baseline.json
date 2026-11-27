@@ -652,11 +652,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "acc5c78598a0f2a25bf7b65bceb0db78d8ed3bfad11dfba1bd4427c45b80e86a",
+      "fingerprint": "6f2a5f7eb4e96ecfc2e40f6727bc28664a926d14063b9e2547cea687aaf41a81",
       "test_id": "B608",
       "path": "src/metroliza/reports/characteristic_alias_service.py",
       "owner": "Security review",
-      "rationale": "resolve_characteristic_aliases_bulk: alias_name_placeholders is a ? list; scope_where is either fixed scope_type = global or a fixed global/reference predicate with a ? list from reference count. Actual alias names and references are supplied as tuple(params), not interpolated.",
+      "rationale": "_resolve_normalized_aliases: alias_name_placeholders contains one ? per alias. scope_where uses the fixed global predicate or its fixed reference variant with one ? per reference. The query receives alias names and reference values separately as bound parameters.",
       "expires_on": "2027-04-30"
     },
     {
