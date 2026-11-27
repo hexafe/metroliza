@@ -65,7 +65,7 @@ def test_report_typed_preview_and_real_xlsx_use_one_bound_scope(report_database,
         assert [row[:3] for row in connection.execute(legacy)] == [(1, 1, "001"), (2, 2, "1")]
 
     output = tmp_path / "typed-export.xlsx"
-    ExportDataThread(_request(report_database, output, scope)).run()
+    ExportDataThread(replace(_request(report_database, output, scope), filter_description="Wrong description")).run()
     workbook = load_workbook(output, read_only=True)
     try:
         headings, *rows = workbook["MEASUREMENTS"].values
@@ -169,6 +169,48 @@ def test_typed_report_contract_rejects_conflicting_or_unsupported_paths(report_d
     ):
         with pytest.raises(ValueError, match="Main plots"):
             ExportDataThread(unsupported)
+
+
+def test_typed_snapshot_interrupt_cancels_without_replacing_workbook(
+    report_database, filter_state, tmp_path, monkeypatch,
+):
+    from contextlib import contextmanager
+
+    from metroliza.reports import db
+
+    scope = prepare_report_typed_filter(report_database, filter_state)
+    output = tmp_path / "previous.xlsx"
+    output.write_bytes(b"previous workbook bytes")
+    worker = ExportDataThread(_request(report_database, output, scope))
+    error_codes, failures, cancelled = [], [], []
+
+    class InterruptProbe(sqlite3.Connection):
+        def set_progress_handler(self, handler, operations):
+            if handler is not None:
+                worker.export_canceled = True
+                operations = 1
+            return super().set_progress_handler(handler, operations)
+
+        def execute(self, *args, **kwargs):
+            try:
+                return super().execute(*args, **kwargs)
+            except sqlite3.OperationalError as error:
+                error_codes.append(error.sqlite_errorcode)
+                raise
+
+    @contextmanager
+    def read_only_scope(_database, **_options):
+        uri = report_database.resolve().as_uri() + "?mode=ro"
+        with closing(sqlite3.connect(uri, uri=True, factory=InterruptProbe)) as connection:
+            yield connection
+
+    monkeypatch.setattr(db, "sqlite_readonly_connection_scope", read_only_scope)
+    worker.error_occurred.connect(failures.append)
+    worker.canceled.connect(lambda: cancelled.append(True))
+    worker.run()
+    assert error_codes == [sqlite3.SQLITE_INTERRUPT]
+    assert cancelled == [True] and failures == []
+    assert output.read_bytes() == b"previous workbook bytes"
 
 
 def test_normal_export_dialog_applies_the_previewed_scope(report_database, tmp_path, monkeypatch):
