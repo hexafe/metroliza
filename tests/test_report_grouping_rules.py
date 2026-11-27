@@ -1,5 +1,6 @@
 from contextlib import closing
 from dataclasses import replace
+from html import escape
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ from PyQt6.QtWidgets import QFileDialog, QPushButton
 import pytest
 
 from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+from metroliza.exporting import export_data_thread
 from metroliza.exporting.export_data_thread import ExportDataThread
 from metroliza.reports import report_grouping_rules as rules
 from metroliza.reports.db import sqlite_file_identity
@@ -56,6 +58,29 @@ def test_preset_round_trip_retains_order_ids_text_and_style():
     assert rules.load_grouping_preset(raw) == original
     assert json.loads(raw)["groups"][0]["filter"]["expression"]["values"] == ["001"]
     assert {item["id"] for item in json.loads(raw)["groups"]} == {item.group_id for item in original.rules}
+
+
+def test_rule_group_rename_keeps_identity_and_exact_request_binding(database, selection, tmp_path):
+    source = rules.ReportGroupingSource.capture(database, selection)
+    first = _rule(1, "Original label", 'Reference = "001"')
+    original = rules.ReportGroupingPreset("Suppliers", (first,))
+    renamed = replace(original, rules=(replace(first, label="New label", color="#aAbBcC"),))
+    reopened = rules.load_grouping_preset(rules.dump_grouping_preset(renamed))
+    before = rules.preview_grouping_preset(original, source)
+    after = rules.preview_grouping_preset(reopened, source)
+    previous, previous_population = before.source.group_descriptors
+    current, population = after.source.group_descriptors
+    assert previous.group_id == current.group_id == first.group_id
+    assert (current.label, current.color, current.role) == ("New label", "#aAbBcC", "rule")
+    assert population == previous_population
+    assert (population.group_id, population.label, population.role) == ("population", "POPULATION", "population")
+    assert after.source.assignments is after.assignments
+    request = ExportRequest(
+        AppPaths(str(database), str(tmp_path / "rename.xlsx")), ExportOptions(),
+        filter_query=selection, grouping_df=before.assignments, grouping_rule_source=after.source,
+    )
+    with pytest.raises(ValueError, match="differ from the preview"):
+        ExportDataThread(request)
 
 
 @pytest.mark.parametrize("damage", ["future", "field", "type", "drift", "id", "name", "color", "extra"])
@@ -249,6 +274,92 @@ def test_report_grouping_rules_save_reopen_and_export_real_outputs(database, sel
             export._build_export_request()
     finally:
         export.close()
+
+
+@pytest.mark.parametrize("level", ["light", "standard"])
+def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, tmp_path, monkeypatch):
+    database = tmp_path / "one-reference.sqlite"
+    ensure_report_schema(str(database))
+    repository = ReportRepository(str(database))
+    for number, sample in enumerate(("001", "1", "other") * 3, start=1):
+        _persist_report(repository, tmp_path, number=number, reference="001", sample_number=sample,
+                        header="Width", meas=9.9 + number / 100)
+
+    preset = rules.ReportGroupingPreset("Samples", (
+        replace(_rule(1, "Zulu Plotly chart <sample>", 'Sample = "001"'), color="#AaBbCc"),
+        _rule(2, "Alpha", 'Sample = "1"'),
+    ))
+    restored = rules.load_grouping_preset(rules.dump_grouping_preset(preset))
+    preview = rules.preview_grouping_preset(restored, rules.ReportGroupingSource.capture(database, None))
+    descriptors = preview.source.group_descriptors
+    expected_labels = [descriptor.label for descriptor in descriptors]
+    assert expected_labels == ["Zulu Plotly chart <sample>", "Alpha", "POPULATION"]
+    assert tuple(descriptor.role for descriptor in descriptors) == ("rule", "rule", "population")
+
+    output = tmp_path / f"analysis-{level}.xlsx"
+    worker = ExportDataThread(ExportRequest(
+        AppPaths(str(database), str(output)),
+        ExportOptions(group_analysis_level=level, generate_html_dashboard=True, chart_worker_count=1),
+        grouping_df=preview.assignments, grouping_rule_source=preview.source,
+    ))
+    original_analysis = export_data_thread.build_group_analysis_payload
+    built = []
+    plot_audiences = []
+    original_plots = worker._build_group_analysis_plot_assets
+
+    def observe_analysis(*args, **kwargs):
+        payload = original_analysis(*args, **kwargs)
+        built.append(payload)
+        return payload
+
+    def observe_plots(*args, audience, **kwargs):
+        plot_audiences.append(audience)
+        return original_plots(*args, audience=audience, **kwargs)
+
+    monkeypatch.setattr(export_data_thread, "build_group_analysis_payload", observe_analysis)
+    monkeypatch.setattr(worker, "_build_group_analysis_plot_assets", observe_plots)
+    failures = []
+    worker.error_occurred.connect(failures.append)
+    worker.run()
+    assert failures == []
+    payload, = built
+    assert payload["group_descriptors"] is descriptors
+    assert plot_audiences == ["dashboard"]
+    metric, = payload["metric_rows"]
+    assert [(row["group"], row["group_id"], row["n"]) for row in metric["descriptive_stats"]] == [
+        (descriptor.label, descriptor.group_id, 3) for descriptor in descriptors
+    ]
+
+    workbook = load_workbook(output, read_only=True)
+    try:
+        assert "Group Analysis Plots" not in workbook.sheetnames
+        rows = list(workbook["Group Analysis"].values)
+        definitions_row = next(index for index, row in enumerate(rows) if row[0] == "Group definitions")
+        description_row = next(index for index, row in enumerate(rows) if row[0] == "Descriptive stats")
+        assert [tuple(row[column] for column in (0, 5, 10, 13))
+                for row in rows[definitions_row + 2:definitions_row + 5]] == [
+            (descriptor.label, descriptor.group_id, descriptor.role, descriptor.color) for descriptor in descriptors
+        ]
+        assert [row[0] for row in rows[description_row + 2:description_row + 5]] == expected_labels
+        assert not any("Open plots sheet" in row for row in rows)
+        if level == "standard":
+            assert any("Plots are in the companion HTML dashboard." in str(cell) for row in rows for cell in row)
+    finally:
+        workbook.close()
+
+    html = Path(worker.html_dashboard_file).read_text(encoding="utf-8")
+    definitions = html.split("<h4>Group definitions</h4>", 1)[1].split("</table>", 1)[0]
+    descriptions = html.split('<div class="subsection-title">Descriptive stats</div>', 1)[1].split("</table>", 1)[0]
+    ordered = []
+    for descriptor in descriptors:
+        row = (
+            f"<tr><td>{escape(descriptor.label)}</td><td>{descriptor.group_id}</td>"
+            f"<td>{descriptor.role}</td><td>{descriptor.color or ''}</td></tr>"
+        )
+        ordered.append(definitions.index(row))
+    assert ordered == sorted(ordered)
+    positions = [descriptions.index(f"<tr><td>{escape(label)}</td>") for label in expected_labels]
+    assert positions == sorted(positions)
 
 
 @pytest.mark.parametrize("change", ["report", "same_stat", "view"])

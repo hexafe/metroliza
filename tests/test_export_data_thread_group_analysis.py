@@ -1031,6 +1031,7 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Group Analysis', html_text)
             self.assertIn('FEATURE_1', html_text)
             self.assertIn('Descriptive stats', html_text)
+            self.assertNotIn('Group definitions', html_text)
             self.assertIn('Pairwise comparisons', html_text)
             self.assertIn('plotly-chart', html_text)
             self.assertIn('data-plotly-spec-dark=', html_text)

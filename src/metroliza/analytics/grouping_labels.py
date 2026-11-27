@@ -2,10 +2,30 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Any, Iterable, Literal
 
 
 DEFAULT_GROUP_LABEL = "POPULATION"
+POPULATION_GROUP_ID = "population"
+
+
+@dataclass(frozen=True, slots=True)
+class GroupDescriptor:
+    """Stable group identity and presentation, with order given by the containing tuple."""
+
+    group_id: str
+    label: str
+    color: str | None
+    role: Literal["rule", "population"]
+
+
+def group_definition_rows(groups: tuple[GroupDescriptor, ...]) -> list[dict[str, str | None]]:
+    """Project the ordered definitions to one presentation shape."""
+    return [
+        {"Group": group.label, "Group ID": group.group_id, "Role": group.role, "Color": group.color}
+        for group in groups
+    ]
 
 
 def normalize_default_group_label(value: Any, *, fallback: str = DEFAULT_GROUP_LABEL) -> str:

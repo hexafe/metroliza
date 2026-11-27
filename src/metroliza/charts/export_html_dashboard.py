@@ -21,6 +21,7 @@ from unicodedata import normalize
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
+from metroliza.analytics.grouping_labels import group_definition_rows
 from metroliza.charts.dashboard_navigation import (
     render_back_to_section,
     render_back_to_dashboard_start,
@@ -2680,6 +2681,11 @@ def _normalize_group_analysis_manifest(
     if not isinstance(payload, dict):
         return None
 
+    descriptors = payload.get("group_descriptors")
+    group_definitions = (
+        {"group_definitions": _normalize_rows_table(group_definition_rows(descriptors))}
+        if descriptors else {}
+    )
     diagnostics = payload.get("diagnostics") if isinstance(payload.get("diagnostics"), dict) else {}
     warning_summary = diagnostics.get("warning_summary") if isinstance(diagnostics.get("warning_summary"), dict) else {}
     histogram_skip_summary = (
@@ -2817,7 +2823,7 @@ def _normalize_group_analysis_manifest(
                         "capability_ci",
                         "lower_ci",
                         "upper_ci",
-                    ],
+                    ] + (["group_id"] if descriptors else []),
                 ),
                 "pairwise_rows": _normalize_rows_table(
                     raw_metric.get("pairwise_rows"),
@@ -2842,6 +2848,7 @@ def _normalize_group_analysis_manifest(
 
     reason_counts = histogram_skip_summary.get("reason_counts") if isinstance(histogram_skip_summary.get("reason_counts"), dict) else {}
     return {
+        **group_definitions,
         "status": str(payload.get("status") or ""),
         "analysis_level": _humanize_field_label(str(payload.get("analysis_level") or "")).lower(),
         "effective_scope": str(payload.get("effective_scope") or "").replace("_", " "),
@@ -4796,6 +4803,11 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     pill_markup = "".join(f'<span class="pill">{html.escape(item)}</span>' for item in pills)
 
     summary_table = _render_summary_table(group_analysis.get("summary_rows") or [])
+    definitions = group_analysis.get("group_definitions")
+    definition_panel = _render_detail_panel(
+        "Group definitions",
+        _render_data_table(definitions, literal_columns=("Group", "Group ID", "Role", "Color")),
+    ) if definitions else ""
     warning_messages = _render_text_list([str(item) for item in (group_analysis.get("warning_messages") or []) if str(item).strip()])
 
     histogram_skip = group_analysis.get("histogram_skip_summary") if isinstance(group_analysis.get("histogram_skip_summary"), dict) else {}
@@ -4822,7 +4834,9 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
             ]
         )
 
-    metrics_markup = "".join(_render_group_analysis_metric(metric) for metric in metrics)
+    metrics_markup = "".join(
+        _render_group_analysis_metric(metric, literal_group_labels=bool(definitions)) for metric in metrics
+    )
     details_row = ""
     if warning_messages or histogram_block:
         panels = []
@@ -4840,6 +4854,7 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
         f'<div class="pill-row">{pill_markup}</div></div>'
         f'{skip_message}'
         f'{summary_table}'
+        f'{definition_panel}'
         f'{details_row}'
         f'{metric_nav}'
         f'<div class="metric-stack">{metrics_markup}</div>'
@@ -4847,7 +4862,7 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     )
 
 
-def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
+def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_labels=False) -> str:
     summary_rows = metric.get("summary_rows") or []
     takeaways = metric.get("takeaways") or []
     descriptive_stats = metric.get("descriptive_stats") or {}
@@ -4874,16 +4889,23 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     )
 
     raw_table_sections = []
+    group_columns = ("group", "group_a", "group_b", "Group A", "Group B") if literal_group_labels else ()
     if descriptive_stats.get("rows"):
-        raw_table_sections.append('<div class="subsection-title">Descriptive stats</div>' + _render_data_table(descriptive_stats))
+        raw_table_sections.append(
+            '<div class="subsection-title">Descriptive stats</div>'
+            + _render_data_table(descriptive_stats, literal_columns=group_columns)
+        )
     if pairwise_rows.get("rows"):
-        raw_table_sections.append('<div class="subsection-title">Pairwise comparisons</div>' + _render_data_table(pairwise_rows))
+        raw_table_sections.append(
+            '<div class="subsection-title">Pairwise comparisons</div>'
+            + _render_data_table(pairwise_rows, literal_columns=group_columns)
+        )
     if distribution_difference:
         raw_table_sections.append('<div class="subsection-title">Distribution difference</div>' + _render_summary_table(distribution_difference))
     if distribution_pairwise_rows.get("rows"):
         raw_table_sections.append(
             '<div class="subsection-title">Distribution pairwise comparison</div>'
-            + _render_data_table(distribution_pairwise_rows)
+            + _render_data_table(distribution_pairwise_rows, literal_columns=group_columns)
         )
 
     plot_markup = ""
@@ -4912,7 +4934,7 @@ def _render_group_analysis_metric(metric: dict[str, Any]) -> str:
     )
 
 
-def _render_data_table(table_meta: dict[str, Any]) -> str:
+def _render_data_table(table_meta: dict[str, Any], *, literal_columns: tuple[str, ...] = ()) -> str:
     columns = table_meta.get("columns") or []
     rows = table_meta.get("rows") or []
     if not columns or not rows:
@@ -4921,9 +4943,14 @@ def _render_data_table(table_meta: dict[str, Any]) -> str:
         f"<th>{html.escape(clean_dashboard_copy(column.get('label') or ''))}</th>"
         for column in columns
     )
+
+    def display_cell(row, key):
+        value = row.get(key) or ''
+        return html.escape(str(value) if key in literal_columns else clean_dashboard_copy(value))
+
     row_markup = "".join(
         "<tr>" + "".join(
-            f"<td>{html.escape(clean_dashboard_copy(row.get(column.get('key')) or ''))}</td>"
+            f"<td>{display_cell(row, column.get('key'))}</td>"
             for column in columns
         ) + "</tr>"
         for row in rows

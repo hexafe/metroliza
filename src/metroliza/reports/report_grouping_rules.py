@@ -10,7 +10,7 @@ import sqlite3
 from time import monotonic
 from unicodedata import normalize
 
-from metroliza.analytics.grouping_labels import DEFAULT_GROUP_LABEL
+from metroliza.analytics.grouping_labels import DEFAULT_GROUP_LABEL, POPULATION_GROUP_ID, GroupDescriptor
 from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.reports.report_query_service import build_grouping_query, build_measurement_export_query
 from metroliza.reports.report_typed_filter import (
@@ -174,7 +174,8 @@ class ReportGroupingSource:
     filter_query: str | None = field(repr=False)
     stamp: tuple = field(repr=False)
     projection_digest: bytes | None = field(default=None, repr=False)
-    report_ids: tuple[int, ...] = field(default=(), repr=False)
+    assignments: GroupingAssignments = field(default=(), repr=False)
+    group_descriptors: tuple[GroupDescriptor, ...] = field(default=(), repr=False)
 
     @classmethod
     def capture(cls, database, filter_query):
@@ -309,7 +310,12 @@ def preview_grouping_preset(preset: ReportGroupingPreset, source: ReportGrouping
         if rules else GroupingAssignment(report_id=report_id, group=DEFAULT_GROUP_LABEL)
         for report_id, rules in matches.items()
     ) if not overlaps else ()
-    verified_source = replace(source, projection_digest=_projection_digest(rows), report_ids=tuple(matches))
+    descriptors = tuple(GroupDescriptor(rule.group_id, rule.label, rule.color, "rule") for rule in preset.rules)
+    if unassigned:
+        descriptors += (GroupDescriptor(POPULATION_GROUP_ID, DEFAULT_GROUP_LABEL, None, "population"),)
+    verified_source = replace(
+        source, projection_digest=_projection_digest(rows), assignments=assignments, group_descriptors=descriptors,
+    )
     return ReportGroupingPreview(
         verified_source, tuple(counts), len(overlaps), len(unassigned),
         overlaps[:PREVIEW_SAMPLE_ROWS], unassigned[:PREVIEW_SAMPLE_ROWS], assignments,

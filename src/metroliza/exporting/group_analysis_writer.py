@@ -10,6 +10,7 @@ from metroliza.exporting.export_summary_composition_service import (
     classify_capability_value as _classify_capability_value,
 )
 from metroliza.analytics.group_analysis_service import get_spec_status_label
+from metroliza.analytics.grouping_labels import group_definition_rows
 from metroliza.shared.docs_links import github_blob_url
 
 SECTION_GAP = 1
@@ -1226,7 +1227,7 @@ def _build_compact_priority_metrics_summary(metric_rows, *, limit=2):
     return '; '.join(candidates) if candidates else 'No immediate priorities'
 
 
-def _build_watch_summary(payload, metric_rows):
+def _build_watch_summary(payload, metric_rows, *, plots_in_companion_dashboard=False):
     diagnostics = payload.get('diagnostics') or {}
     warning_parts = []
     warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
@@ -1239,7 +1240,9 @@ def _build_watch_summary(payload, metric_rows):
     if plot_summary:
         warning_parts.append(plot_summary.replace(' omitted for ', ' omitted: '))
     if str(payload.get('analysis_level') or 'light').strip().lower() == 'standard' and metric_rows:
-        warning_parts.append('plots on separate sheet')
+        warning_parts.append(
+            'plots in companion HTML dashboard' if plots_in_companion_dashboard else 'plots on separate sheet'
+        )
     skip_reason = payload.get('skip_reason')
     if skip_reason:
         warning_parts.append(str(skip_reason.get('message') or '').strip())
@@ -1381,18 +1384,21 @@ def _apply_group_analysis_print_layout(worksheet, *, title, last_row, repeat_to_
         target.set_footer(f'&L{title}&RPage &P of &N')
 
 
-def _write_top_guidance_row(worksheet, row, payload, metric_rows):
+def _write_top_guidance_row(worksheet, row, payload, metric_rows, *, plots_in_companion_dashboard=False):
     formats = _build_formats(worksheet)
     normalized_level = str(payload.get('analysis_level') or 'light').strip().lower()
     guidance = 'Tip: use the +/- outline controls on the left to expand metric details.'
     if metric_rows:
         guidance = f'{guidance} Low-priority no-difference metrics start collapsed.'
     if normalized_level == 'standard':
-        guidance = f'{guidance} Plots are on the Group Analysis Plots sheet.'
+        plot_location = (
+            'in the companion HTML dashboard' if plots_in_companion_dashboard else 'on the Group Analysis Plots sheet'
+        )
+        guidance = f'{guidance} Plots are {plot_location}.'
 
     _merge_row(worksheet, row, 0, 2, 'Tip', formats.get('detail_label_fmt'))
     _merge_row(worksheet, row, 3, 11, guidance, formats.get('detail_note_fmt'))
-    if normalized_level == 'standard':
+    if normalized_level == 'standard' and not plots_in_companion_dashboard:
         if hasattr(worksheet, 'write_url'):
             worksheet.write_url(
                 row,
@@ -1422,7 +1428,7 @@ def _write_top_guidance_row(worksheet, row, payload, metric_rows):
     return row + 1
 
 
-def _write_dashboard_row(worksheet, row, payload, metric_rows):
+def _write_dashboard_row(worksheet, row, payload, metric_rows, *, plots_in_companion_dashboard=False):
     formats = _build_formats(worksheet)
     diagnostics = payload.get('diagnostics') or {}
     analysis_level = _format_analysis_level_label(payload.get('analysis_level'))
@@ -1440,7 +1446,9 @@ def _write_dashboard_row(worksheet, row, payload, metric_rows):
     if coverage_parts:
         coverage_text = ' across '.join(coverage_parts)
     metric_count = len(metric_rows)
-    watch_summary = _build_watch_summary(payload, metric_rows)
+    watch_summary = _build_watch_summary(
+        payload, metric_rows, plots_in_companion_dashboard=plots_in_companion_dashboard,
+    )
     top_focus = _truncate_text(_build_compact_priority_metrics_summary(metric_rows, limit=2), max_chars=88)
     warning_count = int((diagnostics.get('warning_summary') or {}).get('count') or 0)
 
@@ -2021,7 +2029,20 @@ def write_group_analysis_plots_sheet(worksheet, payload, *, plot_assets=None):
     _apply_group_analysis_print_layout(worksheet, title='Group Analysis Plots', last_row=row, repeat_to_row=1)
 
 
-def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
+def _write_group_definitions(worksheet, row, descriptors, formats):
+    row = _write_section_title(worksheet, row, 'Group definitions', cell_format=formats.get('section_fmt'))
+    columns = (('Group', 0, 4), ('Group ID', 5, 9), ('Role', 10, 12), ('Color', 13, 14))
+    for title, first, last in columns:
+        _merge_row(worksheet, row, first, last, title, formats.get('header_fmt'))
+    row += 1
+    for entry in group_definition_rows(descriptors):
+        for title, first, last in columns:
+            _merge_row(worksheet, row, first, last, entry[title] or '', formats.get('detail_value_fmt'))
+        row += 1
+    return row + SECTION_GAP
+
+
+def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None, plots_in_companion_dashboard=False):
     """Write the canonical user-facing Group Analysis worksheet."""
     sheet_state = {
         'title_rows': [],
@@ -2043,14 +2064,22 @@ def write_group_analysis_sheet(worksheet, payload, *, plot_assets=None):
         metric_row['analysis_level'] = normalized_level
     metric_rows = _sorted_metric_rows(metric_rows)
 
-    row = _write_dashboard_row(worksheet, row, payload, metric_rows)
-    row = _write_top_guidance_row(worksheet, row, payload, metric_rows)
+    row = _write_dashboard_row(
+        worksheet, row, payload, metric_rows, plots_in_companion_dashboard=plots_in_companion_dashboard,
+    )
+    row = _write_top_guidance_row(
+        worksheet, row, payload, metric_rows, plots_in_companion_dashboard=plots_in_companion_dashboard,
+    )
     repeat_to_row = row - 1
     if metric_rows:
         row, _index_bounds = _write_metric_index(worksheet, row, metric_rows, sheet_state=sheet_state)
         repeat_to_row = _index_bounds['header_row']
     else:
         row += SECTION_GAP
+
+    descriptors = payload.get('group_descriptors')
+    if descriptors:
+        row = _write_group_definitions(worksheet, row, descriptors, formats)
 
     for metric_row in metric_rows:
         metric_with_level = dict(metric_row)

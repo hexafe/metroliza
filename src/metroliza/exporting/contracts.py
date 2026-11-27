@@ -162,10 +162,10 @@ def _validate_grouping_rule_source(request, paths, options, assignments):
     from metroliza.reports.report_grouping_rules import MAX_REPORTS, ReportGroupingSource
 
     source = request.grouping_rule_source
-    if (type(source) is not ReportGroupingSource or not source.projection_digest
+    if (type(source) is not ReportGroupingSource or not source.projection_digest or not source.group_descriptors
             or not assignments or len(assignments) > MAX_REPORTS):
         raise ValueError("The grouping rule preview is missing or invalid. Preview the rules again.")
-    if tuple(item.report_id for item in assignments) != source.report_ids:
+    if assignments != source.assignments:
         raise ValueError("Grouping assignments differ from the preview. Preview the rules again.")
     if (request.existing_database_identity is not None or request.typed_report_scope is not None
             or options.export_target not in {"excel_xlsx", "html_dashboard"} or options.include_industrial_context):

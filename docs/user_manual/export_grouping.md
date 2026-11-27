@@ -43,6 +43,12 @@ filters or simplify the rules if the preview exceeds its work budget. The Report
 measurement filter and industrial context are separate modes. Use the other **Grouping**
 controls to assign reports manually.
 
+For rule grouping, **Group Analysis** lists each group's ID, label, role and color.
+The workbook and HTML use the preset order for those definitions and descriptive stats.
+If you assigned unmatched reports to **POPULATION**, its definition appears last.
+For a paired XLSX and HTML export, the workbook has the analysis tables and the HTML
+has the analysis plots.
+
 ## Understanding the four panes
 
 The dialog is built around four main panes.

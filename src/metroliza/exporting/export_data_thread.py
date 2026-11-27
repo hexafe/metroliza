@@ -6147,7 +6147,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             logger.warning('Unknown group analysis level %r; skipping Group Analysis output.', mode)
             return
 
-        dashboard_only_group_analysis = self.generate_html_dashboard and self.export_target != 'html_dashboard'
+        rule_source = getattr(self, '_grouping_rule_source', None)
+        group_descriptors = rule_source.group_descriptors if rule_source is not None else ()
+        companion_dashboard = self.generate_html_dashboard and self.export_target != 'html_dashboard'
+        dashboard_only_group_analysis = companion_dashboard and not group_descriptors
+        workbook_tables_only = companion_dashboard and bool(group_descriptors)
         backend = self._active_backend or self.get_export_backend()
         workbook = None if dashboard_only_group_analysis else backend.get_workbook(excel_writer)
         used_sheet_names = set() if dashboard_only_group_analysis else backend.list_sheet_names(excel_writer)
@@ -6227,6 +6231,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 progress_callback=emit_group_analysis_progress,
                 should_cancel=self._check_canceled,
                 include_chart_payloads=(mode == 'standard'),
+                **({'group_descriptors': group_descriptors} if group_descriptors else {}),
             )
         except group_analysis_cancelled:
             self._check_canceled()
@@ -6277,22 +6282,28 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         readiness = payload.get('readiness') or {}
         skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
         skip_code = str(skip_reason.get('code') or '')
-        if skip_code in {
+        if not group_descriptors and skip_code in {
             'forced_single_reference_scope_mismatch',
             'forced_multi_reference_scope_mismatch',
         }:
             short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
-            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode, audience='worksheet')
+            plot_assets = (
+                None if workbook_tables_only
+                else self._build_group_analysis_plot_assets(payload, mode=mode, audience='worksheet')
+            )
             if self.generate_html_dashboard:
                 self._html_group_analysis_plot_assets = self._build_group_analysis_plot_assets(
                     payload,
                     mode=mode,
                     audience='dashboard',
                 )
-            _export_module.write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
-            if mode == 'standard':
+            _export_module.write_group_analysis_sheet(
+                group_worksheet, payload, plot_assets=plot_assets,
+                **({'plots_in_companion_dashboard': True} if workbook_tables_only else {}),
+            )
+            if mode == 'standard' and not workbook_tables_only:
                 plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)
                 plots_worksheet = workbook.add_worksheet(plots_sheet_name)
                 self._record_exported_sheet_name(plots_sheet_name)
