@@ -2128,11 +2128,14 @@ def test_tabular_workbook_refuses_oversized_tables_before_opening_output(tmp_pat
     assert list(tmp_path.iterdir()) == [output]
 
 
-def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, monkeypatch):
+@pytest.mark.parametrize("serializer", ["worksheet", "shared strings"])
+def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, monkeypatch, serializer):
     import errno
     import tempfile
 
+    from xlsxwriter import workbook as xlsx_workbook
     from xlsxwriter.exceptions import FileCreateError
+    from xlsxwriter.sharedstrings import SharedStrings
     from xlsxwriter.worksheet import Worksheet
 
     from metroliza.industrial.industrial_analytics_workflow import _export_tabular_workbook_with_temp
@@ -2143,14 +2146,24 @@ def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, m
     scratch.mkdir()
     monkeypatch.setattr(tempfile, "tempdir", str(scratch))
     opened = []
-    handles = []
+    handles, archives = [], []
+    open_zip = xlsx_workbook.ZipFile
 
-    def fail_worksheet_write(worksheet):
+    def remember_archive(*args, **kwargs):
+        archive = open_zip(*args, **kwargs)
+        archives.append(archive)
+        return archive
+
+    def fail_xml_write(writer):
         opened.extend(path for path in scratch.rglob("*") if path.is_file())
-        handles.append(worksheet.fh)
+        handles.append(writer.fh)
         raise OSError(errno.ENOSPC, "synthetic workbook writer exhaustion")
 
-    monkeypatch.setattr(Worksheet, "_write_sheet_data", fail_worksheet_write)
+    monkeypatch.setattr(xlsx_workbook, "ZipFile", remember_archive)
+    if serializer == "worksheet":
+        monkeypatch.setattr(Worksheet, "_write_sheet_data", fail_xml_write)
+    else:
+        monkeypatch.setattr(SharedStrings, "_assemble_xml_file", fail_xml_write)
     with pytest.raises(FileCreateError, match="synthetic workbook writer exhaustion"):
         _export_tabular_workbook_with_temp(
             output_workbook_file=str(output), dataframe=pd.DataFrame({"metric": [1, 2]}),
@@ -2161,6 +2174,7 @@ def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, m
 
     assert opened, "the writer must have allocated its real scratch files before failing"
     assert handles and all(handle.closed for handle in handles)
+    assert archives and all(archive.fp is None for archive in archives)
     assert not list(scratch.iterdir())
     assert output.read_bytes() == b"previous workbook bytes"
     assert {path.name for path in tmp_path.iterdir()} == {"previous.xlsx", "writer-scratch"}
