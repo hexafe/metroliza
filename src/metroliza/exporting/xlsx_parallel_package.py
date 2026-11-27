@@ -197,7 +197,8 @@ def _cleanup_traceback(workbook: Any, error: BaseException) -> None:
     if not isinstance(workbook, Workbook) or xlsxwriter.__version__ != '3.2.9':
         return
     scratch = _real_path(getattr(workbook, '_metroliza_package_scratch', None))
-    target = _real_path(workbook.filename)
+    filename = workbook.filename
+    target = _real_path(getattr(filename, 'name', None) if isinstance(filename, io.IOBase) else filename)
     if scratch is None or target is None or _real_path(workbook.tmpdir) != scratch:
         return
     seen_handles: set[int] = set()
