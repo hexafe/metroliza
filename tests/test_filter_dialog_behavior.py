@@ -268,6 +268,11 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
     presets, unavailable = ReportFilterPresets(store.path).load_typed()
     assert presets == [] and len(unavailable) == 1
     assert expected in unavailable[0][1]
+    repair = store.load_typed_repair_draft("Daily")
+    if corruption in {"field", "kind", "operator", "field_alias"}:
+        assert repair is not None and repair.expression_text == payload["filter"]["expression_text"]
+    else:
+        assert repair is None
     with pytest.raises(ValueError, match="Confirm replacement"):
         store.save_typed("daily", state)
     with pytest.raises(ValueError, match="Enter a typed report filter expression"):
@@ -385,6 +390,41 @@ def test_typed_preset_cannot_load_as_magic_or_clamp_a_date(monkeypatch, supports
     finally:
         dialog.close()
         parent.close()
+
+
+def test_typed_preset_repair_requires_an_explicit_edit_before_opening_draft(monkeypatch):
+    from metroliza.shared.filter_state import FilterState
+
+    initial = FilterState(expression_text='OldAlias IN ("001")')
+    opened = []
+    dialog = types.SimpleNamespace(_load_saved_filter=lambda state, **kwargs: opened.append((state, kwargs)))
+    selected = iter(((initial.expression_text, True), ('Ref IN ("001")', False), ('Ref IN ("001")', True)))
+    monkeypatch.setattr(filter_dialog.QtWidgets.QInputDialog, "getMultiLineText", lambda *_args: next(selected))
+    for _ in range(3):
+        filter_dialog.FilterDialog._edit_typed_preset_expression(dialog, initial)
+    assert len(opened) == 1
+    fixed, options = opened[0]
+    assert fixed.expression_text == 'Ref IN ("001")' and options == {"typed": True}
+
+
+def test_typed_preset_save_preserves_previous_file_when_another_writer_holds_lock(tmp_path):
+    from PyQt6.QtCore import QLockFile
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    original = FilterState(expression_text='Ref IN ("001")')
+    store.save_typed("Daily", original)
+    prior = store.path.read_bytes()
+    lock = QLockFile(f"{store.path}.typed-write.lock")
+    assert lock.tryLock(0)
+    try:
+        with pytest.raises(OSError, match="Another window"):
+            store.save_typed("DAILY", FilterState(expression_text='Ref IN ("1")'), replace=True)
+    finally:
+        lock.unlock()
+    assert store.path.read_bytes() == prior
 
 
 def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):

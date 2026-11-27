@@ -420,8 +420,9 @@ to keep a typed draft. **Load typed as draft** restores the conditions and
 requires a new preview against the current database before Apply. Typed presets
 store the expression and its stable field IDs separately from Magic presets.
 An unavailable typed preset shows the field or condition that needs attention
-and keeps the original entry. Review the current catalog and save a new draft
-after correcting it. Export recipes continue to use the existing Magic format.
+and keeps the original entry. Use **Edit expression…** to replace an incompatible
+field or operator in a new draft, then preview it. The original preset stays saved
+until you explicitly replace it. Export recipes continue to use the existing Magic format.
 Clear the typed filter before switching to grouping, HTML, Google Sheets,
 industrial context or the last-import scope.
 

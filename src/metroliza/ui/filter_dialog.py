@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from time import monotonic
 
 from metroliza.shared.custom_logger import CustomLogger
@@ -981,13 +981,14 @@ class FilterDialog(QDialog):
                          and self._validate_date_range()) if typed else self.apply_button.isEnabled())
         save.triggered.connect(lambda: self._save_filter_draft(store))
         menu.addSeparator()
-        self._add_saved_filter_actions(menu, presets, unavailable, typed=False)
-        self._add_saved_filter_actions(menu, typed_presets, typed_unavailable, typed=True)
+        self._add_saved_filter_actions(menu, presets, unavailable)
+        self._add_saved_filter_actions(menu, typed_presets, typed_unavailable, typed_store=store)
         if not any((presets, unavailable, typed_presets, typed_unavailable)):
             menu.addAction("No saved filters").setEnabled(False)
         menu.exec(self.saved_filters_button.mapToGlobal(self.saved_filters_button.rect().bottomLeft()))
 
-    def _add_saved_filter_actions(self, menu, presets, unavailable, *, typed):
+    def _add_saved_filter_actions(self, menu, presets, unavailable, *, typed_store=None):
+        typed = typed_store is not None
         load_label = "Load typed as draft" if typed else "Load as draft"
         unavailable_label = "Unavailable typed preset" if typed else "Unavailable"
         for name, state in presets:
@@ -998,14 +999,37 @@ class FilterDialog(QDialog):
         for name, detail in unavailable:
             label = " ".join(name.split()).replace("&", "&&")
             message = menu.addAction(f"{unavailable_label}: {label}…")
-            message.triggered.connect(lambda _checked, reason=detail: self._show_unavailable_filter(reason))
+            message.triggered.connect(
+                lambda _checked, key=name, reason=detail: self._show_unavailable_entry(key, reason, typed_store)
+            )
 
-    def _show_unavailable_filter(self, reason, *, title="Saved filter unavailable"):
+    def _show_unavailable_entry(self, name, reason, typed_store):
+        draft = typed_store.load_typed_repair_draft(name) if typed_store is not None else None
+        if draft is None:
+            self._show_unavailable_filter(reason)
+            return
+        self._show_unavailable_filter(reason, repair_draft=draft)
+
+    def _show_unavailable_filter(self, reason, *, title="Saved filter unavailable", repair_draft=None):
         message = QtWidgets.QMessageBox(self)
         message.setWindowTitle(title)
         message.setTextFormat(Qt.TextFormat.PlainText)
         message.setText(reason)
+        edit = None
+        if repair_draft is not None:
+            message.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Close)
+            edit = message.addButton("Edit expression…", QtWidgets.QMessageBox.ButtonRole.ActionRole)
         message.exec()
+        if edit is not None and message.clickedButton() is edit:
+            self._edit_typed_preset_expression(repair_draft)
+
+    def _edit_typed_preset_expression(self, draft):
+        text, accepted = QtWidgets.QInputDialog.getMultiLineText(
+            self, "Edit saved filter expression", "Choose fields and operators from the current catalog.",
+            draft.expression_text,
+        )
+        if accepted and text.strip() != draft.expression_text.strip():
+            self._load_saved_filter(replace(draft, expression_text=text), typed=True)
 
     def _save_filter_draft(self, store):
         typed = self._typed_mode()
@@ -1029,7 +1053,7 @@ class FilterDialog(QDialog):
             else:
                 store.save(name, state)
         except (OSError, ValueError) as error:
-            if typed and isinstance(error, ValueError):
+            if typed:
                 self._show_unavailable_filter(str(error), title="Could not save typed filter")
             else:
                 QtWidgets.QMessageBox.warning(self, "Save filter", "Could not save the filter. Check its name and conditions.")

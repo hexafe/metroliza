@@ -6,13 +6,13 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings
+from PyQt6.QtCore import QLockFile, QSettings
 
 from metroliza.reports.report_query_service import build_measurement_filter_query
 from metroliza.reports.report_typed_filter import REPORT_TYPED_FILTER_FIELDS
 from metroliza.shared.filter_state import decode_filter_state
 from metroliza.shared.local_app_paths import local_metroliza_directory
-from metroliza.shared.typed_filter import dump_typed_filter, load_typed_filter, parse_typed_filter
+from metroliza.shared.typed_filter import FilterValidationError, dump_typed_filter, load_typed_filter, parse_typed_filter
 
 
 _MAX_PRESET_LENGTH = 131072
@@ -48,13 +48,17 @@ def _decode_typed_state(values):
     return state
 
 
-def _decode_typed_preset(payload):
+def _typed_preset_state(payload):
     version = payload.get("version")
     if type(version) is not int or version != _TYPED_PRESET_VERSION:
         raise ValueError("Unsupported typed report preset version.")
     if payload.keys() != {"version", "name", "filter", "typed_expression"}:
         raise ValueError("Invalid typed report preset fields.")
-    state = _decode_typed_state(payload["filter"])
+    return _decode_typed_state(payload["filter"])
+
+
+def _decode_typed_preset(payload):
+    state = _typed_preset_state(payload)
     expression = load_typed_filter(payload["typed_expression"], REPORT_TYPED_FILTER_FIELDS)
     if expression is None or dump_typed_filter(expression) != _typed_expression_document(state):
         raise ValueError("Saved typed conditions and expression text disagree. The original preset was kept.")
@@ -85,6 +89,30 @@ class ReportFilterPresets:
     def load_typed(self):
         return self._load(typed=True)
 
+    def load_typed_repair_draft(self, name):
+        """Read original draft text when a current field or operator needs replacement."""
+        state = None
+        try:
+            _, payload = self._read_entry(self._settings(typed=True), self._key(name))
+            state = _typed_preset_state(payload)
+            _decode_typed_preset(payload)
+        except FilterValidationError as error:
+            if error.code in {"missing_field", "incompatible_type", "unsupported_operator"}:
+                return state
+        except (KeyError, TypeError, ValueError, RecursionError):
+            pass
+        return None
+
+    def _read_entry(self, settings, key):
+        raw = settings.value(key, "", type=str)
+        if len(raw) > _MAX_PRESET_LENGTH:
+            raise ValueError("Saved report filter is too large.")
+        payload = json.loads(raw)
+        name = payload["name"]
+        if not isinstance(name, str) or not 1 <= len(name) <= 80 or self._key(name) != key:
+            raise ValueError("Invalid report filter name.")
+        return name, payload
+
     def _load(self, *, typed):
         presets = []
         unavailable = []
@@ -92,14 +120,7 @@ class ReportFilterPresets:
         for key in settings.childKeys():
             name = None
             try:
-                raw = settings.value(key, "", type=str)
-                if len(raw) > _MAX_PRESET_LENGTH:
-                    raise ValueError("Saved report filter is too large.")
-                payload = json.loads(raw)
-                candidate = payload["name"]
-                if not isinstance(candidate, str) or not 1 <= len(candidate) <= 80 or self._key(candidate) != key:
-                    raise ValueError("Invalid report filter name.")
-                name = candidate
+                name, payload = self._read_entry(settings, key)
                 state = _decode_typed_preset(payload) if typed else _decode_filter(payload["filter"])
                 presets.append((name, state))
             except (KeyError, TypeError, ValueError, RecursionError) as error:
@@ -136,11 +157,18 @@ class ReportFilterPresets:
     def _write(self, name, payload, *, typed=False, replace=False):
         raw = self._encode(payload)
         self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        settings = self._settings(typed=typed)
-        key = self._key(name)
-        if typed and not replace and settings.contains(key):
-            raise ValueError("A typed preset already uses this name. Confirm replacement first.")
-        settings.setValue(key, raw)
-        settings.sync()
-        if settings.status() != QSettings.Status.NoError:
-            raise OSError("Could not save the report filter.")
+        lock = QLockFile(f"{self.path}.typed-write.lock") if typed else None
+        if lock is not None and not lock.tryLock(0):
+            raise OSError("Another window is saving a typed report filter. Try again.")
+        try:
+            settings = self._settings(typed=typed)
+            key = self._key(name)
+            if typed and not replace and settings.contains(key):
+                raise ValueError("A typed preset already uses this name. Confirm replacement first.")
+            settings.setValue(key, raw)
+            settings.sync()
+            if settings.status() != QSettings.Status.NoError:
+                raise OSError("Could not save the report filter.")
+        finally:
+            if lock is not None:
+                lock.unlock()
