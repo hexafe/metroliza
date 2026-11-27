@@ -88,7 +88,9 @@ from metroliza.analytics.row_table import RowTable
 from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
+    TABULAR_EXCEL_SUFFIXES,
     TABULAR_GROUP_COLUMN,
+    TABULAR_INPUT_SUFFIXES,
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
     TabularSqliteStore,
@@ -99,6 +101,7 @@ from metroliza.tabular.tabular_analytics_service import (
     materialize_tabular_dataframe,
     tabular_file_group_labels,
     tabular_load_result_row_count,
+    tabular_source_display_names,
 )
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -1536,7 +1539,9 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _tabular_source_status_source_text(self, source_files: tuple[str, ...]) -> str:
         if len(source_files) > 1:
-            return self._count_phrase(len(source_files), "CSV file")
+            suffixes = {Path(path).suffix.lower() for path in source_files}
+            kind = "CSV" if suffixes == {".csv"} else "Excel" if suffixes <= TABULAR_EXCEL_SUFFIXES else "CSV/Excel"
+            return self._count_phrase(len(source_files), f"{kind} file")
         if source_files:
             return Path(source_files[0]).name
         if self.input_file:
@@ -1742,11 +1747,11 @@ class IndustrialAnalyticsDialog(QDialog):
             return ""
         if len(input_files) == 1:
             return input_files[0]
-        names = [Path(path).name for path in input_files]
+        names = tabular_source_display_names(input_files)
         preview = ", ".join(names[:3])
         if len(names) > 3:
             preview = f"{preview}, +{len(names) - 3} more"
-        return f"{len(names)} CSV files: {preview}"
+        return f"{self._tabular_source_status_source_text(input_files)}: {preview}"
 
     def _tabular_filter_state_key(self) -> tuple:
         return (
@@ -1881,14 +1886,16 @@ class IndustrialAnalyticsDialog(QDialog):
     def _populate_tabular_sheet_options(self) -> None:
         self.sheet_name_combo.blockSignals(True)
         self.sheet_name_combo.clear()
-        if len(self._selected_input_files()) > 1:
-            self.sheet_name_combo.addItem("CSV files", "")
+        input_files = self._selected_input_files()
+        if len(input_files) > 1:
+            includes_excel = any(Path(path).suffix.lower() in TABULAR_EXCEL_SUFFIXES for path in input_files)
+            self.sheet_name_combo.addItem("First sheet of each workbook" if includes_excel else "CSV files", "")
             self.sheet_name_combo.setEnabled(False)
             self.sheet_name_combo.blockSignals(False)
             return
         path = Path(self.input_file) if self.input_file else None
         suffix = path.suffix.lower() if path is not None else ""
-        if suffix in {".xlsx", ".xls"}:
+        if suffix in TABULAR_EXCEL_SUFFIXES:
             try:
                 sheet_names = list_tabular_excel_sheets(path)
             except Exception:
@@ -1956,13 +1963,15 @@ class IndustrialAnalyticsDialog(QDialog):
         if not filenames or self._tabular_source_busy():
             return
         selected_files = tuple(str(Path(filename)) for filename in filenames)
-        self._auto_group_selected_files = False
-        if len(selected_files) > 1 and any(Path(filename).suffix.lower() != ".csv" for filename in selected_files):
+        if any(Path(filename).suffix.lower() not in TABULAR_INPUT_SUFFIXES for filename in selected_files):
             QMessageBox.warning(
                 self,
                 self.windowTitle(),
-                "Select only CSV files when loading multiple CSV Summary inputs.",
+                "Select only CSV (.csv) or Excel (.xlsx, .xls) files.",
             )
+            return
+        if any(not Path(filename).is_file() for filename in selected_files):
+            QMessageBox.warning(self, self.windowTitle(), "One or more selected files are unavailable. Choose the files again.")
             return
         self._auto_group_selected_files = self._confirm_auto_group_selected_files(selected_files)
         self.input_files = selected_files
@@ -1997,11 +2006,16 @@ class IndustrialAnalyticsDialog(QDialog):
         preview = ", ".join(group_names[:5])
         if len(group_names) > 5:
             preview = f"{preview}, +{len(group_names) - 5} more"
+        sheet_notice = (
+            "This selection uses the first sheet of each workbook.\n\n"
+            if any(Path(path).suffix.lower() in TABULAR_EXCEL_SUFFIXES for path in selected_files) else ""
+        )
         result = QMessageBox.question(
             self,
             self.windowTitle(),
             (
                 "Create groups from the selected file names?\n\n"
+                f"{sheet_notice}"
                 f"Groups: {preview}\n\n"
                 "Each loaded row will be assigned to the group for its source file. "
                 "No POPULATION group will be created unless you add or rename one later."
@@ -2243,7 +2257,10 @@ class IndustrialAnalyticsDialog(QDialog):
         previous = pending[0] if pending else self.tabular_load_result
         choices = None
         lost = ()
-        if isinstance(previous, TabularAnalyticsLoadResult) and same_tabular_source(previous, loaded):
+        if (
+            isinstance(previous, TabularAnalyticsLoadResult) and same_tabular_source(previous, loaded)
+            and self._tabular_worksheet_scope(previous) == self._tabular_worksheet_scope(loaded)
+        ):
             original = pending[1] if pending else self._tabular_choices()
             try:
                 result = self._reloaded_tabular_choices(previous, original, loaded)
@@ -2269,6 +2286,10 @@ class IndustrialAnalyticsDialog(QDialog):
             self._tabular_refresh_lost = bool(lost)
         if populate_metrics:
             self._sync_ui_state()
+
+    @staticmethod
+    def _tabular_worksheet_scope(loaded):
+        return tuple(snapshot.sheet_name for snapshot in loaded.source_snapshots)
 
     def _replace_tabular_snapshot(self, loaded, choices, populate_metrics):
         self._tabular_reload_notice = ""
@@ -2345,7 +2366,7 @@ class IndustrialAnalyticsDialog(QDialog):
         row_count = tabular_load_result_row_count(loaded)
         source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
         if len(source_files) > 1:
-            return f"{len(source_files)} CSV files: {row_count} rows"
+            return f"{self._tabular_source_status_source_text(source_files)}: {row_count} rows"
         if source_files:
             return f"{Path(source_files[0]).name}: {row_count} rows"
         if self.input_file:
@@ -2744,7 +2765,7 @@ class IndustrialAnalyticsDialog(QDialog):
         return "Groupstats requires manual CSV/Excel groups."
 
     def _selected_sheet_name(self) -> str | None:
-        if self.is_production_source:
+        if self.is_production_source or len(self._selected_input_files()) != 1:
             return None
         data_value = self.sheet_name_combo.currentData()
         if data_value is not None:
@@ -2855,7 +2876,7 @@ class IndustrialAnalyticsDialog(QDialog):
             self.reference_column_combo.setEnabled(source_idle)
             self.sheet_name_combo.setEnabled(
                 source_idle and len(self._selected_input_files()) == 1
-                and Path(self.input_file).suffix.lower() in {".xlsx", ".xls"}
+                and Path(self.input_file).suffix.lower() in TABULAR_EXCEL_SUFFIXES
             )
         if self.is_production_source:
             self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
@@ -3381,8 +3402,8 @@ class IndustrialAnalyticsDialog(QDialog):
             # Inspect only the existing source descriptor, without opening the
             # input. Neither the path nor its suffix enters diagnostic storage.
             loaded = request.tabular_load_result
-            source = getattr(loaded, "source_file", "") or request.input_file
-            suffix = Path(source).suffix.lower() if tabular_file else ""
+            sources = getattr(loaded, "source_files", ()) or (getattr(loaded, "source_file", "") or request.input_file,)
+            suffixes = {Path(source).suffix.lower() for source in sources} if tabular_file else set()
             return _bugreport_recorder.record_option_snapshot(
                 OptionSnapshotKind.INDUSTRIAL_ANALYSIS
                 if production_cache or industrial_cache
@@ -3410,8 +3431,8 @@ class IndustrialAnalyticsDialog(QDialog):
                     "cohort_configured": bool(request.cohort_state.is_applied),
                     "source_production_cache": production_cache,
                     "source_industrial_cache": industrial_cache,
-                    "source_csv": suffix == ".csv",
-                    "source_xlsx": suffix == ".xlsx",
+                    "source_csv": ".csv" in suffixes,
+                    "source_xlsx": ".xlsx" in suffixes,
                 },
             )
         except Exception:

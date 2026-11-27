@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 
 import sys
@@ -1168,39 +1169,94 @@ def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
         _dispose_dialog(dialog)
 
 
-def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
+def test_tabular_analytics_dialog_loads_mixed_files_using_first_sheet_and_auto_groups(
     tmp_path,
     monkeypatch,
+    qapplication_session,
 ) -> None:
-    _app()
     csv_file = tmp_path / "dataset.csv"
-    excel_file = tmp_path / "supplier.xlsx"
-    pd.DataFrame({"Length mm": [10.0, 10.2]}).to_csv(csv_file, index=False)
-    pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(excel_file, index=False)
-    warning_calls = []
+    excel_file = tmp_path / "dataset.xlsx"
+    pd.DataFrame({"TraceCode": ["A", "B"], "Length mm": [10.0, 10.2]}).to_csv(csv_file, index=False)
+    with pd.ExcelWriter(excel_file) as writer:
+        pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(writer, sheet_name="Overview", index=False)
+        pd.DataFrame({"Length mm": [99, 100]}).to_excel(writer, sheet_name="Data", index=False)
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(csv_file), str(excel_file)], "All files (*)"),
     )
+    prompts = []
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QMessageBox.question",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid mixed multi-file selection must not prompt for file groups")
-        ),
+        lambda *_args, **_kwargs: prompts.append(_args[2]) or QMessageBox.StandardButton.Yes,
+    )
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+        assert dialog.input_files == (str(csv_file), str(excel_file))
+        assert dialog.source_label.text() == "2 CSV/Excel files: 4 rows"
+        assert dialog.input_file_field.text() == "2 CSV/Excel files: dataset.csv, dataset.xlsx"
+        assert "first sheet of each workbook" in prompts[0]
+        assert dialog.sheet_name_combo.currentText() == "First sheet of each workbook"
+        assert not dialog.sheet_name_combo.isEnabled() and dialog._selected_sheet_name() is None
+        assert dialog.tabular_load_result.source_snapshots[1].sheet_name == "Overview"
+        assert dialog.tabular_load_result.dataframe["length_mm"].tolist() == pytest.approx([10, 10.2, 10.4, 10.6])
+        assert dialog.grouping_applied and dialog.df_for_grouping["GROUP"].tolist() == [
+            "dataset", "dataset", "dataset 2", "dataset 2",
+        ]
+
+        old_store = Path(dialog.tabular_load_result.sqlite_store.path)
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [4], "GROUP": ["Old worksheet group"]}))
+        dialog.set_grouping_applied(True)
+        with pd.ExcelWriter(excel_file) as writer:
+            pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(writer, sheet_name="Data", index=False)
+            pd.DataFrame({"Length mm": [99, 100]}).to_excel(writer, sheet_name="Overview", index=False)
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert dialog.tabular_load_result.source_snapshots[1].sheet_name == "Data"
+        assert not old_store.exists()
+        assert dialog.df_for_grouping["GROUP"].tolist() == ["dataset", "dataset", "dataset 2", "dataset 2"]
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_tabular_analytics_dialog_rejects_unsupported_selection_without_discarding_loaded_data(
+    tmp_path, monkeypatch, qapplication_session,
+) -> None:
+    csv_file = tmp_path / "dataset.csv"
+    second = tmp_path / "another.csv"
+    unsupported = tmp_path / "readme.txt"
+    for path in (csv_file, second, unsupported):
+        path.write_text("Length mm\n10\n12\n", encoding="utf-8")
+    selections = iter(((csv_file, second), (csv_file, unsupported)))
+    prompts, warnings = [], []
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: (list(map(str, next(selections))), "All files (*)"),
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: prompts.append(_args[2]) or QMessageBox.StandardButton.Yes,
     )
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QMessageBox.warning",
-        lambda *args, **_kwargs: warning_calls.append(args),
+        lambda *_args, **_kwargs: warnings.append(_args[2]),
     )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+        loaded = dialog.tabular_load_result
+        previous_groups = dialog.df_for_grouping
+        dialog.select_input_file()
 
-        assert dialog.input_files == ()
-        assert dialog.input_file == ""
-        assert warning_calls
-        assert "Select only CSV files" in warning_calls[0][2]
+        assert dialog.input_files == (str(csv_file), str(second))
+        assert dialog.input_file == str(csv_file)
+        assert dialog.tabular_load_result is loaded and Path(loaded.sqlite_store.path).is_file()
+        assert dialog.df_for_grouping is previous_groups and dialog._auto_group_selected_files
+        assert len(prompts) == 1
+        assert warnings == ["Select only CSV (.csv) or Excel (.xlsx, .xls) files."]
     finally:
         _dispose_dialog(dialog)
 

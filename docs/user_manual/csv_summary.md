@@ -130,8 +130,13 @@ The source status row tells you what Metroliza detected, including row count,
 source file count, metric count, detected time column, detected Part / ID column,
 and whether a large-file row store is being used.
 
-You can select more than one CSV file at the same time. When multiple CSV files
-are loaded, Metroliza asks whether to auto-create one group per file name. For
+You can select multiple CSV and Excel files (`.csv`, `.xlsx`, `.xls`) together. For
+a multi-file selection, Metroliza uses the first worksheet in each Excel workbook.
+The `source_file` column records the file name and distinguishes matching basenames with a
+number, without exposing folder paths. The `source_sheet` column records the workbook
+worksheet and is blank for CSV rows.
+
+When multiple files are loaded, Metroliza asks whether to auto-create one group per file. For
 example, selecting `dataset1.csv`, `supplier1.csv`, and `test123.csv` can create
 the groups `dataset1`, `supplier1`, and `test123`, with every row from each file
 assigned to its matching group.
@@ -140,7 +145,7 @@ Auto-created file groups do not include a **POPULATION** group. If you want a
 population-style comparison later, open **Edit groups** and rename or add groups
 manually after the files are loaded.
 
-For Excel files, Metroliza lists workbook sheets after file selection. Choose a different
+For a single Excel workbook, Metroliza lists its worksheets after file selection. Choose a different
 sheet and click **Reload metrics** when needed. If automatic detection does not pick the
 correct time or reference column, choose those columns and click **Reload metrics** again
 before creating analytics.
@@ -194,7 +199,7 @@ to separate workbook sheets.
 
 Click **Edit groups** when you want export-style groups for the CSV/Excel rows. For a
 single input file, the grouping dialog starts empty and leaves every row in
-**POPULATION** until you create a custom group. For multiple CSV files, accepting the
+**POPULATION** until you create a custom group. For multiple files, accepting the
 auto-create prompt starts the dialog with one group per file name and no **POPULATION**
 rows. Search for a source column, select it, and use **Add column (Ctrl+E)** to
 choose a column such as `TraceCode`. **Remove column (Ctrl+Shift+E)** removes the
@@ -369,8 +374,7 @@ The workbook can include:
   `1.2340`, and write a grouped integer as `1234`. You can also load an Excel worksheet with
   numeric cells.
 - If filtering leaves zero rows, clear or loosen the filter and try again.
-- If multiple input files are needed, select multiple CSV files. Multi-file loading is
-  not available for Excel workbooks.
+- To choose a worksheet other than the first, select a single Excel workbook.
 - If groupstats is selected but no groupstats output appears, create at least two
   non-empty manual groups in **Edit groups**.
 - If a filter expression is rejected, use simple value selection first, then retry the
