@@ -512,9 +512,10 @@ def test_realtime_review_details_use_the_saved_frozen_decision_and_keep_old_expl
         loads.append(kwargs["limit"])
         return load(service, **kwargs)
 
-    def count_read(service, event_id):
+    def count_read(service, event_id, *, expected_event):
         lookup_ids.append(event_id)
-        return read(service, event_id)
+        assert expected_event.id == event_id
+        return read(service, event_id, expected_event=expected_event)
 
     monkeypatch.setattr(RealtimeDashboardService, "list_open_anomaly_events", count_load)
     monkeypatch.setattr(RealtimeDashboardService, "read_open_anomaly_decision", count_read)
@@ -578,6 +579,75 @@ def test_realtime_review_details_use_the_saved_frozen_decision_and_keep_old_expl
         assert tuple(lookup_ids) == read_before
         assert not unexpected_details and not dialog.event_details_button.isEnabled()
         assert "replaced or removed" in dialog.event_review_status_label.text()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+
+
+def test_realtime_review_details_require_refresh_after_sqlite_reuses_an_event_id(qapp, tmp_path, monkeypatch):
+    from metroliza.industrial.anomaly import event_repository
+    from metroliza.industrial.anomaly.contracts import DetectionResult
+    from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+    from metroliza.reports.db import SQLiteFileBinding, sqlite_connection_scope
+
+    db_path = str(tmp_path / "review-reused-id.db")
+    events = _persist_frozen_review_events(db_path, monkeypatch)
+    selected = events["legacy_limits"]
+    assert selected.id == max(event.id for event in events.values())
+    listed = []
+    load = RealtimeDashboardService.list_open_anomaly_events
+
+    def count_load(service, **kwargs):
+        listed.append(kwargs["limit"])
+        return load(service, **kwargs)
+
+    monkeypatch.setattr(RealtimeDashboardService, "list_open_anomaly_events", count_load)
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path, config_path=tmp_path / "unused.yaml")
+    try:
+        dialog.show()
+        dialog.event_review_button.click()
+        table = dialog.event_review_table
+        row = next(index for index in range(table.rowCount()) if table.item(index, 7).text() == str(selected.id))
+        table.selectRow(row)
+        assert dialog.event_details_button.isEnabled()
+        binding = SQLiteFileBinding.capture(db_path)
+
+        replacement_time = "2026-06-13T11:00:00Z"
+        assert replacement_time != selected.created_at
+        monkeypatch.setattr(event_repository, "utc_timestamp", lambda: replacement_time)
+        with sqlite_connection_scope(db_path) as connection, connection:
+            connection.execute("DELETE FROM industrial_anomaly_events WHERE id = ?", (selected.id,))
+        result = event_repository.AnomalyEventRepository(db_path).insert_events([DetectionResult(
+            detector_key=selected.detector_key, sample_id=selected.sample_id, signal_id=selected.signal_id,
+            signal_key="cycle_time", event_time=selected.event_time, severity="major", score=11.0,
+            observed_value=selected.observed_value, expected_value=None, threshold={"usl": 9.0},
+            explanation="New event after SQLite ID reuse.",
+            context={"detector_evidence": {
+                "schema_version": 1,
+                "configuration": {"detector": selected.detector_key, "algorithm_version": 2},
+                "window": {"kind": "trigger_sample"},
+            }},
+        )])
+        assert result.inserted == 1 and result.event_ids == (selected.id,)
+        binding.require(db_path)
+
+        before = tuple(listed)
+        before_bytes = Path(db_path).read_bytes()
+        unexpected_details = []
+        with monkeypatch.context() as capture:
+            capture.setattr(dialog, "_show_event_details_dialog", unexpected_details.append)
+            dialog.event_details_button.click()
+        assert unexpected_details == []
+        assert not dialog.event_details_button.isEnabled()
+        assert "Refresh events" in dialog.event_review_status_label.text()
+        assert tuple(listed) == before and Path(db_path).read_bytes() == before_bytes
+
+        dialog.refresh_events_button.click()
+        replacement = _read_event_details(qapp, dialog, selected.id)
+        assert "New event after SQLite ID reuse." in replacement
+        assert "Upper specification limit (USL): 9" in replacement
+        assert "Algorithm version: 2" in replacement
     finally:
         dialog.close()
         dialog.deleteLater()

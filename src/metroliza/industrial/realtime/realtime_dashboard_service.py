@@ -194,14 +194,18 @@ class RealtimeDashboardService:
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
 
-    def read_open_anomaly_decision(self, event_id: int) -> OpenAnomalyDecisionEvidence | None:
-        """Read one open event's bounded decision evidence without migrating or writing."""
+    def read_open_anomaly_decision(
+        self, event_id: int, *, expected_event: DashboardAnomalyEvent | None = None,
+    ) -> OpenAnomalyDecisionEvidence | None:
+        """Read bounded evidence only if the open event still matches the optional selection."""
         if type(event_id) is not int or not 1 <= event_id <= 2**63 - 1:
             raise ValueError("Select a valid open event.")
+        if expected_event is not None and expected_event.id != event_id:
+            return None
         if self.connection is not None:
-            return _open_anomaly_decision(self.connection, event_id)
+            return _open_anomaly_decision(self.connection, event_id, expected_event)
         with sqlite_readonly_connection_scope(self.database, timeout_s=0.5) as connection:
-            return _open_anomaly_decision(connection, event_id)
+            return _open_anomaly_decision(connection, event_id, expected_event)
 
     def anomaly_counts_by_severity(
         self,
@@ -1125,7 +1129,11 @@ def _dashboard_event_from_row(row) -> DashboardAnomalyEvent:
     )
 
 
-def _open_anomaly_decision(connection, event_id):
+def _open_anomaly_decision(connection, event_id, expected_event):
+    identity = (
+        expected_event.sample_id, expected_event.signal_id, expected_event.event_time,
+        expected_event.detector_key, expected_event.created_at,
+    ) if expected_event is not None else (None,) * 5
     with closing(connection.execute(
         """
         SELECT detector_key,
@@ -1133,8 +1141,9 @@ def _open_anomaly_decision(connection, event_id):
                     THEN CAST(context_json AS BLOB) END
         FROM industrial_anomaly_events
         WHERE id = ? AND status = 'open'
+          AND (? OR (sample_id, signal_id, event_time, detector_key, created_at) = (?, ?, ?, ?, ?))
         """,
-        (_MAX_EVENT_CONTEXT_BYTES, event_id),
+        (_MAX_EVENT_CONTEXT_BYTES, event_id, expected_event is None, *identity),
     )) as cursor:
         row = cursor.fetchone()
     return _decode_anomaly_decision(*row) if row is not None else None

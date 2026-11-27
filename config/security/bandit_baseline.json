@@ -553,7 +553,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "05a31daee4250a34dcfe408f0f8dd8c42bcae7ce756babd5da9857b3e8b2b3e2",
+      "fingerprint": "6f7e178a1e4d77368b99b47849c6407a58e2eb5cb1e4ff40cbf2a318e94bccdc",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -562,7 +562,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "4de27eead56a3a34f3d158f2a920e747db9f0e033521445cf1b148adb32a143c",
+      "fingerprint": "2501f72b1dc1c34a0b82746341a493cee2475bc6906f95592364255a0a5f61be",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -571,7 +571,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "3c8c9290556e3640fc63c0a807ee17a9a840ba4a319365a9b39bb93dbd27af73",
+      "fingerprint": "d5a7296cbf84e81683b5fc76faf68ef16cabffceb4a86cfe3acbf762547f08a3",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -580,7 +580,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "cb077bdb2365434176141e595ee84d852f793ee85f8a9c449d512fc0d8d548f2",
+      "fingerprint": "fdd9abcf66b014b7e25b33ce01d38037537644e5040d42a195d28d476c006cb6",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -589,7 +589,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "eb7751646946d3f4c0e1e6144c4b175a5c1748f1c264cf0f40e23277e67266c8",
+      "fingerprint": "34bd8df9318e406f3f8fcf4674c9ff48c1745fe26d7b23e5cf9c0606572b6318",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -598,7 +598,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6d2b86c020f70374b320ebcb471cadff75686c83aa7ad5ac8a75c08a73b4094f",
+      "fingerprint": "2d47a01990d53b0284deec3c58cea39ec1cec0273f0dda22bf4a08af64e4f459",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",

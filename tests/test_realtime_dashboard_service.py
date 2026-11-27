@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 
 from metroliza.industrial.realtime import realtime_dashboard_service as dashboard_service_module
@@ -189,15 +189,24 @@ def test_selected_open_decision_caps_context_bytes_and_handles_absent_or_closed_
 
     decoded = []
     from_json = dashboard_service_module.from_json
+    service = RealtimeDashboardService(db_path)
+    selected = next(event for event in service.list_open_anomaly_events() if event.id == oversized_id)
 
     def capture(raw, default):
         decoded.append(raw)
         return from_json(raw, default)
 
     monkeypatch.setattr(dashboard_service_module, "from_json", capture)
-    service = RealtimeDashboardService(db_path)
     before = (tmp_path / "selected-event.db").read_bytes()
-    assert service.read_open_anomaly_decision(oversized_id).algorithm_version is None
+    for stale in (
+        replace(selected, id=legacy_id),
+        replace(selected, sample_id=selected.sample_id + 1),
+        replace(selected, detector_key="different_detector"),
+        replace(selected, created_at="2026-06-14T00:00:00Z"),
+    ):
+        assert service.read_open_anomaly_decision(oversized_id, expected_event=stale) is None
+    assert decoded == []
+    assert service.read_open_anomaly_decision(oversized_id, expected_event=selected).algorithm_version is None
     assert decoded == [None]
     assert service.read_open_anomaly_decision(legacy_id).algorithm_version is None
     assert service.read_open_anomaly_decision(future_id).algorithm_version is None

@@ -928,7 +928,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             binding.require(database)
             with sqlite_readonly_connection_scope(database, timeout_s=0.5) as connection:
                 binding.require(database)
-                evidence = RealtimeDashboardService(database, connection=connection).read_open_anomaly_decision(event_id)
+                evidence = RealtimeDashboardService(database, connection=connection).read_open_anomaly_decision(
+                    event_id, expected_event=event,
+                )
                 binding.require(database)
         except Exception as exc:
             self._invalidate_event_selection()
@@ -940,7 +942,9 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if evidence is None:
             self._review_events.pop(event_id, None)
             self._invalidate_event_selection()
-            self.event_review_status_label.setText("This event is no longer open. Refresh events to update the list.")
+            self.event_review_status_label.setText(
+                "The selected event changed or is no longer open. Refresh events to update the list."
+            )
             set_status_variant(self.event_review_status_label, "warning")
             return
         self._show_event_details_dialog(event_review_details(event, evidence))
