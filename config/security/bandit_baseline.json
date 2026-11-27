@@ -1453,7 +1453,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "7ffd21e9091cf4ec2c2fca7101cd6f4942daadbb5dbde98ad2a9a15dfd70e3f8",
+      "fingerprint": "c469ba6b689ee85f630dcac5afde9df3c11692729dafe936941a75402b8efe78",
       "test_id": "B608",
       "path": "src/metroliza/tabular/tabular_analytics_service.py",
       "owner": "Security review",
