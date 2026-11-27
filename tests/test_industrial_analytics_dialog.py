@@ -247,6 +247,46 @@ def test_tabular_analytics_dialog_loads_csv_metrics_and_group_columns(tmp_path) 
         _dispose_dialog(dialog)
 
 
+def test_tabular_reload_with_ambiguous_csv_preserves_last_complete_analysis(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    _app()
+    source = tmp_path / "private-source.csv"
+    source.write_text("Part;Length mm\nA;10.0\nB;10.2\n", encoding="utf-8")
+    dashboard = tmp_path / "existing.html"
+    dashboard.write_bytes(b"<html><body>Last complete analysis</body></html>")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warnings.append(message))
+
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.input_file = str(source)
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        previous_load = dialog.tabular_load_result
+        store_path = Path(previous_load.sqlite_store.path)
+        assert previous_load.row_table["length_mm"].tolist() == [10.0, 10.2]
+        assert dialog.start_button.isEnabled()
+
+        source.write_text("Part;Length mm\nA;1.234\nB;2.345\n", encoding="utf-8")
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+
+        assert len(warnings) == 1
+        assert "Ambiguous CSV number separators" in warnings[0]
+        assert "Excel worksheet with numeric cells" in warnings[0]
+        assert "private-source.csv" not in warnings[0] and "1.234" not in warnings[0]
+        assert dialog.tabular_load_result is previous_load
+        assert store_path.is_file()
+        assert previous_load.row_table["length_mm"].tolist() == [10.0, 10.2]
+        assert not dialog.start_button.isEnabled()
+        assert dashboard.read_bytes() == b"<html><body>Last complete analysis</body></html>"
+    finally:
+        _dispose_dialog(dialog)
+    assert not store_path.exists()
+
+
 def test_tabular_load_thread_stop_joins_and_schedules_cleanup(tmp_path, monkeypatch) -> None:
     _app()
     input_file = tmp_path / "table.csv"

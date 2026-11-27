@@ -358,6 +358,10 @@ The workbook can include:
   dashboard or workbook path is filled in.
 - If you changed the Excel sheet, time column, or Part / ID column, click **Reload
   metrics** before creating analytics.
+- If loading reports ambiguous CSV number separators, re-export with one decimal convention per
+  numeric column and no thousands separators. For example, write a decimal value of `1.234` as
+  `1.2340`, and write a grouped integer as `1234`. You can also load an Excel worksheet with
+  numeric cells.
 - If filtering leaves zero rows, clear or loosen the filter and try again.
 - If multiple input files are needed, select multiple CSV files. Multi-file loading is
   not available for Excel workbooks.
