@@ -109,10 +109,11 @@ live. After Stop the snapshot remains visible as stopped; a later poll error
 appears separately without making the previous snapshot current. Dashboard
 generation can still be finishing after polling stops.
 
-After monitoring resumes, any pending batch saved by this version uses the
-detectors, signal limits and history available when that batch was saved.
-Changes to those settings apply to later batches. Older saved batches without
-these settings use the available settings when the monitor first evaluates them.
+After monitoring resumes, a pending batch saved by this version uses its
+saved detector names, signal limits, partition fields and history boundaries.
+The installed Metroliza version supplies the detector algorithms. Changes to
+the settings apply to later batches. Older batches use the current settings
+when the monitor evaluates them.
 
 Open **Event Review (Ctrl+E)** to load up to 100 persisted open events. **Ctrl+S**
 refreshes that list. Select an event and enter both operator and review comment

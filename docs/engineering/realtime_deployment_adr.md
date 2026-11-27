@@ -67,8 +67,9 @@ at-least-once handling and idempotence. Each new live sample batch records the
 signal limits and partition fields used by acquisition, plus the upper row IDs
 of append-only samples and baselines visible in the commit. A restarted consumer
 checks the saved detector list with those settings and the history available to
-that batch. The legacy batch format uses the settings available at first
-consumption because it has no saved settings. Alert evidence records the
+that batch. The detector algorithms still come from the installed application.
+Before a retry, the legacy batch format uses the current settings because it
+has no saved settings. Alert evidence records the
 effective parameters and window used by the detector.
 The [branch audit](../project/branch_audit.md#featurerealtime-industrial-ml-anomaly-historical)
 records the integrated historical source and preserves operator monitoring under #941.

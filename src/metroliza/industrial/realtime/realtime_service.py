@@ -487,11 +487,12 @@ def _commit_mapped_chunk(
         nonlocal stage
         stage = "persist_samples"
         batch_result = sample_repository.insert_samples(mapping.samples, _cursor=cursor)
-        stage = "append_stream_event"
+        stage = "capture_detector_batch"
         detector_batch = (
             {DETECTOR_BATCH_KEY: capture_detector_batch(cursor, signals.values())}
             if batch_result.sample_ids else {}
         )
+        stage = "append_stream_event"
         stream_append_result = stream_repository.append_sample_batch_committed(
             source_profile_id=config.source_profile_id,
             stream_key=config.stream_key,

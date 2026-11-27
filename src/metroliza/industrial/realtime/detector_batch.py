@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Iterable, Mapping
 
+from metroliza.industrial.industrial_workflow_state import require_identifier
 from metroliza.industrial.realtime.numeric_validation import exact_integral, finite_number
 from metroliza.industrial.realtime.stream_contracts import SignalDefinition
 
@@ -26,7 +27,7 @@ def capture_detector_batch(cursor, signals: Iterable[SignalDefinition]) -> dict[
         ).fetchone()[0],
         "signals": {
             str(signal.id): {
-                **{name: getattr(signal, name) for name in _LIMIT_FIELDS},
+                **{name: _limit(getattr(signal, name), name) for name in _LIMIT_FIELDS},
                 "segment_fields": list(signal.segment_fields),
             }
             for signal in signals
@@ -74,8 +75,11 @@ def _restore_signal(signal: SignalDefinition, raw: Any) -> SignalDefinition:
     segments = raw.get("segment_fields")
     if not isinstance(segments, list) or not all(isinstance(name, str) and name for name in segments):
         raise ValueError("detector batch has invalid signal segment fields")
-    limits = {
-        name: None if raw[name] is None else finite_number(raw[name], field_name=f"detector batch {name}")
-        for name in _LIMIT_FIELDS
-    }
+    for name in segments:
+        require_identifier("detector batch segment field", name)
+    limits = {name: _limit(raw[name], name) for name in _LIMIT_FIELDS}
     return replace(signal, segment_fields=tuple(segments), **limits)
+
+
+def _limit(value: float | None, name: str) -> float | None:
+    return None if value is None else finite_number(value, field_name=f"detector batch {name}")

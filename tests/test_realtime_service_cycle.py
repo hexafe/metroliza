@@ -269,7 +269,12 @@ def test_realtime_poll_cycle_loads_segment_baseline_for_iqr_detector(tmp_path):
 def test_restarted_consumer_uses_settings_of_the_committed_batch(tmp_path, monkeypatch):
     database = str(tmp_path / "frozen-batch.db")
     profile = _profile(database)
-    config = _config(profile.id, detectors=("spec_limits", "iqr", "rolling_zscore"))
+    config = replace(
+        _config(profile.id, detectors=("spec_limits", "iqr", "rolling_zscore")),
+        signal_keys=("cycle_time", "missing_metric"),
+        signal_columns={"cycle_time": "cycle_time_s", "missing_metric": "station"},
+        segment_fields=("station",),
+    )
     samples = RealtimeSampleRepository(database)
     signal = samples.upsert_signal_definition(config_signal_definition(profile.id))
     baselines = BaselineRepository(database)
@@ -300,6 +305,13 @@ def test_restarted_consumer_uses_settings_of_the_committed_batch(tmp_path, monke
             }]))
 
     assert AnomalyEventRepository(database).list_events() == []
+    stream_events = RealtimeEventStreamRepository(database).read_events_after(
+        source_profile_id=profile.id, stream_key=config.stream_key,
+    )
+    batch, = stream_events
+    assert len(batch.payload["sample_ids"]) == 1
+    assert len(batch.payload["signal_ids"]) == 2
+    assert set(batch.payload["detector_batch"]["signals"]) == {str(i) for i in batch.payload["signal_ids"]}
     samples.upsert_signal_definition(replace(signal, usl=100.0))
     baselines.insert_baseline(replace(baseline, baseline_version="later", q3=30.0, iqr=21.0,
                                       created_at="2026-06-13T10:41:00Z"))
@@ -310,17 +322,22 @@ def test_restarted_consumer_uses_settings_of_the_committed_batch(tmp_path, monke
     )])
 
     after_restart = IndustrialDataRepository(database).list_source_profiles()[0]
+    changed = replace(config, detectors=("mad_zscore",), segment_fields=())
     recovered = run_polling_cycle(
-        database=database, profile=after_restart, config=replace(config, detectors=("mad_zscore",)),
+        database=database, profile=after_restart, config=changed,
         adapter=FakeAdapter(),
     )
     alerts = {event.detector_key: event for event in AnomalyEventRepository(database).list_events()}
     assert recovered.rows_fetched == 0
     assert recovered.cursor_value == "100"
+    current = samples.get_signal_definition(source_profile_id=profile.id, signal_key="cycle_time")
+    assert (current.usl, current.segment_fields) == (100.0, ())
     assert set(alerts) == {"spec_limits", "iqr", "rolling_zscore"}
     assert alerts["spec_limits"].threshold["usl"] == 12.0
     assert alerts["iqr"].context["detector_evidence"]["window"]["id"] == original_baseline_id
-    assert alerts["rolling_zscore"].context["detector_evidence"]["window"]["count"] == 30
+    rolling = alerts["rolling_zscore"].context["detector_evidence"]
+    assert rolling["window"]["count"] == 30
+    assert rolling["configuration"]["parameters"]["segment_fields"] == ["station"]
 
     no_duplicates = run_polling_cycle(database=database, profile=after_restart, config=config, adapter=FakeAdapter())
     assert no_duplicates.detector_events_created == 0
