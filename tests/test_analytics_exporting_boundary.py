@@ -12,6 +12,8 @@ from metroliza.analytics.grouping_labels import (
 )
 from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.exporting import export_grouping_utils, export_query_service
+from metroliza.analytics import grouping_labels as legacy_grouping_labels
+from metroliza.shared import grouping_labels
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,10 @@ def test_export_helpers_preserve_row_table_and_group_label_compatibility() -> No
     assert export_query_service._coerce_to_row_table is coerce_to_row_table
     assert export_grouping_utils.normalize_default_group_label is normalize_default_group_label
     assert export_grouping_utils.normalize_group_labels is normalize_group_labels
+    assert normalize_default_group_label is grouping_labels.normalize_default_group_label
+    assert normalize_group_labels is grouping_labels.normalize_group_labels
+    assert legacy_grouping_labels.GroupDescriptor is grouping_labels.GroupDescriptor
+    assert legacy_grouping_labels.group_definition_rows is grouping_labels.group_definition_rows
 
     table = export_query_service.build_export_dataframe(
         [("A", 1.0), ("B", 2.0)],

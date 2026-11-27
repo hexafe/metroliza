@@ -21,7 +21,6 @@ from unicodedata import normalize
 from uuid import uuid4
 from weakref import WeakValueDictionary
 
-from metroliza.analytics.grouping_labels import group_definition_rows
 from metroliza.charts.dashboard_navigation import (
     render_back_to_section,
     render_back_to_dashboard_start,
@@ -79,6 +78,7 @@ from metroliza.charts.plotly_stat_helpers import (
     strip_group_count_suffix as _strip_group_count_suffix,
 )
 from metroliza.charts.value_formatting import format_metrology_legend_value as _shared_format_metrology_legend_value
+from metroliza.shared.grouping_labels import group_definition_rows
 
 
 _PLOTLY_COLORWAY = [

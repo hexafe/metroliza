@@ -2,7 +2,8 @@
 
 New canonical code should import contracts from their owning package:
 ``metroliza.exporting.contracts``, ``metroliza.industrial.contracts``,
-``metroliza.tabular.contracts``, or ``metroliza.shared.parse_contracts``.
+``metroliza.tabular.contracts``, ``metroliza.shared.grouping_contracts`` or
+``metroliza.shared.parse_contracts``.
 The aliases here preserve the historical public API without loading feature
 packages during a cold import of this module.
 """
@@ -20,8 +21,8 @@ _COMPAT_EXPORTS = {
     ),
     "ExportOptions": ("metroliza.exporting.contracts", "ExportOptions"),
     "ExportRequest": ("metroliza.exporting.contracts", "ExportRequest"),
-    "GroupingAssignment": ("metroliza.tabular.contracts", "GroupingAssignment"),
-    "GroupingAssignments": ("metroliza.tabular.contracts", "GroupingAssignments"),
+    "GroupingAssignment": ("metroliza.shared.grouping_contracts", "GroupingAssignment"),
+    "GroupingAssignments": ("metroliza.shared.grouping_contracts", "GroupingAssignments"),
     "IndustrialAnalyticsRequest": (
         "metroliza.industrial.contracts",
         "IndustrialAnalyticsRequest",

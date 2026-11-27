@@ -10,18 +10,18 @@ import sqlite3
 from time import monotonic
 from unicodedata import normalize
 
-from metroliza.analytics.grouping_labels import DEFAULT_GROUP_LABEL, POPULATION_GROUP_ID, GroupDescriptor
 from metroliza.reports.db import sqlite_readonly_connection_scope
 from metroliza.reports.report_query_service import build_grouping_query, build_measurement_export_query
 from metroliza.reports.report_typed_filter import (
     ReportTypedViewError, _database_stamp, require_report_typed_view,
 )
 from metroliza.shared.datetime_parsing import parse_datetime_literal
+from metroliza.shared.grouping_contracts import GroupingAssignment, GroupingAssignments
 from metroliza.shared.grouping_filter_core import DataFrameFilterSpec
+from metroliza.shared.grouping_labels import DEFAULT_GROUP_LABEL, POPULATION_GROUP_ID, GroupDescriptor
 from metroliza.shared.typed_filter import (
     PandasFilterAdapter, dump_typed_filter, load_typed_filter, parse_typed_filter, FilterField,
 )
-from metroliza.tabular.contracts import GroupingAssignment, GroupingAssignments
 
 
 PRESET_VERSION = 1

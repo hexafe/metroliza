@@ -10,8 +10,8 @@ from metroliza.exporting.export_summary_composition_service import (
     classify_capability_value as _classify_capability_value,
 )
 from metroliza.analytics.group_analysis_service import get_spec_status_label
-from metroliza.analytics.grouping_labels import group_definition_rows
 from metroliza.shared.docs_links import github_blob_url
+from metroliza.shared.grouping_labels import group_definition_rows
 
 SECTION_GAP = 1
 DEFAULT_PLOT_ROW_SPAN = 16

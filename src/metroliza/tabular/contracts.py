@@ -9,23 +9,9 @@ import sys
 from typing import Any
 
 from metroliza.analytics.row_table import RowMapping, RowTable
+from metroliza.shared.grouping_contracts import GroupingAssignment, GroupingAssignments
 
 
-@dataclass(frozen=True)
-class GroupingAssignment:
-    """Logical grouping assignment keyed by canonical report identity."""
-
-    group: str
-    report_id: int | None = None
-    reference: str | None = None
-    fileloc: str | None = None
-    filename: str | None = None
-    date: str | None = None
-    sample_number: str | None = None
-    group_color: str | None = None
-
-
-GroupingAssignments = tuple[GroupingAssignment, ...]
 _PLAIN_GROUPING_VALUE_TYPES = (str, int, float, bool, Decimal, type(None))
 
 
