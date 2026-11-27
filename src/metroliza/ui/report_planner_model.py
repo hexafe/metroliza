@@ -121,6 +121,7 @@ class ExecutionStatus(str, Enum):
     ALREADY_PRESENT = "already_present"
     SKIPPED = "skipped"
     FAILED = "failed"
+    CANCELLED = "cancelled"
     UNKNOWN = "unknown"
 
 
@@ -129,6 +130,7 @@ _EXECUTION_LABELS = {
     ExecutionStatus.ALREADY_PRESENT: "Already present",
     ExecutionStatus.SKIPPED: "Skipped",
     ExecutionStatus.FAILED: "Failed",
+    ExecutionStatus.CANCELLED: "Cancelled",
     ExecutionStatus.UNKNOWN: "Unknown",
 }
 
@@ -136,7 +138,10 @@ _EXECUTION_DETAILS = {
     ExecutionStatus.SAVED: "Saved to the selected database.",
     ExecutionStatus.ALREADY_PRESENT: "Report already present in the selected database.",
     ExecutionStatus.FAILED: "Report processing failed.",
+    ExecutionStatus.CANCELLED: "Cancelled before this report was saved.",
 }
+
+_RECEIPT_STATUSES = frozenset(status.value for status in _EXECUTION_DETAILS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,10 +182,10 @@ def build_execution_rows(review, selected_ids, receipts):
                 "Excluded during review: " + _STATUS_LABELS[item.status] + ". Not submitted for import."
             )
             attention = item.status not in (ParsePreflightStatus.READY, ParsePreflightStatus.DUPLICATE)
-        elif occurrences[identity] == 1 and len(states) == 1 and type(states[0]) is str and states[0] in {"saved", "already_present", "failed"}:
+        elif occurrences[identity] == 1 and len(states) == 1 and type(states[0]) is str and states[0] in _RECEIPT_STATUSES:
             status = ExecutionStatus(states[0])
             detail = _EXECUTION_DETAILS[status]
-            attention = status is ExecutionStatus.FAILED
+            attention = status in (ExecutionStatus.FAILED, ExecutionStatus.CANCELLED)
         rows.append(ReportExecutionRow(identity, str(item.display_name), safe_parser_id(item.parser_id), status, detail, attention))
     return tuple(rows)
 

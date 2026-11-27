@@ -27,12 +27,12 @@ ERROR_CODES = ('reports_gate_missing', 'reports_fixture_invalid', 'reports_appli
                'reports_capture_failed', 'reports_summary_clipped',
                'reports_worker_join_deadline', 'reports_cleanup_failed', 'unexpected_exception')
 FIXTURE_HASHES = {'reports-12.zip': '99f2a0af7269e52e82ac60a784e29aa82153a37b72357dc3844019d487c22041',
-                  'oracles.json': '2ebad1ab90578f926f608e40652c516f36aaa5c55de918228ffd0b735551e1d4'}
+                  'oracles.json': '557b093b0f52983034a05692a9936f3409fdd3663ab382d1c3415ed59cb87d8e'}
 CAPTURE_STATES = {
-    'reports-saved-top': {'rows': 12, 'saved': 12, 'failed': 0, 'unknown': 0, 'attention': 0, 'viewport': 'top'},
-    'reports-saved-bottom': {'rows': 12, 'saved': 12, 'failed': 0, 'unknown': 0, 'attention': 0, 'viewport': 'bottom'},
-    'reports-partial-error': {'rows': 12, 'saved': 11, 'failed': 1, 'unknown': 0, 'attention': 1, 'viewport': 'top'},
-    'reports-partial-cancel': {'rows': 12, 'saved': 1, 'failed': 0, 'unknown': 11, 'attention': 11, 'viewport': 'top'},
+    'reports-saved-top': {'rows': 12, 'saved': 12, 'failed': 0, 'cancelled': 0, 'unknown': 0, 'attention': 0, 'viewport': 'top'},
+    'reports-saved-bottom': {'rows': 12, 'saved': 12, 'failed': 0, 'cancelled': 0, 'unknown': 0, 'attention': 0, 'viewport': 'bottom'},
+    'reports-partial-error': {'rows': 12, 'saved': 11, 'failed': 1, 'cancelled': 0, 'unknown': 0, 'attention': 1, 'viewport': 'top'},
+    'reports-partial-cancel': {'rows': 12, 'saved': 1, 'failed': 0, 'cancelled': 11, 'unknown': 0, 'attention': 11, 'viewport': 'top'},
 }
 MEASUREMENT_FIELDS = ('row_order', 'header', 'section_name', 'feature_label',
                       'characteristic_name', 'characteristic_family', 'description',
@@ -263,14 +263,16 @@ class _Journey:
         planner = self.workspace.report_planner
         model, proxy = planner.model, planner.proxy
         rows = list(model.execution_rows)
-        expected = {name: 'failed' if case == 'B' and name == self.names[5] else
-                    'unknown' if case == 'C' and name != self.names[0] else 'saved' for name in self.names}
+        scenario = self.oracle['scenarios'][case]
+        expected = {name: 'failed' if name == scenario.get('failed_name') else
+                    'cancelled' if case == 'C' and name != scenario['saved_name'] else 'saved'
+                    for name in self.names}
         _require({row.stable_occurrence_id for row in rows} == set(self.names))
         _require(len(rows) == model.rowCount() == proxy.rowCount() == 12
                  and len({row.stable_occurrence_id for row in rows}) == 12)
         _require({row.display_name: row.status.value for row in rows} == expected)
-        _require(model.selected_ids == () and not model.valid and self.workspace._preflight_result is None
-                 and not self.workspace.parse_button.isEnabled())
+        _require(model.selected_ids == () and not model.valid and self.workspace._preflight_result is None)
+        self.check_resume_action(expected)
         facts = []
         for index, row in enumerate(rows):
             cells = [model.data(model.index(index, col), Qt.ItemDataRole.DisplayRole) for col in range(model.columnCount())]
@@ -278,12 +280,12 @@ class _Journey:
             readonly = all(not model.flags(model.index(index, col)) & (Qt.ItemFlag.ItemIsEditable | Qt.ItemFlag.ItemIsUserCheckable)
                            for col in range(model.columnCount()))
             _require(readonly and row.needs_attention == (row.status.value != 'saved'))
-            if row.status.value == 'unknown':
-                _require(row.detail == 'No per-report completion evidence. Review the destination before retrying.')
+            if row.status.value == 'cancelled':
+                _require(row.detail == 'Cancelled before this report was saved.')
             facts.append(dict(name=row.display_name, occurrence_id=row.stable_occurrence_id,
                               state=row.status.value, readonly=readonly, attention=row.needs_attention))
         states = {receipt.occurrence_id: receipt.state for receipt in receipts}
-        _require(len(states) == len(receipts) and states == {row['occurrence_id']: row['state'] for row in facts if row['state'] != 'unknown'})
+        _require(len(states) == len(receipts) and states == {row['occurrence_id']: row['state'] for row in facts})
         attention = sum(row['attention'] for row in facts)
         planner.attention_filter.setChecked(True)
         _require(proxy.rowCount() == attention)
@@ -292,13 +294,25 @@ class _Journey:
         expected_counts = Counter(expected.values())
         _require(all(model.execution_counts.get(key, 0) == count for key, count in expected_counts.items()))
         outcome = planner.outcome.toPlainText()
-        for status, word in [('saved', 'Saved'), ('failed', 'Failed'), ('unknown', 'Cancelled')]:
+        for status, word in [('saved', 'Saved'), ('failed', 'Failed'), ('cancelled', 'Cancelled')]:
             if expected_counts[status]:
                 _require(f'{word}: {expected_counts[status]} report file' in outcome)
         _require(self.workspace.import_succeeded == (attention == 0))
         _require((self.workspace.readiness_label.property('statusVariant') == 'success') == (attention == 0))
         ordered = sorted(facts, key=lambda row: row['name'])
         return ordered, states
+
+    def check_resume_action(self, expected):
+        pending = {name for name, state in expected.items() if state in ('failed', 'cancelled')}
+        button, plan = self.workspace.parse_button, self.workspace._resume_plan
+        _require(button.isEnabled() == bool(pending))
+        if pending:
+            plain_text = import_module('metroliza.ui.shortcuts').plain_text
+            _require(plain_text(button.text()).startswith(f'Resume import ({len(pending)})')
+                     and plan is not None and plan.database_path == self.workspace.db_file
+                     and {item.occurrence_id for item in plan.selected_reports} == pending)
+        else:
+            _require(plan is None)
 
     def summary(self, case):
         from PyQt6.QtCore import QTimer
@@ -314,7 +328,8 @@ class _Journey:
         self.evidence['summaries'][case] = snapshots
         expected = self.oracle['scenarios'][case]
         for fragment in ('Last import: 12 visible / 12 report results', f"{expected['saved']} saved",
-                         f"{expected['failed']} failed", f"{expected['unknown']} unknown"):
+                         f"{expected['failed']} failed", f"{expected['cancelled']} cancelled",
+                         f"{expected['unknown']} unknown"):
             _require(fragment in planner.counts.accessibleDescription())
         for name in (('reports-saved-top', 'reports-saved-bottom') if case == 'A' else
                      ('reports-partial-error' if case == 'B' else 'reports-partial-cancel',)):

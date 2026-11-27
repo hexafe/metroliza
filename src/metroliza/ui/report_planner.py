@@ -581,7 +581,8 @@ class ReportPlanner(QWidget):
             text = (f"Last import: {visible_count} visible / {counts['total']} report results · "
                     f"{results.get('saved', 0)} saved · {results.get('already_present', 0)} already present · "
                     f"{results.get('skipped', 0)} skipped · {results.get('failed', 0)} failed · "
-                    f"{results.get('unknown', 0)} unknown · {counts['attention']} need attention · Review again to import")
+                    f"{results.get('cancelled', 0)} cancelled · {results.get('unknown', 0)} unknown · "
+                    f"{counts['attention']} need attention")
         missing_reference = self.model.missing_reference_count
         if missing_reference:
             text += f" · {missing_reference} missing reference"
