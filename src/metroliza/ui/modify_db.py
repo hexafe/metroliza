@@ -59,7 +59,7 @@ from metroliza.ui.modify_db_records import (
 )
 from metroliza.reports.report_repository import ReportRepository, validate_manual_number
 from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
-from metroliza.reports.report_metadata_review import FIELD_LABELS
+from metroliza.reports.report_metadata_review import FIELD_LABELS, OCR_ACCEPTED
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -123,9 +123,10 @@ def _stored_ocr_decision_lines(decisions: tuple[StoredOcrDecision, ...]) -> list
             provenance.append(f"page {decision.page_number}")
         if decision.confidence is not None:
             provenance.append(f"{round(decision.confidence * 100)}% confidence")
+        value_label = "Accepted value" if decision.decision == OCR_ACCEPTED else "Suggested value"
         lines.append(
             f"{FIELD_LABELS[decision.field_name]} · {decision.decision.capitalize()} · "
-            f"Suggested value: {decision.value} ({' / '.join(provenance)})"
+            f"{value_label}: {decision.value} ({' / '.join(provenance)})"
         )
     return lines
 
@@ -727,6 +728,9 @@ class ModifyDB(QDialog):
         if prompt.exec() != QMessageBox.StandardButton.Yes or sip.isdeleted(dialog) or sip.isdeleted(self):
             return
         if not self._can_accept_stored_ocr(approval):
+            QMessageBox.warning(
+                dialog, "Use OCR suggestion", "The report changed. Reopen Report details and review the suggestion again.",
+            )
             return
         dialog.reject()
         _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_STARTED)

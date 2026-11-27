@@ -785,13 +785,16 @@ def test_complete_enrichment_preserves_manual_edit_after_snapshot(tmp_path, fake
     assert _single_report(database)[0]["reference"] == "NEW-MANUAL"
 
 
-def test_imported_deferred_sample_can_be_accepted_and_survives_real_enrichment(tmp_path, fake_ocr, monkeypatch):
+@pytest.mark.parametrize("metadata_parsing_mode", ["light", "complete"])
+def test_imported_deferred_sample_can_be_accepted_and_survives_real_enrichment(
+    tmp_path, fake_ocr, monkeypatch, metadata_parsing_mode,
+):
     from metroliza.parsing.metadata_enrichment_thread import (
         discover_metadata_enrichment_work,
         enrich_existing_report_metadata,
     )
 
-    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,), metadata_parsing_mode="complete")
+    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,), metadata_parsing_mode=metadata_parsing_mode)
 
     def canonical_identity():
         with closing(sqlite3.connect(database)) as connection:

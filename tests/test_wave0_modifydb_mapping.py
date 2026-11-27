@@ -558,7 +558,10 @@ def test_accepting_deferred_ocr_from_report_details_preserves_exact_stored_candi
         _wait_edit(dialog)
         assert len(confirmations) == 2 and all(proposed in "\n".join(prompt) for prompt in confirmations)
         assert committed == [path]
-        assert load_stored_report_context(path, report).ocr_decisions == ()
+        context = load_stored_report_context(path, report)
+        accepted, = context.ocr_decisions
+        assert accepted.decision == "accepted" and accepted.approval is None
+        assert "Reference · Accepted · Accepted value: OCR-" in dialog._report_details_text(context)
         with closing(sqlite3.connect(path)) as connection:
             value, part_name, metadata_json = connection.execute(
                 "SELECT reference, part_name, metadata_json FROM report_metadata WHERE report_id = ?", (report,),

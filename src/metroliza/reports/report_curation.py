@@ -7,7 +7,7 @@ import sqlite3
 
 from metroliza.reports.db import SQLiteFileBinding, quote_identifier, sqlite_readonly_connection_scope
 from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
-from metroliza.reports.report_metadata_review import OCR_DEFERRED, OCR_REJECTED, REVIEW_FIELDS
+from metroliza.reports.report_metadata_review import OCR_ACCEPTED, OCR_DEFERRED, OCR_REJECTED, REVIEW_FIELDS
 
 
 DETAIL_ROW_LIMIT = 25
@@ -235,7 +235,7 @@ def read_deferred_ocr_approval(connection, binding, report_id, field_name, recor
 
 
 def _stored_ocr_decision(field_name: str, record) -> StoredOcrDecision | None:
-    if not isinstance(record, dict) or record.get("decision") not in (OCR_DEFERRED, OCR_REJECTED):
+    if not isinstance(record, dict) or record.get("decision") not in (OCR_ACCEPTED, OCR_DEFERRED, OCR_REJECTED):
         return None
     value = _bounded_decision_text(record.get("value"))
     source_type = _bounded_decision_text(record.get("source_type"))
