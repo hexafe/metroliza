@@ -57,11 +57,15 @@ class WorkspaceFiles(QObject):
         if consents is not None:
             snapshot = self.window.workspace_context.snapshot
             draft = self.window.report_grouping_draft
-            if draft is not None and self.window.get_report_grouping_draft(snapshot.database_file) is None:
+            binding = self.window._database_source_binding(snapshot.database_file) if draft is not None else None
+            if draft is not None and (
+                binding is None or binding.identity is None
+                or self.window.get_report_grouping_draft(snapshot.database_file) is None
+            ):
                 self._error("Select the Reports database again before saving its grouping draft.")
                 return
             self._start(write_workspace, self._saved, path, snapshot,
-                        self.window.navigation_combo.currentData(), consents, draft)
+                        self.window.navigation_combo.currentData(), consents, draft, binding)
 
     def _saved(self, path):
         self.window.statusBar().showMessage(f"Workspace saved to {path}", 8000)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from metroliza.exporting.output_publication import publish_output
 
 if TYPE_CHECKING:
+    from metroliza.reports.db import SQLiteFileBinding
     from metroliza.reports.report_grouping_rules import ReportGroupingPreset
 
 
@@ -104,16 +105,41 @@ def _workspace_payload(state, report_grouping_draft):
     return payload
 
 
-def write_workspace(path, snapshot, page, consents=(), report_grouping_draft=None):
-    state = SavedWorkspace(page, WorkspaceLocation.capture(snapshot.source_directory),
-                           WorkspaceLocation.capture(snapshot.database_file))
+def write_workspace(path, snapshot, page, consents=(), report_grouping_draft=None,
+                    database_binding: SQLiteFileBinding | None = None):
+    database_path = snapshot.database_file
+    if report_grouping_draft is not None and (
+        database_binding is None or database_binding.identity is None or not database_path
+    ):
+        raise ValueError("Select the Reports database again before saving its grouping draft.")
+
+    def check_database():
+        if database_binding is not None:
+            database_binding.require(database_path)
+        return False
+
+    check_database()
+    source = WorkspaceLocation.capture(snapshot.source_directory)
+    check_database()
+    database = WorkspaceLocation.capture(database_path)
+    check_database()
+    if database_binding is not None and database is not None and (
+        Path(database.path) != database_binding.path
+        or (database.device, database.inode) != database_binding.identity
+    ):
+        from metroliza.reports.db import DatabaseSourceChanged
+
+        raise DatabaseSourceChanged("The selected database was replaced or removed.")
+    state = SavedWorkspace(page, source, database)
     target = Path(path)
     payload = _workspace_payload(state, report_grouping_draft)
     with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
         staged = Path(stream.name)
     try:
         staged.write_bytes(payload)
-        publish_output(staged, target, consents=consents)
+        # The shared publisher calls the check inside its destination lock.
+        guard = {"should_cancel": check_database} if database_binding is not None else {}
+        publish_output(staged, target, consents=consents, **guard)
     finally:
         staged.unlink(missing_ok=True)
     return target

@@ -14,6 +14,7 @@ from metroliza.app.analysis_history import (
     record_analysis, result_still_matches,
 )
 from metroliza.app.workspace_file import read_workspace, write_workspace
+from metroliza.reports.db import SQLiteFileBinding
 from metroliza.reports.report_grouping_rules import ReportGroupRule, ReportGroupingPreset
 from metroliza.ui.workspace_context import WorkspaceSnapshot
 
@@ -56,7 +57,10 @@ def test_workspace_v2_embeds_only_the_versioned_ordered_rule_definition(tmp_path
     snapshot = WorkspaceSnapshot(1, None, str(database))
     output = tmp_path / "grouping.metroliza-workspace"
     draft = _rule_draft()
-    write_workspace(output, snapshot, "reports", report_grouping_draft=draft)
+    with pytest.raises(ValueError, match="Select the Reports database"):
+        write_workspace(output, snapshot, "reports", report_grouping_draft=draft)
+    write_workspace(output, snapshot, "reports", report_grouping_draft=draft,
+                    database_binding=SQLiteFileBinding.capture(database))
 
     saved = read_workspace(output)
     assert saved.report_grouping_draft == draft
@@ -77,7 +81,8 @@ def test_workspace_v2_rejects_incompatible_or_ambiguous_drafts(tmp_path, change)
     database = tmp_path / "source.sqlite"
     database.write_bytes(b"SYNTHETIC DATABASE")
     output = tmp_path / "grouping.metroliza-workspace"
-    write_workspace(output, WorkspaceSnapshot(1, None, str(database)), "reports", report_grouping_draft=_rule_draft())
+    write_workspace(output, WorkspaceSnapshot(1, None, str(database)), "reports", report_grouping_draft=_rule_draft(),
+                    database_binding=SQLiteFileBinding.capture(database))
     payload = json.loads(output.read_bytes())
     if change == "future":
         payload["version"] = 3
@@ -107,7 +112,8 @@ def test_workspace_size_limit_leaves_previous_file_intact(tmp_path, monkeypatch)
     previous = output.read_bytes()
     monkeypatch.setattr(workspace_file, "_MAX_WORKSPACE_BYTES", len(previous))
     with pytest.raises(ValueError, match="file limit"):
-        write_workspace(output, snapshot, "reports", report_grouping_draft=_rule_draft())
+        write_workspace(output, snapshot, "reports", report_grouping_draft=_rule_draft(),
+                        database_binding=SQLiteFileBinding.capture(database))
     assert output.read_bytes() == previous
     assert read_workspace(output).report_grouping_draft is None
 

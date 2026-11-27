@@ -1276,6 +1276,7 @@ def test_workspace_menu_round_trips_rule_draft_without_reusing_applied_assignmen
 
 def test_workspace_rule_relink_cancel_and_pinned_export_do_not_consume_restored_draft(window, app, tmp_path, monkeypatch):
     from metroliza.app.workspace_file import write_workspace
+    from metroliza.reports.db import SQLiteFileBinding
     from metroliza.reports.report_grouping_rules import ReportGroupRule, ReportGroupingPreset
     from metroliza.ui.workspace_context import WorkspaceSnapshot
 
@@ -1283,7 +1284,8 @@ def test_workspace_rule_relink_cancel_and_pinned_export_do_not_consume_restored_
     current = _create_workspace_reports(tmp_path, "current.sqlite", ("another",))
     saved = tmp_path / "other.metroliza-workspace"
     carried = ReportGroupingPreset("Restored", (ReportGroupRule("0" * 32, "Match", "#aAbBcC", 'Reference = "001"'),))
-    write_workspace(saved, WorkspaceSnapshot(1, None, str(original)), "reports", report_grouping_draft=carried)
+    write_workspace(saved, WorkspaceSnapshot(1, None, str(original)), "reports", report_grouping_draft=carried,
+                    database_binding=SQLiteFileBinding.capture(original))
     moved = original.rename(tmp_path / "relocated.sqlite")
 
     assert window.set_db_file(str(current))
@@ -1358,6 +1360,56 @@ def test_workspace_open_preserves_grouping_edited_while_reading_the_file(window,
         wait_until(app, lambda: window._workspace_files().task is None)
     assert window.report_grouping_draft is retained
     assert any("workspace changed while this file was opening" in message for message in warnings)
+
+
+@pytest.mark.parametrize("when", ["before_worker", "after_capture", "before_publication"])
+def test_workspace_save_keeps_previous_file_if_approved_database_is_replaced(window, app, tmp_path, monkeypatch, when):
+    from metroliza.app import workspace_file
+    from metroliza.ui import workspace_files
+
+    database = _create_workspace_reports(tmp_path, "grouping.sqlite", ("001",))
+    replacement = _create_workspace_reports(tmp_path, "replacement.sqlite", ("changed",))
+    assert window.set_db_file(str(database))
+    window.launch_export_dialog(whole_database=True)
+    _edit_workspace_grouping(app, window.export_dialog, _keep_workspace_draft)
+    target = tmp_path / "draft.metroliza-workspace"
+    _save_workspace_menu(window, app, monkeypatch, target)
+    previous = target.read_bytes()
+    window._show_workspace_page("reports")
+
+    if when == "before_worker":
+        write = workspace_files.write_workspace
+
+        def replace_before_write(*args, **kwargs):
+            replacement.replace(database)
+            return write(*args, **kwargs)
+
+        monkeypatch.setattr(workspace_files, "write_workspace", replace_before_write)
+    elif when == "after_capture":
+        capture = workspace_file.WorkspaceLocation.capture
+
+        def replace_after_capture(_cls, path):
+            location = capture(path)
+            if path == str(database):
+                replacement.replace(database)
+            return location
+
+        monkeypatch.setattr(workspace_file.WorkspaceLocation, "capture", classmethod(replace_after_capture))
+    else:
+        publish = workspace_file.publish_output
+
+        def replace_before_publication(*args, **kwargs):
+            replacement.replace(database)
+            return publish(*args, **kwargs)
+
+        monkeypatch.setattr(workspace_file, "publish_output", replace_before_publication)
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    _save_workspace_menu(window, app, monkeypatch, target)
+    assert not replacement.exists()
+    assert target.read_bytes() == previous
+    assert any("selected database was replaced" in message for message in warnings)
 
 
 def test_recent_store_bounded_validated_and_windows_dedup(tmp_path):
