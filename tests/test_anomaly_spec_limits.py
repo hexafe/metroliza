@@ -92,3 +92,5 @@ def test_spec_limit_configuration_identity_tracks_effective_parameters():
     assert original["configuration"]["parameters"]["usl"] == 10.5
     assert original == evidence(updated_at="2026-06-13T11:00:00Z")
     assert original["configuration_revision"] != evidence(usl=11.0)["configuration_revision"]
+    assert original["configuration_revision"] == evidence(nominal=None)["configuration_revision"]
+    assert evidence(usl=11)["configuration_revision"] == evidence(usl=11.0)["configuration_revision"]

@@ -1,6 +1,8 @@
 from contextlib import closing
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+import json
 from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
@@ -410,7 +412,7 @@ def test_rolling_replay_isolates_configured_segments_across_batches(tmp_path, ba
     assert evidence["source_profile_id"] == request.source_profile_id
     assert evidence["configuration"] == {
         "detector": "rolling_zscore", "algorithm_version": 1,
-        "parameters": {"min_n": 30, "threshold": 3.0, "max_window": 500},
+        "parameters": {"min_n": 30, "threshold": 3.0, "max_window": 500, "segment_fields": ["station"]},
     }
     assert evidence["window"]["kind"] == "prior_samples"
     assert evidence["window"]["count"] == 30
@@ -419,7 +421,10 @@ def test_rolling_replay_isolates_configured_segments_across_batches(tmp_path, ba
         (evidence["window"]["last_sample_id"],),
     )
     assert history_end.source_record_key == "row-59" and history_end.segment_key == {"station": "B"}
-    assert len(evidence["window"]["values_sha256"]) == 64 and "values" not in evidence["window"]
+    expected_history = json.dumps([199.0, 201.0] * 15, separators=(",", ":")).encode()
+    assert evidence["window"]["values_sha256"] == sha256(expected_history).hexdigest()
+    assert evidence["window"]["segment_sha256"] == sha256(b'{"station":"B"}').hexdigest()
+    assert "values" not in evidence["window"] and "segment_key" not in evidence["window"]
     assert replay_industrial_stream(request).detector_events_created == 0
 
 
@@ -434,6 +439,24 @@ def test_rolling_replay_rejects_excess_segments_before_writes(tmp_path, dry_run)
     before = database.read_bytes()
     assert replay_industrial_stream(replace(request, dry_run=True, limit=256)).samples_processed == 256
     with pytest.raises(ValueError, match="supports up to 256 segments"):
+        replay_industrial_stream(replace(request, dry_run=dry_run))
+    assert database.read_bytes() == before
+
+
+@pytest.mark.parametrize(("change", "message"), [
+    ("metric", "does not match the stored signal metric"),
+    ("segment", "missing configured segment columns: station"),
+])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_rolling_replay_rejects_incompatible_input_without_changing_database(tmp_path, change, message, dry_run):
+    database, csv_path, _signal, request = _rolling_replay(tmp_path)
+    if change == "metric":
+        request = replace(request, metric_column="other")
+        csv_path.write_text("record_id,event_time,other,station\none,2026-06-12T09:00:00Z,100,A\n", encoding="utf-8")
+    else:
+        csv_path.write_text("record_id,event_time,cycle_time_s\none,2026-06-12T09:00:00Z,100\n", encoding="utf-8")
+    before = database.read_bytes()
+    with pytest.raises(ValueError, match=message):
         replay_industrial_stream(replace(request, dry_run=dry_run))
     assert database.read_bytes() == before
 
@@ -465,6 +488,17 @@ def test_equal_time_replay_keeps_the_existing_source_health_event(tmp_path):
     path.write_text(header + newer_id + older_id, encoding="utf-8")
     assert replay_industrial_stream(request).detector_events_created == 0
     assert repository.list_events() == [existing]
+
+    # Existing alert identity continues to be sample + detector when the
+    # previously stored event predates the new evidence document.
+    old_context = {"source_level": True, "last_sample_id": existing.sample_id}
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "UPDATE industrial_anomaly_events SET context_json = ? WHERE id = ?",
+            (json.dumps(old_context), existing.id),
+        )
+    assert replay_industrial_stream(request).detector_events_created == 0
+    assert repository.list_events() == [replace(existing, context=old_context)]
 
 
 def test_end_to_end_replay_normal_process_creates_no_events(tmp_path):

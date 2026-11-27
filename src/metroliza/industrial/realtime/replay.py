@@ -329,7 +329,10 @@ def _replay_ordered_stream(
     )
     needs_rolling = _ROLLING_DETECTOR in request.detectors
     if needs_rolling and existing_signal is not None and existing_signal.metric_name != request.metric_column:
-        raise ValueError("Rolling replay requires the replay column to match the stored signal metric.")
+        raise ValueError(
+            "The replay column does not match the stored signal metric. "
+            "Select that metric column or use a different signal."
+        )
     segment_fields = _signal_attr(existing_signal, "segment_fields") or ()
     map_samples = rows_to_samples
     if existing_signal is not None and (needs_baselines or needs_rolling):
@@ -428,7 +431,10 @@ def _validate_segment_columns(input_file: str, segment_fields: tuple[str, ...]) 
         headers = csv.DictReader(handle).fieldnames or ()
     missing = [field for field in segment_fields if field not in headers]
     if missing:
-        raise ValueError(f"Replay CSV is missing configured segment columns: {', '.join(missing)}")
+        raise ValueError(
+            f"Replay CSV is missing configured segment columns: {', '.join(missing)}. "
+            "Add the columns or use a different signal."
+        )
 
 
 def _validate_replay_input(request: ReplayRequest, map_samples, *, rolling_fields: tuple[str, ...]) -> None:
@@ -445,7 +451,8 @@ def _validate_replay_input(request: ReplayRequest, map_samples, *, rolling_field
                 )
             last_event_time = sample.event_time
             if rolling_fields:
-                segment_key = _rolling_segment_key(sample, rolling_fields)
+                segment = _configured_segment(sample, rolling_fields)
+                segment_key = _rolling_segment_key(segment) if segment is not None else None
                 if segment_key is not None and segment_key not in rolling_segments:
                     _require_rolling_capacity(len(rolling_segments))
                     rolling_segments.add(segment_key)
@@ -492,18 +499,17 @@ def _signal_attr(signal: SignalDefinition | None, name: str) -> Any:
     return getattr(signal, name) if signal is not None else None
 
 
-def _configured_segment(sample: IndustrialSample, fields: tuple[str, ...]) -> str | None:
+def _configured_segment(sample: IndustrialSample, fields: tuple[str, ...]) -> dict[str, Any] | None:
     segment = {field: sample.segment_key.get(field) for field in fields}
     if any(value in (None, "") for value in segment.values()):
         return None
-    return to_json(segment)
+    return segment
 
 
-def _rolling_segment_key(sample: IndustrialSample, fields: tuple[str, ...]) -> bytes | None:
-    if not fields:
+def _rolling_segment_key(segment: dict[str, Any]) -> bytes:
+    if not segment:
         return b""
-    segment_json = _configured_segment(sample, fields)
-    return sha256(segment_json.encode("utf-8")).digest() if segment_json is not None else None
+    return sha256(to_json(segment).encode("utf-8")).digest()
 
 
 def _require_rolling_capacity(segment_count: int) -> None:
@@ -557,19 +563,23 @@ class _ReplayDetectorSession:
             baseline = self._baseline_for_sample(sample, baselines)
             for detector in self.detectors:
                 rolling_key = None
+                window_segment = None
                 state = DetectorState()
                 if detector.detector_key == _ROLLING_DETECTOR:
                     if sample.metric_name != self.signal.metric_name:
                         continue
-                    rolling_key = _rolling_segment_key(sample, self.signal.segment_fields)
-                    if rolling_key is None:
+                    window_segment = _configured_segment(sample, self.signal.segment_fields)
+                    if window_segment is None:
                         continue
+                    rolling_key = _rolling_segment_key(window_segment)
                     if rolling_key in self.rolling_states:
                         state = self.rolling_states[rolling_key]
                     else:
                         _require_rolling_capacity(len(self.rolling_states))
                 detector_baseline = baseline if detector.detector_key in _BASELINE_DETECTORS else {}
-                context = DetectorContext(signal=self.signal, state=state, baseline=detector_baseline)
+                context = DetectorContext(
+                    signal=self.signal, state=state, baseline=detector_baseline, window_segment=window_segment,
+                )
                 result = detector.score_one(sample, context)
                 if result is not None:
                     events.append(_with_baseline_evidence(result, detector_baseline))
@@ -586,9 +596,10 @@ class _ReplayDetectorSession:
             return {}
         # Earlier replays may have stored extra dimensions. Use only the
         # configured key and leave old samples with missing dimensions unscored.
-        segment_json = _configured_segment(sample, self.signal.segment_fields)
-        if segment_json is None:
+        segment = _configured_segment(sample, self.signal.segment_fields)
+        if segment is None:
             return {}
+        segment_json = to_json(segment)
         if segment_json not in cache:
             cache[segment_json] = self.baseline_lookup(segment_json=segment_json) or {}
         return cache[segment_json]

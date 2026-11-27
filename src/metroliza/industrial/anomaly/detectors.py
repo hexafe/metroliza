@@ -14,6 +14,7 @@ from metroliza.industrial.anomaly.contracts import (
     DetectorContext,
     DetectorState,
 )
+from metroliza.industrial.json_safety import json_safe_value
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
 from metroliza.industrial.realtime.timestamps import parse_utc_timestamp
 
@@ -66,7 +67,7 @@ def _result(
     window: dict[str, Any],
     extra_context: dict[str, Any] | None = None,
 ) -> DetectionResult:
-    configuration = {"detector": detector_key, "algorithm_version": 1, "parameters": parameters}
+    configuration = {"detector": detector_key, "algorithm_version": 1, "parameters": dict(parameters)}
     evidence = {
         "schema_version": 1,
         "source_profile_id": sample.source_profile_id,
@@ -112,7 +113,8 @@ class SpecLimitDetector:
             "lower_warning": signal.lower_warning,
             "upper_warning": signal.upper_warning,
         }
-        parameters = {**thresholds, "nominal": signal.nominal, "warning_severity": self.warning_severity}
+        parameters = {key: _finite_float_or_none(raw) for key, raw in thresholds.items()}
+        parameters["warning_severity"] = self.warning_severity
         window = {"kind": "trigger_sample"}
         if signal.lsl is not None and value < signal.lsl:
             return _result(
@@ -217,7 +219,7 @@ class IQRDetector:
             expected_value=(q1_value + q3_value) / 2.0,
             threshold={"lower_fence": lower, "upper_fence": upper, "iqr": iqr_value, "n": n},
             explanation=f"Observed value {value:g} is outside IQR fence [{lower:g}, {upper:g}].",
-            parameters={"min_n": self.min_n, "fence_multiplier": self.fence_multiplier},
+            parameters={"min_n": float(self.min_n), "fence_multiplier": float(self.fence_multiplier)},
             window={**_baseline_window(baseline), "q1": q1_value, "q3": q3_value},
         )
 
@@ -259,7 +261,7 @@ class MadZScoreDetector:
             expected_value=median_value,
             threshold={"robust_z": self.threshold, "median": median_value, "mad": mad_value, "n": n},
             explanation=f"Observed value {value:g} has robust z-score {robust_z:.2f}.",
-            parameters={"min_n": self.min_n, "threshold": self.threshold, "scale": 0.6745},
+            parameters={"min_n": float(self.min_n), "threshold": float(self.threshold), "scale": 0.6745},
             window={**_baseline_window(baseline), "median": median_value, "mad": mad_value},
             extra_context={"robust_z": robust_z},
         )
@@ -296,6 +298,7 @@ class RollingZScoreDetector:
         z_score = (value - mean) / std
         if abs(z_score) < self.threshold:
             return None
+        segment = context.window_segment if context.window_segment is not None else sample.segment_key
         return _result(
             detector_key=self.detector_key,
             sample=sample,
@@ -305,13 +308,19 @@ class RollingZScoreDetector:
             expected_value=mean,
             threshold={"z": self.threshold, "mean": mean, "std": std, "n": len(finite_values)},
             explanation=f"Observed value {value:g} has rolling z-score {z_score:.2f}.",
-            parameters={"min_n": self.min_n, "threshold": self.threshold, "max_window": self.max_window},
+            parameters={
+                "min_n": float(self.min_n),
+                "threshold": float(self.threshold),
+                "max_window": int(self.max_window),
+                "segment_fields": sorted(context.signal.segment_fields) if context.signal is not None else [],
+            },
             window={
                 "kind": "prior_samples",
                 "count": len(finite_values),
                 "last_sample_id": context.state.last_sample_id,
                 "last_event_time": context.state.last_event_time,
                 "values_sha256": _evidence_digest(finite_values),
+                "segment_sha256": _evidence_digest(json_safe_value(segment)),
             },
             extra_context={"z_score": z_score},
         )
@@ -358,7 +367,7 @@ class StaleSourceDetector:
             explanation=(
                 f"No new samples for {stale_seconds:.0f} seconds since {sample.event_time}."
             ),
-            parameters=threshold,
+            parameters={"warning_seconds": float(self.warning_seconds), "major_seconds": float(self.major_seconds)},
             window={
                 "kind": "elapsed_since_last_sample",
                 "last_event_time": sample.event_time,
