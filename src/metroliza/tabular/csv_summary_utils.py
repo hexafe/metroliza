@@ -36,7 +36,7 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
     preferences = _preferred_csv_config(preferred_config)
     sample = sample_csv_sources(path, preferred_delimiter=preferences.get("delimiter"))[0]
     text_fields = _csv_text_fields(sample)
-    conventions, _numeric_counts = sample.evidence(text_fields)
+    conventions, numeric_counts = sample.evidence(text_fields)
     numbers = CsvSourceNumbers(conventions, text_fields)
     width = len(sample.header)
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
@@ -55,7 +55,7 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
         if any(csv_value_looks_like_identifier(value) for value in values):
             continue
         parsed = numbers.parse_column(index, values)
-        if any(number is not None for number in parsed):
+        if numeric_counts[index] and any(number is not None for number in parsed):
             df.isetitem(index, parsed)
     return df, sample.config(conventions, preferred_decimal=preferences.get("decimal"))
 

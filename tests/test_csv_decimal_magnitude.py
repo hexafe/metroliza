@@ -126,11 +126,11 @@ def test_csv_malformed_groups_and_nonfinite_values_have_no_numeric_shadow(tmp_pa
 
 def test_csv_explicit_text_preserves_custom_identifier(tmp_path):
     file = tmp_path / "types.csv"
-    file.write_text("Workpiece code;Reading\n1.234;1.2\n001;1.3\n", encoding="utf-8")
+    file.write_text("Workpiece code;Reading\n1.234;1\n001;2\n", encoding="utf-8")
     loaded = load_tabular_analytics_file(file, column_types={("Workpiece code", 1): "text"})
     try:
         assert list(loaded.row_table["workpiece_code"]) == ["1.234", "001"]
-        assert list(loaded.row_table["reading"]) == [1.2, 1.3]
+        assert list(loaded.row_table["reading"]) == [1.0, 2.0]
     finally:
         cleanup_tabular_load_result(loaded)
     with pytest.raises(ValueError, match="Ambiguous CSV number separators"):
@@ -149,5 +149,124 @@ def test_csv_numeric_looking_identifiers_preserve_all_original_text(tmp_path):
         expected = ["1.234", "2", "3", "4", "5"]
         assert legacy["Batch code"].tolist() == list(loaded.row_table["batch_code"]) == expected
         assert {metric.field_name for metric in loaded.metric_candidates} == {"reading"}
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("content", [
+    "Part;Length, mm\nA;10,2\nB;10,5\n",
+    "Part;Length, mm\nA;10,2; \nB;10,5; \n",
+    "Length, mm\n10,2\n10,5\n",
+], ids=["two-table-dialects", "empty-trailing-fields", "table-or-scalar"])
+@pytest.mark.parametrize("loader", ["sqlite", "legacy", "legacy-comma-hint"])
+def test_csv_refuses_competing_field_boundaries(tmp_path, content, loader):
+    path = tmp_path / "private-name.csv"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError, match="Ambiguous CSV delimiter") as caught:
+        if loader == "sqlite":
+            cleanup_tabular_load_result(load_tabular_analytics_file(path))
+        else:
+            preferred = {"delimiter": ","} if loader == "legacy-comma-hint" else None
+            load_csv_with_fallbacks(path, preferred_config=preferred)
+    assert "private-name" not in str(caught.value)
+    assert "10,2" not in str(caught.value)
+
+
+@pytest.mark.parametrize("content", [
+    "Part,Temp,Length mm\nA,20.5,25.403\nB,20.6,25.398\n",
+    "Part;Temp;Length mm\nA;20,5;25,403\nB;20,6;25,398\n",
+], ids=["dot", "comma"])
+def test_csv_fixed_three_decimals_use_agreeing_evidence_from_same_file(tmp_path, content):
+    path = tmp_path / "measurements.csv"
+    path.write_text(content, encoding="utf-8")
+    legacy, _ = load_csv_with_fallbacks(path)
+    loaded = load_tabular_analytics_file(path)
+    try:
+        assert legacy["Length mm"].tolist() == list(loaded.row_table["length_mm"]) == [25.403, 25.398]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_legacy_csv_does_not_erase_text_when_a_late_cell_is_numeric(tmp_path):
+    path = tmp_path / "comments.csv"
+    comments = ["station checked"] * 210 + ["5"]
+    path.write_text(
+        "Notes;Length mm\n" + "".join(f"{comment};10.2\n" for comment in comments), encoding="utf-8",
+    )
+    legacy, _ = load_csv_with_fallbacks(path)
+    loaded = load_tabular_analytics_file(path)
+    try:
+        assert legacy["Notes"].tolist() == list(loaded.row_table["notes"]) == comments
+        assert legacy["Length mm"].tolist() == list(loaded.row_table["length_mm"]) == [10.2] * len(comments)
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_csv_padded_numbers_obey_the_same_convention_in_both_readers(tmp_path):
+    path = tmp_path / "padded.csv"
+    path.write_text("Part;Length mm\nA; 1,234.5 \nB;   1.234  \n", encoding="utf-8")
+    legacy, _ = load_csv_with_fallbacks(path)
+    loaded = load_tabular_analytics_file(path)
+    try:
+        assert legacy["Length mm"].tolist() == list(loaded.row_table["length_mm"]) == [1234.5, 1.234]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("content", [
+    '"Length, mm"\n"10,2"\n"10,5"\n',
+    '"Part";"Length, mm"\n"A";"10,2"\n"B";"10,5"\n',
+    "Part;Length mm\nA;10.2; \nB;10.5;\n",
+    "Length mm, Width mm\n10.2,4.1\n10.5,4.2\n",
+], ids=["quoted-single-column", "quoted-table", "empty-trailing-fields", "ordinary-two-columns"])
+def test_csv_unambiguous_repairs_and_standard_fields_still_load(tmp_path, content):
+    path = tmp_path / "measurements.csv"
+    path.write_text(content, encoding="utf-8")
+    legacy, _ = load_csv_with_fallbacks(path)
+    loaded = load_tabular_analytics_file(path)
+    try:
+        header = "Length, mm" if "Length, mm" in legacy.columns else "Length mm"
+        assert legacy[header].tolist() == list(loaded.row_table["length_mm"]) == [10.2, 10.5]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_csv_file_convention_fallback_rejects_late_contradiction(tmp_path, monkeypatch):
+    import metroliza.tabular.tabular_analytics_service as service
+
+    path = tmp_path / "measurements.csv"
+    path.write_text(
+        "Part;Length mm;Temp\nA;25.403;20.5\n"
+        + "B;25.398;20\n" * 54000
+        + "C;25.399;20,5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(service.tempfile, "tempdir", str(tmp_path))
+    progress = []
+    with pytest.raises(ValueError, match="Ambiguous CSV number separators"):
+        load_csv_with_fallbacks(path)
+    with pytest.raises(ValueError, match="Ambiguous CSV number separators"):
+        load_tabular_analytics_file(path, progress_callback=progress.append)
+    assert any(event["stage"] == "chunk_loaded" and event["rows_loaded"] == 50000 for event in progress)
+    assert not list(tmp_path.glob("metroliza_csv_summary_*.sqlite*"))
+
+
+def test_csv_mixed_evidence_cannot_supply_a_third_columns_missing_convention(tmp_path):
+    path = tmp_path / "measurements.csv"
+    path.write_text("Part;Dot;Comma;Length mm\nA;20.5;5,2;25.403\nB;20.6;5,3;25.398\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Ambiguous CSV number separators"):
+        load_csv_with_fallbacks(path)
+    with pytest.raises(ValueError, match="Ambiguous CSV number separators"):
+        load_tabular_analytics_file(path)
+
+
+def test_csv_tight_comma_header_keeps_two_integer_columns(tmp_path):
+    path = tmp_path / "table.csv"
+    path.write_text("Length,Width\n10,2\n11,3\n", encoding="utf-8")
+    legacy, _ = load_csv_with_fallbacks(path)
+    loaded = load_tabular_analytics_file(path)
+    try:
+        assert legacy["Length"].tolist() == list(loaded.row_table["length"]) == [10, 11]
+        assert legacy["Width"].tolist() == list(loaded.row_table["width"]) == [2, 3]
     finally:
         cleanup_tabular_load_result(loaded)

@@ -22,6 +22,10 @@ _IDENTIFIER_HEADERS = frozenset(
     {"batch code", "id", "lot", "part", "part id", "part number", "ref", "reference",
      "reference id", "row id", "serial", "serial number"}
 )
+_AMBIGUOUS_DELIMITER_MESSAGE = (
+    "Ambiguous CSV delimiter. Quote headers and values that contain the delimiter, "
+    "re-export with a delimiter that does not occur in the data, or load an Excel worksheet."
+)
 _AMBIGUOUS_NUMBER_MESSAGE = (
     "Ambiguous CSV number separators. Use one decimal convention per numeric column, "
     "remove thousands separators, and use an extra trailing decimal zero for ambiguous values, "
@@ -83,11 +87,22 @@ def _number_evidence(dot: float | None, comma: float | None) -> int:
     return _COMMA if dot is None else 0
 
 
+def _has_extra_csv_values(row: list[str] | tuple[str, ...], width: int) -> bool:
+    return len(row) > width and any(cell.strip() for cell in row[width:])
+
+
 def validate_csv_width(row: list[str] | tuple[str, ...], width: int) -> None:
-    if len(row) > width and any(cell.strip() for cell in row[width:]):
+    if _has_extra_csv_values(row, width):
         raise ValueError(
             "A CSV row has more fields than the header. Check the delimiter and quote fields that contain it."
         )
+
+
+def _combined_conventions(conventions: tuple[int, ...]) -> int:
+    combined = 0
+    for convention in conventions:
+        combined |= convention
+    return combined
 
 
 @dataclass(frozen=True)
@@ -112,9 +127,7 @@ class CsvSourceSample:
         return tuple(conventions), tuple(numeric_counts)
 
     def config(self, conventions: tuple[int, ...], *, preferred_decimal: str | None = None) -> dict[str, str]:
-        observed = 0
-        for convention in conventions:
-            observed |= convention
+        observed = _combined_conventions(conventions)
         decimal = "," if self.delimiter == ";" else "."
         if observed == _DOT:
             decimal = "."
@@ -131,19 +144,40 @@ def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) ->
     for delimiter in _DELIMITERS:
         try:
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                reader = csv.reader(handle, delimiter=delimiter)
+                reader = csv.reader(handle, delimiter=delimiter, strict=True)
                 header = tuple(next(reader, ()))
                 rows = [tuple(row) for row in islice(reader, _SAMPLE_ROWS)]
         except (OSError, UnicodeError, csv.Error):
             continue
         width = len(header)
-        complete_rows = sum(len(row) == width for row in rows if row)
+        complete_rows = sum(len(row) >= width and not _has_extra_csv_values(row, width) for row in rows if row)
         rank = (width > 1, complete_rows, width, delimiter == preferred_delimiter)
         ranked.append((rank, CsvSourceSample(delimiter, header, rows)))
     if not ranked:
         raise ValueError("Unable to read the CSV file. Check that it is a UTF-8 CSV.")
     ranked.sort(key=lambda item: item[0], reverse=True)
+    best_rank, best = ranked[0]
+    for rank, sample in ranked[1:]:
+        if best_rank[0] and rank[:2] == best_rank[:2] and sample.header != best.header:
+            raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
+        if _could_be_comma_decimal_column(best, sample):
+            raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
     return [sample for _rank, sample in ranked]
+
+
+def _could_be_comma_decimal_column(table: CsvSourceSample, scalar: CsvSourceSample) -> bool:
+    if table.delimiter != "," or len(table.header) != 2 or len(scalar.header) != 1:
+        return False
+    first, second = table.header
+    # A header like "Length, mm" can be a single label with an embedded comma.
+    if (first == first.rstrip() and second == second.lstrip()) or scalar.header[0] != f"{first},{second}":
+        return False
+    if '"' in scalar.header[0] or any(_has_extra_csv_values(row, 1) for row in scalar.rows):
+        return False
+    values = [row[0].strip() for row in scalar.rows if row and row[0].strip()]
+    return any("," in value for value in values) and all(
+        any(number is not None for number in _number_options(value)) for value in values
+    )
 
 
 class CsvSourceNumbers:
@@ -152,6 +186,9 @@ class CsvSourceNumbers:
     def __init__(self, conventions: tuple[int, ...], text_fields: frozenset[int]):
         self._conventions = list(conventions)
         self._text_fields = text_fields
+        self._sample_conventions = _combined_conventions(conventions)
+        self._file_conventions = self._sample_conventions
+        self._used_file_convention = False
         self._used_ambiguous_separator = [False] * len(conventions)
         self.ambiguous_text_fields: set[int] = set()
 
@@ -175,13 +212,22 @@ class CsvSourceNumbers:
                 self.ambiguous_text_fields.add(index)
                 number = None
             else:
-                if conventions not in (_DOT, _COMMA):
+                if conventions == 0:
+                    if self._file_conventions != self._sample_conventions:
+                        raise ValueError(_AMBIGUOUS_NUMBER_MESSAGE)
+                    self._used_file_convention = True
+                convention = conventions or self._sample_conventions
+                if convention not in (_DOT, _COMMA):
                     raise ValueError(_AMBIGUOUS_NUMBER_MESSAGE)
-                number = dot if conventions == _DOT else comma
+                number = dot if convention == _DOT else comma
                 used_ambiguous = True
             if used_ambiguous and conventions == (_DOT | _COMMA):
                 raise ValueError(_AMBIGUOUS_NUMBER_MESSAGE)
             parsed.append(number if number is not None and math.isfinite(number) else None)
         self._conventions[index] = conventions
         self._used_ambiguous_separator[index] = used_ambiguous
+        if not text_field:
+            self._file_conventions |= conventions
+            if self._used_file_convention and self._file_conventions != self._sample_conventions:
+                raise ValueError(_AMBIGUOUS_NUMBER_MESSAGE)
         return parsed
