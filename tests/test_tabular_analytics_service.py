@@ -2354,7 +2354,8 @@ def test_sqlite_finite_numeric_loaded_integer_scope(tmp_path, suffix):
             ("Code IN (9007199254740992,9223372036854775808)", [1, 5]),
             ("Code NOT IN (9007199254740992,9223372036854775808)", [2, 3, 4, 6, 7, 8, 9]),
             ("Code = -9007199254740993", [8]),
-            ("Code = 15", [9]),  # default decimal=".": comma remains a grouping separator
+            ("Code = 15", [] if suffix == "csv" else [9]),
+            ("Code = 1.5", [9] if suffix == "csv" else []),
         ]
         for expression, expected in cases * 2:
             assert loaded.sqlite_store.row_ids(grouping_filter_expression=expression) == expected
@@ -2380,7 +2381,8 @@ _COLUMN_INTEGER_CASES = [
     ("=", "-9007199254740993", [8]),
     ("=", "9223372036854775808", [5]),
     (">", "9223372036854775808", [6]),
-    ("=", "1,5", [9]),  # Existing comma/grouping literal and sidecar behavior.
+    ("=", "1,5", {"csv": [], "xlsx": [9]}),  # Legacy filter syntax still reads this as 15.
+    ("=", "1.5", {"csv": [9], "xlsx": []}),
 ]
 
 
@@ -2390,6 +2392,8 @@ def test_sqlite_finite_numeric_loaded_column_filter_scope(tmp_path, suffix, oper
     import csv
     from openpyxl import Workbook
 
+    if isinstance(expected, dict):
+        expected = expected[suffix]
     sources = ["9007199254740992", "9007199254740993", "bad", None,
                "9223372036854775808", "9223372036854775809",
                " +9007199254740993 ", "-9007199254740993", "1,5", "Inf", "1e309"]

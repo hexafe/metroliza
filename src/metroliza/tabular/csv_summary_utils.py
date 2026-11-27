@@ -3,185 +3,79 @@ from pathlib import Path
 
 from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex, normalize_grouping_key
 from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
+from metroliza.tabular.csv_source_numbers import (
+    CsvSourceNumbers,
+    CsvSourceSample,
+    csv_value_looks_like_identifier,
+    is_csv_identifier_header,
+    iter_csv_source_rows,
+    sample_csv_sources,
+    validate_csv_width,
+)
 
 
-_SAMPLE_ROWS = 200
-_TOP_FULL_READ_CANDIDATES = 2
 _BLANK_GROUP_VALUE = "(blank)"
 
 
 pd = _LazyPandas()
 
 
-def _parse_numeric_text(value, *, decimal=".") -> float | None:
-    text = str(value if value is not None else "").strip()
-    if not text:
-        return None
-    if decimal == ",":
-        text = text.replace(".", "").replace(",", ".")
-    else:
-        text = text.replace(",", "")
-    try:
-        return float(text)
-    except ValueError:
-        return None
+def _csv_text_fields(sample: CsvSourceSample) -> frozenset[int]:
+    return frozenset(index for index, header in enumerate(sample.header) if is_csv_identifier_header(header))
 
 
-def _read_csv_sample_rows(path: Path, *, delimiter: str, nrows: int) -> tuple[list[str], list[list[str]]]:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle, delimiter=delimiter)
-        try:
-            header = [str(column) for column in next(reader)]
-        except StopIteration:
-            return [], []
-        rows: list[list[str]] = []
-        for _index, row in zip(range(nrows), reader, strict=False):
-            rows.append([str(value) for value in row])
-    return header, rows
-
-
-def _score_csv_sample(header: list[str], rows: list[list[str]], *, decimal: str) -> tuple[int, list[str]]:
-    if not header:
-        return 0, []
-    base_score = len(header) * 10
-    numeric_cells = 0
-    numeric_columns: list[str] = []
-    for index, column in enumerate(header):
-        count = 0
-        for row in rows:
-            value = row[index] if index < len(row) else ""
-            if _parse_numeric_text(value, decimal=decimal) is not None:
-                count += 1
-        if count:
-            numeric_columns.append(column)
-            numeric_cells += count
-    return base_score + numeric_cells, numeric_columns
-
-
-def _score_dataframe(df, numeric_columns_hint=None):
-    if df.empty:
-        return 0, []
-
-    base_score = len(df.columns) * 10
-    row_count = len(df)
-
-    numeric_dtype_columns = list(df.select_dtypes(include='number').columns)
-    numeric_cells = row_count * len(numeric_dtype_columns)
-
-    hinted_columns = numeric_columns_hint or [
-        column for column in df.columns if column not in numeric_dtype_columns
-    ]
-    parse_candidates = [
-        column
-        for column in hinted_columns
-        if column in df.columns and column not in numeric_dtype_columns
-    ]
-
-    detected_numeric_columns = []
-    if parse_candidates:
-        coerced = df[parse_candidates].apply(pd.to_numeric, errors='coerce')
-        non_na_counts = coerced.notna().sum()
-        numeric_cells += int(non_na_counts.sum())
-        detected_numeric_columns = [column for column, count in non_na_counts.items() if count > 0]
-
-    return base_score + numeric_cells, detected_numeric_columns
+def _preferred_csv_config(preferred_config):
+    return preferred_config if isinstance(preferred_config, dict) else {}
 
 
 def load_csv_with_fallbacks(file_path, preferred_config=None):
-    """Load CSV with delimiter/decimal fallbacks for common manufacturing exports."""
+    """Load CSV with bounded delimiter detection and source-aware numeric conversion."""
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(file_path)
 
-    sampled_results = detect_csv_read_configs(path, preferred_config=preferred_config)
-    narrowed_candidates = sampled_results[:_TOP_FULL_READ_CANDIDATES]
+    preferences = _preferred_csv_config(preferred_config)
+    sample = sample_csv_sources(path, preferred_delimiter=preferences.get("delimiter"))[0]
+    text_fields = _csv_text_fields(sample)
+    conventions, numeric_counts = sample.evidence(text_fields)
+    numbers = CsvSourceNumbers(conventions, text_fields)
+    width = len(sample.header)
+    rows = []
+    for row in iter_csv_source_rows(path, sample.delimiter):
+        validate_csv_width(row, width)
+        rows.append(row[:width] + [None] * max(width - len(row), 0))
 
-    best_df = None
-    best_score = -1
-    best_config = None
-
-    for candidate in narrowed_candidates:
-        delimiter = candidate['delimiter']
-        decimal = candidate['decimal']
-        sample_numeric_columns = candidate['sample_numeric_columns']
-
-        try:
-            header, rows = _read_csv_sample_rows(path, delimiter=delimiter, nrows=10**12)
-            df = pd.DataFrame(rows, columns=header)
-            for column in sample_numeric_columns:
-                if column in df.columns:
-                    df[column] = df[column].map(
-                        lambda value, decimal=decimal: _parse_numeric_text(value, decimal=decimal)
-                    )
-        except Exception:
+    df = pd.DataFrame(rows, columns=sample.header)
+    for index in range(width):
+        if index in text_fields:
             continue
-
-        score, _ = _score_dataframe(df, numeric_columns_hint=sample_numeric_columns)
-
-        if score > best_score:
-            best_df = df
-            best_score = score
-            best_config = {'delimiter': delimiter, 'decimal': decimal}
-
-    if best_df is None:
-        raise ValueError(f"Unable to read CSV file: {file_path}")
-
-    return best_df, best_config
+        values = [str(value).strip() if value is not None else "" for value in df.iloc[:, index]]
+        if any(csv_value_looks_like_identifier(value) for value in values):
+            continue
+        parsed = numbers.parse_column(index, values)
+        if numeric_counts[index] and any(number is not None for number in parsed):
+            df.isetitem(index, parsed)
+    return df, sample.config(conventions, preferred_decimal=preferences.get("decimal"))
 
 
 def detect_csv_read_configs(file_path, preferred_config=None):
-    """Return likely CSV delimiter/decimal configs ordered by sample score."""
+    """Return likely CSV read configurations ordered by field boundary evidence."""
     path = Path(file_path)
     if not path.exists():
         raise FileNotFoundError(file_path)
 
-    delimiter_candidates = [';', ',', '\t', '|']
-    decimal_candidates = [',', '.']
-
-    ordered_candidates = []
-    if isinstance(preferred_config, dict):
-        preferred_delimiter = preferred_config.get('delimiter')
-        preferred_decimal = preferred_config.get('decimal')
-        if preferred_delimiter in delimiter_candidates and preferred_decimal in decimal_candidates:
-            ordered_candidates.append((preferred_delimiter, preferred_decimal))
-
-    for delimiter in delimiter_candidates:
-        for decimal in decimal_candidates:
-            pair = (delimiter, decimal)
-            if pair not in ordered_candidates:
-                ordered_candidates.append(pair)
-
-    sampled_results = []
-    for delimiter, decimal in ordered_candidates:
-        try:
-            header, rows = _read_csv_sample_rows(path, delimiter=delimiter, nrows=_SAMPLE_ROWS)
-        except Exception:
-            continue
-
-        sample_score, sample_numeric_columns = _score_csv_sample(header, rows, decimal=decimal)
-        sampled_results.append(
-            {
-                'delimiter': delimiter,
-                'decimal': decimal,
-                'sample_score': sample_score,
-                'sample_numeric_columns': sample_numeric_columns,
-            }
-        )
-
-    if not sampled_results:
-        raise ValueError(f"Unable to read CSV file: {file_path}")
-
-    def _candidate_sort_key(item):
-        delimiter = item["delimiter"]
-        decimal = item["decimal"]
-        decimal_preference = 1 if (
-            (delimiter == "," and decimal == ".")
-            or (delimiter == ";" and decimal == ",")
-        ) else 0
-        return item["sample_score"], decimal_preference
-
-    sampled_results.sort(key=_candidate_sort_key, reverse=True)
-    return sampled_results
+    preferences = _preferred_csv_config(preferred_config)
+    results = []
+    for sample in sample_csv_sources(path, preferred_delimiter=preferences.get("delimiter")):
+        conventions, counts = sample.evidence(_csv_text_fields(sample))
+        results.append({
+            **sample.config(conventions, preferred_decimal=preferences.get("decimal")),
+            "sample_score": len(sample.header) * 10 + sum(counts),
+            "sample_numeric_columns": [
+                column for column, count in zip(sample.header, counts, strict=True) if count
+            ],
+        })
+    return results
 
 
 def resolve_default_data_columns(data_frame, selected_indexes):

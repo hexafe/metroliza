@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-import csv
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import math
@@ -41,6 +40,13 @@ from metroliza.industrial.industrial_analytics_state import (
 )
 from metroliza.shared.lazy_modules import LazyPandas as _LazyPandas
 from metroliza.tabular.column_types import ColumnIdentity, ColumnType, normalize_column_types
+from metroliza.tabular.csv_source_numbers import (
+    CsvSourceNumbers,
+    is_csv_identifier_header,
+    iter_csv_source_rows,
+    sample_csv_sources,
+    validate_csv_width,
+)
 
 try:
     from metroliza.shared.grouping_filter_core import (
@@ -1841,10 +1847,26 @@ def _load_tabular_files_into_sqlite(
                 timestamp_field=file_timestamp_field,
             )
         )
+        csv_sample = sampled_spec.get("csv_sample")
+        csv_numbers = None
+        if csv_sample is None:
+            csv_config = sampled_spec["csv_config"]
+        else:
+            text_fields = frozenset(
+                index
+                for index, column in enumerate(normalized_columns)
+                if column in (file_timestamp_field, file_reference_field)
+                or types_by_column.get(column) == "text"
+                or (types_by_column.get(column) != "number" and is_csv_identifier_header(header[index]))
+            )
+            conventions, _numeric_counts = csv_sample.evidence(text_fields)
+            csv_config = csv_sample.config(conventions)
+            csv_numbers = CsvSourceNumbers(conventions, text_fields)
         file_specs.append(
             {
                 "path": sampled_spec["path"],
-                "csv_config": sampled_spec["csv_config"],
+                "csv_config": csv_config,
+                "csv_numbers": csv_numbers,
                 "header": header,
                 "mapping": mapping,
                 "normalized_columns": normalized_columns,
@@ -1951,6 +1973,7 @@ def _load_tabular_files_into_sqlite(
                     ),
                     normalized_columns=spec["normalized_columns"],
                     decimal=decimal,
+                    csv_numbers=spec["csv_numbers"],
                     cancel_check=cancel_check,
                     record_timing=_record_load_timing,
                 ):
@@ -2108,6 +2131,13 @@ def _load_tabular_files_into_sqlite(
             )
         )
         metric_candidates_started_at = time.perf_counter()
+        # An identifier with an ambiguous reading must remain a raw column,
+        # even if the other values could make it look like a numeric metric.
+        for spec in file_specs:
+            numbers = spec["csv_numbers"]
+            if numbers is not None:
+                for index in numbers.ambiguous_text_fields:
+                    metric_stats.pop(spec["normalized_columns"][index], None)
         inferred_candidates = _metric_candidates_from_stats(
             metric_stats,
             numeric_threshold=numeric_threshold,
@@ -2204,16 +2234,11 @@ def _load_tabular_files_into_sqlite(
 def _sample_tabular_source(path: Path, *, sheet_name: str | int | None) -> dict[str, Any]:
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        csv_config = _detect_csv_config(path)
-        header, sample_rows = _read_csv_header_and_sample(
-            path,
-            delimiter=csv_config["delimiter"],
-            sample_size=200,
-        )
+        sample = sample_csv_sources(path)[0]
         return {
-            "csv_config": csv_config,
-            "header": header,
-            "sample_rows": sample_rows,
+            "csv_sample": sample,
+            "header": sample.header,
+            "sample_rows": sample.rows,
             "sheet_name": None,
         }
     if suffix in {".xlsx", ".xls"}:
@@ -2232,22 +2257,6 @@ def _sample_tabular_source(path: Path, *, sheet_name: str | int | None) -> dict[
     raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
 
 
-def _read_csv_header_and_sample(
-    path: Path,
-    *,
-    delimiter: str,
-    sample_size: int,
-) -> tuple[tuple[str, ...], list[tuple[Any, ...]]]:
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle, delimiter=delimiter)
-        try:
-            header = tuple(str(column) for column in next(reader))
-        except StopIteration:
-            return (), []
-        rows = [tuple(row) for _index, row in zip(range(sample_size), reader, strict=False)]
-    return header, rows
-
-
 def _iter_tabular_source_rows(
     path: Path,
     *,
@@ -2257,11 +2266,7 @@ def _iter_tabular_source_rows(
     suffix = path.suffix.lower()
     if suffix == ".csv":
         delimiter = str(csv_config.get("delimiter") or ",")
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle, delimiter=delimiter)
-            next(reader, None)
-            for row in reader:
-                yield tuple(row)
+        yield from (tuple(row) for row in iter_csv_source_rows(path, delimiter))
         return
     yield from _iter_excel_rows(path, sheet_name=sheet_name)
 
@@ -2593,6 +2598,7 @@ def _iter_normalized_numeric_rows(
     rows: Iterable[tuple[Any, ...]], *, normalized_columns: tuple[str, ...],
     decimal: str, cancel_check: TabularCancelCheck | None,
     record_timing: Callable[[str, float], None],
+    csv_numbers: CsvSourceNumbers | None = None,
 ):
     """Bound conversion memory independently of source size and SQLite batches."""
     from itertools import islice
@@ -2606,11 +2612,20 @@ def _iter_normalized_numeric_rows(
         if not chunk:
             return
         normalize_started_at = time.perf_counter()
+        if csv_numbers is not None:
+            for row in chunk:
+                validate_csv_width(row, len(normalized_columns))
         normalized = [_normalize_raw_row(normalized_columns, row) for row in chunk]
-        numeric_columns = [
-            _parse_tabular_numbers([row[column] for row in normalized], decimal=decimal)
-            for column in normalized_columns
-        ]
+        if csv_numbers is None:
+            numeric_columns = [
+                _parse_tabular_numbers([row[column] for row in normalized], decimal=decimal)
+                for column in normalized_columns
+            ]
+        else:
+            numeric_columns = [
+                csv_numbers.parse_column(index, [row[column] for row in normalized])
+                for index, column in enumerate(normalized_columns)
+            ]
         record_timing("chunk_normalize", normalize_started_at)
         if not normalized_columns:
             for row in normalized:
@@ -2706,41 +2721,6 @@ def _append_metric_sample_text(stats: dict[str, Any], text: str) -> None:
     if text not in sample_value_set:
         sample_values.append(text)
         sample_value_set.add(text)
-
-
-def _detect_csv_config(path: Path) -> dict[str, Any]:
-    candidates: list[dict[str, Any]] = []
-    for delimiter in (";", ",", "\t", "|"):
-        for decimal in (",", "."):
-            try:
-                header, rows = _read_csv_header_and_sample(
-                    path,
-                    delimiter=delimiter,
-                    sample_size=200,
-                )
-            except (OSError, UnicodeError, csv.Error):
-                continue
-            numeric_cells = sum(
-                1
-                for row in rows
-                for value in row[: len(header)]
-                if _parse_tabular_number(value, decimal=decimal) is not None
-            )
-            candidates.append(
-                {
-                    "delimiter": delimiter,
-                    "decimal": decimal,
-                    "score": len(header) * 10 + numeric_cells,
-                    "preference": int(
-                        (delimiter == "," and decimal == ".")
-                        or (delimiter == ";" and decimal == ",")
-                    ),
-                }
-            )
-    if not candidates:
-        raise ValueError(f"Unable to read CSV file: {path}")
-    best = max(candidates, key=lambda item: (item["score"], item["preference"]))
-    return {"delimiter": best["delimiter"], "decimal": best["decimal"]}
 
 
 def _legacy_filter_csv_summary_by_group_keys(dataframe, columns, selected_keys):
