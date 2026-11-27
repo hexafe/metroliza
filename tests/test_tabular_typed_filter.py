@@ -12,7 +12,7 @@ from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_
 from metroliza.recipes.tabular_adapter import capture
 from metroliza.shared.typed_filter import FilterPreview, PandasFilterAdapter
 from metroliza.tabular.tabular_analytics_service import (
-    cleanup_tabular_load_result, load_tabular_analytics_file, materialize_tabular_dataframe,
+    cleanup_tabular_load_result, load_tabular_analytics_file, load_tabular_analytics_files, materialize_tabular_dataframe,
 )
 from metroliza.tabular.tabular_typed_filter import prepare_tabular_typed_filter, tabular_typed_filter_fields
 
@@ -177,5 +177,81 @@ def test_shared_931_fixture_with_imported_csv_values(tmp_path):
             assert scope.preview() == reference.preview() == FilterPreview(len(expected), expected), rule
             result = materialize_tabular_dataframe(loaded, typed_scope=scope, required_columns=("source_row_number",))
             assert tuple(result.dataframe["source_row_number"]) == expected, rule
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+@pytest.mark.parametrize("headers", [
+    ("A", " A ", "A (occurrence 1)", "a", "A", "Plain"),
+    ("Unnamed column", "", " ", "Unnamed column (occurrence 1)", "", "Plain"),
+    ("A", "csv_559aead08264d5795d39_1", "Plain"),
+], ids=["heading-imitates-occurrence", "blank-and-literal-unnamed", "heading-imitates-field-id"])
+def test_loaded_labels_distinguish_literal_raw_headings_and_occurrences(tmp_path, headers):
+    import csv
+    import json
+
+    labels_by_id = None
+    physical_order = tuple(range(len(headers)))
+    reordered = tuple(sorted(physical_order, key=lambda index: headers[index], reverse=True))
+    for version, order in enumerate((physical_order, reordered)):
+        path = tmp_path / f"source-{version}.csv"
+        with path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle, delimiter=";", quoting=csv.QUOTE_ALL)
+            writer.writerow([headers[index] for index in order])
+            writer.writerows(["hit" if column == row else "miss" for column in order] for row in physical_order)
+        loaded = load_tabular_analytics_file(path)
+        try:
+            fields = tabular_typed_filter_fields(loaded)
+            assert len({field.label.casefold() for field in fields}) == len(headers)
+            assert not {field.label.casefold() for field in fields} & {
+                field.field_id.casefold() for field in fields
+            }
+            labels = {field.field_id: field.label for field in fields}
+            if labels_by_id is None:
+                labels_by_id = labels
+            else:
+                assert labels == labels_by_id
+            for field, physical_index in zip(fields, order, strict=True):
+                raw = headers[physical_index]
+                if raw == "Plain":
+                    assert field.label == raw
+                if (raw and raw != raw.strip()) or (not raw and physical_index == headers.index("")):
+                    assert json.dumps(raw, ensure_ascii=False) in field.label
+                quoted_label = "`" + field.label.replace("`", "``") + "`"
+                expected = FilterPreview(1, (physical_index + 1,))
+                for alias in (quoted_label, field.field_id):
+                    scope = prepare_tabular_typed_filter(loaded, f'{alias} = "hit"')
+                    assert scope.preview() == expected
+        finally:
+            cleanup_tabular_load_result(loaded)
+
+
+def test_mixed_csv_and_workbook_use_inferred_number_for_exact_combined_rows(tmp_path):
+    from openpyxl import Workbook
+
+    csv_input = tmp_path / "first.csv"
+    csv_input.write_text("Part;Rate;Rate\nA;99,1;8,2\nB;99,2;10,4\n", encoding="utf-8")
+    excel_input = tmp_path / "second.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["Rate", "Part", "Rate"])
+    worksheet.append([99.3, "C", 9.6])
+    worksheet.append([99.4, "D", 11.5])
+    workbook.save(excel_input)
+    workbook.close()
+
+    loaded = load_tabular_analytics_files((csv_input, excel_input))
+    try:
+        field = next(item for item in tabular_typed_filter_fields(loaded) if item.label == "Rate (occurrence 2)")
+        assert field.kind == "number"
+        scope = prepare_tabular_typed_filter(loaded, '`Rate (occurrence 2)` > 10')
+        frame = pd.DataFrame({"source_row_number": [1, 2, 3, 4], field.field_id: [8.2, 10.4, 9.6, 11.5]})
+        expected = FilterPreview(2, (2, 4))
+        reference = PandasFilterAdapter(frame, "source_row_number").prepare(scope.expression)
+        assert scope.preview() == reference.preview() == expected
+        result = materialize_tabular_dataframe(loaded, typed_scope=scope).dataframe
+        assert result["source_row_number"].tolist() == list(reference.iter_row_ids()) == [2, 4]
+        assert result["source_file"].tolist() == ["first.csv", "second.xlsx"]
+        assert result["rate_2"].tolist() == [10.4, 11.5]
     finally:
         cleanup_tabular_load_result(loaded)

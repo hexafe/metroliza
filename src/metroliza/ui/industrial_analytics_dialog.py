@@ -2900,6 +2900,7 @@ class IndustrialAnalyticsDialog(QDialog):
         source_stable = not self._tabular_reload_busy()
         typed = self._tabular_typed_filter
         typed_stale = typed is not None and not typed.matches_loaded(self.tabular_load_result)
+        scope_notice = self._tabular_reload_notice or (STALE_TYPED_FILTER if typed_stale else "")
         clear_typed = "Clear the typed filter first."
         filtered_row_count = None
         if not self.is_production_source and self.tabular_load_result is not None:
@@ -2989,8 +2990,7 @@ class IndustrialAnalyticsDialog(QDialog):
         ready = bool(
             source_stable
             and source_ready
-            and not self._tabular_reload_notice
-            and not typed_stale
+            and not scope_notice
             and metrics
             and self.output_dashboard_file
             and charts_ready
@@ -3013,11 +3013,8 @@ class IndustrialAnalyticsDialog(QDialog):
         elif not source_ready:
             self.readiness_label.setText("Select a source before creating analytics.")
             set_status_variant(self.readiness_label, "warning")
-        elif self._tabular_reload_notice:
-            self.readiness_label.setText(self._tabular_reload_notice)
-            set_status_variant(self.readiness_label, "warning")
-        elif typed_stale:
-            self.readiness_label.setText(STALE_TYPED_FILTER)
+        elif scope_notice:
+            self.readiness_label.setText(scope_notice)
             set_status_variant(self.readiness_label, "warning")
         elif not metrics:
             self.readiness_label.setText("Load metrics and select at least one parameter.")

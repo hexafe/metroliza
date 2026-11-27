@@ -56,6 +56,7 @@ except ImportError:  # pragma: no cover - compatibility for older forks without 
     _parse_grouping_filter_expression = None
 
 if TYPE_CHECKING:
+    from metroliza.shared.typed_filter import CompiledSqliteFilter
     from metroliza.tabular.tabular_typed_filter import TabularTypedFilterScope
 
     from metroliza.industrial.industrial_analytics_service import (
@@ -297,24 +298,38 @@ class TabularSqliteStore:
         grouping_filter: Any = None,
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
+        _typed_filter: CompiledSqliteFilter | None = None,
     ) -> QueryScope:
         """Return a reusable SQLite query scope for selected tabular rows."""
 
         select_columns = _normalized_tabular_required_columns(self.columns, columns)
-        where_sql, params = self._where_clause(
-            filter_columns=filter_columns,
-            selected_filter_keys=selected_filter_keys,
-            base_column_filters=base_column_filters,
-            column_filters=column_filters,
-            column_filter_match_mode=column_filter_match_mode,
-            grouping_filter=grouping_filter,
-            grouping_filter_expression=grouping_filter_expression,
-            grouping_filter_aliases=grouping_filter_aliases,
-        )
+        if _typed_filter is None:
+            where_sql, params = self._where_clause(
+                filter_columns=filter_columns,
+                selected_filter_keys=selected_filter_keys,
+                base_column_filters=base_column_filters,
+                column_filters=column_filters,
+                column_filter_match_mode=column_filter_match_mode,
+                grouping_filter=grouping_filter,
+                grouping_filter_expression=grouping_filter_expression,
+                grouping_filter_aliases=grouping_filter_aliases,
+            )
+        else:
+            if any((filter_columns, selected_filter_keys, base_column_filters, column_filters,
+                    grouping_filter is not None, grouping_filter_expression)):
+                raise ValueError("A typed filter scope cannot include legacy filters.")
+            validated = _validate_compiled_sqlite_filter(
+                TabularSqliteFilterExpression(clause=_typed_filter.sql, params=_typed_filter.parameters),
+                columns=(*self.columns, self.table_name), aliases={},
+                date_filter_columns=self.date_filter_columns, numeric_filter_columns=self.numeric_filter_columns,
+            )
+            where_sql, params = f" WHERE {validated.clause}", validated.params
         query = (
             f"SELECT {', '.join(self._select_column_expression(column) for column in select_columns)} "
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
+        if _typed_filter is not None:
+            query += ' ORDER BY "source_row_number"'
         if limit is not None and int(limit) >= 0:
             query = f"{query} LIMIT {int(limit)}"
             row_count_sql = f"SELECT COUNT(*) FROM ({query}) AS limited_scope"
@@ -3308,8 +3323,7 @@ def materialize_tabular_dataframe(
             raise ValueError(TYPED_FILTER_COMBINATION)
         typed_scope.require_loaded(loaded)
         store = loaded.sqlite_store
-        columns = _normalized_tabular_required_columns(store.columns, required_columns)
-        query = typed_scope.query(", ".join(store._select_column_expression(column) for column in columns))
+        query = typed_scope.query(required_columns)
         with typed_scope.read_connection(loaded, cancel_check=cancel_check) as connection:
             dataframe = read_sql_dataframe(store.path, query.sql, query.params, connection=connection)
         dataframe = _restore_sqlite_dataframe(dataframe, metric_columns=store.metric_columns)
