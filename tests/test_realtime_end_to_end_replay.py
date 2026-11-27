@@ -357,6 +357,29 @@ def test_replay_keeps_csv_order_for_timestamp_ties(tmp_path, batch_size, existin
     assert replay_industrial_stream(request).detector_events_created == 0
 
 
+def test_equal_time_replay_keeps_the_existing_source_health_event(tmp_path):
+    database = str(tmp_path / "stale-replay.sqlite")
+    profile = _source_profile(database)
+    path = tmp_path / "ties.csv"
+    header = "record_id,event_time,cycle_time_s\n"
+    older_id = "earlier-in-database,2026-06-12T09:00:00Z,101\n"
+    newer_id = "later-in-database,2026-06-12T09:00:00Z,102\n"
+    request = ReplayRequest(
+        input_file=str(path), database=database, source_profile_id=profile.id, signal_key="cycle_time",
+        metric_column="cycle_time_s", event_time_column="event_time", record_key_column="record_id",
+        detectors=("stale_source",), now="2026-06-12T09:30:00Z", batch_size=50,
+    )
+    path.write_text(header + older_id + newer_id, encoding="utf-8")
+    assert replay_industrial_stream(request).detector_events_created == 1
+    repository = AnomalyEventRepository(database)
+    existing, = repository.list_events()
+    assert existing.observed_value == 102
+
+    path.write_text(header + newer_id + older_id, encoding="utf-8")
+    assert replay_industrial_stream(request).detector_events_created == 0
+    assert repository.list_events() == [existing]
+
+
 def test_end_to_end_replay_normal_process_creates_no_events(tmp_path):
     db_path = str(tmp_path / "normal.db")
     profile = _source_profile(db_path)

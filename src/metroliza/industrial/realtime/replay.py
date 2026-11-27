@@ -536,7 +536,9 @@ class _ReplayDetectorSession:
                     events.append(_with_baseline_evidence(result, detector_baseline))
                 self.states[detector.detector_key] = detector.update_one(sample, context)
             self.last_event_time = sample.event_time
-            self.latest_sample = sample
+        if self.stale_detector is not None and ordered:
+            # Preserve the source-health event's stored sample identity on replay.
+            self.latest_sample = max(ordered, key=_sample_sort_key)
         return events
 
     def _baseline_for_sample(self, sample, cache):
