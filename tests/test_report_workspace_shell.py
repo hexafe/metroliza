@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from dataclasses import replace
+import json
 from pathlib import Path
 import os
 import sqlite3
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, Qt
+from PyQt6.QtCore import QCoreApplication, QEvent, QSettings, QTimer, Qt
 from PyQt6.QtGui import QAction, QKeySequence, QPalette, QShortcut
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QPushButton, QVBoxLayout
@@ -1127,6 +1128,288 @@ def test_workspace_menu_relinks_moved_files_in_one_snapshot(window, app, tmp_pat
     assert snapshots[0].source_directory == str(moved_source)
     assert snapshots[0].database_file == str(moved_database)
     assert window.navigation_combo.currentData() == "reports"
+
+
+def _create_workspace_reports(tmp_path, name, references):
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.reports.report_schema import ensure_report_schema
+    from tests.test_1089_acceptance_analytics import _persist_report
+
+    path = tmp_path / name
+    ensure_report_schema(str(path))
+    repository = ReportRepository(str(path))
+    for number, reference in enumerate(references, start=1):
+        _persist_report(repository, tmp_path, number=number, reference=reference, header="Width")
+    return path
+
+
+def _click_rule_button(editor, label):
+    next(button for button in editor.findChildren(QPushButton) if button.text() == label).click()
+
+
+def _edit_workspace_grouping(app, export, action):
+    from metroliza.ui.report_grouping_rules_dialog import ReportGroupingRulesDialog
+
+    export.group_button.click()
+    grouping = export.grouping_window
+    wait_until(app, lambda: not grouping.is_loading_grouping())
+    errors = []
+
+    def drive_modal():
+        editor = grouping.findChild(ReportGroupingRulesDialog)
+        try:
+            assert isinstance(editor, ReportGroupingRulesDialog) and app.activeModalWidget() is editor
+            action(editor)
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            if isinstance(editor, ReportGroupingRulesDialog) and editor.isVisible():
+                editor.reject()
+
+    QTimer.singleShot(0, drive_modal)
+    grouping.grouping_rules_button.click()
+    if grouping.isVisible():
+        grouping.cancel_button.click()
+    if errors:
+        raise errors[0]
+
+
+def _save_workspace_menu(window, app, monkeypatch, path):
+    from metroliza.ui import workspace_files
+
+    monkeypatch.setattr(workspace_files.QFileDialog, "getSaveFileName", lambda *a, **kw: (str(path), ""))
+    window.save_workspace_action.trigger()
+    wait_until(app, lambda: window._workspace_files().task is None)
+    assert path.is_file()
+
+
+def _open_workspace_menu(window, app, monkeypatch, *paths):
+    from metroliza.ui import workspace_files
+
+    paths = iter(paths)
+    monkeypatch.setattr(workspace_files.QFileDialog, "getOpenFileName", lambda *_: (str(next(paths)), ""))
+    window.open_workspace_action.trigger()
+    wait_until(app, lambda: window._workspace_files().task is None)
+
+
+def _keep_workspace_draft(editor):
+    editor.name_input.setText("Supplier groups")
+    editor.rules_table.item(0, 0).setText("Leading zero")
+    editor.rules_table.item(0, 1).setText("#aAbBcC")
+    editor.rules_table.item(0, 2).setText('Reference = "001"')
+    _click_rule_button(editor, "Keep draft")
+
+
+def test_workspace_menu_round_trips_rule_draft_without_reusing_applied_assignments(window, app, tmp_path, monkeypatch):
+    from metroliza.app.workspace_file import read_workspace
+    from metroliza.reports.report_query_service import build_measurement_filter_query
+    from metroliza.tabular.contracts import GroupingAssignment
+
+    database = _create_workspace_reports(tmp_path, "grouping.sqlite", ("001", "1"))
+    assert window.set_db_file(str(database))
+    window._show_workspace_page("reports")
+    legacy = tmp_path / "legacy.metroliza-workspace"
+    _save_workspace_menu(window, app, monkeypatch, legacy)
+    assert json.loads(legacy.read_bytes())["version"] == 1
+
+    window.launch_export_dialog(whole_database=True)
+    export = window.export_dialog
+    _edit_workspace_grouping(app, export, _keep_workspace_draft)
+    assert export.df_for_grouping is None
+    draft = window.report_grouping_draft
+    saved = tmp_path / "draft.metroliza-workspace"
+    _save_workspace_menu(window, app, monkeypatch, saved)
+    assert read_workspace(saved).report_grouping_draft == draft
+
+    def apply(editor):
+        assert editor.name_input.text() == draft.name
+        assert not editor.apply_button.isEnabled()
+        assert not editor.default_checkbox.isChecked()
+        _click_rule_button(editor, "Preview")
+        assert not editor.apply_button.isEnabled()
+        editor.default_checkbox.setChecked(True)
+        _click_rule_button(editor, "Use rule grouping")
+
+    _edit_workspace_grouping(app, export, apply)
+    assert [(row.report_id, row.group) for row in export.df_for_grouping] == [(1, "Leading zero"), (2, "POPULATION")]
+
+    _open_workspace_menu(window, app, monkeypatch, saved)
+    assert window.export_dialog is export
+    assert not export._grouping_is_applied()
+    assert export.df_for_grouping is None
+    assert export._grouping_rule_source is None
+    assert window.report_grouping_draft == draft
+
+    export.set_filter_query(build_measurement_filter_query(reference_values=("1",)))
+
+    def cancel_edit(editor):
+        assert editor.rules_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == draft.rules[0].group_id
+        assert not editor.apply_button.isEnabled()
+        assert editor.preview_output.toPlainText() == ""
+        assert not editor.default_checkbox.isChecked()
+        editor.rules_table.item(0, 2).setText('Reference = "1"')
+        _click_rule_button(editor, "Cancel")
+
+    _edit_workspace_grouping(app, export, cancel_edit)
+    assert window.report_grouping_draft == draft
+    assert export.df_for_grouping is None
+
+    _edit_workspace_grouping(app, export, apply)
+    assert [(row.report_id, row.group) for row in export.df_for_grouping] == [(2, "POPULATION")]
+
+    _open_workspace_menu(window, app, monkeypatch, legacy)
+    assert window.report_grouping_draft is None
+    assert not export._grouping_is_applied()
+    assert export.df_for_grouping is None
+
+    def check_empty(editor):
+        assert editor.name_input.text() == ""
+        _click_rule_button(editor, "Cancel")
+
+    _edit_workspace_grouping(app, export, check_empty)
+    manual = (GroupingAssignment(report_id=2, group="Manual"),)
+    export.set_df_for_grouping(manual)
+    export.set_grouping_applied(True)
+    _open_workspace_menu(window, app, monkeypatch, legacy)
+    assert export.df_for_grouping is manual
+
+
+def test_workspace_rule_relink_cancel_and_pinned_export_do_not_consume_restored_draft(window, app, tmp_path, monkeypatch):
+    from metroliza.app.workspace_file import write_workspace
+    from metroliza.reports.db import SQLiteFileBinding
+    from metroliza.reports.report_grouping_rules import ReportGroupRule, ReportGroupingPreset
+    from metroliza.ui.workspace_context import WorkspaceSnapshot
+
+    original = _create_workspace_reports(tmp_path, "saved.sqlite", ("001", "1"))
+    current = _create_workspace_reports(tmp_path, "current.sqlite", ("another",))
+    saved = tmp_path / "other.metroliza-workspace"
+    carried = ReportGroupingPreset("Restored", (ReportGroupRule("0" * 32, "Match", "#aAbBcC", 'Reference = "001"'),))
+    write_workspace(saved, WorkspaceSnapshot(1, None, str(original)), "reports", report_grouping_draft=carried,
+                    database_binding=SQLiteFileBinding.capture(original))
+    moved = original.rename(tmp_path / "relocated.sqlite")
+
+    assert window.set_db_file(str(current))
+    window.launch_export_dialog(whole_database=True)
+    export = window.export_dialog
+    _edit_workspace_grouping(app, export, _keep_workspace_draft)
+    current_draft = window.report_grouping_draft
+
+    def apply_pinned_grouping(editor):
+        _click_rule_button(editor, "Preview")
+        editor.default_checkbox.setChecked(True)
+        _click_rule_button(editor, "Use rule grouping")
+
+    _edit_workspace_grouping(app, export, apply_pinned_grouping)
+    previous_assignments = export.df_for_grouping
+    assert [(row.report_id, row.group) for row in previous_assignments] == [(1, "POPULATION")]
+    for rejected_location in ("", current):
+        _open_workspace_menu(window, app, monkeypatch, saved, rejected_location)
+        assert window.db_file == str(current)
+        assert window.report_grouping_draft == current_draft
+        assert export.df_for_grouping is previous_assignments
+
+    _open_workspace_menu(window, app, monkeypatch, saved, moved)
+    assert window.db_file == str(moved)
+    assert window.report_grouping_draft == carried
+    assert export.db_file == str(current)
+    assert export.get_report_grouping_draft() == current_draft
+    assert export.df_for_grouping is previous_assignments
+
+    window.launch_export_dialog(whole_database=True)
+    assert window.export_dialog is export
+    assert export.db_file == str(moved)
+    assert export.get_report_grouping_draft() == carried
+    assert export.df_for_grouping is None
+
+
+def test_workspace_open_preserves_grouping_edited_while_reading_the_file(window, app, tmp_path, monkeypatch):
+    from metroliza.ui import workspace_files
+
+    database = _create_workspace_reports(tmp_path, "grouping.sqlite", ("001",))
+    assert window.set_db_file(str(database))
+    window.launch_export_dialog(whole_database=True)
+    export = window.export_dialog
+    _edit_workspace_grouping(app, export, _keep_workspace_draft)
+    saved = tmp_path / "draft.metroliza-workspace"
+    _save_workspace_menu(window, app, monkeypatch, saved)
+
+    prepared = Event()
+    release = Event()
+    warnings = []
+    original_prepare = workspace_files._prepare_workspace
+
+    def delayed_prepare(path):
+        result = original_prepare(path)
+        prepared.set()
+        if not release.wait(10):
+            raise RuntimeError("The workspace test did not release its file worker.")
+        return result
+
+    monkeypatch.setattr(workspace_files, "_prepare_workspace", delayed_prepare)
+    monkeypatch.setattr(workspace_files.QFileDialog, "getOpenFileName", lambda *_: (str(saved), ""))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    window.open_workspace_action.trigger()
+    old_draft = window.report_grouping_draft
+    try:
+        wait_until(app, prepared.is_set)
+        _edit_workspace_grouping(app, export, _keep_workspace_draft)
+        retained = window.report_grouping_draft
+        assert retained == old_draft and retained is not old_draft
+    finally:
+        release.set()
+        wait_until(app, lambda: window._workspace_files().task is None)
+    assert window.report_grouping_draft is retained
+    assert any("workspace changed while this file was opening" in message for message in warnings)
+
+
+@pytest.mark.parametrize("when", ["before_worker", "after_capture", "before_publication"])
+def test_workspace_save_keeps_previous_file_if_approved_database_is_replaced(window, app, tmp_path, monkeypatch, when):
+    from metroliza.app import workspace_file
+    from metroliza.ui import workspace_files
+
+    database = _create_workspace_reports(tmp_path, "grouping.sqlite", ("001",))
+    replacement = _create_workspace_reports(tmp_path, "replacement.sqlite", ("changed",))
+    assert window.set_db_file(str(database))
+    window.launch_export_dialog(whole_database=True)
+    _edit_workspace_grouping(app, window.export_dialog, _keep_workspace_draft)
+    target = tmp_path / "draft.metroliza-workspace"
+    _save_workspace_menu(window, app, monkeypatch, target)
+    previous = target.read_bytes()
+    window._show_workspace_page("reports")
+
+    if when == "before_worker":
+        write = workspace_files.write_workspace
+
+        def replace_before_write(*args, **kwargs):
+            replacement.replace(database)
+            return write(*args, **kwargs)
+
+        monkeypatch.setattr(workspace_files, "write_workspace", replace_before_write)
+    elif when == "after_capture":
+        capture = workspace_file.WorkspaceLocation.capture
+
+        def replace_after_capture(_cls, path):
+            location = capture(path)
+            if path == str(database):
+                replacement.replace(database)
+            return location
+
+        monkeypatch.setattr(workspace_file.WorkspaceLocation, "capture", classmethod(replace_after_capture))
+    else:
+        publish = workspace_file.publish_output
+
+        def replace_before_publication(*args, **kwargs):
+            replacement.replace(database)
+            return publish(*args, **kwargs)
+
+        monkeypatch.setattr(workspace_file, "publish_output", replace_before_publication)
+
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    _save_workspace_menu(window, app, monkeypatch, target)
+    assert not replacement.exists()
+    assert target.read_bytes() == previous
+    assert any("selected database was replaced" in message for message in warnings)
 
 
 def test_recent_store_bounded_validated_and_windows_dedup(tmp_path):

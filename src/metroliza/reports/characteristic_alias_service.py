@@ -12,9 +12,11 @@ from itertools import islice
 from metroliza.reports.db import (
     execute_with_retry,
     run_transaction_with_retry,
+    sqlite_connection_scope,
     sqlite_file_identity,
     sqlite_readonly_connection_scope,
 )
+from metroliza.shared.diagnostic_events import CharacteristicAliasConflictError
 
 
 CHARACTERISTIC_ALIAS_TABLE = 'CHARACTERISTIC_ALIASES'
@@ -34,6 +36,10 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
 )
 
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
+_ALIAS_FILE_FORMAT = 'metroliza.characteristic_aliases'
+_ALIAS_FILE_VERSION = 1
+_MAX_ALIAS_FILE_BYTES = 1024 * 1024
+_MAX_ALIAS_FILE_ROWS = 5_000
 
 
 class CharacteristicAliasImportValidationError(ValueError):
@@ -283,31 +289,27 @@ def fetch_all_characteristic_aliases(
     db_path: str,
     *,
     connection: sqlite3.Connection | None = None,
-) -> list[dict[str, str | None]]:
-    """Fetch all alias mappings ordered for deterministic UI rendering."""
+    include_identity: bool = False,
+    limit: int = -1,
+) -> list[dict[str, str | int | None]]:
+    """Fetch alias mappings in display order, optionally including storage IDs for review."""
     query = '''
-        SELECT alias_name, canonical_name, scope_type, scope_value
+        SELECT alias_name, canonical_name, scope_type, scope_value, id
         FROM CHARACTERISTIC_ALIASES
         ORDER BY alias_name COLLATE NOCASE ASC,
                  scope_type ASC,
                  scope_value COLLATE NOCASE ASC,
                  id ASC
+        LIMIT ?
     '''
     rows = execute_with_retry(
         db_path,
         query,
-        params=(),
+        params=(limit,),
         connection=connection,
     )
-    return [
-        {
-            'alias_name': row[0],
-            'canonical_name': row[1],
-            'scope_type': row[2],
-            'scope_value': row[3],
-        }
-        for row in rows
-    ]
+    fields = (*CSV_ALIAS_HEADERS, 'id') if include_identity else CSV_ALIAS_HEADERS
+    return [dict(zip(fields, row)) for row in rows]
 
 
 def resolve_characteristic_alias(
@@ -324,25 +326,70 @@ def resolve_characteristic_alias(
       2) global alias
       3) original ``metric_name`` (fallback)
     """
-    normalized_metric_name = str(metric_name or '').strip()
-    if not normalized_metric_name:
+    key = _normalize_resolution_input(metric_name, reference)
+    if not key[0]:
         return str(metric_name or '')
+    return _resolve_normalized_aliases([key], db_path, connection=connection)[key]
 
-    try:
-        aliases = fetch_characteristic_aliases(
-            db_path,
-            normalized_metric_name,
-            reference=reference,
-            connection=connection,
+
+def _normalize_resolution_input(metric_name, reference):
+    metric_name = str(metric_name or '').strip()
+    if not metric_name:
+        return '', None
+    reference = None if reference is None or reference != reference else str(reference).strip() or None
+    return metric_name, reference
+
+
+def effective_alias_scope(alias_name, scope_type, scope_value):
+    """Return the storage key used at each priority, ignoring legacy global scope values."""
+    return alias_name, scope_type, None if scope_type == 'global' else scope_value
+
+
+def _canonical_targets(alias_name, names):
+    return {str(name or '').strip() or alias_name for name in names}
+
+
+def conflicting_alias_targets(alias_name, names) -> bool:
+    """Whether rows for one effective scope produce different output names."""
+    return len(_canonical_targets(alias_name, names)) > 1
+
+
+def _stored_scope_rows(cursor, key):
+    return tuple(cursor.execute(
+        """
+        SELECT id, alias_name, canonical_name, scope_type, scope_value
+        FROM CHARACTERISTIC_ALIASES
+        WHERE alias_name = ? AND scope_type = ? AND (scope_type = 'global' OR scope_value IS ?)
+        ORDER BY id
+        """,
+        key,
+    ).fetchall())
+
+
+def _save_existing_alias_scope(cursor, key, canonical, previous_rows):
+    if not previous_rows:
+        cursor.execute(
+            "INSERT INTO CHARACTERISTIC_ALIASES (alias_name, scope_type, scope_value, canonical_name) VALUES (?, ?, ?, ?)",
+            (*key, canonical),
         )
-    except sqlite3.OperationalError as exc:
-        if 'no such table: CHARACTERISTIC_ALIASES' in str(exc):
-            return normalized_metric_name
-        raise
+        return
+    if key == effective_alias_scope(previous_rows[0][1], previous_rows[0][3], previous_rows[0][4]):
+        cursor.executemany(
+            "UPDATE CHARACTERISTIC_ALIASES SET canonical_name = ? WHERE id = ?",
+            ((canonical, row[0]) for row in previous_rows if row[2] != canonical),
+        )
+        return
+    cursor.executemany(
+        "UPDATE CHARACTERISTIC_ALIASES SET alias_name = ?, scope_type = ?, scope_value = ?, canonical_name = ? WHERE id = ?",
+        ((*key, canonical, row[0]) for row in previous_rows),
+    )
 
-    if aliases:
-        return str(aliases[0].get('canonical_name') or normalized_metric_name)
-    return normalized_metric_name
+
+def _upsert_alias_scope(cursor, key, canonical):
+    previous = _stored_scope_rows(cursor, key)
+    if conflicting_alias_targets(key[0], (row[2] for row in previous)):
+        raise CharacteristicAliasConflictError()
+    _save_existing_alias_scope(cursor, key, canonical, previous)
 
 
 def resolve_characteristic_aliases_bulk(
@@ -351,22 +398,17 @@ def resolve_characteristic_aliases_bulk(
     *,
     connection: sqlite3.Connection | None = None,
 ) -> dict[tuple[str, str | None], str]:
-    """Resolve many ``(metric_name, reference)`` keys with reference->global priority."""
-    normalized_keys: list[tuple[str, str | None]] = []
-    for metric_name, reference in keys:
-        normalized_metric_name = str(metric_name or '').strip()
-        if reference is None or reference != reference:
-            normalized_reference = None
-        else:
-            normalized_reference = str(reference).strip() or None
-        if not normalized_metric_name:
-            continue
-        normalized_keys.append((normalized_metric_name, normalized_reference))
-
-    unique_keys = list(dict.fromkeys(normalized_keys))
+    """Resolve normalized keys and reject distinct targets at the effective priority."""
+    unique_keys = list(dict.fromkeys(
+        key for metric_name, reference in keys
+        if (key := _normalize_resolution_input(metric_name, reference))[0]
+    ))
     if not unique_keys:
         return {}
+    return _resolve_normalized_aliases(unique_keys, alias_db_path, connection=connection)
 
+
+def _resolve_normalized_aliases(unique_keys, alias_db_path, *, connection):
     alias_names = sorted({metric_name for metric_name, _ in unique_keys})
     references = sorted({reference for _, reference in unique_keys if reference})
 
@@ -384,7 +426,6 @@ def resolve_characteristic_aliases_bulk(
         FROM CHARACTERISTIC_ALIASES
         WHERE alias_name IN ({alias_name_placeholders})
           AND {scope_where}
-        ORDER BY id ASC
     '''
 
     try:
@@ -399,26 +440,19 @@ def resolve_characteristic_aliases_bulk(
             return {key: key[0] for key in unique_keys}
         raise
 
-    aliases_by_name: dict[str, list[tuple[str, str | None, str]]] = {}
+    names_by_scope = {}
     for alias_name, canonical_name, scope_type, scope_value in rows:
-        aliases_by_name.setdefault(str(alias_name), []).append(
-            (
-                str(scope_type or '').strip().lower(),
-                str(scope_value or '').strip() or None,
-                str(canonical_name or '').strip(),
-            )
-        )
+        scope = effective_alias_scope(alias_name, scope_type, scope_value)
+        names_by_scope.setdefault(scope, []).append(canonical_name)
+    targets_by_scope = {scope: _canonical_targets(scope[0], names) for scope, names in names_by_scope.items()}
 
     resolved: dict[tuple[str, str | None], str] = {}
     for metric_name, reference in unique_keys:
-        selected: str | None = None
-        for scope_type, scope_value, canonical_name in aliases_by_name.get(metric_name, []):
-            if scope_type == 'reference' and reference and scope_value == reference:
-                selected = canonical_name or metric_name
-                break
-            if scope_type == 'global' and selected is None:
-                selected = canonical_name or metric_name
-        resolved[(metric_name, reference)] = selected or metric_name
+        targets = (targets_by_scope.get((metric_name, 'reference', reference))
+                   or targets_by_scope.get((metric_name, 'global', None)))
+        if targets is not None and len(targets) > 1:
+            raise CharacteristicAliasConflictError()
+        resolved[(metric_name, reference)] = next(iter(targets)) if targets else metric_name
 
     return resolved
 
@@ -470,55 +504,12 @@ def upsert_characteristic_aliases_bulk(
         return 0
 
     def operation(cursor) -> int:
+        if not cursor.connection.in_transaction:
+            cursor.execute("BEGIN IMMEDIATE")
         ensure_characteristic_alias_table(cursor)
         for row in normalized_rows:
-            cursor.execute(
-                '''
-                SELECT id
-                FROM CHARACTERISTIC_ALIASES
-                WHERE alias_name = ? AND scope_type = ?
-                  AND (
-                    (scope_value IS NULL AND ? IS NULL)
-                    OR scope_value = ?
-                  )
-                ORDER BY id ASC
-                LIMIT 1
-                ''',
-                (
-                    row['alias_name'],
-                    row['scope_type'],
-                    row['scope_value'],
-                    row['scope_value'],
-                ),
-            )
-            existing_row = cursor.fetchone()
-            if existing_row is None:
-                cursor.execute(
-                    '''
-                    INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value)
-                    VALUES (?, ?, ?, ?)
-                    ''',
-                    (
-                        row['alias_name'],
-                        row['canonical_name'],
-                        row['scope_type'],
-                        row['scope_value'],
-                    ),
-                )
-            else:
-                cursor.execute(
-                    '''
-                    UPDATE CHARACTERISTIC_ALIASES
-                    SET canonical_name = ?, scope_type = ?, scope_value = ?
-                    WHERE id = ?
-                    ''',
-                    (
-                        row['canonical_name'],
-                        row['scope_type'],
-                        row['scope_value'],
-                        existing_row[0],
-                    ),
-                )
+            key = row['alias_name'], row['scope_type'], row['scope_value']
+            _upsert_alias_scope(cursor, key, row['canonical_name'])
         return len(normalized_rows)
 
     return run_transaction_with_retry(
@@ -538,6 +529,7 @@ def export_characteristic_aliases_csv(
     connection: sqlite3.Connection | None = None,
 ) -> int:
     """Export all alias mappings to a CSV file."""
+    protect_alias_export_destination(db_path, destination_path)
     rows = fetch_all_characteristic_aliases(db_path, connection=connection)
     with open(destination_path, 'w', newline='', encoding='utf-8') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=list(CSV_ALIAS_HEADERS))
@@ -649,6 +641,8 @@ class AliasImportPlan:
     added: int
     replaced: int
     unchanged: int
+    database_path: Path | None = None
+    database_identity: tuple[int, int] | None = None
 
     def replacement_lines(self, limit=20):
         limit = max(0, int(limit))
@@ -662,45 +656,141 @@ def _alias_key_snapshot(cursor, rows):
     cursor.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES' COLLATE NOCASE")
     if cursor.fetchone() is None:
         return tuple(() for _ in rows)
-    snapshot = []
-    for alias, _canonical, scope, value in rows:
-        cursor.execute(
-            "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES "
-            "WHERE alias_name=? AND scope_type=? AND scope_value IS ? ORDER BY id",
-            (alias, scope, value),
-        )
-        snapshot.append(tuple(cursor.fetchall()))
-    return tuple(snapshot)
+    return tuple(
+        tuple((row[0], row[2]) for row in _stored_scope_rows(cursor, (alias, scope, value)))
+        for alias, _canonical, scope, value in rows
+    )
 
 
 def preview_characteristic_aliases_csv(db_path: str, source_path: str) -> AliasImportPlan:
-    rows = tuple(tuple(row[field] for field in CSV_ALIAS_HEADERS) for row in _read_alias_csv(source_path))
+    return _preview_alias_rows(db_path, _read_alias_csv(source_path))
+
+
+def _preview_alias_rows(db_path, mappings) -> AliasImportPlan:
+    rows = tuple(tuple(row[field] for field in CSV_ALIAS_HEADERS) for row in mappings)
     snapshot = tuple(() for _ in rows)
-    if Path(db_path).exists():
-        with sqlite_readonly_connection_scope(db_path) as connection:
+    path = Path(db_path).expanduser().resolve()
+    identity = sqlite_file_identity(path)
+    if identity is not None:
+        with sqlite_readonly_connection_scope(path) as connection:
             cursor = connection.cursor()
             try:
                 cursor.execute("BEGIN")
+                _check_alias_database_owner(db_path, path, identity, cursor)
                 snapshot = _alias_key_snapshot(cursor, rows)
             finally:
                 cursor.close()
+    if any(conflicting_alias_targets(row[0], (item[1] for item in old)) for row, old in zip(rows, snapshot)):
+        raise CharacteristicAliasConflictError()
     added = sum(not old for old in snapshot)
     replaced = sum(bool(old) and old[0][1] != row[1] for row, old in zip(rows, snapshot))
-    return AliasImportPlan(rows, snapshot, added, replaced, len(rows) - added - replaced)
+    return AliasImportPlan(rows, snapshot, added, replaced, len(rows) - added - replaced, path, identity)
 
 
 def apply_characteristic_alias_import(db_path: str, plan: AliasImportPlan, *, replace: bool = False) -> int:
     """Recheck all affected keys under the write lock before the first mutation."""
+    if plan.database_path is not None:
+        if (Path(db_path).expanduser().resolve() != plan.database_path
+                or sqlite_file_identity(plan.database_path) != plan.database_identity):
+            raise ValueError("The selected database changed after preview. Preview the mapping file again.")
+
     def operation(cursor):
         cursor.execute("BEGIN IMMEDIATE")
+        if plan.database_identity is not None:
+            _check_alias_database_owner(db_path, plan.database_path, plan.database_identity, cursor)
         if _alias_key_snapshot(cursor, plan.rows) != plan.snapshot:
-            raise ValueError("Mappings changed after preview. Nothing was imported; preview the CSV again.")
+            raise ValueError("Mappings changed after preview. Nothing was imported; preview the mapping file again.")
         rows = [dict(zip(CSV_ALIAS_HEADERS, row)) for row, old in zip(plan.rows, plan.snapshot)
                 if not old or (replace and old[0][1] != row[1])]
         return upsert_characteristic_aliases_bulk(
             db_path, rows, connection=cursor.connection, join_transaction=True,
         )
     return run_transaction_with_retry(db_path, operation)
+
+
+def protect_alias_export_destination(db_path, destination_path) -> None:
+    source = Path(db_path)
+    destination = Path(destination_path)
+    for database_name in {source, source.resolve()}:
+        candidates = (database_name, *(Path(f'{database_name}{suffix}') for suffix in ('-wal', '-shm', '-journal')))
+        if any(_same_alias_file(candidate, destination) for candidate in candidates):
+            raise ValueError("Choose an export file separate from the source database and its companion files.")
+
+
+def _same_alias_file(source, destination):
+    if source.resolve() == destination.resolve():
+        return True
+    try:
+        return destination.samefile(source)
+    except FileNotFoundError:
+        return False
+
+
+def _portable_alias_rows(mappings, *, collapse_equal=False):
+    if not isinstance(mappings, list) or len(mappings) > _MAX_ALIAS_FILE_ROWS:
+        raise ValueError(f"The mapping file supports up to {_MAX_ALIAS_FILE_ROWS:,} entries.")
+    rows = {}
+    for number, mapping in enumerate(mappings, start=1):
+        if not isinstance(mapping, dict) or mapping.keys() != set(CSV_ALIAS_HEADERS):
+            raise ValueError(f"Mapping {number} must contain only names and scope fields.")
+        if any(not isinstance(mapping[key], str) for key in CSV_ALIAS_HEADERS[:-1]):
+            raise ValueError(f"Mapping {number} names and scope type must be text.")
+        if mapping['scope_value'] is not None and not isinstance(mapping['scope_value'], str):
+            raise ValueError(f"Mapping {number} scope value must be text or null.")
+        normalized = _normalize_alias_mapping_payload(mapping, row_number=number)
+        key = effective_alias_scope(
+            normalized['alias_name'], normalized['scope_type'], normalized['scope_value'],
+        )
+        if key in rows and (not collapse_equal or normalized != rows[key]):
+            raise ValueError(f"Mapping {number} repeats an effective alias scope. Resolve the duplicate first.")
+        rows[key] = normalized
+    return list(rows.values())
+
+
+def _unique_alias_fields(pairs):
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("The mapping file contains a duplicate JSON field.")
+    return fields
+
+
+def preview_characteristic_aliases_json(db_path: str, source_path: str) -> AliasImportPlan:
+    """Validate a portable mapping file before calling the shared read-only preview."""
+    with open(source_path, 'rb') as source:
+        raw = source.read(_MAX_ALIAS_FILE_BYTES + 1)
+    if len(raw) > _MAX_ALIAS_FILE_BYTES:
+        raise ValueError("The mapping file is larger than 1 MiB.")
+    try:
+        document = json.loads(raw.decode('utf-8-sig'), object_pairs_hook=_unique_alias_fields)
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("The mapping file is not valid UTF-8 JSON.") from exc
+    if not isinstance(document, dict) or document.get('format') != _ALIAS_FILE_FORMAT:
+        raise ValueError("Choose a Metroliza name-matches JSON file.")
+    if type(document.get('version')) is not int or document['version'] != _ALIAS_FILE_VERSION:
+        raise ValueError("This Metroliza version does not support the mapping file version.")
+    if document.keys() != {'format', 'version', 'mappings'}:
+        raise ValueError("The mapping file contains unsupported fields.")
+    return _preview_alias_rows(db_path, _portable_alias_rows(document['mappings']))
+
+
+def build_characteristic_aliases_json(db_path: str) -> tuple[bytes, int]:
+    """Export versioned name/scope fields, independent of database identities and rows."""
+    with sqlite_readonly_connection_scope(db_path) as connection:
+        connection.execute('BEGIN')
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES' COLLATE NOCASE"
+        ).fetchone()
+        rows = fetch_all_characteristic_aliases(
+            db_path, connection=connection, limit=_MAX_ALIAS_FILE_ROWS + 1,
+        ) if table else []
+    mappings = _portable_alias_rows(rows, collapse_equal=True)
+    payload = json.dumps(
+        {'format': _ALIAS_FILE_FORMAT, 'version': _ALIAS_FILE_VERSION, 'mappings': mappings},
+        ensure_ascii=False, indent=2,
+    ).encode('utf-8') + b'\n'
+    if len(payload) > _MAX_ALIAS_FILE_BYTES:
+        raise ValueError("The mapping configuration exceeds the 1 MiB file limit.")
+    return payload, len(mappings)
 
 
 def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:
@@ -718,22 +808,16 @@ def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:
     def operation(cursor):
         cursor.execute("BEGIN IMMEDIATE")
         ensure_characteristic_alias_table(cursor)
-        matching = "SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES WHERE alias_name = ? AND scope_type = ? AND scope_value IS ?"
-        source = cursor.execute(matching, original).fetchone() if original is not None else None
-        if original is not None and (source is None or source[1] != previous["canonical_name"]):
-            raise ValueError("The original match changed. Reopen it before saving.")
-        if target != original and cursor.execute(matching, target).fetchone() is not None:
+        source = _stored_scope_rows(cursor, original) if original is not None else ()
+        if original is not None:
+            targets = _canonical_targets(original[0], (row[2] for row in source))
+            if len(targets) > 1:
+                raise CharacteristicAliasConflictError()
+            if targets != _canonical_targets(original[0], [previous["canonical_name"]]):
+                raise ValueError("The original match changed. Reopen it before saving.")
+        if target != original and _stored_scope_rows(cursor, target):
             raise ValueError("This name match already exists for the selected scope.")
-        if source is None:
-            cursor.execute(
-                "INSERT INTO CHARACTERISTIC_ALIASES (alias_name, scope_type, scope_value, canonical_name) VALUES (?, ?, ?, ?)",
-                (*target, canonical),
-            )
-        else:
-            cursor.execute(
-                "UPDATE CHARACTERISTIC_ALIASES SET alias_name = ?, scope_type = ?, scope_value = ?, canonical_name = ? WHERE id = ?",
-                (*target, canonical, source[0]),
-            )
+        _save_existing_alias_scope(cursor, target, canonical, source)
     run_transaction_with_retry(db_path, operation)
 
 
@@ -760,57 +844,10 @@ def upsert_characteristic_alias(
     normalized_scope_type, normalized_scope_value = normalize_alias_scope(scope_type, scope_value)
 
     def operation(cursor) -> None:
-        cursor.execute(
-            '''
-            SELECT id
-            FROM CHARACTERISTIC_ALIASES
-            WHERE alias_name = ? AND scope_type = ?
-              AND (
-                (scope_value IS NULL AND ? IS NULL)
-                OR scope_value = ?
-              )
-            ORDER BY id ASC
-            LIMIT 1
-            ''',
-            (
-                normalized_alias_name,
-                normalized_scope_type,
-                normalized_scope_value,
-                normalized_scope_value,
-            ),
-        )
-        row = cursor.fetchone()
-
-        if row is None:
-            cursor.execute(
-                '''
-                INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value)
-                VALUES (?, ?, ?, ?)
-                ''',
-                (
-                    normalized_alias_name,
-                    normalized_canonical_name,
-                    normalized_scope_type,
-                    normalized_scope_value,
-                ),
-            )
-            return
-
-        cursor.execute(
-            '''
-            UPDATE CHARACTERISTIC_ALIASES
-            SET canonical_name = ?,
-                scope_type = ?,
-                scope_value = ?
-            WHERE id = ?
-            ''',
-            (
-                normalized_canonical_name,
-                normalized_scope_type,
-                normalized_scope_value,
-                row[0],
-            ),
-        )
+        if not cursor.connection.in_transaction:
+            cursor.execute("BEGIN IMMEDIATE")
+        key = normalized_alias_name, normalized_scope_type, normalized_scope_value
+        _upsert_alias_scope(cursor, key, normalized_canonical_name)
 
     run_transaction_with_retry(
         db_path,
@@ -868,6 +905,33 @@ def _check_alias_database_owner(db_path, expected_path, expected_identity, curso
                 raise ValueError
         except (OSError, RuntimeError, ValueError) as exc:
             raise ValueError(_STALE_DATABASE_BINDING) from exc
+
+
+def repair_characteristic_alias_conflict(
+    db_path, key, expected_rows, keep_id, *, expected_database_path, expected_database_identity,
+):
+    """Align one reviewed effective scope without deleting any row."""
+    expected_path = Path(expected_database_path).expanduser().resolve()
+    if expected_database_identity is None:
+        raise ValueError(_STALE_DATABASE_BINDING)
+    _check_alias_database_owner(db_path, expected_path, expected_database_identity)
+
+    def operation(cursor):
+        cursor.execute('BEGIN IMMEDIATE')
+        _check_alias_database_owner(db_path, expected_path, expected_database_identity, cursor)
+        actual = _stored_scope_rows(cursor, key)
+        if actual != expected_rows or not conflicting_alias_targets(key[0], (row[2] for row in actual)):
+            raise ValueError('The conflicting name matches changed. Reload the list and review them again.')
+        winner = next((row for row in actual if row[0] == keep_id), None)
+        if winner is None or not str(winner[2] or '').strip():
+            raise ValueError('Select a conflicting row with the common name you want to keep.')
+        _save_existing_alias_scope(cursor, key, winner[2], actual)
+        _check_alias_database_owner(db_path, expected_path, expected_database_identity, cursor)
+
+    with sqlite_connection_scope(
+        str(expected_path), initialize_wal=False, existing_identity=expected_database_identity,
+    ) as connection:
+        run_transaction_with_retry(db_path, operation, connection=connection)
 
 
 def _record_deleted_alias(cursor, row, mapping):

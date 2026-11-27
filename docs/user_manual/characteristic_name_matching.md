@@ -39,8 +39,8 @@ The main dialog contains:
   - **Add manually**
   - **Edit selected**
   - **Delete selected**
-  - **Import CSV**
-  - **Export CSV**
+  - **Import matches**
+  - **Export matches**
   - **Close**
 
 The report/export names table shows names already found in the selected database, with counts for references, reports, and measurement rows. Select a row there when you want to avoid typing the original name manually.
@@ -131,12 +131,12 @@ Reference-specific matches are the safer choice when a short report name is reus
 
 1. Select a row in the saved matches table.
 2. Click **Delete selected**.
-3. If you may need to recover the rule, choose **Export CSV** and save a copy before continuing.
+3. If you may need to recover the rule, choose **Export matches** and save a copy before continuing.
 4. Confirm deletion after checking the alias, common name, and scope.
 
 Deleting a match stops Metroliza from using that replacement rule in future work.
 Confirmed deletions also keep the previous rule in the local database for recovery.
-The database retains the latest 100 deleted rules. Import the saved CSV to restore
+The database retains the latest 100 deleted rules. Import the saved JSON or CSV file to restore
 a rule after checking its scope.
 
 ## Troubleshooting
@@ -145,7 +145,7 @@ a rule after checking its scope.
 
 Disabled buttons usually mean a required selection is missing.
 
-- **Add manually**, **Import CSV**, and **Export CSV** need a selected database.
+- **Add manually**, **Import matches**, and **Export matches** need a selected database.
 - **Add from selected** needs a selected database and a selected row in **Report/export names in this database**.
 - **Edit selected** and **Delete selected** need a selected row in **Saved name matches**.
 
@@ -161,13 +161,20 @@ If the message says no report/export names were found in the database, check tha
 
 Select one row in **Report/export names in this database** first. If no rows are visible, clear the search or choose the correct database.
 
-## Import/export CSV
+## Move name matches between databases
 
-CSV import/export is for moving the mapping rules, not the report measurements themselves.
+Use **Export matches** and select **Metroliza name matches** to save a versioned JSON file
+for reuse in another workspace or database. The file contains the saved original and shared
+names and their global or reference scope. It carries no report measurements, database paths,
+or credentials. Choose **Import matches** to preview and apply the file in the selected database.
+The JSON format supports up to 5,000 mappings and a 1 MiB file. Metroliza rejects files made
+with an unsupported format version and asks you to resolve conflicting saved rules before export.
+Each imported alias and scope can appear once. Replacing an existing JSON file requires
+confirmation for the exact destination.
 
 ### Export CSV
 
-Use **Export CSV** to save the current saved matches to a CSV file.
+Use **Export matches** and select **CSV files** for a spreadsheet or an external mapping system.
 
 This is useful for:
 
@@ -183,13 +190,13 @@ alias_name,canonical_name,scope_type,scope_value
 
 ### Import CSV
 
-Use **Import CSV** to load name matches from a CSV file.
+Use **Import matches** to load either a saved Metroliza JSON file or an existing CSV.
 
 Before saving, review the Added / Replaced / Unchanged counts and the old → new names
 for replacements. **Import only new** is the default; **Import and replace N** explicitly
 allows replacements. Cancel saves nothing. If affected rules change after preview, the
-import aborts without saving; preview the CSV again.
-Export the current rules to CSV first if you may need to restore a rule that the import
+import aborts without saving. Preview the file again.
+Export the current rules first if you may need to restore a rule that the import
 replaces.
 
 This is useful when you already maintain a mapping list externally or want to load many matches at once.
@@ -262,6 +269,16 @@ Create a match:
 If characteristic names need normalization, it is usually best to set up **Characteristic Name Matching** before running [Export overview](export_overview.md).
 
 That helps the **Group Analysis worksheet** combine and label metrics using the common names you intended, while the raw stored report values remain unchanged.
+
+A match for the report's reference takes priority over a match for all references. Group Analysis
+uses the original name when neither scope has a match. Different original names can share one
+common name. Multiple rows in the same scope that produce the same common name also work as one match.
+
+If rules at the applicable scope give different common names, Group Analysis stops the export and
+keeps the last complete output. Open **Characteristic Name Matching**, select the row whose common
+name you want to keep, then choose **Resolve conflict** and confirm. All rows in that scope will
+use the selected name. Later edits apply to the whole scope. **Delete selected** is available for
+scopes with one saved row.
 
 ## Saving, closing and keyboard commands
 

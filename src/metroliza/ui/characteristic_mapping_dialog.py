@@ -7,6 +7,7 @@ import csv
 from functools import partial
 from html import escape
 import sqlite3
+import tempfile
 import threading
 import time
 import weakref
@@ -38,14 +39,20 @@ from metroliza.reports.characteristic_alias_service import (
     CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     CHARACTERISTIC_ALIAS_TABLE,
+    build_characteristic_aliases_json,
+    conflicting_alias_targets,
     delete_characteristic_alias,
+    effective_alias_scope,
     ensure_characteristic_alias_schema,
     export_characteristic_aliases_csv,
     fetch_all_characteristic_aliases,
     import_characteristic_aliases_csv,
     preview_characteristic_aliases_csv,
+    preview_characteristic_aliases_json,
+    protect_alias_export_destination,
     apply_characteristic_alias_import,
     normalize_scope_type,
+    repair_characteristic_alias_conflict,
     save_manual_characteristic_alias,
 )
 from metroliza.reports.characteristic_mapping_service import (
@@ -85,6 +92,7 @@ REMEDIATION_REPORT_HEADERS = ('row_number', 'field', 'code', 'category', 'messag
 SOURCE_TABLE_HEADERS = ['Report/export name', 'References', 'Reports', 'Rows']
 SOURCE_LOADING_TEXT = 'Loading report/export names...'
 SOURCE_LOAD_CANCELED_TEXT = 'Loading report/export names was canceled. Use Browse DB to load them again.'
+ALIAS_INFO_TEXT = 'Matches affect Group Analysis labels; raw parsed values stay unchanged.'
 # Upper bound for the GUI thread to wait for an interrupted loader; a loader that has not stopped by
 # then is detached (it keeps running to completion in the background and its result is dropped).
 SOURCE_LOAD_STOP_WAIT_MS = 2000
@@ -93,6 +101,74 @@ _DEFAULT_ALIAS_SCHEMA = ensure_characteristic_alias_schema
 _DEFAULT_ALIAS_IMPORT = import_characteristic_aliases_csv
 _DEFAULT_ALIAS_EXPORT = export_characteristic_aliases_csv
 _DEFAULT_ALIAS_FETCH = fetch_all_characteristic_aliases
+_JSON_ALIAS_FILTER = 'Metroliza name matches (*.json)'
+_CSV_ALIAS_FILTER = 'CSV files (*.csv)'
+_ALIAS_FILE_FILTERS = f'{_JSON_ALIAS_FILTER};;{_CSV_ALIAS_FILTER};;All files (*)'
+
+
+def _is_alias_json(filename):
+    return Path(filename).suffix.casefold() == '.json'
+
+
+def _alias_output_filename(filename, selected_filter):
+    extension = Path(filename).suffix.casefold()
+    if not extension:
+        return filename + ('.json' if selected_filter == _JSON_ALIAS_FILTER else '.csv')
+    if selected_filter == _JSON_ALIAS_FILTER and extension != '.json':
+        raise ValueError("Use a .json filename to export Metroliza name matches.")
+    if selected_filter == _CSV_ALIAS_FILTER and extension == '.json':
+        raise ValueError("Use a .csv filename to export name matches as CSV.")
+    return filename
+
+
+def _preview_alias_file(db_file, filename):
+    preview = preview_characteristic_aliases_json if _is_alias_json(filename) else preview_characteristic_aliases_csv
+    return preview(db_file, filename)
+
+
+def _save_alias_json(db_file, filename, consents=()):
+    payload, count = build_characteristic_aliases_json(db_file)
+
+    def write(staged):
+        staged.write_bytes(payload)
+        return count
+
+    return _publish_alias_file(db_file, filename, write, consents)
+
+
+def _save_alias_csv(db_file, filename, producer, consents):
+    return _publish_alias_file(db_file, filename, lambda staged: producer(db_file, str(staged)), consents)
+
+
+def _publish_alias_file(db_file, filename, write, consents):
+    from metroliza.exporting.output_publication import publish_output
+
+    protect_alias_export_destination(db_file, filename)
+
+    def require_separate_destination():
+        protect_alias_export_destination(db_file, filename)
+        return False
+
+    target = Path(filename)
+    with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
+        staged = Path(stream.name)
+    try:
+        count = write(staged)
+        publish_output(staged, target, consents=consents, should_cancel=require_separate_destination)
+    finally:
+        staged.unlink(missing_ok=True)
+    return count
+
+
+def _prepare_alias_export(parent, original_filename, selected_filter):
+    filename = _alias_output_filename(original_filename, selected_filter)
+    if not _is_alias_json(filename) and filename == original_filename:
+        return filename, None
+    from metroliza.ui.analysis_history_dialog import collect_output_consent
+
+    protect_alias_export_destination(parent.db_file, filename)
+    consents = collect_output_consent(parent, filename)
+    return (filename, consents) if consents is not None else None
 
 
 @contextmanager
@@ -191,6 +267,7 @@ class _AliasCsvThread(QThread):
         self.count, self.error, self.discard_result = None, None, False
         self.reviewed = threading.Event()
         self.choice = None
+        self.output_consents = None
         self._outcome_lock = threading.Lock()
         self._phase = 'preflight'
         self._result_confirmed = False
@@ -198,7 +275,7 @@ class _AliasCsvThread(QThread):
     def run(self):
         try:
             if self.operation == 'import':
-                plan = preview_characteristic_aliases_csv(self.db_file, self.filename)
+                plan = _preview_alias_file(self.db_file, self.filename)
                 self.preview_ready.emit(plan)
                 while not self.reviewed.wait(0.1):
                     if self.isInterruptionRequested() or self.discard_result:
@@ -219,8 +296,14 @@ class _AliasCsvThread(QThread):
             else:
                 with self._outcome_lock:
                     self._phase = 'applying'
-                _DEFAULT_ALIAS_SCHEMA(self.db_file)
-                self.count = self.producer(self.db_file, self.filename)
+                if _is_alias_json(self.filename):
+                    self.count = _save_alias_json(self.db_file, self.filename, self.output_consents or ())
+                else:
+                    _DEFAULT_ALIAS_SCHEMA(self.db_file)
+                    if self.output_consents is None:
+                        self.count = self.producer(self.db_file, self.filename)
+                    else:
+                        self.count = _save_alias_csv(self.db_file, self.filename, self.producer, self.output_consents)
                 self._result_confirmed = True
         except Exception as exc:
             self.error = exc
@@ -673,6 +756,8 @@ class CharacteristicMappingDialog(QDialog):
         self.db_file = db_file
         self._loaded_alias_database_path: str | None = None
         self._loaded_alias_database_identity: tuple[int, int] | None = None
+        self._loaded_alias_scope_rows = {}
+        self._conflicting_alias_scopes = set()
         self.database_change_allowed = None
         self.report_database_is_current = None
         self.metric_options: list[dict[str, object]] = []
@@ -728,7 +813,7 @@ class CharacteristicMappingDialog(QDialog):
             'warning',
         )
         self.collision_warning_label = status_chip(
-            'Matches affect Group Analysis labels; raw parsed values stay unchanged.',
+            ALIAS_INFO_TEXT,
             'info',
         )
 
@@ -743,8 +828,8 @@ class CharacteristicMappingDialog(QDialog):
         self.add_button = QPushButton('Add manually')
         self.edit_button = QPushButton('Edit selected')
         self.delete_button = QPushButton('Delete selected')
-        self.import_button = QPushButton('Import CSV')
-        self.export_button = QPushButton('Export CSV')
+        self.import_button = QPushButton('Import matches')
+        self.export_button = QPushButton('Export matches')
         self.close_button = QPushButton('Close')
 
         table_actions_row = QHBoxLayout()
@@ -876,13 +961,28 @@ class CharacteristicMappingDialog(QDialog):
         has_db = _has_selected_db_file(self.db_file)
         has_metric_selection = self._selected_metric_option() is not None
         has_selection = self._selected_mapping() is not None
+        key, row = self._selected_alias_storage()
+        conflicting = key in self._conflicting_alias_scopes
+        multiple = len(self._loaded_alias_scope_rows.get(key, ())) > 1
         options_ready = not self._source_loading
         self.add_button.setEnabled(has_db and options_ready)
         self.add_from_selected_button.setEnabled(has_db and options_ready and has_metric_selection)
         self.import_button.setEnabled(has_db and options_ready)
         self.export_button.setEnabled(has_db)
-        self.edit_button.setEnabled(has_db and options_ready and has_selection)
-        self.delete_button.setEnabled(has_db and options_ready and has_selection)
+        self.edit_button.setText('Resolve conflict' if conflicting else 'Edit selected')
+        can_select_target = not conflicting or (row[0] is not None and bool(str(row[2] or '').strip()))
+        self.edit_button.setEnabled(has_db and options_ready and has_selection and can_select_target)
+        self.delete_button.setEnabled(has_db and options_ready and has_selection and not multiple)
+
+    def _selected_alias_storage(self):
+        selected = self.alias_table.selectionModel().selectedRows()
+        if not selected or self.alias_table.isRowHidden(selected[0].row()):
+            return None, None
+        item = self.alias_table.item(selected[0].row(), 0)
+        row = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(row, tuple) or len(row) != 5:
+            return None, None
+        return effective_alias_scope(row[1], row[3], row[4]), row
 
     def _sync_warning_labels(self):
         has_db = bool(str(self.db_file or '').strip())
@@ -1106,12 +1206,26 @@ class CharacteristicMappingDialog(QDialog):
         except Exception as exc:
             self._invalidate_loaded_aliases()
             self.alias_table.setRowCount(0)
+            self._sync_alias_scope_warning()
             CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Load error', f'Could not load name matches: {exc}')
             return
 
         self._loaded_alias_database_path = loaded_path
         self._loaded_alias_database_identity = loaded_identity
+
+        identities = [tuple(row.get(name) for name in ('id', 'alias_name', 'canonical_name', 'scope_type', 'scope_value'))
+                      for row in alias_rows]
+        scopes = {}
+        for row in identities:
+            scopes.setdefault(effective_alias_scope(row[1], row[3], row[4]), []).append(row)
+        self._loaded_alias_scope_rows = {
+            key: tuple(sorted(rows, key=lambda row: row[0] or 0)) for key, rows in scopes.items()
+        }
+        self._conflicting_alias_scopes = {
+            key for key, rows in scopes.items()
+            if key[1] in ('global', 'reference') and conflicting_alias_targets(key[0], (row[2] for row in rows))
+        }
 
         self.alias_table.setRowCount(len(alias_rows))
         for row_index, row in enumerate(alias_rows):
@@ -1124,8 +1238,14 @@ class CharacteristicMappingDialog(QDialog):
             ]
             for column_index, value in enumerate(values):
                 self.alias_table.setItem(row_index, column_index, QTableWidgetItem(value))
+            identity = identities[row_index]
+            alias_item = self.alias_table.item(row_index, 0)
+            alias_item.setData(Qt.ItemDataRole.UserRole, identity)
+            if effective_alias_scope(identity[1], identity[3], identity[4]) in self._conflicting_alias_scopes:
+                alias_item.setToolTip('Conflicting common names for this scope. Select the name to keep and resolve the conflict.')
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
+        self._sync_alias_scope_warning()
         self._filter_alias_table()
         self._sync_warning_labels()
 
@@ -1148,7 +1268,7 @@ class CharacteristicMappingDialog(QDialog):
                 if alias_table_exists is None:
                     alias_rows = []
                 else:
-                    alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+                    alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection, include_identity=True)
                 if sqlite_file_identity(selected_path, include_empty=True) != selected_identity:
                     raise ValueError('The selected database changed while name matches were loading. Reload the list.')
             return str(selected_path), selected_identity, alias_rows
@@ -1157,7 +1277,7 @@ class CharacteristicMappingDialog(QDialog):
         loaded_path, loaded_identity = _alias_database_binding(self.db_file)
         if fetch_all_characteristic_aliases is _DEFAULT_ALIAS_FETCH:
             with sqlite_readonly_connection_scope(self.db_file) as connection:
-                alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+                alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection, include_identity=True)
         else:
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
         if _alias_database_binding(self.db_file) != (loaded_path, loaded_identity):
@@ -1168,12 +1288,23 @@ class CharacteristicMappingDialog(QDialog):
         self._invalidate_loaded_aliases()
         self.alias_table.setRowCount(0)
         self.empty_state_label.setVisible(True)
+        self._sync_alias_scope_warning()
         self._sync_selection_actions()
         self._sync_warning_labels()
 
     def _invalidate_loaded_aliases(self):
         self._loaded_alias_database_path = None
         self._loaded_alias_database_identity = None
+        self._loaded_alias_scope_rows = {}
+        self._conflicting_alias_scopes = set()
+
+    def _sync_alias_scope_warning(self):
+        count = len(self._conflicting_alias_scopes)
+        self.collision_warning_label.setText(
+            f'{count} conflicting name match scope(s). Select the common name to keep, then choose Resolve conflict.'
+            if count else ALIAS_INFO_TEXT
+        )
+        set_status_variant(self.collision_warning_label, 'warning' if count else 'info')
 
     def _loaded_alias_database_matches_current(self):
         if self._loaded_alias_database_path is None or self._loaded_alias_database_identity is None:
@@ -1260,7 +1391,40 @@ class CharacteristicMappingDialog(QDialog):
     def edit_mapping(self):
         selected = self._selected_mapping()
         if selected is not None:
-            self._open_mapping_editor(selected, previous=selected)
+            key, row = self._selected_alias_storage()
+            if key in self._conflicting_alias_scopes:
+                self._resolve_alias_conflict(key, row)
+            else:
+                self._open_mapping_editor(selected, previous=selected)
+
+    def _resolve_alias_conflict(self, key, row):
+        if _alias_csv_busy(self) or self._source_loading or row[0] is None or not str(row[2] or '').strip():
+            return
+        expected = self._loaded_alias_scope_rows[key]
+        path, identity = self._loaded_alias_database_path, self._loaded_alias_database_identity
+        scope = escape(str(key[2])) if key[1] == 'reference' else ALL_REFERENCES_LABEL
+        text = (
+            f'Use {escape(row[2])} for {escape(row[1])} in this scope?\n\n'
+            f'Scope: {scope}\n{len(expected)} saved rows will use the selected common name.'
+        )
+        if QMessageBox.question(
+            self, 'Resolve name match conflict', text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        if _alias_csv_busy(self) or self._source_loading:
+            return
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_STARTED)
+        try:
+            repair_characteristic_alias_conflict(
+                self.db_file, key, expected, row[0], expected_database_path=path, expected_database_identity=identity,
+            )
+        except (OSError, sqlite3.Error, ValueError):
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
+            QMessageBox.warning(self, 'Name match conflict', 'Could not resolve the conflict. Reload the name matches and try again.')
+            return
+        self.load_aliases()
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED)
 
     def _open_mapping_editor(self, initial_values, previous=None):
         if _alias_csv_busy(self) or not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
@@ -1300,6 +1464,10 @@ class CharacteristicMappingDialog(QDialog):
                     'The selected database changed after this list was loaded. Reload the name matches and review the rule again.',
                 )
                 self.load_aliases()
+            return
+        key, _row = self._selected_alias_storage()
+        if len(self._loaded_alias_scope_rows.get(key, ())) > 1:
+            QMessageBox.warning(self, 'Multiple name matches', 'This scope has more than one saved row. Delete is unavailable.')
             return
 
         loaded_database_path = self._loaded_alias_database_path
@@ -1481,7 +1649,7 @@ class CharacteristicMappingDialog(QDialog):
             self,
             'Import name matches',
             str(self.db_file or ''),
-            'CSV files (*.csv);;All files (*)',
+            _ALIAS_FILE_FILTERS,
         )
         if not filename:
             return
@@ -1493,10 +1661,10 @@ class CharacteristicMappingDialog(QDialog):
             return
 
         def produce():
-            if import_characteristic_aliases_csv is not _DEFAULT_ALIAS_IMPORT:
+            if not _is_alias_json(filename) and import_characteristic_aliases_csv is not _DEFAULT_ALIAS_IMPORT:
                 ensure_characteristic_alias_schema(self.db_file)
                 return import_characteristic_aliases_csv(self.db_file, filename)
-            plan = preview_characteristic_aliases_csv(self.db_file, filename)
+            plan = _preview_alias_file(self.db_file, filename)
             choice = self._confirm_alias_import(plan)
             if choice is not None:
                 try:
@@ -1592,23 +1760,36 @@ class CharacteristicMappingDialog(QDialog):
         if not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
             return
 
-        filename, _ = QFileDialog.getSaveFileName(
+        filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             'Export name matches',
-            'characteristic_aliases.csv',
-            'CSV files (*.csv);;All files (*)',
+            'characteristic_aliases.json',
+            _ALIAS_FILE_FILTERS,
         )
         if not filename:
             return
+        try:
+            chosen = _prepare_alias_export(self, filename, selected_filter)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, 'Export error', str(exc))
+            return
+        if chosen is None:
+            return
+        filename, consents = chosen
 
         _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_STARTED)
 
         if type(filename) is str and _native_alias_csv(self):
-            CharacteristicMappingDialog._start_alias_csv(self, 'export', filename, started_at)
+            options = {'output_consents': consents} if consents is not None else {}
+            CharacteristicMappingDialog._start_alias_csv(self, 'export', filename, started_at, **options)
             return
 
         def produce():
+            if _is_alias_json(filename):
+                return _save_alias_json(self.db_file, filename, consents or ())
             ensure_characteristic_alias_schema(self.db_file)
+            if consents is not None:
+                return _save_alias_csv(self.db_file, filename, export_characteristic_aliases_csv, consents)
             return export_characteristic_aliases_csv(self.db_file, filename)
 
         CharacteristicMappingDialog._apply_alias_export(self, produce)
@@ -1625,10 +1806,11 @@ class CharacteristicMappingDialog(QDialog):
             CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
 
-    def _start_alias_csv(self, operation, filename, started_at):
+    def _start_alias_csv(self, operation, filename, started_at, *, output_consents=None):
         thread, cleanup_registered = None, False
         try:
             thread = _AliasCsvThread(operation, self.db_file, filename)
+            thread.output_consents = output_consents
             self._alias_csv_thread = thread
             if operation == 'import':
                 thread.preview_ready.connect(self._review_alias_import)

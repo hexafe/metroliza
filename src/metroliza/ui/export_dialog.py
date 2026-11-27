@@ -457,6 +457,8 @@ class ExportDialog(QDialog):
         self.filter_state = None
         self._typed_report_scope = None
         self.df_for_grouping = None
+        self._grouping_rule_source = None
+        self._report_grouping_draft = None
 
         self.filter_window = None
         self.grouping_window = None
@@ -1662,6 +1664,8 @@ class ExportDialog(QDialog):
             self.filter_state = None
             self._typed_report_scope = None
             self.df_for_grouping = None
+            self._grouping_rule_source = None
+            self._report_grouping_draft = None
             self._refresh_filter_state_summary()
             self.set_grouping_applied(False)
             self.use_whole_database()
@@ -1769,12 +1773,31 @@ class ExportDialog(QDialog):
         self.set_filter_applied(scope.state)
         self._refresh_background_controls()
 
-    def set_df_for_grouping(self, df):
+    def set_df_for_grouping(self, df, *, rule_source=None):
         try:
             self.df_for_grouping = df
+            self._grouping_rule_source = rule_source
             self._refresh_draft_request_summary()
         except Exception as e:
             self.log_and_exit(e)
+
+    def get_report_grouping_draft(self):
+        owner = self.parent()
+        read = getattr(owner, "get_report_grouping_draft", None)
+        if callable(read) and self.db_file == getattr(owner, "db_file", None):
+            return read(self.db_file)
+        return self._report_grouping_draft
+
+    def keep_report_grouping_draft(self, preset):
+        self._report_grouping_draft = preset
+        remember = getattr(self.parent(), "keep_report_grouping_draft", None)
+        if callable(remember):
+            remember(self.db_file, preset)
+
+    def restore_report_grouping_draft(self, preset):
+        self._report_grouping_draft = preset
+        if self._grouping_rule_source is not None:
+            self.clear_grouping()
 
     def get_filter_query(self):
         try:
@@ -1819,6 +1842,7 @@ class ExportDialog(QDialog):
     def clear_grouping(self):
         try:
             self.df_for_grouping = None
+            self._grouping_rule_source = None
             self.set_grouping_applied(False)
             self._discard_child_dialog('grouping_window')
             _record_export_action(BugReportAction.WORKFLOW_EXPORT_GROUPING_CLEARED)
@@ -1885,6 +1909,9 @@ class ExportDialog(QDialog):
             mode = _STALE_IMPORT
         if mode == _STALE_IMPORT:
             raise ValueError("The last import selection expired. Choose the report scope again.")
+        whole_database = mode == _WHOLE_DATABASE
+        grouping_df = self.df_for_grouping if whole_database else None
+        rule_source = getattr(self, "_grouping_rule_source", None) if whole_database else None
         typed = getattr(self, "_typed_report_scope", None)
         if typed is not None:
             blocker = self.typed_report_filter_blocker()
@@ -1914,16 +1941,18 @@ class ExportDialog(QDialog):
                 else False
             ),
             filter_query=self.filter_query if batch is None and typed is None else None,
-            grouping_df=self.df_for_grouping if batch is None else None,
+            grouping_df=grouping_df,
             group_analysis_level=self._selected_group_analysis_level(),
             group_analysis_scope=self._selected_group_analysis_scope(),
             dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
         )
         request = replace(request, application_version=VERSION_LABEL)
-        if typed is not None:
+        if typed is not None or rule_source is not None:
             from metroliza.exporting.contracts import validate_export_request
 
-            request = validate_export_request(replace(request, typed_report_scope=typed))
+            request = validate_export_request(replace(
+                request, typed_report_scope=typed, grouping_rule_source=rule_source,
+            ))
         if batch is None:
             description = self._scope_for_query(request.filter_query)
             if description not in {"all rows", "custom applied filter (review Filters)"}:
@@ -1939,6 +1968,8 @@ class ExportDialog(QDialog):
     def _build_recipe_export_request(self):
         if getattr(self, "_typed_report_scope", None) is not None:
             raise ValueError("Clear the typed filter before saving a recipe.")
+        if getattr(self, "_grouping_rule_source", None) is not None:
+            raise ValueError("Save these rules as a grouping preset in the Grouping dialog.")
         if self._scope_mode() != _WHOLE_DATABASE:
             raise ValueError("Choose Whole database before saving a recipe.")
         return self._build_export_request()
@@ -1948,8 +1979,10 @@ class ExportDialog(QDialog):
         try:
             request = self._build_recipe_export_request()
             open_capture_editor(self, "reports", request, filter_state=self.filter_state)
-        except ValueError:
-            QMessageBox.warning(self, "Recipe", "Review the configuration before saving it as a recipe.")
+        except ValueError as exc:
+            message = (str(exc) if getattr(self, "_grouping_rule_source", None) is not None
+                       else "Review the configuration before saving it as a recipe.")
+            QMessageBox.warning(self, "Recipe", message)
 
     def show_loading_screen(self):
         """Validate inputs, persist options, and hand work to the export thread."""

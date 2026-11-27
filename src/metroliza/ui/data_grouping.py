@@ -325,6 +325,7 @@ class DataGrouping(QDialog):
             "group_search_input",
             "part_group_search_input",
             "scope_filter_input",
+            "grouping_rules_button",
             "use_grouping_button",
             "dont_use_grouping_button",
         )
@@ -529,6 +530,8 @@ class DataGrouping(QDialog):
             self.remove_from_group_button.setDisabled(True)
             self.delete_group_button = QPushButton("Delete group")
             self.delete_group_button.setDisabled(True)
+            self.grouping_rules_button = QPushButton("Grouping rules…")
+            self.grouping_rules_button.clicked.connect(self._open_grouping_rules)
 
             self.use_grouping_button = QPushButton("Use grouping")
             self.dont_use_grouping_button = QPushButton("Reset changes")
@@ -538,6 +541,7 @@ class DataGrouping(QDialog):
                 self.rename_group_button,
                 self.remove_from_group_button,
                 self.delete_group_button,
+                self.grouping_rules_button,
                 self.use_grouping_button,
                 self.dont_use_grouping_button,
                 self.cancel_button,
@@ -638,6 +642,7 @@ class DataGrouping(QDialog):
             actions_row_one.setSpacing(8)
             actions_row_one.addWidget(self.create_group_button)
             actions_row_one.addWidget(self.rename_group_button)
+            actions_row_one.addWidget(self.grouping_rules_button)
             actions_row_one.addStretch(1)
             self.layout.addLayout(actions_row_one, 4, 0, 1, 4)
 
@@ -681,7 +686,8 @@ class DataGrouping(QDialog):
             ui_foundation.configure_accessibility(listing, name=name)
             order.extend((search, listing))
         order.extend((self.create_group_button, self.rename_group_button, self.remove_from_group_button,
-                      self.delete_group_button, self.dont_use_grouping_button, self.cancel_button,
+                      self.delete_group_button, self.grouping_rules_button,
+                      self.dont_use_grouping_button, self.cancel_button,
                       self.use_grouping_button))
         for first, second in zip(order, order[1:]):
             self.setTabOrder(first, second)
@@ -1081,6 +1087,9 @@ class DataGrouping(QDialog):
         try:
             parent = self.parent()
             saved_df = getattr(parent, 'df_for_grouping', None) if parent is not None else None
+            if isinstance(saved_df, tuple) and getattr(parent, "_grouping_rule_source", None) is not None:
+                self._restore_rule_assignments(saved_df)
+                return
             if not isinstance(saved_df, pd.DataFrame) or saved_df.empty:
                 return
 
@@ -1099,6 +1108,39 @@ class DataGrouping(QDialog):
             self._invalidate_grouping_cache()
         except Exception as e:
             self.log_and_exit(e)
+
+    def _restore_rule_assignments(self, assignments):
+        groups = {assignment.report_id: assignment.group for assignment in assignments}
+        colors = {assignment.report_id: assignment.group_color for assignment in assignments}
+        ids = self.df["REPORT_ID"]
+        self.df["GROUP"] = ids.map(groups).fillna(self.default_group)
+        self.df[self.group_color_column] = ids.map(colors).fillna(self.default_group_color)
+        self._invalidate_grouping_cache()
+
+    def _open_grouping_rules(self):
+        parent = self.parent()
+        if self.is_loading_grouping() or parent is None:
+            return
+        from metroliza.ui.report_grouping_rules_dialog import ReportGroupingRulesDialog
+
+        dialog = ReportGroupingRulesDialog(
+            self, self.db_file, parent.get_filter_query(), self.group_palette,
+            draft=parent.get_report_grouping_draft(),
+        )
+        try:
+            if not dialog.exec():
+                return
+            preview = dialog.accepted_preview
+            if preview is not None:
+                preview.source.require_current(parent.db_file, parent.get_filter_query())
+                parent.set_df_for_grouping(preview.assignments, rule_source=preview.source)
+                parent.set_grouping_applied(True)
+                self.hide()
+            parent.keep_report_grouping_draft(dialog.kept_preset)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Apply grouping rules", str(exc))
+        finally:
+            dialog.deleteLater()
 
     @staticmethod
     def _ideal_text_color(background_hex):
@@ -2413,10 +2455,13 @@ class DataGrouping(QDialog):
             if bool(self._safe_attr(self, "_scope_filter_error", "")):
                 self._refresh_selection_summary()
                 return
+            parent = self.parent()
+            if getattr(parent, "_grouping_rule_source", None) is not None and not self._is_grouping_dirty():
+                self.hide()
+                return
             self.hide()
             committed_df = self.df.copy(deep=True)
             set_default_group_label(committed_df, self.default_group)
-            parent = self.parent()
             if parent is not None:
                 parent.set_df_for_grouping(committed_df)
                 parent.set_grouping_applied(True)

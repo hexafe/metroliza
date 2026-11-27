@@ -21,7 +21,7 @@ import math
 import numpy as np
 
 from metroliza.analytics.distribution_shape_analysis import compute_distribution_difference, resolve_distribution_fit_policy
-from metroliza.analytics.grouping_labels import normalize_default_group_label, normalize_group_labels
+from metroliza.analytics.grouping_labels import GroupDescriptor, normalize_default_group_label, normalize_group_labels
 from metroliza.analytics.hexafe_groupstats_adapter import analyze_group_metric
 from metroliza.analytics.row_table import RowTable, coerce_to_row_table
 from metroliza.reports.characteristic_alias_service import resolve_characteristic_aliases_bulk
@@ -1550,7 +1550,7 @@ def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_gro
     elif 'LSL' in working.columns:
         working['LSL'] = _coerce_numeric_values(_column_values(working, 'LSL'))
 
-    return _filter_table(working, lambda row: row.get('MEAS') is not None)
+    return _filter_table(working, lambda row: row['MEAS'] is not None and math.isfinite(row['MEAS']))
 
 
 def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None, alias_db_path=None):
@@ -1746,6 +1746,15 @@ def _build_metric_distribution_stage(*, metric_partition, alpha, correction_meth
     )
 
 
+def _identify_descriptive_groups(rows, group_index):
+    try:
+        rows.sort(key=lambda row: group_index[row['group']][0])
+        for row in rows:
+            row['group_id'] = group_index[row['group']][1]
+    except KeyError as exc:
+        raise ValueError("A descriptive group is missing from the selected grouping definitions.") from exc
+
+
 def _assemble_metric_payload(
     *,
     metric_partition,
@@ -1754,6 +1763,7 @@ def _assemble_metric_payload(
     distribution_stage,
     normalized_level,
     include_chart_payloads=True,
+    group_index=None,
 ):
     descriptive_stats = descriptive_stage['descriptive_stats']
     pairwise_rows = pairwise_stage['pairwise_rows']
@@ -1866,6 +1876,8 @@ def _assemble_metric_payload(
         distribution_difference=distribution_omnibus,
     )
     metric_payload['insights'] = engine_insights or build_metric_insights(metric_payload)
+    if group_index:
+        _identify_descriptive_groups(descriptive_stats, group_index)
     return metric_payload
 
 
@@ -1894,9 +1906,12 @@ def build_group_analysis_payload(
     should_cancel=None,
     cancel_check=None,
     include_chart_payloads=True,
+    group_descriptors: tuple[GroupDescriptor, ...] = (),
 ):
-    """Assemble metric-level Group Analysis payload for writer modules."""
+    """Assemble Group Analysis with optional ordered identities from the grouping source."""
     default_group_label = normalize_default_group_label(default_group_label)
+    group_index = {group.label: (rank, group.group_id) for rank, group in enumerate(group_descriptors)}
+    provenance = {'group_descriptors': group_descriptors} if group_descriptors else {}
     grouped_table = _filter_known_reference_rows(grouped_df)
 
     _check_cancelled(should_cancel=should_cancel, cancel_check=cancel_check)
@@ -1940,6 +1955,7 @@ def build_group_analysis_payload(
             skip_reason=readiness['skip_reason'],
         )
         return {
+            **provenance,
             'status': 'skipped',
             'analysis_level': normalized_level,
             'readiness': readiness,
@@ -2060,6 +2076,7 @@ def build_group_analysis_payload(
                 distribution_stage=distribution_stage,
                 normalized_level=normalized_level,
                 include_chart_payloads=include_chart_payloads,
+                group_index=group_index,
             )
         )
         _emit_progress(progress_callback, f'Completed metric {metric_index}/{total_metrics}: {metric_identity}')
@@ -2084,6 +2101,7 @@ def build_group_analysis_payload(
     )
 
     return {
+        **provenance,
         'status': 'ready',
         'analysis_level': normalized_level,
         'readiness': readiness,

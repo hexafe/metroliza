@@ -83,17 +83,17 @@ controls have no new window-wide letter binding.
 | Action | Modify database | Name Matching | Hint and guard |
 | --- | --- | --- | --- |
 | Search | Ctrl+F | Ctrl+F | Visible pane's search |
-| Apply pending edits / Export CSV | Ctrl+S | Ctrl+S | Distinct visible labels: Apply versus Export CSV |
+| Apply pending edits / Export matches | Ctrl+S | Ctrl+S | The Name Matching button opens the JSON or CSV export picker |
 | Close | Ctrl+W | Ctrl+W | Existing dirty-work/CSV-operation guard; Esc also retains its existing meaning |
 | Add manually / Edit selected | — | Ctrl+E / Ctrl+Shift+E | Actual selected match and validation guards |
 | Browse database | Ctrl+D | Ctrl+D | Mapping database transition guards retained |
 | Add from selected / Delete | — | Ctrl+R / Ctrl+Shift+D | Actual selection and confirmation |
-| Import CSV | — | Ctrl+Shift+R | Existing review/atomic import path |
+| Import matches | — | Ctrl+Shift+R | Review the JSON or CSV rules before saving |
 | Save match / Cancel | — | Ctrl+S / Ctrl+W | Active Add/Edit child only |
 
-Name Matching writes successful edits immediately. Export CSV does not mean Save a
-draft. No Stop is offered for its atomic CSV commit; guarded Close can wait for the
-operation. Modify database retains Alt+B/A/C as secondary browse/apply/close keys.
+Name Matching writes successful edits immediately. **Export matches** makes a file
+copy of those rules. Close waits for any import already committing its changes.
+Modify database retains Alt+B/A/C as secondary browse/apply/close keys.
 
 ## Industrial Data and its children
 

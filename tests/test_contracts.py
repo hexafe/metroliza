@@ -33,6 +33,7 @@ class TestContractOwnership(unittest.TestCase):
         exporting = importlib.import_module("metroliza.exporting.contracts")
         industrial = importlib.import_module("metroliza.industrial.contracts")
         tabular = importlib.import_module("metroliza.tabular.contracts")
+        grouping = importlib.import_module("metroliza.shared.grouping_contracts")
 
         self.assertIs(legacy, shared)
         self.assertIs(shared.AppPaths, exporting.AppPaths)
@@ -44,7 +45,10 @@ class TestContractOwnership(unittest.TestCase):
             shared.validate_industrial_analytics_request,
             industrial.validate_industrial_analytics_request,
         )
-        self.assertIs(shared.GroupingAssignment, tabular.GroupingAssignment)
+        self.assertIs(shared.GroupingAssignment, grouping.GroupingAssignment)
+        self.assertIs(tabular.GroupingAssignment, grouping.GroupingAssignment)
+        self.assertIs(shared.GroupingAssignments, grouping.GroupingAssignments)
+        self.assertIs(tabular.GroupingAssignments, grouping.GroupingAssignments)
         self.assertIs(shared.validate_grouping_df, tabular.validate_grouping_df)
 
     def test_cold_shared_contract_import_does_not_load_feature_packages(self):
@@ -54,6 +58,7 @@ import json
 import sys
 
 contracts = importlib.import_module("metroliza.shared.contracts")
+assert contracts.GroupingAssignment(group="A", report_id=1).group == "A"
 print(json.dumps({
     "feature_packages": {
         name: name in sys.modules

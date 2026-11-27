@@ -1,5 +1,6 @@
 import os
 import importlib.util
+from pathlib import Path
 import tempfile
 import threading
 import time
@@ -1945,5 +1946,191 @@ def test_manual_alias_editor_keeps_conflict_inputs_and_filters_saved_rows(tmp_pa
         editor.alias_input.setCurrentText("Width")
         editor._validate_and_accept()
         assert editor.result_payload["alias_name"] == "Width"
+    finally:
+        dialog.close()
+
+
+def test_mapping_dialog_resolves_exact_reviewed_scope_without_deleting_rows(tmp_path, qapplication_session, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    from PyQt6.QtTest import QTest
+
+    path = str(tmp_path / 'aliases.db')
+    ensure_characteristic_alias_schema(path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executemany(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value) VALUES (?, ?, ?, ?)',
+            [('Raw', 'First', 'global', None), ('Raw', 'Second', 'global', None),
+             ('Raw', 'Reference override', 'reference', 'REF-1')],
+        )
+    dialog = CharacteristicMappingDialog(db_file=path)
+    questions = []
+    monkeypatch.setattr(QMessageBox, 'question', lambda _parent, _title, text, *_args:
+                        questions.append(text) or QMessageBox.StandardButton.Yes)
+    try:
+        limit = time.monotonic() + 5
+        while dialog.is_loading_source_options() and time.monotonic() < limit:
+            QTest.qWait(5)
+        assert not dialog.is_loading_source_options()
+        assert '1 conflicting' in dialog.collision_warning_label.text()
+        dialog.alias_table.selectRow(1)
+        assert dialog.alias_table.item(1, 1).text() == 'Second'
+        assert 'Conflicting' in dialog.alias_table.item(1, 0).toolTip()
+        assert dialog.edit_button.text() == 'Resolve conflict' and dialog.edit_button.isEnabled()
+        assert not dialog.delete_button.isEnabled()
+        dialog.edit_button.click()
+        assert len(questions) == 1 and 'Second' in questions[0] and '2 saved rows' in questions[0]
+        assert 'conflicting' not in dialog.collision_warning_label.text()
+        dialog.alias_table.selectRow(0)
+        assert dialog.edit_button.text() == 'Edit selected' and dialog.edit_button.isEnabled()
+        assert not dialog.delete_button.isEnabled()
+        with closing(sqlite3.connect(path)) as connection:
+            assert connection.execute('SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES ORDER BY id').fetchall() == [
+                (1, 'Second'), (2, 'Second'), (3, 'Reference override'),
+            ]
+    finally:
+        dialog.close()
+
+
+def test_mapping_buttons_round_trip_json_through_the_review_window(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.reports.characteristic_alias_service import fetch_all_characteristic_aliases
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    original = str(tmp_path / 'source.db')
+    target = str(tmp_path / 'target.db')
+    portable = tmp_path / 'portable.json'
+    for database in (original, target):
+        ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(original, 'Diameter', 'New label', 'global')
+    upsert_characteristic_alias(original, 'Width', 'Width mm', 'reference', 'R1')
+    upsert_characteristic_alias(target, 'Diameter', 'Old label', 'global')
+    monkeypatch.setattr(QMessageBox, 'information', lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: pytest.fail(str(_args[2])))
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName',
+                        lambda *_args: (str(portable.with_suffix('')), 'Metroliza name matches (*.json)'))
+    monkeypatch.setattr(native.QFileDialog, 'getOpenFileName',
+                        lambda *_args: (str(portable), 'Metroliza name matches (*.json)'))
+    source_dialog = CharacteristicMappingDialog(db_file=original)
+    target_dialog = CharacteristicMappingDialog(db_file=target)
+    try:
+        _wait_impact(qapplication_session, lambda: not source_dialog.is_loading_source_options())
+        source_before = Path(original).read_bytes()
+        source_dialog.export_button.click()
+        assert source_dialog._alias_csv_thread is not None
+        _wait_impact(qapplication_session, lambda: source_dialog._alias_csv_thread is None)
+        assert portable.is_file()
+        assert Path(original).read_bytes() == source_before
+
+        _wait_impact(qapplication_session, lambda: not target_dialog.is_loading_source_options())
+        choices = iter(('Cancel', 'Import only new', 'Import and replace 1'))
+
+        def choose(box):
+            assert 'Old label → New label' in box.text()
+            assert box.defaultButton().text() == 'Import only new'
+            label = next(choices)
+            button = next(button for button in box.buttons() if button.text() == label)
+            button.click()
+            return 0
+
+        monkeypatch.setattr(native.QMessageBox, 'exec', choose)
+        before = Path(target).read_bytes()
+        target_dialog.import_button.click()
+        assert target_dialog._alias_csv_thread is not None
+        _wait_impact(qapplication_session, lambda: target_dialog._alias_csv_thread is None)
+        assert Path(target).read_bytes() == before
+        for expected in ('Old label', 'New label'):
+            target_dialog.import_button.click()
+            _wait_impact(qapplication_session, lambda: target_dialog._alias_csv_thread is None)
+            assert [item['canonical_name'] for item in fetch_all_characteristic_aliases(target)] == [
+                expected, 'Width mm',
+            ]
+    finally:
+        source_dialog.close()
+        target_dialog.close()
+
+
+def test_alias_json_target_must_match_explicit_replacement_consent(tmp_path, qapplication_session):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
+    from metroliza.exporting.output_publication import OutputConsent
+    from metroliza.ui.characteristic_mapping_dialog import _save_alias_json
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(database, 'Diameter', 'Common', 'global')
+    target = tmp_path / 'matches.json'
+    target.write_bytes(b'previous configuration')
+    old_consent = OutputConsent.for_path(target)
+    replacement = tmp_path / 'new.json'
+    replacement.write_bytes(b'updated by another writer')
+    replacement.replace(target)
+
+    with pytest.raises(FileExistsError, match='changed after confirmation'):
+        _save_alias_json(database, str(target), (old_consent,))
+    with pytest.raises(FileExistsError, match='already exists'):
+        _save_alias_json(database, str(target))
+    assert target.read_bytes() == b'updated by another writer'
+    assert {path.name for path in tmp_path.iterdir()} <= {
+        'source.db', 'source.db-wal', 'source.db-shm', 'matches.json', _output_lock_path(target).name,
+    }
+
+    confirmed = OutputConsent.for_path(target)
+    assert _save_alias_json(database, str(target), (confirmed,)) == 1
+    assert b'"canonical_name": "Common"' in target.read_bytes()
+
+
+def test_json_filter_refuses_a_csv_output_name_before_starting_the_worker(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    target = tmp_path / 'surprising.csv'
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName',
+                        lambda *_args: (str(target), 'Metroliza name matches (*.json)'))
+    errors = []
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: errors.append(_args[2]))
+    dialog = CharacteristicMappingDialog(db_file=database)
+    try:
+        _wait_impact(qapplication_session, lambda: not dialog.is_loading_source_options())
+        dialog.export_button.click()
+        assert errors and 'Use a .json filename' in errors[0]
+        assert dialog._alias_csv_thread is None
+        assert not target.exists()
+    finally:
+        dialog.close()
+
+
+@pytest.mark.parametrize('selected_filter', ['CSV files (*.csv)', 'All files (*)'])
+def test_alias_export_completes_the_csv_filename_and_checks_that_destination(
+    tmp_path, qapplication_session, monkeypatch, selected_filter,
+):
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(database, 'DIA', 'Diameter', 'global')
+    entered = tmp_path / 'matches'
+    output = entered.with_suffix('.csv')
+    output.write_bytes(b'previous')
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName', lambda *_args: (str(entered), selected_filter))
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: pytest.fail(str(_args[2])))
+    monkeypatch.setattr(QMessageBox, 'information', lambda *_args: None)
+    choices = iter((QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes))
+
+    def confirm(_parent, _title, message, *_args):
+        assert output.name in message
+        return next(choices)
+
+    monkeypatch.setattr(QMessageBox, 'question', confirm)
+    dialog = CharacteristicMappingDialog(db_file=database)
+    try:
+        _wait_impact(qapplication_session, lambda: not dialog.is_loading_source_options())
+        dialog.export_button.click()
+        assert dialog._alias_csv_thread is None
+        assert output.read_bytes() == b'previous'
+        dialog.export_button.click()
+        assert dialog._alias_csv_thread.filename == str(output)
+        _wait_impact(qapplication_session, lambda: dialog._alias_csv_thread is None)
+        assert b'DIA,Diameter,global' in output.read_bytes()
+        assert not entered.exists()
     finally:
         dialog.close()

@@ -4,9 +4,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from sqlite3 import connect
+from sqlite3 import IntegrityError, connect
+
+import pytest
 
 from modules.characteristic_alias_service import (
+    CharacteristicAliasConflictError,
     CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     delete_characteristic_alias,
@@ -16,12 +19,115 @@ from modules.characteristic_alias_service import (
     fetch_characteristic_aliases,
     import_characteristic_aliases_csv,
     normalize_alias_scope,
+    repair_characteristic_alias_conflict,
     resolve_characteristic_alias,
     resolve_characteristic_aliases_bulk,
+    save_manual_characteristic_alias,
     upsert_characteristic_alias,
     upsert_characteristic_aliases_bulk,
 )
 from metroliza.reports.db import sqlite_file_identity
+from metroliza.reports.characteristic_alias_service import (
+    apply_characteristic_alias_import,
+    build_characteristic_aliases_json,
+    preview_characteristic_aliases_json,
+)
+
+
+def test_portable_alias_file_publishes_only_effective_name_and_scope_fields(tmp_path):
+    source = str(tmp_path / 'source.db')
+    target = str(tmp_path / 'target.db')
+    ensure_characteristic_alias_schema(source)
+    ensure_characteristic_alias_schema(target)
+    upsert_characteristic_alias(source, '=1+1', 'Średnica', 'global')
+    upsert_characteristic_alias(source, '=1+1', 'Lokalna', 'reference', 'R1')
+    with closing(connect(source)) as connection, connection:
+        connection.execute(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value) '
+            "VALUES ('=1+1', 'Średnica', 'global', 'legacy ignored scope')"
+        )
+    data, count = build_characteristic_aliases_json(source)
+    assert count == 2
+    assert json.loads(data) == {
+        'format': 'metroliza.characteristic_aliases',
+        'version': 1,
+        'mappings': [
+            {'alias_name': '=1+1', 'canonical_name': 'Średnica', 'scope_type': 'global', 'scope_value': None},
+            {'alias_name': '=1+1', 'canonical_name': 'Lokalna', 'scope_type': 'reference', 'scope_value': 'R1'},
+        ],
+    }
+    exported = tmp_path / 'matches.json'
+    exported.write_bytes(data)
+    before = Path(target).read_bytes()
+    plan = preview_characteristic_aliases_json(target, str(exported))
+    assert Path(target).read_bytes() == before
+    assert (plan.added, plan.replaced, plan.unchanged) == (2, 0, 0)
+    assert apply_characteristic_alias_import(target, plan) == 2
+    assert resolve_characteristic_alias('=1+1', reference='R1', db_path=target) == 'Lokalna'
+    assert resolve_characteristic_alias('=1+1', reference='R2', db_path=target) == 'Średnica'
+
+    original = Path(source).read_bytes()
+    with pytest.raises(ValueError, match='separate from the source database'):
+        export_characteristic_aliases_csv(source, source)
+    assert Path(source).read_bytes() == original
+
+    with closing(connect(source)) as connection, connection:
+        connection.execute(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type) '
+            "VALUES ('=1+1', 'Other name', 'global')"
+        )
+    with pytest.raises(ValueError, match='effective alias scope'):
+        build_characteristic_aliases_json(source)
+
+
+@pytest.mark.parametrize(
+    ('contents', 'message'),
+    [
+        (b'{"format":"metroliza.characteristic_aliases","version":123,"mappings":[]}', 'does not support'),
+        (b'{"format":"metroliza.characteristic_aliases","version":1,"version":1,"mappings":[]}', 'duplicate'),
+        (b'{"format":"metroliza.characteristic_aliases","version":1,"mappings":[],"source":"private"}', 'unsupported fields'),
+        (b' ' * (1024 * 1024 + 1), 'larger than 1 MiB'),
+    ],
+)
+def test_portable_alias_preview_rejects_unsupported_files_without_writing(tmp_path, contents, message):
+    database = str(tmp_path / 'target.db')
+    ensure_characteristic_alias_schema(database)
+    source = tmp_path / 'matches.json'
+    source.write_bytes(contents)
+    before = Path(database).read_bytes()
+    with pytest.raises(ValueError, match=message):
+        preview_characteristic_aliases_json(database, str(source))
+    assert Path(database).read_bytes() == before
+
+
+def test_alias_import_refuses_a_replaced_database_even_when_rows_match(tmp_path):
+    target = tmp_path / 'target.db'
+    replacement = tmp_path / 'replacement.db'
+    for database in (target, replacement):
+        ensure_characteristic_alias_schema(str(database))
+    source = tmp_path / 'matches.json'
+    source.write_text(json.dumps({
+        'format': 'metroliza.characteristic_aliases', 'version': 1, 'mappings': [{
+            'alias_name': 'Width', 'canonical_name': 'Width mm', 'scope_type': 'global', 'scope_value': None,
+        }],
+    }))
+    plan = preview_characteristic_aliases_json(str(target), str(source))
+    replacement.replace(target)
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match='database changed after preview'):
+        apply_characteristic_alias_import(str(target), plan, replace=True)
+    assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize('suffix', ['-wal', '-shm', '-journal'])
+def test_alias_csv_export_protects_the_database_companion_files(tmp_path, suffix):
+    database = str(tmp_path / 'db.sqlite')
+    ensure_characteristic_alias_schema(database)
+    companion = Path(database + suffix)
+    companion.write_bytes(b'simulated SQLite companion file')
+    with pytest.raises(ValueError, match='source database and its companion files'):
+        export_characteristic_aliases_csv(database, str(companion))
+    assert companion.read_bytes() == b'simulated SQLite companion file'
 
 
 class TestCharacteristicAliasService(unittest.TestCase):
@@ -40,6 +146,91 @@ class TestCharacteristicAliasService(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, 'scope_value is required'):
             normalize_alias_scope('reference', None)
+
+    def _seed_conflicts(self):
+        with closing(connect(self.db_path)) as connection, connection:
+            connection.executemany(
+                "INSERT INTO CHARACTERISTIC_ALIASES(alias_name,canonical_name,scope_type,scope_value) VALUES (?,?,?,?)",
+                [
+                    ("Raw alias", "Target A", "global", None),
+                    ("Raw alias", "Target B", "global", "legacy value"),
+                    ("Raw alias", "Reference target", "reference", "REF-1"),
+                    ("Raw alias", " Reference target ", "reference", "REF-1"),
+                    ("Raw alias", "REF2-A", "reference", "REF-2"),
+                    ("Raw alias", "REF2-B", "reference", "REF-2"),
+                    ("Other alias", "Reference target", "global", None),
+                ],
+            )
+
+    def test_aliases_share_effective_scope_and_distinct_targets_fail_without_values(self):
+        self._seed_conflicts()
+        resolve = resolve_characteristic_alias
+        bulk = resolve_characteristic_aliases_bulk
+        self.assertEqual(resolve(" Raw alias ", " REF-1 ", self.db_path), "Reference target")
+        self.assertEqual(bulk([("Raw alias", "REF-1"), ("Other alias", "REF-1"), ("Unmapped", None)], self.db_path), {
+            ("Raw alias", "REF-1"): "Reference target", ("Other alias", "REF-1"): "Reference target",
+            ("Unmapped", None): "Unmapped",
+        })
+        for ref in (None, "REF-2", "ANOTHER"):
+            with self.assertRaises(CharacteristicAliasConflictError) as error:
+                resolve("Raw alias", ref, self.db_path)
+            self.assertNotIn("Raw alias", str(error.exception))
+            self.assertNotIn("Target A", str(error.exception))
+            self.assertNotIn("REF-2", str(error.exception))
+            with self.assertRaises(CharacteristicAliasConflictError):
+                bulk([("Other alias", ref), ("Raw alias", ref)], self.db_path)
+
+    def test_repair_is_exact_and_subsequent_edits_keep_agreeing_rows_consistent(self):
+        self._seed_conflicts()
+        key = ("Raw alias", "global", None)
+        args = dict(expected_database_path=self.db_path, expected_database_identity=sqlite_file_identity(self.db_path))
+        with closing(connect(self.db_path)) as connection, connection:
+            sql = "SELECT id, alias_name, canonical_name, scope_type, scope_value FROM CHARACTERISTIC_ALIASES ORDER BY id"
+            before = connection.execute(sql).fetchall()
+            snapshot, selected = tuple(before[:2]), before[1][0]
+            connection.execute("UPDATE CHARACTERISTIC_ALIASES SET canonical_name = 'New third choice' WHERE id = ?", (selected,))
+        with self.assertRaisesRegex(ValueError, "changed"):
+            repair_characteristic_alias_conflict(self.db_path, key, snapshot, selected, **args)
+        with self.assertRaises(CharacteristicAliasConflictError):
+            upsert_characteristic_alias(self.db_path, "Raw alias", "No unreviewed overwrite", "global")
+        current = tuple((row[0], row[1], "New third choice", row[3], row[4]) if row[0] == selected else row
+                        for row in snapshot)
+        repair_characteristic_alias_conflict(self.db_path, key, current, selected, **args)
+        self.assertEqual(resolve_characteristic_alias("Raw alias", None, self.db_path), "New third choice")
+        old = dict(zip(('alias_name', 'canonical_name', 'scope_type', 'scope_value'),
+                       ("Raw alias", "New third choice", "global", None)))
+        save_manual_characteristic_alias(self.db_path, {**old, "canonical_name": "Final name"}, previous=old)
+        with closing(connect(self.db_path)) as connection:
+            after = connection.execute(sql).fetchall()
+        self.assertEqual(after[:2], [(row[0], row[1], "Final name", row[3], row[4]) for row in before[:2]])
+        self.assertEqual(after[2:], before[2:])
+
+    def test_scope_repair_rolls_back_when_update_fails_and_rejects_database_replacement(self):
+        self._seed_conflicts()
+        key = ("Raw alias", "global", None)
+        args = dict(expected_database_path=self.db_path, expected_database_identity=sqlite_file_identity(self.db_path))
+        with closing(connect(self.db_path)) as connection, connection:
+            connection.execute(
+                "INSERT INTO CHARACTERISTIC_ALIASES VALUES (99,'Raw alias','Third','global',NULL,NULL,NULL)"
+            )
+            sql = "SELECT id, alias_name, canonical_name, scope_type, scope_value FROM CHARACTERISTIC_ALIASES ORDER BY id"
+            before = connection.execute(sql).fetchall()
+            snapshot = tuple(row for row in before if row[1] == "Raw alias" and row[3] == "global")
+            connection.execute(
+                "CREATE TRIGGER stop_alias_repair BEFORE UPDATE OF canonical_name ON CHARACTERISTIC_ALIASES "
+                "WHEN old.id=99 BEGIN SELECT RAISE(ABORT, 'synthetic alias update interruption'); END"
+            )
+        with self.assertRaisesRegex(IntegrityError, "synthetic alias update interruption"):
+            repair_characteristic_alias_conflict(self.db_path, key, snapshot, 2, **args)
+        replacement = Path(self.db_path).with_name("replacement.db")
+        with closing(connect(self.db_path)) as connection, closing(connect(replacement)) as copy:
+            self.assertEqual(connection.execute(sql).fetchall(), before)
+            connection.backup(copy)
+        replacement.replace(self.db_path)
+        with self.assertRaisesRegex(ValueError, "database changed"):
+            repair_characteristic_alias_conflict(self.db_path, key, snapshot, 2, **args)
+        with closing(connect(self.db_path)) as connection:
+            self.assertEqual(connection.execute(sql).fetchall(), before)
 
     def test_ensure_schema_is_idempotent_and_preserves_existing_rows(self):
         ensure_characteristic_alias_schema(self.db_path)

@@ -6,6 +6,7 @@ from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from metroliza.app.workspace_file import WORKSPACE_FILTER, read_workspace, write_workspace
+from metroliza.reports.db import DatabaseSourceChanged, SQLiteFileBinding
 from metroliza.shared.sqlite_paths import SQLITE_FILE_FILTER
 from metroliza.ui.analysis_history_dialog import collect_output_consent
 from metroliza.ui.local_file_task import LocalFileTask
@@ -18,7 +19,7 @@ class WorkspaceFiles(QObject):
         self.task = None
         self.save_action = window.save_workspace_action
         self.open_action = window.open_workspace_action
-        self.version_at_open = None
+        self.context_at_open = None
 
     def _start(self, operation, callback, *args):
         self.open_action.setEnabled(False)
@@ -54,8 +55,17 @@ class WorkspaceFiles(QObject):
             self._error(str(exc))
             return
         if consents is not None:
-            self._start(write_workspace, self._saved, path, self.window.workspace_context.snapshot,
-                        self.window.navigation_combo.currentData(), consents)
+            snapshot = self.window.workspace_context.snapshot
+            draft = self.window.report_grouping_draft
+            binding = self.window._database_source_binding(snapshot.database_file) if draft is not None else None
+            if draft is not None and (
+                binding is None or binding.identity is None
+                or self.window.get_report_grouping_draft(snapshot.database_file) is None
+            ):
+                self._error("Select the Reports database again before saving its grouping draft.")
+                return
+            self._start(write_workspace, self._saved, path, snapshot,
+                        self.window.navigation_combo.currentData(), consents, draft, binding)
 
     def _saved(self, path):
         self.window.statusBar().showMessage(f"Workspace saved to {path}", 8000)
@@ -65,13 +75,16 @@ class WorkspaceFiles(QObject):
             return
         selected, _ = QFileDialog.getOpenFileName(self.window, "Open workspace", "", WORKSPACE_FILTER)
         if selected:
-            self.version_at_open = self.window.workspace_context.snapshot.version
+            self.context_at_open = self._report_context_token()
             self._start(_prepare_workspace, self._restore, selected)
 
+    def _report_context_token(self):
+        return self.window.workspace_context.snapshot.version, self.window.report_grouping_draft
+
     def _restore(self, prepared):
-        state, missing = prepared
+        state, missing, database_binding = prepared
         if not missing:
-            self._apply(self._locations(state), state.page)
+            self._apply(self._locations(state), state, database_binding)
             return
         chosen = self._locations(state)
         for field in missing:
@@ -97,27 +110,61 @@ class WorkspaceFiles(QObject):
     def _apply_verified(self, result):
         self._apply(*result)
 
-    def _apply(self, selected, page):
-        if self.window.workspace_context.snapshot.version != self.version_at_open:
+    def _apply(self, selected, state, database_binding):
+        version, draft = self._report_context_token()
+        opening_version, opening_draft = self.context_at_open
+        if version != opening_version or draft is not opening_draft:
             self._error("The current workspace changed while this file was opening. Open it again to apply it.")
             return
-        if self.window.restore_workspace_locations(selected["database"], selected["source"], page):
+        if database_binding is not None:
+            try:
+                database_binding.require(selected["database"])
+            except (DatabaseSourceChanged, OSError, ValueError) as exc:
+                self._error(str(exc))
+                return
+        if self.window.restore_workspace_locations(
+            selected["database"], selected["source"], state.page, report_grouping_draft=state.report_grouping_draft,
+        ):
             self.window.statusBar().showMessage("Workspace restored", 6000)
+
+
+def _match_location(state, field, path):
+    location = getattr(state, field)
+    if field != "database" or state.report_grouping_draft is None:
+        return location.matches(path), None
+    try:
+        binding = SQLiteFileBinding.capture(path)
+        if binding.identity is not None and location.matches(path):
+            binding.require(path)
+            return True, binding
+    except (DatabaseSourceChanged, OSError, ValueError):
+        pass
+    return False, None
 
 
 def _prepare_workspace(filename):
     state = read_workspace(filename)
     missing = []
+    database_binding = None
     for field in ("source", "database"):
         location = getattr(state, field)
-        if location and not location.matches(location.path):
-            missing.append(field)
-    return state, missing
+        if location:
+            matched, binding = _match_location(state, field, location.path)
+            if not matched:
+                missing.append(field)
+            if binding is not None:
+                database_binding = binding
+    return state, missing, database_binding
 
 
 def _verify_relinks(state, selected):
+    database_binding = None
     for field, path in selected.items():
         location = getattr(state, field)
-        if location is not None and not location.matches(path):
-            raise ValueError(f"The selected location did not match the saved {field}. Choose the original or an unchanged copy.")
-    return selected, state.page
+        if location is not None:
+            matched, binding = _match_location(state, field, path)
+            if not matched:
+                raise ValueError(f"The selected location did not match the saved {field}. Choose the original or an unchanged copy.")
+            if binding is not None:
+                database_binding = binding
+    return selected, state, database_binding

@@ -255,6 +255,7 @@ class MainWindow(QMainWindow):
         self.parser_plugin_wizard_dialog = None
         self.directory = None
         self.db_file = None
+        self.report_grouping_draft = None
         self.workspace_context = WorkspaceContext()
         self.workspace_context.snapshot_changed.connect(self._on_workspace_snapshot_changed)
         self.window_coordinator = WindowCoordinator(self.workspace_context, parent=self)
@@ -799,15 +800,40 @@ class MainWindow(QMainWindow):
     def _open_workspace_file(self):
         self._workspace_files().open()
 
-    def restore_workspace_locations(self, database, source, page):
+    def get_report_grouping_draft(self, database):
+        if database and database == self.db_file and self._database_source_is_current(database):
+            return self.report_grouping_draft
+        return None
+
+    def keep_report_grouping_draft(self, database, preset):
+        if database and database == self.db_file and self._database_source_is_current(database):
+            self.report_grouping_draft = preset
+
+    def restore_workspace_locations(self, database, source, page, *, report_grouping_draft=None):
         if self.navigation_combo.findData(page) < 0:
             QMessageBox.warning(self, "Open workspace", "The workspace refers to an unknown page.")
+            return False
+        if not self._report_context_change_allowed():
+            return False
+        if report_grouping_draft is not None and database == self.db_file and not self._database_source_is_current(database):
+            return False
+        export = self.export_dialog
+        current_export = export is not None and getattr(export, "db_file", None) == database
+        restore_draft = getattr(export, "restore_report_grouping_draft", None) if current_export else None
+        if restore_draft is not None and (
+            report_grouping_draft is not None or self.report_grouping_draft is not None
+            or getattr(export, "_grouping_rule_source", None) is not None
+        ) and export.has_open_scope_editors():
+            QMessageBox.warning(self, "Open workspace", "Close the Report Filters or Grouping editor and open the workspace again.")
             return False
         if database != self.db_file:
             accepted = self.set_db_file(database, workspace_source=source)
         else:
             accepted = self.set_directory(source)
         if accepted:
+            self.report_grouping_draft = report_grouping_draft
+            if restore_draft is not None:
+                restore_draft(report_grouping_draft)
             self._show_workspace_page(page)
         return accepted
 
@@ -1308,6 +1334,7 @@ class MainWindow(QMainWindow):
         self.directory = current.source_directory
         self.db_file = current.database_file
         if current.database_file != _previous.database_file:
+            self.report_grouping_draft = None
             self._on_report_import_batch_finished(None)
         if self._reports_workspace is not None:
             self._reports_workspace.apply_workspace_snapshot(current)

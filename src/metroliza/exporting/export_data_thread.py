@@ -3674,6 +3674,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         validated_request = validate_export_request(export_request)
         self._export_scope_request = validated_request
         self._typed_report_scope = validated_request.typed_report_scope
+        self._grouping_rule_source = validated_request.grouping_rule_source
         self.replace_outputs = validated_request.replace_outputs
         self.copy_output_from = getattr(validated_request, "copy_output_from", None)
         self._summary_render_options = validated_request.options
@@ -4195,9 +4196,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._snapshot_partition_source = None
         self._report_selection = ()
         typed = getattr(self, "_typed_report_scope", None)
+        rule_source = getattr(self, "_grouping_rule_source", None)
         if self._db_connection is None:
-            if typed is not None:
-                raise ValueError("The typed filter requires its report database connection.")
+            if typed is not None or rule_source is not None:
+                raise ValueError("This report scope requires its report database connection.")
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
             self._partition_header_counts_cache = None
@@ -4205,6 +4207,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
 
         snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
+        snapshot_query = f'SELECT * FROM temp."{snapshot_table_name}"'
         selection_sql = typed.query.sql if typed is not None else self.filter_query
         create_snapshot_query = (
             f'CREATE TEMP TABLE "{snapshot_table_name}" AS '
@@ -4212,11 +4215,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         )
         try:
             with self._db_connection:
+                if rule_source is not None:
+                    rule_source.begin_snapshot(self._db_connection, self.db_file, self._export_scope_request.filter_query)
                 self._execute_export_snapshot(create_snapshot_query, typed)
+                if rule_source is not None:
+                    rule_source.require_current(self.db_file, self._export_scope_request.filter_query)
+                    rule_source.require_snapshot(self._db_connection, snapshot_query)
                 self._index_export_snapshot(snapshot_table_name)
                 snapshot_source = prepare_snapshot_partition_source(self._db_connection, snapshot_table_name)
         except Exception:
-            if typed is not None:
+            if typed is not None or rule_source is not None:
                 self._discard_failed_export_snapshot(snapshot_table_name)
                 raise
             if getattr(self, "_approved_report_ids", ()):
@@ -4236,7 +4244,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._report_selection = self._snapshot_report_selection(snapshot_table_name)
         self._snapshot_table_name = snapshot_table_name
         self._snapshot_partition_source = snapshot_source
-        self._active_export_query = f'SELECT * FROM temp."{snapshot_table_name}"'
+        self._active_export_query = snapshot_query
         self._cached_export_filtered_df = None
         self._partition_header_counts_cache = None
         self._sql_measurement_summary_cache.clear()
@@ -5200,10 +5208,14 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._ensure_chart_executor()
             identity = getattr(self, "_existing_database_identity", None)
             typed = getattr(self, "_typed_report_scope", None)
-            if typed is not None:
+            rule_source = getattr(self, "_grouping_rule_source", None)
+            if typed is not None or rule_source is not None:
                 from metroliza.reports.db import sqlite_readonly_connection_scope
 
-                typed.require_current_database(self.db_file)
+                if typed is not None:
+                    typed.require_current_database(self.db_file)
+                if rule_source is not None:
+                    rule_source.require_current(self.db_file, self._export_scope_request.filter_query)
                 database_scope = sqlite_readonly_connection_scope(self.db_file, timeout_s=1.0)
             elif identity is None:
                 database_scope = sqlite_report_schema_connection_scope(self.db_file)
@@ -5215,10 +5227,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 )
             with database_scope as connection:
                 self._db_connection = connection
-                if identity is None and typed is None:
+                if identity is None and typed is None and rule_source is None:
                     ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
                 self._prepare_export_snapshot()
-                if typed is not None and self._check_canceled():
+                if (typed is not None or rule_source is not None) and self._check_canceled():
                     return
 
                 self._emit_stage_progress('preparing_query', 0.0)
@@ -6135,7 +6147,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             logger.warning('Unknown group analysis level %r; skipping Group Analysis output.', mode)
             return
 
-        dashboard_only_group_analysis = self.generate_html_dashboard and self.export_target != 'html_dashboard'
+        rule_source = getattr(self, '_grouping_rule_source', None)
+        group_descriptors = rule_source.group_descriptors if rule_source is not None else ()
+        companion_dashboard = self.generate_html_dashboard and self.export_target != 'html_dashboard'
+        dashboard_only_group_analysis = companion_dashboard and not group_descriptors
+        workbook_tables_only = companion_dashboard and bool(group_descriptors)
         backend = self._active_backend or self.get_export_backend()
         workbook = None if dashboard_only_group_analysis else backend.get_workbook(excel_writer)
         used_sheet_names = set() if dashboard_only_group_analysis else backend.list_sheet_names(excel_writer)
@@ -6215,6 +6231,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 progress_callback=emit_group_analysis_progress,
                 should_cancel=self._check_canceled,
                 include_chart_payloads=(mode == 'standard'),
+                **({'group_descriptors': group_descriptors} if group_descriptors else {}),
             )
         except group_analysis_cancelled:
             self._check_canceled()
@@ -6265,22 +6282,28 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         readiness = payload.get('readiness') or {}
         skip_reason = readiness.get('skip_reason') or payload.get('skip_reason') or {}
         skip_code = str(skip_reason.get('code') or '')
-        if skip_code in {
+        if not group_descriptors and skip_code in {
             'forced_single_reference_scope_mismatch',
             'forced_multi_reference_scope_mismatch',
         }:
             short_message = str(skip_reason.get('message') or 'Group Analysis skipped.')
             self._write_group_analysis_message_sheet(group_worksheet, short_message)
         else:
-            plot_assets = self._build_group_analysis_plot_assets(payload, mode=mode, audience='worksheet')
+            plot_assets = (
+                None if workbook_tables_only
+                else self._build_group_analysis_plot_assets(payload, mode=mode, audience='worksheet')
+            )
             if self.generate_html_dashboard:
                 self._html_group_analysis_plot_assets = self._build_group_analysis_plot_assets(
                     payload,
                     mode=mode,
                     audience='dashboard',
                 )
-            _export_module.write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
-            if mode == 'standard':
+            _export_module.write_group_analysis_sheet(
+                group_worksheet, payload, plot_assets=plot_assets,
+                **({'plots_in_companion_dashboard': True} if workbook_tables_only else {}),
+            )
+            if mode == 'standard' and not workbook_tables_only:
                 plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)
                 plots_worksheet = workbook.add_worksheet(plots_sheet_name)
                 self._record_exported_sheet_name(plots_sheet_name)
@@ -7690,6 +7713,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             from metroliza.reports.report_typed_filter import ReportTypedViewError
 
             if isinstance(exception, ReportTypedViewError):
+                message = str(exception)
+        if getattr(self, "_grouping_rule_source", None) is not None:
+            from metroliza.reports.report_grouping_rules import ReportGroupingSourceChanged
+
+            if isinstance(exception, ReportGroupingSourceChanged):
                 message = str(exception)
         try:
             custom_logger.handle_exception(
