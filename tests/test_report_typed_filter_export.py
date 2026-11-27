@@ -10,8 +10,12 @@ from metroliza.exporting.export_data_thread import ExportDataThread
 from metroliza.reports.db import QueryScope
 from metroliza.reports.report_query_service import build_measurement_filter_query
 from metroliza.reports.report_repository import ReportRepository
-from metroliza.reports.report_schema import ensure_report_schema
-from metroliza.reports.report_typed_filter import prepare_report_typed_filter, preview_report_typed_filter
+from metroliza.reports.report_schema import ensure_report_schema, is_report_schema_ready
+from metroliza.reports.report_typed_filter import (
+    ReportTypedViewError,
+    prepare_report_typed_filter,
+    preview_report_typed_filter,
+)
 from metroliza.shared.filter_state import FilterState
 from metroliza.shared.typed_filter import FilterValidationError
 from tests.test_1089_acceptance_analytics import _persist_report
@@ -89,23 +93,21 @@ def test_typed_report_unknown_field_and_operator_and_unavailable_schema(report_d
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("CREATE TABLE no_reports(id INTEGER)")
     scope = prepare_report_typed_filter(database, FilterState(expression_text="Ref = 001"))
-    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+    with pytest.raises(ReportTypedViewError, match="standard Reports measurement view"):
         preview_report_typed_filter(scope)
 
 
-def test_typed_report_preview_caps_the_ordered_prefix(tmp_path):
-    from tests.test_report_query_service import _create_measurement_export_table, _measurement_row
-
-    database = tmp_path / "sample.sqlite"
-    with closing(sqlite3.connect(database)) as connection, connection:
-        _create_measurement_export_table(connection)
-        rows = [_measurement_row(measurement_id=f"{index:02}", reference="001") for index in range(25, 0, -1)]
-        markers = ",".join("?" for _ in rows[0])
-        connection.executemany(f"INSERT INTO vw_measurement_export VALUES ({markers})", rows)
-    scope = prepare_report_typed_filter(database, FilterState(expression_text="Date = 2026-01-01"))
+def test_typed_report_preview_caps_the_ordered_prefix(report_database):
+    with closing(sqlite3.connect(report_database)) as connection, connection:
+        connection.execute("UPDATE report_metadata SET report_date = '2026-01-01' WHERE report_id = 1")
+        connection.executemany(
+            "INSERT INTO report_measurements (id, report_id, row_order, status_code) VALUES (?, 1, ?, 'ok')",
+            ((index, index) for index in range(29, 5, -1)),
+        )
+    scope = prepare_report_typed_filter(report_database, FilterState(expression_text="Date = 2026-01-01"))
     preview = preview_report_typed_filter(scope)
     assert preview.matching_count == 25
-    assert [row[0] for row in preview.rows] == [f"{index:02}" for index in range(1, 21)]
+    assert [row[0] for row in preview.rows] == [1, *range(6, 25)]
 
 
 def test_typed_report_counts_and_samples_in_the_same_read_snapshot(report_database, filter_state, monkeypatch):
@@ -122,10 +124,26 @@ def test_typed_report_counts_and_samples_in_the_same_read_snapshot(report_databa
     assert preview_report_typed_filter(scope).matching_count == 1
 
 
-@pytest.mark.parametrize("failure", ["changed_database", "snapshot"])
+@pytest.mark.parametrize("failure", ["changed_database", "snapshot", "changed_view"])
 def test_typed_report_snapshot_failure_retains_existing_xlsx(report_database, filter_state, tmp_path, failure,
                                                              monkeypatch):
+    if failure == "changed_view":
+        with closing(sqlite3.connect(report_database)) as connection, connection:
+            canonical = connection.execute(
+                "SELECT sql FROM sqlite_schema WHERE name = 'vw_measurement_export'",
+            ).fetchone()[0]
+            altered = canonical.replace("rm.reference AS reference,", "rm.part_name AS reference,")
+            assert altered != canonical
+            connection.execute("DROP VIEW vw_measurement_export")
+            connection.execute(altered)
+            assert is_report_schema_ready(connection)
+            assert connection.execute(
+                "SELECT reference, typeof(reference) FROM vw_measurement_export WHERE measurement_id = 1",
+            ).fetchone() == ("Part 1", "text")
     scope = prepare_report_typed_filter(report_database, filter_state)
+    if failure == "changed_view":
+        with pytest.raises(ReportTypedViewError, match="Restore an intact Reports database"):
+            preview_report_typed_filter(scope)
     output = tmp_path / "existing.xlsx"
     from openpyxl import Workbook
 
@@ -151,6 +169,8 @@ def test_typed_report_snapshot_failure_retains_existing_xlsx(report_database, fi
     worker.error_occurred.connect(errors.append)
     worker.run()
     assert errors
+    if failure == "changed_view":
+        assert "Restore an intact Reports database" in errors[0]
     assert backend_calls == []
     assert output.read_bytes() == before
     assert not list(tmp_path.glob(".xlsx-package-*"))

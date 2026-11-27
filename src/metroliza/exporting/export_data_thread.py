@@ -4247,12 +4247,16 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             connection.execute(statement)
             return
 
+        from metroliza.reports.report_typed_filter import require_report_typed_view
         from metroliza.shared.typed_filter import install_typed_filter_sqlite
 
         typed.require_current_database(self.db_file)
         install_typed_filter_sqlite(connection)
         connection.set_progress_handler(lambda: int(self.export_canceled), 1000)
         try:
+            if not connection.in_transaction:
+                connection.execute("BEGIN")
+            require_report_typed_view(connection)
             connection.execute(statement, typed.query.params)
             typed.require_current_database(self.db_file)
         except sqlite3.OperationalError as error:
@@ -7682,6 +7686,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 message = "Export failed. Detailed failure capture is unavailable."
         except Exception:
             message = "Export failed. Detailed failure capture is unavailable."
+        if getattr(self, "_typed_report_scope", None) is not None:
+            from metroliza.reports.report_typed_filter import ReportTypedViewError
+
+            if isinstance(exception, ReportTypedViewError):
+                message = str(exception)
         try:
             custom_logger.handle_exception(
                 exception, behavior=custom_logger.LOG_ONLY,

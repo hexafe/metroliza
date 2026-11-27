@@ -214,7 +214,8 @@ def test_typed_named_filter_roundtrips_separately_from_magic_after_restart(tmp_p
     assert store.contains_name("daily") and store.contains_name("daily", typed=True)
     settings = store._settings(typed=True)
     saved = json.loads(settings.value(store._key("daily"), "", type=str))
-    assert saved.keys() == {"name", "version", "filter", "typed_expression"}
+    assert saved.keys() == {"name", "version", "filter", "typed_expression", "definition_sha256"}
+    assert saved["version"] == 2
     assert saved["typed_expression"]["expression"]["field"] == "reference"
     assert saved["typed_expression"]["expression"]["values"] == ["001"]
 
@@ -234,11 +235,13 @@ def test_typed_named_filter_roundtrips_separately_from_magic_after_restart(tmp_p
 @pytest.mark.parametrize(("corruption", "expected"), [
     ("field", "retired_reference"), ("kind", "found text"), ("operator", "unsupported"),
     ("field_alias", "OldAlias"), ("future", "Unsupported typed report preset version"),
+    ("experimental", "Experimental typed preset has no integrity check"),
     ("future_expression", "Unsupported filter document version"),
     ("mismatch", "conditions and expression text disagree"),
     ("malformed", "could not be read"), ("oversized", "could not be read"),
 ])
 def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, corruption, expected):
+    from hashlib import sha256
     import json
 
     from metroliza.shared.filter_state import FilterState
@@ -256,11 +259,17 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
     if corruption == "field_alias":
         payload["filter"]["expression_text"] = 'OldAlias IN ("001")'
     if corruption == "future":
-        payload["version"] = 2
+        payload["version"] = 999
     if corruption == "future_expression":
         payload["typed_expression"]["version"] = 2
     if corruption == "mismatch":
         payload["filter"]["expression_text"] = 'Ref IN ("1")'
+    payload.pop("definition_sha256")
+    if corruption == "experimental":
+        payload["version"] = 1
+    else:
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        payload["definition_sha256"] = sha256(canonical.encode("ascii")).hexdigest()
     raw = {"malformed": "not JSON", "oversized": "x" * 131073}.get(corruption, json.dumps(payload))
     settings.setValue(key, raw)
     settings.sync()
@@ -276,7 +285,7 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
     with pytest.raises(ValueError, match="Confirm replacement"):
         store.save_typed("daily", state)
     with pytest.raises(ValueError, match="Enter a typed report filter expression"):
-        store.save_typed("Daily", FilterState(), replace=True)
+        store.save_typed("Daily", FilterState(), expected_record=raw)
     assert store.path.read_bytes() == before
 
 
@@ -421,10 +430,121 @@ def test_typed_preset_save_preserves_previous_file_when_another_writer_holds_loc
     assert lock.tryLock(0)
     try:
         with pytest.raises(OSError, match="Another window"):
-            store.save_typed("DAILY", FilterState(expression_text='Ref IN ("1")'), replace=True)
+            store.save_typed("DAILY", FilterState(expression_text='Ref IN ("1")'),
+                             expected_record=store.typed_record("DAILY"))
     finally:
         lock.unlock()
     assert store.path.read_bytes() == prior
+
+
+def test_typed_preset_rejects_replacement_if_record_changes_during_consent(monkeypatch, tmp_path):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    _app()
+    parent = QDialog()
+    parent.typed_report_filter_blocker = lambda: ""
+    dialog = _build_dialog(monkeypatch, parent=parent)
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    opened = FilterState(expression_text='Ref = "001"')
+    newer = FilterState(expression_text='Ref = "newer"')
+    store.save_typed("Daily", opened)
+    widgets = filter_dialog.QtWidgets
+    monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: ("DAILY", True))
+
+    def replace_during_prompt(*_args):
+        writer = ReportFilterPresets(store.path)
+        writer.save_typed("Daily", newer, expected_record=writer.typed_record("Daily"))
+        return widgets.QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(widgets.QMessageBox, "question", replace_during_prompt)
+    errors = []
+    monkeypatch.setattr(dialog, "_show_unavailable_filter", lambda reason, **_: errors.append(reason))
+    try:
+        dialog.typed_mode_button.setChecked(True)
+        dialog.expression_input.setText('Ref = "my draft"')
+        dialog._save_filter_draft(store)
+        assert store.load_typed() == ([("Daily", newer)], [])
+        assert errors and "changed" in errors[0]
+        monkeypatch.setattr(widgets.QMessageBox, "question", lambda *_args: widgets.QMessageBox.StandardButton.Yes)
+        dialog._save_filter_draft(store)
+        assert store.load_typed() == ([("DAILY", dialog._current_filter_state())], [])
+    finally:
+        dialog.close()
+        parent.close()
+
+
+@pytest.mark.parametrize(("field", "changed"), [("header_values", []), ("has_nok_only", False)])
+def test_typed_preset_detects_drift_outside_the_expression(tmp_path, field, changed):
+    import json
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    state = FilterState(header_values=("WIDTH",), has_nok_only=True, expression_text='Ref = "001"')
+    store.save_typed("Daily", state)
+    settings = store._settings(typed=True)
+    key = store._key("Daily")
+    payload = json.loads(settings.value(key, "", type=str))
+    payload["filter"][field] = changed
+    settings.setValue(key, json.dumps(payload))
+    settings.sync()
+    before = store.path.read_bytes()
+    available, unavailable = store.load_typed()
+    assert not available
+    assert "integrity" in dict(unavailable)["Daily"]
+    assert store.load_typed_repair_draft("Daily") is None
+    assert store.path.read_bytes() == before
+
+
+def test_loading_a_typed_preset_cannot_truncate_a_valid_prefix(monkeypatch):
+    from metroliza.shared.filter_state import FilterState
+
+    _app()
+    parent = QDialog()
+    parent.typed_report_filter_blocker = lambda: ""
+    dialog = _build_dialog(monkeypatch, parent=parent)
+    original = dialog._draft_snapshot()
+    errors = []
+    monkeypatch.setattr(dialog, "_show_unavailable_filter", errors.append)
+    try:
+        dialog.expression_input.setMaxLength(len('Ref = "001"'))
+        dialog._load_saved_filter(FilterState(expression_text='Ref = "001" AND Status = OK'), typed=True)
+        assert dialog._draft_snapshot() == original
+        assert errors and "too long" in errors[0]
+    finally:
+        dialog.close()
+        parent.close()
+
+
+def test_preset_expression_length_is_bounded_in_utf16_before_publication(tmp_path):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    store.save_typed("Daily", FilterState(expression_text='Ref = "001"'))
+    prior = store.path.read_bytes()
+    text = 'Ref = "' + "😀" * 16384 + '"'
+    assert len(text) < 32767
+    with pytest.raises(ValueError, match="too long"):
+        store.save_typed("Daily", FilterState(expression_text=text), expected_record=store.typed_record("Daily"))
+    assert store.path.read_bytes() == prior
+
+
+def test_typed_preset_menu_keeps_repeated_spaces_in_distinct_names():
+    from metroliza.shared.filter_state import FilterState
+
+    _app()
+    menu = filter_dialog.QtWidgets.QMenu()
+    dialog = types.SimpleNamespace(_values_loading=False)
+    state = FilterState(expression_text='Ref = "001"')
+    filter_dialog.FilterDialog._add_saved_filter_actions(
+        dialog, menu, [("Daily Report", state), ("Daily  Report", state)], [], typed_store=object(),
+    )
+    assert [action.text() for action in menu.actions()] == [
+        "Load typed as draft: Daily Report", "Load typed as draft: Daily  Report",
+    ]
 
 
 def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):

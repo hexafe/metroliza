@@ -992,12 +992,12 @@ class FilterDialog(QDialog):
         load_label = "Load typed as draft" if typed else "Load as draft"
         unavailable_label = "Unavailable typed preset" if typed else "Unavailable"
         for name, state in presets:
-            label = " ".join(name.split()).replace("&", "&&") if typed else name.replace("&", "&&")
+            label = name.replace("&", "&&")
             action = menu.addAction(f"{load_label}: {label}")
             action.setEnabled(not self._values_loading)
             action.triggered.connect(lambda _checked, value=state: self._load_saved_filter(value, typed=typed))
         for name, detail in unavailable:
-            label = " ".join(name.split()).replace("&", "&&")
+            label = (name if typed else " ".join(name.split())).replace("&", "&&")
             message = menu.addAction(f"{unavailable_label}: {label}…")
             message.triggered.connect(
                 lambda _checked, key=name, reason=detail: self._show_unavailable_entry(key, reason, typed_store)
@@ -1038,7 +1038,8 @@ class FilterDialog(QDialog):
             return
         name = name.strip()
         try:
-            exists = store.contains_name(name, typed=typed) if typed else store.contains_name(name)
+            record = store.typed_record(name) if typed else None
+            exists = record is not None if typed else store.contains_name(name)
             if exists:
                 replace = QtWidgets.QMessageBox.question(
                     self, "Replace saved filter?", f"Replace the saved filter {name!r}?",
@@ -1049,7 +1050,7 @@ class FilterDialog(QDialog):
                     return
             state = self._current_filter_state()
             if typed:
-                store.save_typed(name, state, replace=exists)
+                store.save_typed(name, state, expected_record=record)
             else:
                 store.save(name, state)
         except (OSError, ValueError) as error:
@@ -1078,6 +1079,10 @@ class FilterDialog(QDialog):
     def _typed_preset_draft_error(self, state):
         if self.typed_mode_button is None:
             return "This dialog cannot load a typed Reports draft."
+        from metroliza.ui.report_filter_presets import typed_preset_expression_fits
+
+        if not typed_preset_expression_fits(state.expression_text, self.expression_input.maxLength()):
+            return "The saved typed expression is too long for the filter editor."
         for label, value, calendar in (
             ("From", state.date_from, self.date_from_calendar),
             ("To", state.date_to, self.date_to_calendar),

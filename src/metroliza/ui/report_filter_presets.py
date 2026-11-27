@@ -16,7 +16,8 @@ from metroliza.shared.typed_filter import FilterValidationError, dump_typed_filt
 
 
 _MAX_PRESET_LENGTH = 131072
-_TYPED_PRESET_VERSION = 1
+_MAX_EXPRESSION_UNITS = 32767
+_TYPED_PRESET_VERSION = 2
 
 
 def _decode_filter(values):
@@ -32,8 +33,15 @@ def _typed_expression_document(state):
     return dump_typed_filter(expression)
 
 
+def typed_preset_expression_fits(text, maximum=_MAX_EXPRESSION_UNITS):
+    """Check the UTF-16 limit used by the single-line editor."""
+    return len(text.encode("utf-16-le")) <= 2 * min(maximum, _MAX_EXPRESSION_UNITS)
+
+
 def _decode_typed_state(values):
     state = decode_filter_state(values)
+    if not typed_preset_expression_fits(state.expression_text):
+        raise ValueError("The saved typed expression is too long for the filter editor.")
     for field, selection in values.items():
         if field.endswith("_values") and "SELECT ALL" in selection:
             raise ValueError(f"Invalid saved selection for {field}: SELECT ALL.")
@@ -48,12 +56,22 @@ def _decode_typed_state(values):
     return state
 
 
+def _definition_sha256(payload):
+    definition = {key: value for key, value in payload.items() if key != "definition_sha256"}
+    canonical = json.dumps(definition, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return sha256(canonical.encode("ascii")).hexdigest()
+
+
 def _typed_preset_state(payload):
     version = payload.get("version")
+    if type(version) is int and version == 1:
+        raise ValueError("Experimental typed preset has no integrity check. Recreate it as a new draft.")
     if type(version) is not int or version != _TYPED_PRESET_VERSION:
         raise ValueError("Unsupported typed report preset version.")
-    if payload.keys() != {"version", "name", "filter", "typed_expression"}:
+    if payload.keys() != {"version", "name", "filter", "typed_expression", "definition_sha256"}:
         raise ValueError("Invalid typed report preset fields.")
+    if payload["definition_sha256"] != _definition_sha256(payload):
+        raise ValueError("The saved typed filter failed its integrity check. The original preset was kept.")
     return _decode_typed_state(payload["filter"])
 
 
@@ -82,6 +100,14 @@ class ReportFilterPresets:
     def contains_name(self, name, *, typed=False):
         """Check the storage key even for entries that cannot be read."""
         return self._settings(typed=typed).contains(self._key(name))
+
+    def typed_record(self, name):
+        """Read the existing record, including unreadable presets, before asking to replace it."""
+        return self._stored_record(self._settings(typed=True), self._key(name))
+
+    @staticmethod
+    def _stored_record(settings, key):
+        return settings.value(key, "", type=str) if settings.contains(key) else None
 
     def load(self):
         return self._load(typed=False)
@@ -135,7 +161,7 @@ class ReportFilterPresets:
         _decode_filter(values)
         self._write(name, {"name": name, "filter": values})
 
-    def save_typed(self, name, state, *, replace=False):
+    def save_typed(self, name, state, *, expected_record=None):
         if not isinstance(name, str) or not 1 <= len(name) <= 80:
             raise ValueError("Use a name between 1 and 80 characters.")
         values = asdict(state)
@@ -145,7 +171,8 @@ class ReportFilterPresets:
             "version": _TYPED_PRESET_VERSION, "name": name, "filter": values,
             "typed_expression": _typed_expression_document(validated),
         }
-        self._write(name, payload, typed=True, replace=replace)
+        payload["definition_sha256"] = _definition_sha256(payload)
+        self._write(name, payload, typed=True, expected_record=expected_record)
 
     @staticmethod
     def _encode(payload):
@@ -154,7 +181,7 @@ class ReportFilterPresets:
             raise ValueError("This filter has too many values to save as a preset.")
         return raw
 
-    def _write(self, name, payload, *, typed=False, replace=False):
+    def _write(self, name, payload, *, typed=False, expected_record=None):
         raw = self._encode(payload)
         self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         lock = QLockFile(f"{self.path}.typed-write.lock") if typed else None
@@ -163,8 +190,10 @@ class ReportFilterPresets:
         try:
             settings = self._settings(typed=typed)
             key = self._key(name)
-            if typed and not replace and settings.contains(key):
-                raise ValueError("A typed preset already uses this name. Confirm replacement first.")
+            if typed and self._stored_record(settings, key) != expected_record:
+                if expected_record is None:
+                    raise ValueError("A typed preset already uses this name. Confirm replacement first.")
+                raise ValueError("The typed preset changed while you were confirming. Review it and save again.")
             settings.setValue(key, raw)
             settings.sync()
             if settings.status() != QSettings.Status.NoError:

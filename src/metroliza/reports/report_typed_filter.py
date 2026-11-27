@@ -1,5 +1,6 @@
 """Bind a report draft once for typed preview and workbook snapshot selection."""
 
+from contextlib import closing
 from dataclasses import asdict, dataclass, field
 from datetime import date
 from pathlib import Path
@@ -11,7 +12,8 @@ from metroliza.reports.db import (
     read_query_scope_result,
     sqlite_readonly_connection_scope,
 )
-from metroliza.reports.report_query_service import build_measurement_filter_query
+from metroliza.reports.report_query_service import _MEASUREMENT_EXPORT_SELECT_FROM_VIEW
+from metroliza.reports.report_schema import SCHEMA_VIEW_STATEMENTS, _normalized_schema_sql
 from metroliza.shared.filter_state import FilterState, REPORT_FILTER_FIELDS, decode_filter_state, summarize_filter_state
 from metroliza.shared.typed_filter import (
     FilterField,
@@ -38,6 +40,28 @@ _PREVIEW_COLUMNS = ("MEASUREMENT_ID", "REFERENCE", "HEADER", "MEAS", "DATE")
 _LIST_FIELDS = tuple(sorted(name for name in REPORT_FILTER_FIELDS if name.endswith("_values")))
 _EXPRESSION_COLUMNS = {item.field_id: item.field_id for item in REPORT_TYPED_FILTER_FIELDS}
 _EXPRESSION_COLUMNS["report_date"] = "DATE"
+_MEASUREMENT_VIEW = "vw_measurement_export"
+_SUPPORTED_MEASUREMENT_VIEW_SQL = frozenset(
+    statement for statement in map(_normalized_schema_sql, SCHEMA_VIEW_STATEMENTS)
+    if statement.startswith(f"create view {_MEASUREMENT_VIEW} ")
+)
+
+
+class ReportTypedViewError(ValueError):
+    """The database does not expose the canonical typed Reports projection."""
+
+
+def require_report_typed_view(connection) -> None:
+    """Validate the main database projection in the same read as typed selection."""
+    with closing(connection.execute(
+        "SELECT sql FROM main.sqlite_schema WHERE type = 'view' AND name = ?", (_MEASUREMENT_VIEW,),
+    )) as cursor:
+        definition = cursor.fetchone()
+    if not definition or not definition[0] or _normalized_schema_sql(definition[0]) not in _SUPPORTED_MEASUREMENT_VIEW_SQL:
+        raise ReportTypedViewError(
+            "Typed filters require the standard Reports measurement view. "
+            "Restore an intact Reports database or import the source reports into a new database."
+        )
 
 
 @dataclass(frozen=True)
@@ -121,7 +145,7 @@ def _compile_report_typed_filter(state: FilterState) -> QueryScope:
         clauses.append('source."HAS_NOK" = 1')
     clauses.append(compiled.sql)
     parameters.extend(compiled.parameters)
-    base = build_measurement_filter_query()
+    base = " ".join(("SELECT", _MEASUREMENT_EXPORT_SELECT_FROM_VIEW, f"FROM main.{_MEASUREMENT_VIEW}"))
     return QueryScope(
         " ".join(("SELECT source.*", f"FROM ({base}) AS source", "WHERE", " AND ".join(clauses))),
         tuple(parameters),
@@ -139,6 +163,7 @@ def preview_report_typed_filter(scope, *, cancelled=lambda: False) -> ReportType
     with sqlite_readonly_connection_scope(database, timeout_s=1.0) as connection:
         connection.set_progress_handler(lambda: int(cancelled()), 1000)
         connection.execute("BEGIN")
+        require_report_typed_view(connection)
         install_typed_filter_sqlite(connection)
         count = count_query_scope_rows(database, scope.query, connection=connection, retries=0)
         projection = ", ".join(quote_identifier(column) for column in _PREVIEW_COLUMNS)

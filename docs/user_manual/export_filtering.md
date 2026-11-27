@@ -419,6 +419,10 @@ Measurement (`meas`) and Date. Choose **Saved filters… → Save typed filter d
 to keep a typed draft. **Load typed as draft** restores the conditions and
 requires a new preview against the current database before Apply. Typed presets
 store the expression and its stable field IDs separately from Magic presets.
+Saved typed presets check the integrity of the whole definition, including list,
+date and NOK conditions. The earlier experimental format is kept for reference
+and needs to be recreated as a new draft. If a typed preset changes while you
+are confirming replacement, review the newer entry and try saving again.
 An unavailable typed preset shows the field or condition that needs attention
 and keeps the original entry. Use **Edit expression…** to replace an incompatible
 field or operator in a new draft, then preview it. The original preset stays saved
@@ -435,5 +439,7 @@ measurement selection, report grouping, and export with fixed row IDs.
 [Report migration regression](../../tests/test_report_query_service.py)
 
 The typed workbook path binds the same query and parameters used by the preview
-and selects its rows into a temporary export snapshot. Grouping and other export
-targets remain separate work.
+and selects its rows into a temporary export snapshot. Both require the standard
+Reports measurement view. If that view has changed, restore an intact Reports
+database or import the source reports into a new database. Grouping and other
+export targets remain separate work.
