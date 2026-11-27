@@ -17,8 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Lock
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
-from metroliza.reports.db import DatabaseSourceChanged, SQLiteFileBinding, execute_with_retry, lazy_sqlite_connection_scope
-from metroliza.reports.db import checkpoint_pending_import_commits
+from metroliza.reports.db import execute_with_retry, lazy_sqlite_connection_scope
+from metroliza.reports.db import DatabaseSourceChanged, SQLiteFileBinding, checkpoint_pending_import_commits
 from metroliza.shared.env_utils import env_bool, env_int
 from metroliza.shared.log_context import build_parse_log_extra, get_operation_logger
 from metroliza.shared.diagnostic_events import WorkflowError, WorkflowOperation, WorkflowStage
