@@ -973,7 +973,7 @@ class FilterDialog(QDialog):
 
         store = ReportFilterPresets()
         presets, unavailable = store.load()
-        typed_presets, typed_unavailable = store.load_typed() if self.typed_mode_button is not None else ([], [])
+        typed_presets, typed_unavailable = self._read_typed_preset_menu(store)
         menu = QtWidgets.QMenu(self)
         typed = self._typed_mode()
         save = menu.addAction("Save typed filter draft as…" if typed else "Save filter draft as…")
@@ -986,6 +986,14 @@ class FilterDialog(QDialog):
         if not any((presets, unavailable, typed_presets, typed_unavailable)):
             menu.addAction("No saved filters").setEnabled(False)
         menu.exec(self.saved_filters_button.mapToGlobal(self.saved_filters_button.rect().bottomLeft()))
+
+    def _read_typed_preset_menu(self, store):
+        if self.typed_mode_button is None:
+            return [], []
+        try:
+            return store.load_typed()
+        except (OSError, ValueError) as error:
+            return [], [("Typed preset file", str(error))]
 
     def _add_saved_filter_actions(self, menu, presets, unavailable, *, typed_store=None):
         typed = typed_store is not None
@@ -1004,7 +1012,11 @@ class FilterDialog(QDialog):
             )
 
     def _show_unavailable_entry(self, name, reason, typed_store):
-        draft = typed_store.load_typed_repair_draft(name) if typed_store is not None else None
+        try:
+            draft = typed_store.load_typed_repair_draft(name) if typed_store is not None else None
+        except (OSError, ValueError) as error:
+            self._show_unavailable_filter(str(error))
+            return
         if draft is None:
             self._show_unavailable_filter(reason)
             return

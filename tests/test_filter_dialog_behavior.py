@@ -209,11 +209,12 @@ def test_typed_named_filter_roundtrips_separately_from_magic_after_restart(tmp_p
     state = FilterState(header_values=("Width",), expression_text='rEf IN ("001")')
     legacy = FilterState(expression_text='Ref IN ("1")')
     store.save("Daily", legacy)
+    legacy_bytes = store.path.read_bytes()
     store.save_typed("DAILY", state)
+    assert store.path.read_bytes() == legacy_bytes
     assert store.load() == ([("Daily", legacy)], [])
     assert store.contains_name("daily") and store.contains_name("daily", typed=True)
-    settings = store._settings(typed=True)
-    saved = json.loads(settings.value(store._key("daily"), "", type=str))
+    saved = json.loads(store.typed_record("daily"))
     assert saved.keys() == {"name", "version", "filter", "typed_expression", "definition_sha256"}
     assert saved["version"] == 2
     assert saved["typed_expression"]["expression"]["field"] == "reference"
@@ -250,9 +251,9 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
     store = ReportFilterPresets(tmp_path / "reports.ini")
     state = FilterState(expression_text='Ref IN ("001")')
     store.save_typed("Daily", state)
-    settings = store._settings(typed=True)
     key = store._key("Daily")
-    payload = json.loads(settings.value(key, "", type=str))
+    data = json.loads(store.typed_path.read_bytes())
+    payload = json.loads(data["presets"][key])
     condition = payload["typed_expression"]["expression"]
     if corruption in {"field", "kind", "operator"}:
         condition[corruption] = {"field": "retired_reference", "kind": "number", "operator": "unsupported"}[corruption]
@@ -271,9 +272,9 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         payload["definition_sha256"] = sha256(canonical.encode("ascii")).hexdigest()
     raw = {"malformed": "not JSON", "oversized": "x" * 131073}.get(corruption, json.dumps(payload))
-    settings.setValue(key, raw)
-    settings.sync()
-    before = store.path.read_bytes()
+    data["presets"][key] = raw
+    store.typed_path.write_text(json.dumps(data), encoding="utf-8")
+    before = store.typed_path.read_bytes()
     presets, unavailable = ReportFilterPresets(store.path).load_typed()
     assert presets == [] and len(unavailable) == 1
     assert expected in unavailable[0][1]
@@ -286,7 +287,9 @@ def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, cor
         store.save_typed("daily", state)
     with pytest.raises(ValueError, match="Enter a typed report filter expression"):
         store.save_typed("Daily", FilterState(), expected_record=raw)
-    assert store.path.read_bytes() == before
+    assert store.typed_path.read_bytes() == before
+    store.save_typed("Another", state)
+    assert store.typed_record("Daily") == raw
 
 
 def test_typed_saved_filter_runs_fresh_preview_before_apply(monkeypatch, tmp_path):
@@ -318,12 +321,12 @@ def test_typed_saved_filter_runs_fresh_preview_before_apply(monkeypatch, tmp_pat
         editor._show_saved_filters()
         store = ReportFilterPresets()
         assert store.load_typed()[0][0][0] == "Daily"
-        saved_bytes = store.path.read_bytes()
+        saved_bytes = store.typed_path.read_bytes()
         monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: (" dAILY ", True))
         monkeypatch.setattr(widgets.QMessageBox, "question", lambda *_args: widgets.QMessageBox.StandardButton.No)
         editor.expression_input.setText('Ref = "1"')
         editor._show_saved_filters()
-        assert store.path.read_bytes() == saved_bytes
+        assert store.typed_path.read_bytes() == saved_bytes
         assert owner._typed_report_scope is None
     finally:
         owner.close()
@@ -425,7 +428,7 @@ def test_typed_preset_save_preserves_previous_file_when_another_writer_holds_loc
     store = ReportFilterPresets(tmp_path / "reports.ini")
     original = FilterState(expression_text='Ref IN ("001")')
     store.save_typed("Daily", original)
-    prior = store.path.read_bytes()
+    prior = store.typed_path.read_bytes()
     lock = QLockFile(f"{store.path}.typed-write.lock")
     assert lock.tryLock(0)
     try:
@@ -434,7 +437,7 @@ def test_typed_preset_save_preserves_previous_file_when_another_writer_holds_loc
                              expected_record=store.typed_record("DAILY"))
     finally:
         lock.unlock()
-    assert store.path.read_bytes() == prior
+    assert store.typed_path.read_bytes() == prior
 
 
 def test_typed_preset_rejects_replacement_if_record_changes_during_consent(monkeypatch, tmp_path):
@@ -474,6 +477,166 @@ def test_typed_preset_rejects_replacement_if_record_changes_during_consent(monke
         parent.close()
 
 
+def test_typed_preset_observes_external_write_with_same_size_and_timestamp(tmp_path):
+    import subprocess
+    import sys
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    first = ReportFilterPresets(tmp_path / "reports.ini")
+    external = ReportFilterPresets(tmp_path / "external.ini")
+    old = FilterState(expression_text='Ref = "001"')
+    new = FilterState(expression_text='Ref = "002"')
+    first.save_typed("Daily", old)
+    external.save_typed("Daily", new)
+    opened = first.typed_record("Daily")
+    stat = first.typed_path.stat()
+    replacement = external.typed_path.read_bytes()
+    assert len(replacement) == stat.st_size
+
+    subprocess.run(
+        [sys.executable, "-c", (
+            "import os, sys\nfrom pathlib import Path\n"
+            "path, replacement = map(Path, sys.argv[1:])\n"
+            "stamp = path.stat()\npath.write_bytes(replacement.read_bytes())\n"
+            "os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))\n"
+        ), str(first.typed_path), str(external.typed_path)],
+        check=True, timeout=15,
+    )
+    assert first.typed_path.stat().st_mtime_ns == stat.st_mtime_ns
+    assert first.typed_path.stat().st_size == stat.st_size
+    assert first.load_typed() == ([("Daily", new)], [])
+    with pytest.raises(ValueError, match="changed while you were confirming"):
+        first.save_typed("Daily", old, expected_record=opened)
+    assert first.typed_path.read_bytes() == replacement
+
+
+@pytest.mark.parametrize("failure", ["short_write", "commit"])
+def test_failed_typed_atomic_write_cannot_leak_into_next_writer(monkeypatch, tmp_path, failure):
+    from PyQt6.QtCore import QSaveFile
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui import report_filter_presets
+
+    class FailedSave(QSaveFile):
+        def write(self, raw):
+            assert not self.directWriteFallback()
+            return super().write(raw[:5] if failure == "short_write" else raw)
+
+        def commit(self):
+            assert failure == "commit"
+            self.cancelWriting()
+            return super().commit()
+
+    first = report_filter_presets.ReportFilterPresets(tmp_path / "reports.ini")
+    old = FilterState(expression_text='Ref = "old"')
+    failed = FilterState(expression_text='Ref = "failed"')
+    new = FilterState(expression_text='Ref = "new"')
+    first.save("Magic", old)
+    legacy = first.path.read_bytes()
+    first.save_typed("Daily", old)
+    first.save_typed("Other", old)
+    opened = first.typed_record("Daily")
+    before = first.typed_path.read_bytes()
+    with monkeypatch.context() as patch:
+        patch.setattr(report_filter_presets, "QSaveFile", FailedSave)
+        with pytest.raises(OSError, match="previous file was kept"):
+            first.save_typed("Daily", failed, expected_record=opened)
+    assert first.typed_path.read_bytes() == before
+    assert first.load_typed() == ([("Daily", old), ("Other", old)], [])
+
+    second = report_filter_presets.ReportFilterPresets(first.path)
+    second.save_typed("Daily", new, expected_record=opened)
+    published = first.typed_path.read_bytes()
+    with pytest.raises(ValueError, match="changed while you were confirming"):
+        first.save_typed("Daily", failed, expected_record=opened)
+    assert first.load_typed() == second.load_typed() == ([("Daily", new), ("Other", old)], [])
+    assert first.typed_path.read_bytes() == published
+    assert first.path.read_bytes() == legacy
+
+
+def test_experimental_typed_ini_is_kept_without_import_or_repair(tmp_path):
+    from PyQt6.QtCore import QSettings
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    state = FilterState(expression_text='Ref = "001"')
+    store.save("Magic", state)
+    experiment = ReportFilterPresets(tmp_path / "experimental-copy.ini")
+    experiment.save_typed("Daily", state)
+    old = QSettings(str(store.path), QSettings.Format.IniFormat)
+    old.beginGroup("report_filters_typed_v1")
+    old.setValue(store._key("Daily"), experiment.typed_record("Daily"))
+    old.sync()
+    before = store.path.read_bytes()
+    available, unavailable = store.load_typed()
+    assert not available and "kept in the old Reports INI" in unavailable[0][1]
+    assert store.typed_record("Daily") is None
+    assert store.load_typed_repair_draft("Daily") is None
+    store.save_typed("Daily", state)
+    assert store.path.read_bytes() == before
+    assert store.load() == ([("Magic", state)], [])
+    assert store.load_typed()[0] == [("Daily", state)]
+
+
+@pytest.mark.parametrize(
+    "raw", [b"malformed", b'{"version": 11, "presets": {}}', b'{"version": 1, "version": 1, "presets": {}}',
+            b"x" * (4 * 1024 * 1024 + 1)],
+    ids=["malformed", "future-version", "duplicate-field", "oversize"],
+)
+def test_typed_save_refuses_to_replace_unreadable_collection(tmp_path, raw):
+    from hashlib import sha256
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    store.typed_path.write_bytes(raw)
+    with pytest.raises(ValueError, match="kept unchanged"):
+        store.load_typed()
+    with pytest.raises(ValueError, match="kept unchanged"):
+        store.save_typed("Daily", FilterState(expression_text='Ref = "001"'))
+    assert sha256(store.typed_path.read_bytes()).digest() == sha256(raw).digest()
+
+
+def test_typed_preset_read_errors_keep_magic_menu_and_show_save_warning(monkeypatch, tmp_path):
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    _app()
+    parent = QDialog()
+    parent.typed_report_filter_blocker = lambda: ""
+    dialog = _build_dialog(monkeypatch, parent=parent)
+    store = ReportFilterPresets(tmp_path / "filters" / "reports.ini")
+    store.save("Magic", FilterState(expression_text='Ref = "001"'))
+    store.typed_path.mkdir()  # A genuine read error even for a privileged test runner.
+    monkeypatch.setattr("metroliza.ui.report_filter_presets.local_metroliza_directory", lambda: tmp_path)
+    widgets = filter_dialog.QtWidgets
+    monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: ("Daily", True))
+    errors = []
+    monkeypatch.setattr(dialog, "_show_unavailable_filter", lambda detail, **_: errors.append(detail))
+
+    def show_typed_failure(menu, _position):
+        actions = {action.text(): action for action in menu.actions()}
+        assert "Load as draft: Magic" in actions
+        actions["Unavailable typed preset: Typed preset file…"].trigger()
+
+    monkeypatch.setattr(widgets.QMenu, "exec", show_typed_failure)
+    try:
+        dialog.typed_mode_button.setChecked(True)
+        dialog.expression_input.setText('Ref = "001"')
+        dialog._show_saved_filters()
+        dialog._save_filter_draft(store)
+        assert len(errors) == 2 and all("Could not read the typed preset file" in error for error in errors)
+        assert store.typed_path.is_dir()
+    finally:
+        dialog.close()
+        parent.close()
+
+
 @pytest.mark.parametrize(("field", "changed"), [("header_values", []), ("has_nok_only", False)])
 def test_typed_preset_detects_drift_outside_the_expression(tmp_path, field, changed):
     import json
@@ -484,18 +647,18 @@ def test_typed_preset_detects_drift_outside_the_expression(tmp_path, field, chan
     store = ReportFilterPresets(tmp_path / "reports.ini")
     state = FilterState(header_values=("WIDTH",), has_nok_only=True, expression_text='Ref = "001"')
     store.save_typed("Daily", state)
-    settings = store._settings(typed=True)
     key = store._key("Daily")
-    payload = json.loads(settings.value(key, "", type=str))
+    data = json.loads(store.typed_path.read_bytes())
+    payload = json.loads(data["presets"][key])
     payload["filter"][field] = changed
-    settings.setValue(key, json.dumps(payload))
-    settings.sync()
-    before = store.path.read_bytes()
+    data["presets"][key] = json.dumps(payload)
+    store.typed_path.write_text(json.dumps(data), encoding="utf-8")
+    before = store.typed_path.read_bytes()
     available, unavailable = store.load_typed()
     assert not available
     assert "integrity" in dict(unavailable)["Daily"]
     assert store.load_typed_repair_draft("Daily") is None
-    assert store.path.read_bytes() == before
+    assert store.typed_path.read_bytes() == before
 
 
 def test_loading_a_typed_preset_cannot_truncate_a_valid_prefix(monkeypatch):
@@ -524,12 +687,12 @@ def test_preset_expression_length_is_bounded_in_utf16_before_publication(tmp_pat
 
     store = ReportFilterPresets(tmp_path / "reports.ini")
     store.save_typed("Daily", FilterState(expression_text='Ref = "001"'))
-    prior = store.path.read_bytes()
+    prior = store.typed_path.read_bytes()
     text = 'Ref = "' + "😀" * 16384 + '"'
     assert len(text) < 32767
     with pytest.raises(ValueError, match="too long"):
         store.save_typed("Daily", FilterState(expression_text=text), expected_record=store.typed_record("Daily"))
-    assert store.path.read_bytes() == prior
+    assert store.typed_path.read_bytes() == prior
 
 
 def test_typed_preset_menu_keeps_repeated_spaces_in_distinct_names():

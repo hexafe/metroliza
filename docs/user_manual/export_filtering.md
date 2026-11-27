@@ -420,9 +420,10 @@ to keep a typed draft. **Load typed as draft** restores the conditions and
 requires a new preview against the current database before Apply. Typed presets
 store the expression and its stable field IDs separately from Magic presets.
 Saved typed presets check the integrity of the whole definition, including list,
-date and NOK conditions. The earlier experimental format is kept for reference
-and needs to be recreated as a new draft. If a typed preset changes while you
-are confirming replacement, review the newer entry and try saving again.
+date and NOK conditions. They are saved atomically in `reports.typed.json`.
+Experimental typed entries in `reports.ini` are kept for reference. Recreate
+them as new drafts. If a typed preset changes while you are confirming
+replacement, review the newer entry and try saving again.
 An unavailable typed preset shows the field or condition that needs attention
 and keeps the original entry. Use **Edit expression…** to replace an incompatible
 field or operator in a new draft, then preview it. The original preset stays saved
