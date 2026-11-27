@@ -237,6 +237,23 @@ def test_persistent_outcome_never_invents_success_without_result(reviewed, monke
     assert not database.exists()
 
 
+def test_parse_completion_connection_retains_neither_owner_nor_worker():
+    from weakref import ref
+
+    class Endpoint:
+        pass
+
+    callbacks = []
+    owner, worker = Endpoint(), Endpoint()
+    worker.finished = Endpoint()
+    worker.finished.connect = lambda callback, _connection_type: callbacks.append(callback)
+    owner_ref, worker_ref = ref(owner), ref(worker)
+    ParsingDialog._connect_parse_completion(owner, worker)
+    del owner, worker
+    assert owner_ref() is None and worker_ref() is None
+    callbacks[0]()
+
+
 @pytest.mark.parametrize("termination", ["cancel", "error"])
 def test_batch_retains_only_committed_ids_and_digests_after_early_termination(app, reviewed, monkeypatch, termination):
     from metroliza.parsing import parse_reports_thread

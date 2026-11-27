@@ -1513,10 +1513,6 @@ class _ReportOperations:
             self.parse_thread = self._create_parse_worker(execution_request, bind_destination=import_plan is not None)
             _operation.worker = self.parse_thread
             self._connect_parse_completion(self.parse_thread)
-            self.parse_thread.finished.connect(
-                lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread),
-                Qt.ConnectionType.QueuedConnection,
-            )
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
             self.parse_thread.update_progress.connect(self._on_operation_progress)
@@ -1618,7 +1614,21 @@ class _ReportOperations:
         self.loading_label.setText(build_three_line_status("Parsing failed.", "See error details for context", "ETA --"))
 
     def _connect_parse_completion(self, worker):
-        worker.finished.connect(lambda: self.on_parse_finished(worker), Qt.ConnectionType.QueuedConnection)
+        callback = partial(ParsingDialog._deliver_parse_completion, weakref.ref(self), weakref.ref(worker))
+        worker.finished.connect(callback, Qt.ConnectionType.QueuedConnection)
+
+    @staticmethod
+    def _deliver_parse_completion(owner_ref, worker_ref):
+        from PyQt6 import sip
+
+        owner, worker = owner_ref(), worker_ref()
+        if owner is None or worker is None or sip.isdeleted(owner) or sip.isdeleted(worker):
+            return
+        try:
+            owner.on_parse_finished(worker)
+        finally:
+            if not sip.isdeleted(owner):
+                owner._on_parse_thread_stopped(worker)
 
     def on_parse_finished(self, worker=None):
         """Handle parse completion, including cancellation and error paths."""
