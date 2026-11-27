@@ -17,6 +17,28 @@ _PRIVATE_DIRECTORY_MODE = 0o700
 _PRIVATE_DATABASE_MODE = 0o600
 
 
+class SQLiteSnapshotPublicationError(RuntimeError):
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def _snapshot_publication_error(error: OSError, destination: Path) -> SQLiteSnapshotPublicationError:
+    if isinstance(error, PermissionError):
+        return SQLiteSnapshotPublicationError(
+            "permission_denied", f"Permission denied while saving the archive: {destination}",
+        )
+    if (
+        error.errno in {errno.ENOSYS, errno.EOPNOTSUPP, errno.EXDEV, errno.EMLINK}
+        or getattr(error, "winerror", None) in {1, 17, 50, 120}
+    ):
+        return SQLiteSnapshotPublicationError(
+            "unsupported_operation",
+            f"The destination filesystem does not support atomic no-replace publication: {destination}",
+        )
+    return SQLiteSnapshotPublicationError("io_failed", f"Could not publish the verified archive: {destination}")
+
+
 def resolved_database_leaf(candidate: str | Path) -> Path:
     """Resolve a path's parent without following its final filesystem entry."""
 
@@ -147,10 +169,7 @@ def atomic_publish_no_replace(staging_path: Path, destination_path: Path, *, pla
     except FileExistsError as exc:
         raise FileExistsError(f"Destination already exists: {destination_path}") from exc
     except OSError as exc:
-        raise RuntimeError(
-            "The destination filesystem does not support the required atomic no-replace "
-            f"publication: {destination_path}"
-        ) from exc
+        raise _snapshot_publication_error(exc, destination_path) from exc
 
 
 def sync_database_parent(path: Path) -> None:

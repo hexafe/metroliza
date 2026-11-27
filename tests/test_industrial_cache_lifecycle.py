@@ -501,14 +501,18 @@ def test_windows_publication_uses_atomic_no_replace_rename(monkeypatch, tmp_path
 
 
 def test_unsupported_publication_primitive_fails_closed(monkeypatch, tmp_path):
+    import errno
+    from metroliza.shared import sqlite_snapshot
+
     target = create_temporary_industrial_cache_target()
     destination = tmp_path / "unsupported.sqlite"
     primitive = "rename" if os.name == "nt" else "link"
     monkeypatch.setattr(
         cache_target_module.os,
         primitive,
-        lambda *_args: (_ for _ in ()).throw(OSError("hard links unsupported")),
+        lambda *_args: (_ for _ in ()).throw(OSError(errno.EOPNOTSUPP, "atomic publication unsupported")),
     )
+    monkeypatch.setattr(sqlite_snapshot, "rename_noreplace", lambda *_args: False)
     try:
         _populate_cache(target.cache_db_file)
 
