@@ -1550,7 +1550,7 @@ def _normalize_grouped_working_df(grouped_df, *, alias_db_path=None, default_gro
     elif 'LSL' in working.columns:
         working['LSL'] = _coerce_numeric_values(_column_values(working, 'LSL'))
 
-    return _filter_table(working, lambda row: row.get('MEAS') is not None)
+    return _filter_table(working, lambda row: row['MEAS'] is not None and math.isfinite(row['MEAS']))
 
 
 def evaluate_group_analysis_readiness(grouped_df, *, requested_scope='auto', eligible_metrics=None, alias_db_path=None):

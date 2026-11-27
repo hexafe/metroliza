@@ -909,6 +909,34 @@ class TestGroupAnalysisService(unittest.TestCase):
         self.assertEqual(diagnostics_row['included_in_standard'], 'YES')
         self.assertIn('Analyzed', diagnostics_row['comment'])
 
+    def test_group_analysis_uses_only_finite_measurements(self):
+        clean = pd.DataFrame({
+            'REFERENCE': 'R1',
+            'HEADER - AX': 'M1',
+            'GROUP': ['A'] * 4 + ['B'] * 6,
+            'MEAS': [10.0, 10.2, 10.1, 10.3, 9.7, 9.8, 9.9, 9.6, 9.5, 9.75],
+            'LSL': 9.0,
+            'NOMINAL': 10.0,
+            'USL': 11.0,
+        })
+        invalid = clean.iloc[[0, 4, 0, 4]].assign(MEAS=[float('inf'), float('-inf'), None, 'invalid'])
+        mixed = pd.concat([clean, invalid], ignore_index=True)
+        original = mixed.copy(deep=True)
+
+        expected, = build_group_analysis_payload(clean)['metric_rows']
+        observed, = build_group_analysis_payload(mixed)['metric_rows']
+        self.assertEqual([row['n'] for row in observed['descriptive_stats']], [4, 6])
+        self.assertEqual(observed['pairwise_rows'], expected['pairwise_rows'])
+        pair, = observed['pairwise_rows']
+        self.assertIn('LOW N', pair['flags'])
+        self.assertIsNotNone(pair['adjusted_p_value'])
+        pd.testing.assert_frame_equal(mixed, original)
+
+        skipped = build_group_analysis_payload(invalid)
+        self.assertEqual(skipped['status'], 'skipped')
+        self.assertEqual(skipped['skip_reason']['code'], 'missing_numeric_meas')
+        self.assertEqual(skipped['metric_rows'], [])
+
     def test_standard_level_limit_mismatch_is_included_with_pairwise_and_capability_disabled(self):
         grouped_df = pd.DataFrame(
             {
