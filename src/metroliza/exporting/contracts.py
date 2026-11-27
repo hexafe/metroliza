@@ -14,6 +14,7 @@ from metroliza.tabular.contracts import (
 )
 
 if TYPE_CHECKING:
+    from metroliza.reports.report_grouping_rules import ReportGroupingSource
     from metroliza.reports.report_typed_filter import ReportTypedFilterScope
 
 
@@ -65,6 +66,7 @@ class ExportRequest:
     filter_description: str = field(default="", repr=False)
     application_version: str = ""
     typed_report_scope: ReportTypedFilterScope | None = field(default=None, repr=False)
+    grouping_rule_source: ReportGroupingSource | None = field(default=None, repr=False)
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -118,6 +120,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
     _validate_approved_source_scope(request)
     if request.typed_report_scope is not None:
         _validate_typed_report_scope(request, validated_paths, validated_options)
+    if request.grouping_rule_source is not None:
+        _validate_grouping_rule_source(request, validated_paths, validated_options, validated_grouping_df)
 
     _validate_output_namespace(validated_paths, validated_options)
 
@@ -135,6 +139,7 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
                             else request.filter_description.strip()[:2000]),
         application_version=request.application_version.strip()[:64],
         typed_report_scope=request.typed_report_scope,
+        grouping_rule_source=request.grouping_rule_source,
     )
 
 
@@ -151,6 +156,24 @@ def _validate_typed_report_scope(request, paths, options):
             or options.group_analysis_level != "off"):
         raise ValueError(REPORT_TYPED_FILTER_MODE_HINT)
     scope.require_current_database(paths.db_file)
+
+
+def _validate_grouping_rule_source(request, paths, options, assignments):
+    from metroliza.reports.report_grouping_rules import MAX_REPORTS, ReportGroupingSource
+
+    source = request.grouping_rule_source
+    if (type(source) is not ReportGroupingSource or not source.projection_digest
+            or not assignments or len(assignments) > MAX_REPORTS):
+        raise ValueError("The grouping rule preview is missing or invalid. Preview the rules again.")
+    if tuple(item.report_id for item in assignments) != source.report_ids:
+        raise ValueError("Grouping assignments differ from the preview. Preview the rules again.")
+    if (request.existing_database_identity is not None or request.typed_report_scope is not None
+            or options.export_target not in {"excel_xlsx", "html_dashboard"} or options.include_industrial_context):
+        raise ValueError(
+            "Rule grouping requires Whole database and local XLSX or HTML, "
+            "without a typed measurement filter or industrial context."
+        )
+    source.require_current(paths.db_file, request.filter_query)
 
 
 def _validate_output_namespace(paths, options):

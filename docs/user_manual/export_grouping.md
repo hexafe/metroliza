@@ -14,6 +14,35 @@ Use grouping when you want to:
 
 Grouping affects the export workflow. It does not replace filtering.
 
+## Reusing grouping rules
+
+In Reports, select **Whole database**, open **Grouping**, and choose **Grouping rules…**.
+Enter a preset name and add a name, color and rule for each group. Use **Up** and **Down**
+to set the order in the preset and preview. Rules use the report fields `Reference`,
+`Part`, `Revision`, `Template`, `Sample` and `Date`. For example, use
+`Reference = "001" AND Date >= 2026-01-01`. References and sample numbers are text,
+so `"001"` and `"1"` select different values.
+
+**Preview** evaluates the reports with measurements in the current export selection.
+The **Filter rows** search in the manual grouping dialog only narrows that dialog's lists.
+The rule preview shows the count for each group, overlaps and unassigned reports.
+Edit overlapping rules before using the grouping. To keep previewed reports with no
+matching rule, explicitly select **Assign remaining reports to POPULATION**.
+**Use rule grouping** replaces the current grouping for local XLSX and HTML exports.
+Preview again if you change the database or Export filter. If the selected reports
+or their grouping fields change before export, the export asks for a fresh preview.
+
+**Save preset…** writes a JSON file with the ordered definitions, group IDs and styles.
+**Open preset…** opens those definitions as a draft and requires a fresh preview.
+The export selection and report membership are resolved afresh in the current database.
+Files with unsupported versions or fields show an error and leave the current draft
+available. Use **Save preset…** before closing the rule editor if you want to retain the rules.
+
+This workflow supports up to 12 groups and 2,000 reports per preview. Narrow the Export
+filters or simplify the rules if the preview exceeds its work budget. The Reports typed
+measurement filter and industrial context are separate modes. Use the other **Grouping**
+controls to assign reports manually.
+
 ## Understanding the four panes
 
 The dialog is built around four main panes.
