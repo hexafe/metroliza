@@ -325,6 +325,38 @@ def test_statistical_replay_does_not_reassign_a_signal_to_another_metric(tmp_pat
     assert database.read_bytes() == before
 
 
+@pytest.mark.parametrize("batch_size", [1, 7, 50])
+@pytest.mark.parametrize("existing_ids_reversed", [False, True])
+def test_replay_keeps_csv_order_for_timestamp_ties(tmp_path, batch_size, existing_ids_reversed):
+    database = str(tmp_path / "replay.sqlite")
+    profile = _source_profile(database)
+    path = tmp_path / "ties.csv"
+    header = "record_id,event_time,cycle_time_s\n"
+    warmup = "".join(
+        f"warm-{index:02d},2026-06-12T09:00:{index:02d}Z,{99 if index % 2 == 0 else 101}\n"
+        for index in range(29)
+    )
+    normal = "z-warmup,2026-06-12T09:00:29Z,101\n"
+    step = "a-shift,2026-06-12T09:00:29Z,103.5\n"
+    request = ReplayRequest(
+        input_file=str(path), database=database, source_profile_id=profile.id, signal_key="cycle_time",
+        metric_column="cycle_time_s", event_time_column="event_time", record_key_column="record_id",
+        detectors=("rolling_zscore",), batch_size=batch_size,
+    )
+    if existing_ids_reversed:
+        path.write_text(header + step + normal, encoding="utf-8")
+        assert replay_industrial_stream(replace(request, detectors=("spec_limits",))).samples_inserted == 2
+    path.write_text(header + warmup + normal + step, encoding="utf-8")
+
+    expected = {"rolling_zscore/major": 1}
+    preview = replay_industrial_stream(replace(request, dry_run=True))
+    result = replay_industrial_stream(request)
+    assert (preview.event_counts, result.event_counts) == (expected, expected)
+    event, = AnomalyEventRepository(database).list_events()
+    assert event.observed_value == 103.5
+    assert replay_industrial_stream(request).detector_events_created == 0
+
+
 def test_end_to_end_replay_normal_process_creates_no_events(tmp_path):
     db_path = str(tmp_path / "normal.db")
     profile = _source_profile(db_path)

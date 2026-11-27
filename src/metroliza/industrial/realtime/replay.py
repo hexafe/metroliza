@@ -388,7 +388,11 @@ def _replay_ordered_stream(
             batch_result = sample_repository.insert_samples(samples)
             inserted += batch_result.inserted
             skipped += batch_result.skipped
-            persisted_samples = sample_repository.list_samples_by_ids(batch_result.sample_ids)
+            loaded = sample_repository.list_samples_by_ids(batch_result.sample_ids)
+            by_id = {sample.id: sample for sample in loaded}
+            # The returned IDs follow the CSV rows. The repository reads rows
+            # in database order, which can differ for a replayed timestamp tie.
+            persisted_samples = [by_id[sample_id] for sample_id in batch_result.sample_ids if sample_id in by_id]
         events = detector_session.score(persisted_samples)
         if not request.dry_run and events:
             event_result = event_repository.insert_events(events)
@@ -515,7 +519,9 @@ class _ReplayDetectorSession:
     def score(self, samples: Iterable[IndustrialSample]) -> list[DetectionResult]:
         events: list[DetectionResult] = []
         baselines: dict[str, Mapping[str, Any]] = {}
-        for sample in sorted(_unique_samples_for_detection(samples), key=_sample_sort_key):
+        # Stable event-time ordering keeps the supplied CSV order for ties.
+        ordered = sorted(_unique_samples_for_detection(samples), key=lambda sample: str(sample.event_time or ""))
+        for sample in ordered:
             if self.last_event_time is not None and sample.event_time < self.last_event_time:
                 raise ValueError(
                     "Replay input must be ordered by event time for bounded streaming detection."
