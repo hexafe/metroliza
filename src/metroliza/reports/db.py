@@ -930,14 +930,14 @@ def count_query_scope_rows(
 
     count_sql = scope.row_count_sql or f"SELECT COUNT(*) FROM ({scope.sql}) AS scoped_rows"
     count_params = scope.row_count_params if scope.row_count_sql else scope.params
-    rows = execute_with_retry(
+    rows = read_sql_query_result(
         db_path,
         count_sql,
         params=count_params,
         connection=connection,
         retries=retries,
         retry_delay_s=retry_delay_s,
-    )
+    ).rows
     return int(rows[0][0] or 0) if rows else 0
 
 
