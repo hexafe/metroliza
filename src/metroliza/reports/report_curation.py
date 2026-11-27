@@ -13,7 +13,6 @@ from metroliza.reports.report_metadata_review import OCR_ACCEPTED, OCR_DEFERRED,
 DETAIL_ROW_LIMIT = 25
 _METADATA_JSON_BYTE_LIMIT = 256 * 1024
 _DECISION_TEXT_LIMIT = 120
-_CANDIDATE_MATCH_LIMIT = 32
 _REPORT_FIELDS = (
     "absolute_path", "file_name", "sha256", "parser_id", "template_family",
     "template_variant", "parse_status", "measurement_count", "nok_count",
@@ -226,7 +225,8 @@ def _find_deferred_candidate(connection, report_id, field_name, evidence, record
     if has_digest and (not isinstance(digest, str) or len(digest) != 64
                        or any(character not in "0123456789abcdef" for character in digest)):
         return None
-    limit = _CANDIDATE_MATCH_LIMIT + 1 if has_digest else 2
+    max_matches = 32
+    limit = max_matches + 1 if has_digest else 2
     rows = connection.execute(
         """SELECT id FROM report_metadata_candidates
            WHERE report_id = ? AND field_name = ? AND normalized_value = ? AND source_type = ?
