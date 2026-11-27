@@ -223,6 +223,10 @@ class FilterDialog(QDialog):
         self._values_loading = False
         self._values_closed = False
         self._values_error = False
+        self._typed_preview_request = 0
+        self._typed_preview_loader = None
+        self._typed_preview_scope = None
+        self._typed_preview_status = ""
 
         self.setup_ui()
 
@@ -439,6 +443,16 @@ class FilterDialog(QDialog):
             self.clear_expression_button = QPushButton("Clear expression")
             self.saved_filters_button = QPushButton("Saved filters…")
             self.saved_filters_button.setToolTip("Save the current filter as a named draft or load a saved filter.")
+            self.typed_mode_button = self.typed_preview_button = None
+            if callable(getattr(self.parent(), "typed_report_filter_blocker", None)):
+                self.typed_mode_button = QPushButton("Typed expression")
+                self.typed_mode_button.setCheckable(True)
+                self.typed_mode_button.setToolTip(
+                    "Use typed fields. Text such as 001 keeps its leading zeros. Available fields: "
+                    "Reference (Ref), Dimension, Axis, Status, Measurement (meas), Date."
+                )
+                self.typed_preview_button = QPushButton("Preview rows…")
+                self.typed_preview_button.setEnabled(False)
             ui_foundation.configure_accessibility(
                 self.expression_input,
                 name="Advanced report filter expression",
@@ -547,7 +561,12 @@ class FilterDialog(QDialog):
         footer_layout.setVerticalSpacing(2)
 
         footer_layout.addWidget(self.expression_label, 0, 0)
-        footer_layout.addWidget(self.expression_input, 0, 1, 1, 3)
+        footer_layout.addWidget(self.expression_input, 0, 1, 1, 2 if self.typed_mode_button else 3)
+        if self.typed_mode_button is not None:
+            mode_layout = QtWidgets.QHBoxLayout()
+            mode_layout.addWidget(self.typed_mode_button)
+            mode_layout.addWidget(self.typed_preview_button)
+            footer_layout.addLayout(mode_layout, 0, 3)
         footer_layout.addWidget(self.date_range_label, 1, 0)
         footer_layout.addWidget(self.date_range_selector, 1, 1)
         footer_layout.addWidget(self.date_from_label, 2, 0)
@@ -692,6 +711,9 @@ class FilterDialog(QDialog):
             self.measurement_nok_button.toggled.connect(self._select_only_nok_measurements)
             if hasattr(self.expression_input, "textChanged"):
                 self.expression_input.textChanged.connect(self._refresh_filter_summary)
+            if self.typed_mode_button is not None:
+                self.typed_mode_button.toggled.connect(self._typed_mode_changed)
+                self.typed_preview_button.clicked.connect(self._request_typed_preview)
         except Exception as e:
             self.log_and_exit(e)
 
@@ -709,7 +731,10 @@ class FilterDialog(QDialog):
                 if search:
                     ordered.append(getattr(self, search))
                 ordered.append(getattr(self, listing))
-        ordered.extend((self.expression_input, self.date_range_selector, self.date_from_calendar,
+        ordered.append(self.expression_input)
+        if self.typed_mode_button is not None:
+            ordered.extend((self.typed_mode_button, self.typed_preview_button))
+        ordered.extend((self.date_range_selector, self.date_from_calendar,
                         self.date_to_calendar, self.select_beginning_button, self.select_today_button,
                         self.has_nok_button, self.measurement_nok_button,
                         self.reset_button, self.cancel_button, self.apply_button))
@@ -844,7 +869,7 @@ class FilterDialog(QDialog):
         )
         return (
             tuple(selections), date_from, date_to, has_nok_only,
-            self._filter_expression_text(), preset,
+            self._filter_expression_text(), preset, self._typed_mode(),
         )
 
     def _is_dirty(self):
@@ -852,7 +877,7 @@ class FilterDialog(QDialog):
         return self._draft_snapshot() != committed
 
     def _has_active_draft(self):
-        selections, _date_from, _date_to, has_nok_only, expression, _preset = self._draft_snapshot()
+        selections, _date_from, _date_to, has_nok_only, expression, _preset, typed = self._draft_snapshot()
         has_selected_values = any(
             any(value != "SELECT ALL" for value in selected_values)
             for _attr_name, selected_values in selections
@@ -861,6 +886,7 @@ class FilterDialog(QDialog):
             has_selected_values
             or has_nok_only
             or expression
+            or typed
             or self._has_custom_date_range()
         )
 
@@ -908,7 +934,9 @@ class FilterDialog(QDialog):
         self._refresh_choice_presentation(widget)
 
     def _restore_draft_snapshot(self, snapshot):
-        selections, date_from, date_to, has_nok_only, expression, preset = snapshot
+        selections, date_from, date_to, has_nok_only, expression, preset, typed = snapshot
+        if self.typed_mode_button is not None:
+            self.typed_mode_button.setChecked(typed)
         for attr_name, selected_values in selections:
             widget = getattr(self, attr_name, None)
             self._retain_saved_choices(widget, selected_values)
@@ -946,7 +974,9 @@ class FilterDialog(QDialog):
         presets, unavailable = store.load()
         menu = QtWidgets.QMenu(self)
         save = menu.addAction("Save filter draft as…")
-        save.setEnabled(self.apply_button.isEnabled())
+        save.setEnabled(self.apply_button.isEnabled() and not self._typed_mode())
+        if self._typed_mode():
+            menu.addAction("Typed drafts cannot be saved as presets yet").setEnabled(False)
         save.triggered.connect(lambda: self._save_filter_draft(store))
         menu.addSeparator()
         for name, state in presets:
@@ -970,6 +1000,8 @@ class FilterDialog(QDialog):
         message.exec()
 
     def _save_filter_draft(self, store):
+        if self._typed_mode():
+            return
         name, accepted = QtWidgets.QInputDialog.getText(self, "Save filter", "Filter name")
         if not accepted:
             return
@@ -994,9 +1026,11 @@ class FilterDialog(QDialog):
         date_to = state.date_to or QDate.currentDate().toString("yyyy-MM-dd")
         preset = "Custom" if (state.date_from or state.date_to) else "All dates"
         self._restore_draft_snapshot((selections, date_from, date_to, state.has_nok_only,
-                                      state.expression_text, preset))
+                                      state.expression_text, preset, False))
 
     def _reset_draft(self):
+        if self.typed_mode_button is not None:
+            self.typed_mode_button.setChecked(False)
         for attr_name in self._FILTER_LIST_ATTRS:
             self._set_selected_values(getattr(self, attr_name, None), ())
         self._set_date_preset_label("All dates")
@@ -1031,6 +1065,7 @@ class FilterDialog(QDialog):
             return False
         if not self._is_dirty():
             self._stop_value_load()
+            self._stop_typed_preview()
             return True
         if self.isVisible():
             self._discard_gate_active = True
@@ -1044,6 +1079,7 @@ class FilterDialog(QDialog):
             if not allowed:
                 return False
         self._stop_value_load()
+        self._stop_typed_preview()
         committed = getattr(self, "_committed_draft_snapshot", None)
         if committed is not None:
             self._restore_draft_snapshot(committed)
@@ -1182,11 +1218,141 @@ class FilterDialog(QDialog):
         if button is not None and hasattr(button, "setEnabled"):
             button.setEnabled(enabled)
 
+    def _typed_mode(self):
+        button = getattr(self, "typed_mode_button", None)
+        return button is not None and button.isChecked()
+
+    def _typed_mode_changed(self):
+        self._stop_typed_preview()
+        self._typed_preview_scope = None
+        self._typed_preview_status = ""
+        self._refresh_filter_summary()
+
+    def _stop_typed_preview(self):
+        self._typed_preview_request += 1
+        loader = self._typed_preview_loader
+        self._typed_preview_loader = None
+        if loader is not None:
+            loader.requestInterruption()
+        if self.typed_preview_button is not None:
+            self.typed_preview_button.setText("Preview rows…")
+
+    def _request_typed_preview(self):
+        if self._typed_preview_loader is not None:
+            self._stop_typed_preview()
+            self._typed_preview_status = "Preview canceled."
+            self._refresh_filter_summary()
+            return
+        if not self._typed_mode() or self._values_loading or self._values_error:
+            return
+        from metroliza.reports.report_typed_filter import prepare_report_typed_filter
+        from metroliza.ui.filter_values_loader import ReportTypedFilterLoader
+
+        self._reconcile_date_preset()
+        self._typed_preview_scope = None
+        try:
+            blocker = self.parent().typed_report_filter_blocker()
+            if blocker:
+                raise ValueError(blocker)
+            scope = prepare_report_typed_filter(self.db_file, self._current_filter_state())
+        except (KeyError, TypeError, ValueError, OSError) as error:
+            self._typed_preview_status = str(error)
+        else:
+            self._typed_preview_request += 1
+            loader = ReportTypedFilterLoader(self._typed_preview_request, scope)
+            self._typed_preview_loader = loader
+            loader.values_ready.connect(self._typed_preview_received)
+            loader.load_failed.connect(self._typed_preview_failed)
+            loader.finished.connect(self._typed_preview_finished)
+            self.typed_preview_button.setText("Cancel preview")
+            self._typed_preview_status = "Counting typed matches…"
+            loader.start()
+        self._refresh_filter_summary()
+
+    def _typed_preview_received(self, request, preview):
+        if request != self._typed_preview_request or self._typed_preview_loader is None:
+            return
+        scope = self._typed_preview_loader.scope
+        self._stop_typed_preview()
+        if scope.state != self._current_filter_state() or not self._typed_mode():
+            self._typed_preview_status = "The draft changed. Preview it again."
+            self._refresh_filter_summary()
+            return
+        self._typed_preview_scope = scope
+        self._typed_preview_status = f"Typed preview · {preview.matching_count:,} matching measurements"
+        self._refresh_filter_summary()
+        if self.isVisible():
+            self._show_typed_preview(preview)
+
+    def _typed_preview_failed(self, request, error):
+        if request != self._typed_preview_request or self._typed_preview_loader is None:
+            return
+        self._stop_typed_preview()
+        self._typed_preview_status = str(error) if isinstance(error, ValueError) else (
+            "Could not preview this report database. Check its schema or try again."
+        )
+        self._refresh_filter_summary()
+
+    def _typed_preview_finished(self):
+        if self.sender() is self._typed_preview_loader:
+            self._stop_typed_preview()
+            self._typed_preview_status = "Preview canceled."
+            self._refresh_filter_summary()
+
+    def _show_typed_preview(self, preview):
+        message = QtWidgets.QMessageBox(self)
+        message.setWindowTitle("Typed report filter preview")
+        message.setTextFormat(Qt.TextFormat.PlainText)
+        message.setText(f"{preview.matching_count:,} matching measurements. Preview reads the database with a scan.")
+        if preview.rows:
+            message.setDetailedText("\n".join(
+                ["Measurement ID | Reference | Dimension | Measurement | Date"]
+                + [" | ".join("" if value is None else str(value)[:80] for value in row)
+                   for row in preview.rows]
+            ))
+        message.exec()
+
+    def _refresh_typed_filter_summary(self, summary):
+        blocker = self.parent().typed_report_filter_blocker()
+        scope = self._typed_preview_scope
+        ready = not blocker and scope is not None and scope.state == self._current_filter_state()
+        self._set_filter_apply_enabled(bool(ready))
+        if blocker:
+            self.typed_preview_button.setEnabled(False)
+        valid_status = self._typed_preview_status if scope is None or ready else "The draft changed. Preview it again."
+        summary.setTextFormat(Qt.TextFormat.PlainText)
+        summary.setText(blocker or valid_status or "Preview the typed draft before applying it.")
+        ui_foundation.set_status_variant(summary, "success" if ready else "neutral")
+
+    def _apply_typed_report_filter(self, state):
+        scope = self._typed_preview_scope
+        if scope is None or scope.state != state:
+            self._refresh_filter_summary()
+            return False
+        parent = self.parent()
+        try:
+            parent.set_typed_report_filter(scope)
+        except (ValueError, OSError) as error:
+            self._typed_preview_scope = None
+            self._typed_preview_status = str(error)
+            self._refresh_filter_summary()
+            return False
+        _record_filter_submission_options(state.has_nok_only, self.date_range_selector.currentText())
+        self._committed_draft_snapshot = self._draft_snapshot()
+        self._applied_scope_text = "Typed filter applied"
+        self._refresh_draft_presentation()
+        self.hide()
+        return True
+
     def _refresh_filter_summary(self):
         self._refresh_draft_presentation()
         summary_label = getattr(self, "filter_summary_label", None)
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
+        if self.typed_preview_button is not None:
+            if not self._typed_mode():
+                self.typed_mode_button.setEnabled(not self.parent().typed_report_filter_blocker())
+            self.typed_preview_button.setEnabled(self._typed_mode() and not self._values_loading)
         if not self._validate_date_range():
             summary_label.setText("Invalid date range: From must be on or before To.")
             ui_foundation.set_status_variant(summary_label, "danger")
@@ -1199,7 +1365,11 @@ class FilterDialog(QDialog):
             )
             self._set_filter_apply_enabled(False)
             return
-        self._refresh_active_filter_summary(summary_label)
+        if self._typed_mode():
+            self._sync_measurement_nok_button()
+            self._refresh_typed_filter_summary(summary_label)
+        else:
+            self._refresh_active_filter_summary(summary_label)
 
     def _refresh_active_filter_summary(self, summary_label):
         only_nok_measurements = self._sync_measurement_nok_button()
@@ -1506,6 +1676,8 @@ class FilterDialog(QDialog):
             return
         try:
             filter_state = self._current_filter_state()
+            if self._typed_mode():
+                return self._apply_typed_report_filter(filter_state)
             expression_error = self._validate_filter_expression(filter_state.expression_text)
             if expression_error:
                 if self.filter_summary_label is not None and hasattr(self.filter_summary_label, "setText"):

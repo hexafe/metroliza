@@ -3673,6 +3673,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
         validated_request = validate_export_request(export_request)
         self._export_scope_request = validated_request
+        self._typed_report_scope = validated_request.typed_report_scope
         self.replace_outputs = validated_request.replace_outputs
         self.copy_output_from = getattr(validated_request, "copy_output_from", None)
         self._summary_render_options = validated_request.options
@@ -4193,7 +4194,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self._snapshot_partition_source.invalidate()
         self._snapshot_partition_source = None
         self._report_selection = ()
+        typed = getattr(self, "_typed_report_scope", None)
         if self._db_connection is None:
+            if typed is not None:
+                raise ValueError("The typed filter requires its report database connection.")
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
             self._partition_header_counts_cache = None
@@ -4201,26 +4205,27 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             return
 
         snapshot_table_name = f'_export_snapshot_{int(time.time() * 1000)}_{id(self)}'
+        selection_sql = typed.query.sql if typed is not None else self.filter_query
         create_snapshot_query = (
             f'CREATE TEMP TABLE "{snapshot_table_name}" AS '
-            f'SELECT * FROM ({self.filter_query}) AS export_scope'
+            f'SELECT * FROM ({selection_sql}) AS export_scope'
         )
         try:
             with self._db_connection:
-                self._db_connection.execute(create_snapshot_query)
+                self._execute_export_snapshot(create_snapshot_query, typed)
                 self._index_export_snapshot(snapshot_table_name)
                 snapshot_source = prepare_snapshot_partition_source(self._db_connection, snapshot_table_name)
         except Exception:
+            if typed is not None:
+                self._discard_failed_export_snapshot(snapshot_table_name)
+                raise
             if getattr(self, "_approved_report_ids", ()):
                 raise
             logger.warning(
                 'Export snapshot materialization failed; falling back to live query scope.',
                 exc_info=True,
             )
-            try:
-                self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{snapshot_table_name}"')
-            except sqlite3.Error:
-                logger.debug('Unable to discard failed export snapshot.', exc_info=True)
+            self._discard_failed_export_snapshot(snapshot_table_name)
             self._snapshot_table_name = None
             self._active_export_query = self.filter_query
             self._cached_export_filtered_df = None
@@ -4235,6 +4240,29 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         self._cached_export_filtered_df = None
         self._partition_header_counts_cache = None
         self._sql_measurement_summary_cache.clear()
+
+    def _execute_export_snapshot(self, statement, typed):
+        connection = self._db_connection
+        if typed is None:
+            connection.execute(statement)
+            return
+
+        from metroliza.shared.typed_filter import install_typed_filter_sqlite
+
+        typed.require_current_database(self.db_file)
+        install_typed_filter_sqlite(connection)
+        connection.set_progress_handler(lambda: int(self.export_canceled), 1000)
+        try:
+            connection.execute(statement, typed.query.params)
+            typed.require_current_database(self.db_file)
+        finally:
+            connection.set_progress_handler(None, 0)
+
+    def _discard_failed_export_snapshot(self, snapshot_table_name):
+        try:
+            self._db_connection.execute(f'DROP TABLE IF EXISTS temp."{snapshot_table_name}"')
+        except sqlite3.Error:
+            logger.debug('Unable to discard failed export snapshot.', exc_info=True)
 
     def _snapshot_report_selection(self, snapshot_table_name):
         try:
@@ -5163,7 +5191,13 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
 
             self._ensure_chart_executor()
             identity = getattr(self, "_existing_database_identity", None)
-            if identity is None:
+            typed = getattr(self, "_typed_report_scope", None)
+            if typed is not None:
+                from metroliza.reports.db import sqlite_readonly_connection_scope
+
+                typed.require_current_database(self.db_file)
+                database_scope = sqlite_readonly_connection_scope(self.db_file, timeout_s=1.0)
+            elif identity is None:
                 database_scope = sqlite_report_schema_connection_scope(self.db_file)
             else:
                 from metroliza.reports.report_query_service import sqlite_approved_report_export_scope
@@ -5173,9 +5207,11 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 )
             with database_scope as connection:
                 self._db_connection = connection
-                if identity is None:
+                if identity is None and typed is None:
                     ensure_report_schema(self.db_file, connection=connection, retries=5, retry_delay_s=1)
                 self._prepare_export_snapshot()
+                if typed is not None and self._check_canceled():
+                    return
 
                 self._emit_stage_progress('preparing_query', 0.0)
                 self.update_label.emit(build_three_line_status("Preparing export...", "Loading data and configuring stages", "ETA --"))
@@ -5326,6 +5362,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            if getattr(self, "_typed_report_scope", None) is not None and self._check_canceled():
+                return
             if type(e) is XlsxWorksheetCapacityError and self._check_canceled():
                 return
             self._observe_export_failure_stage(exception=e)

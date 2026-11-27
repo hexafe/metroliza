@@ -49,12 +49,28 @@ class FilterValuesLoader(QThread):
 
     def run(self):
         try:
-            values = load_filter_values(
-                self.database, self.filter_query, specs=self.specs,
-                cancelled=self.isInterruptionRequested,
-            )
+            values = self._load()
             if not self.isInterruptionRequested():
                 self.values_ready.emit(self.request_id, values)
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.load_failed.emit(self.request_id, exc)
+
+    def _load(self):
+        return load_filter_values(
+            self.database, self.filter_query, specs=self.specs,
+            cancelled=self.isInterruptionRequested,
+        )
+
+
+class ReportTypedFilterLoader(FilterValuesLoader):
+    """Use the same native-worker shutdown owner for report filter previews."""
+
+    def __init__(self, request_id, scope):
+        super().__init__(request_id, str(scope.database), None, ())
+        self.scope = scope
+
+    def _load(self):
+        from metroliza.reports.report_typed_filter import preview_report_typed_filter
+
+        return preview_report_typed_filter(self.scope, cancelled=self.isInterruptionRequested)

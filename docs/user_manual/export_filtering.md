@@ -406,18 +406,28 @@ schema mappings, indexed plans and additional source-specific cases.
 
 ### Reports compatibility and migration scope
 
-Existing Export filters, Reports presets and recipes still execute saved Magic
-text through the current report query builder. The report alias `Ref` resolves to
+For **Whole database → Main plots → local XLSX**, use **Typed expression** in
+the filter dialog when you want field types to control the comparison. Enter an
+expression and choose **Preview rows…**. The dialog shows the exact matching
+measurement count and up to 20 rows ordered by measurement ID. You can cancel
+the scan while it runs. The preview includes your list choices, date range and
+NOK restrictions. Choose **Apply Filters** to use that scope for the workbook.
+If the draft or database changes, preview again before applying or exporting.
+
+The typed catalog includes Reference (`Ref`), Dimension, Axis, Status,
+Measurement (`meas`) and Date. Reports presets and recipes keep their existing
+Magic format. Typed drafts cannot be saved as presets or recipes yet. Clear the
+typed filter before switching to grouping, HTML, Google Sheets, industrial
+context or the last-import scope.
+
+Existing Magic filters, Reports presets and recipes retain their current
+semantics. The report alias `Ref` resolves to
 `reference`. For `Ref IN ("001") AND Dimension = W*`, Magic infers a number and
 matches reference text `001` and `1` when the dimension also matches. A typed
 text field matches only `001`. The regression fixture exercises the saved state,
 measurement selection, report grouping, and export with fixed row IDs.
 [Report migration regression](../../tests/test_report_query_service.py)
 
-The Reports follow-up is to define the Reports catalog and legacy aliases, then
-carry a bound SQL scope through report selection, grouping and export. The
-current export request carries a SQL string and saved state carries Magic text.
-Keep that version readable with its existing semantics and make typed execution
-an explicit choice for new or converted filters. Verify unchanged legacy
-selection and preview/final equivalence for the typed path, including list and
-date restrictions, measurement versus report scope, and saved-preset reload.
+The typed workbook path binds the same query and parameters used by the preview
+and selects its rows into a temporary export snapshot. Grouping, other export
+targets, and saved-filter migration remain separate work.
