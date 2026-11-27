@@ -6,13 +6,14 @@ import json
 import sqlite3
 
 from metroliza.reports.db import SQLiteFileBinding, quote_identifier, sqlite_readonly_connection_scope
-from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
+from metroliza.reports.report_metadata_models import MetadataCandidate, USER_SOURCE_TYPE
 from metroliza.reports.report_metadata_review import OCR_ACCEPTED, OCR_DEFERRED, OCR_REJECTED, REVIEW_FIELDS
 
 
 DETAIL_ROW_LIMIT = 25
 _METADATA_JSON_BYTE_LIMIT = 256 * 1024
 _DECISION_TEXT_LIMIT = 120
+_CANDIDATE_MATCH_LIMIT = 32
 _REPORT_FIELDS = (
     "absolute_path", "file_name", "sha256", "parser_id", "template_family",
     "template_variant", "parse_status", "measurement_count", "nok_count",
@@ -201,23 +202,7 @@ def read_deferred_ocr_approval(connection, binding, report_id, field_name, recor
     """Bind a deferred receipt to the one matching original candidate in this snapshot."""
     if binding.identity is None or field_name not in REVIEW_FIELDS or (evidence := _deferred_evidence(record)) is None:
         return None
-    rows = connection.execute(
-        """SELECT id, is_selected FROM report_metadata_candidates
-           WHERE report_id = ? AND field_name = ? AND normalized_value = ? AND source_type = ?
-             AND page_number IS ? AND region_name IS ? AND rule_id = ? AND confidence = ? LIMIT 2""",
-        (report_id, field_name, *evidence),
-    ).fetchall()
-    if len(rows) != 1 or rows[0][1] != 0:
-        return None
-    candidate = connection.execute(
-        """SELECT id, raw_value, normalized_value, source_type, source_detail, page_number, region_name,
-                  label_text, rule_id, confidence, evidence_text, created_at, is_selected
-           FROM report_metadata_candidates WHERE id = ?
-             AND COALESCE(length(CAST(raw_value AS BLOB)), 0) + COALESCE(length(CAST(source_detail AS BLOB)), 0)
-                 + COALESCE(length(CAST(label_text AS BLOB)), 0) + COALESCE(length(CAST(evidence_text AS BLOB)), 0)
-                 + length(CAST(created_at AS BLOB)) <= ?""",
-        (rows[0][0], _METADATA_JSON_BYTE_LIMIT),
-    ).fetchone()
+    candidate = _find_deferred_candidate(connection, report_id, field_name, evidence, record)
     if candidate is None:
         return None
     report = connection.execute(
@@ -229,9 +214,47 @@ def read_deferred_ocr_approval(connection, binding, report_id, field_name, recor
     ).fetchone()
     if report is None:
         return None
-    snapshot = repr((tuple(report), tuple(candidate))).encode("utf-8", errors="backslashreplace")
+    snapshot = repr((tuple(report), candidate)).encode("utf-8", errors="backslashreplace")
     return StoredOcrApproval(binding, report_id, field_name, candidate[0], hashlib.sha256(snapshot).hexdigest(),
                              evidence[0], evidence[1])
+
+
+def _find_deferred_candidate(connection, report_id, field_name, evidence, record) -> tuple | None:
+    # Original v1 receipts can be reused only when their partial identity matches one row.
+    has_digest = "candidate_sha256" in record
+    digest = record.get("candidate_sha256")
+    if has_digest and (not isinstance(digest, str) or len(digest) != 64
+                       or any(character not in "0123456789abcdef" for character in digest)):
+        return None
+    limit = _CANDIDATE_MATCH_LIMIT + 1 if has_digest else 2
+    rows = connection.execute(
+        """SELECT id FROM report_metadata_candidates
+           WHERE report_id = ? AND field_name = ? AND normalized_value = ? AND source_type = ?
+             AND page_number IS ? AND region_name IS ? AND rule_id = ? AND confidence = ? LIMIT ?""",
+        (report_id, field_name, *evidence, limit),
+    ).fetchall()
+    if len(rows) == limit:
+        return None
+    match = None
+    for (candidate_id,) in rows:
+        row = connection.execute(
+            """SELECT id, field_name, raw_value, normalized_value, source_type, source_detail, page_number,
+                      region_name, label_text, rule_id, confidence, evidence_text, created_at, is_selected
+               FROM report_metadata_candidates WHERE id = ?
+                 AND COALESCE(length(CAST(raw_value AS BLOB)), 0) + COALESCE(length(CAST(source_detail AS BLOB)), 0)
+                     + COALESCE(length(CAST(label_text AS BLOB)), 0) + COALESCE(length(CAST(evidence_text AS BLOB)), 0)
+                     + length(CAST(created_at AS BLOB)) <= ?""",
+            (candidate_id, _METADATA_JSON_BYTE_LIMIT),
+        ).fetchone()
+        if row is None:
+            return None  # The bounded snapshot cannot prove uniqueness.
+        candidate = tuple(row)
+        if has_digest and MetadataCandidate(*candidate[1:-2]).evidence_digest() != digest:
+            continue
+        if match is not None or candidate[-1] != 0:
+            return None
+        match = candidate
+    return match
 
 
 def _stored_ocr_decision(field_name: str, record) -> StoredOcrDecision | None:

@@ -785,6 +785,66 @@ def test_complete_enrichment_preserves_manual_edit_after_snapshot(tmp_path, fake
     assert _single_report(database)[0]["reference"] == "NEW-MANUAL"
 
 
+def test_deferred_review_distinguishes_same_value_with_different_header_evidence(tmp_path, fake_ocr, monkeypatch):
+    from metroliza.parsing.metadata_enrichment_thread import (
+        MetadataEnrichmentWorkItem,
+        enrich_existing_report_metadata,
+    )
+
+    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,), metadata_parsing_mode="complete")
+    row = next(iter(rows.values()))
+    row.set_user_value("reference", "MANUAL-REF")
+    _read(reader, rows, mode=MODE_OCR)
+    original = row.suggested_ocr_candidate("reference")
+    assert original is not None and original.evidence_text
+    assert row.defer_ocr_suggestion("reference")
+
+    add_diagnostics = CMMReportParser._apply_header_extraction_diagnostics
+
+    def changed_evidence(parser, selection):
+        selection = add_diagnostics(parser, selection)
+        return replace(selection, candidates=tuple(
+            replace(item, evidence_text="Same OCR value with changed nearby text") if item == original else item
+            for item in selection.candidates
+        ))
+
+    monkeypatch.setattr(CMMReportParser, "_apply_header_extraction_diagnostics", changed_evidence)
+    worker = ParseReportsThread(_plan(source, database, review, build_overrides(rows.values())))
+    worker.run()
+    assert worker.last_parse_result.imported_files == 1
+    metadata, _, report = _single_report(database)
+    assert metadata["reference"] == "MANUAL-REF"
+
+    def reference_evidence():
+        with closing(sqlite3.connect(database)) as connection:
+            connection.row_factory = sqlite3.Row
+            return connection.execute(
+                "SELECT * FROM report_metadata_candidates WHERE report_id = ? AND field_name = 'reference'",
+                (report["id"],),
+            ).fetchall()
+
+    identity_fields = ("field_name", "normalized_value", "source_type", "page_number", "region_name", "rule_id", "confidence")
+    matching = [candidate for candidate in reference_evidence()
+                if all(candidate[name] == getattr(original, name) for name in identity_fields)]
+    assert len(matching) == 2
+    original_row, = [item for item in matching if item["evidence_text"] == original.evidence_text]
+
+    decision, = load_stored_report_context(str(database), report["id"]).ocr_decisions
+    assert decision.approval is not None and decision.approval.candidate_id == original_row["id"]
+    receipt = json.loads(metadata["metadata_json"])["metadata_review"]["ocr_decisions"]["reference"]
+    assert original.evidence_text not in json.dumps(receipt)
+    pdf = source / NAME
+    work_item = MetadataEnrichmentWorkItem(report["id"], str(pdf), hashlib.sha256(pdf.read_bytes()).hexdigest())
+    assert enrich_existing_report_metadata(str(database), work_item)
+    refreshed, = load_stored_report_context(str(database), report["id"]).ocr_decisions
+    assert refreshed.approval is not None and refreshed.approval.candidate_id == original_row["id"]
+    ReportRepository(str(database)).accept_deferred_ocr(refreshed.approval)
+    updated, _, _ = _single_report(database)
+    assert updated["reference"] == original.normalized_value
+    selected, = [item for item in reference_evidence() if item["is_selected"]]
+    assert selected["id"] == original_row["id"]
+
+
 @pytest.mark.parametrize("metadata_parsing_mode", ["light", "complete"])
 def test_imported_deferred_sample_can_be_accepted_and_survives_real_enrichment(
     tmp_path, fake_ocr, monkeypatch, metadata_parsing_mode,

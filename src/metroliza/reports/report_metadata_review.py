@@ -193,6 +193,7 @@ class OcrSuggestionDecision:
             "region_name": candidate.region_name,
             "rule_id": candidate.rule_id,
             "confidence": candidate.confidence,
+            "candidate_sha256": candidate.evidence_digest(),
         }
 
 
