@@ -237,6 +237,11 @@ def read_deferred_ocr_approval(connection, binding, report_id, field_name, recor
 def _stored_ocr_decision(field_name: str, record) -> StoredOcrDecision | None:
     if not isinstance(record, dict) or record.get("decision") not in (OCR_ACCEPTED, OCR_DEFERRED, OCR_REJECTED):
         return None
+    if record["decision"] == OCR_ACCEPTED:
+        candidate_id = record.get("candidate_id")
+        accepted_at = _bounded_decision_text(record.get("accepted_at"))
+        if type(candidate_id) is not int or candidate_id <= 0 or accepted_at is None:
+            return None
     value = _bounded_decision_text(record.get("value"))
     source_type = _bounded_decision_text(record.get("source_type"))
     if value is None or source_type is None:
