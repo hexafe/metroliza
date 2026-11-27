@@ -32,7 +32,11 @@ from metroliza.exporting.xlsx_fast_paths import (
     fast_cell_markup,
     write_plain_column,
 )
-from metroliza.exporting.xlsx_writer_policy import LiteralSourceWorksheet
+from metroliza.exporting.xlsx_writer_policy import (
+    LiteralSourceWorksheet,
+    XLSX_MAX_COLUMNS,
+    XLSX_MAX_ROWS,
+)
 from metroliza.shared.env_utils import env_bool
 
 BULK_WRITE_ENV = "METROLIZA_EXPORT_BULK_WRITE"
@@ -42,8 +46,6 @@ _SUPPORTED_XLSXWRITER_SERIES = ((3, 2),)
 _RENDER_CHUNK_ROWS = 4096
 _ROW_SPAN_GROUP = 16
 _STRING_CELL_LIMIT = 32767
-_XLS_ROW_MAX = 1048576
-_XLS_COL_MAX = 16384
 _NUMERIC_TYPES = frozenset({int, float})
 _REQUIRED_WORKSHEET_ATTRIBUTES = (
     "_write_rows",
@@ -211,7 +213,7 @@ class BulkPlanBuilder:
 
 def bulk_block_fits(plan: BulkPlan, *, first_row: int = 1) -> bool:
     """Return whether ``plan`` fits a worksheet starting at ``first_row``."""
-    return first_row + plan.n_rows <= _XLS_ROW_MAX and len(plan.columns) <= _XLS_COL_MAX
+    return first_row + plan.n_rows <= XLSX_MAX_ROWS and len(plan.columns) <= XLSX_MAX_COLUMNS
 
 
 def plan_bulk_rows(columns: list, rows: list) -> BulkPlan | None:

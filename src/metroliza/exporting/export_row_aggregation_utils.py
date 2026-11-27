@@ -3,7 +3,6 @@
 import warnings
 
 import numpy as np
-from scipy.stats import ttest_ind
 
 
 def all_measurements_within_limits(measurements, lower_limit, upper_limit):
@@ -27,6 +26,8 @@ def build_violin_group_stats_rows(labels, values):
 
         if np.isclose(np.std(group_values, ddof=1), 0.0) or np.isclose(np.std(reference_values, ddof=1), 0.0):
             return np.nan
+
+        from scipy.stats import ttest_ind
 
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)
