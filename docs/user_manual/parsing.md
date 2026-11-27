@@ -45,12 +45,16 @@ are stable member-relative paths, rather than temporary extraction folders.
 
 In the review table, **Read with OCR** can supply missing metadata. If OCR differs from a
 value you entered or accepted, the cell keeps that value and shows the suggestion in its
-tooltip and report details. Compare it with the report, select the cell, then open
-**Metadata** and choose **Use OCR suggestion** or **Keep current value**. Keeping the value
-dismisses this suggestion until another read offers a suggestion.
-Import saves an accepted value with its OCR source. Later metadata enrichment keeps that
-value and records different readings as alternatives. You can still correct the value
-before import or in **Modify Database**.
+tooltip and report details. Compare it with the report, select the cell, then open **Metadata**.
+
+- **Use OCR suggestion** replaces the current value with the suggestion.
+- **Keep current value** rejects this reading. A different reading can still offer a new suggestion.
+- **Review later** keeps the current value and marks the suggestion as deferred. Select the cell
+  again to use or reject the suggestion before importing. A different reading appears as a new suggestion.
+
+Import saves accepted values with their OCR source and records deferred or rejected suggestions
+with their source details. Later metadata enrichment keeps reviewed values and records different
+readings as alternatives. You can still correct the value before import or in **Modify Database**.
 
 ## Progress, cancellation and outcomes
 

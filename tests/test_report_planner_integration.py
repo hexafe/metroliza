@@ -10,7 +10,7 @@ import zipfile
 
 import fitz
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -304,6 +304,7 @@ def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, fi
     assert bool(dialog._metadata_carryover) is (field == "metadata")
 
 
+@pytest.mark.usefixtures("qapplication_session")
 def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, reports):
     source, database = reports
     nested = source / "nested"
@@ -314,9 +315,14 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         document.save(nested / fixture.name)
 
     dialog = ParsingDialog(directory=str(source), db_file=str(database))
+
+    def review_settled():
+        # The native reader can stop before Qt delivers its queued finished slot.
+        return dialog.pdf_workers_idle() and dialog.metadata_thread is None and not dialog._metadata_threads
+
     try:
         dialog.scan_button.click()
-        wait_until(app, dialog.pdf_workers_idle)
+        wait_until(app, review_settled)
         model = dialog.report_planner.model
         column = model.column_for_field("reference")
         corrections = {"report-0.pdf": "OUTSIDE-EDIT", "nested/report-0.pdf": "NESTED-EDIT"}
@@ -330,7 +336,7 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         dialog.metadata_mode_combo.setCurrentIndex(dialog.metadata_mode_combo.findData("complete"))
         assert not dialog.parse_button.isEnabled()
         dialog.scan_button.click()
-        wait_until(app, dialog.pdf_workers_idle)
+        wait_until(app, review_settled)
 
         assert model.metadata_row("report-0.pdf").value("reference") != "OUTSIDE-EDIT"
         assert model.metadata_row("nested/report-0.pdf").value("reference") == "NESTED-EDIT"
@@ -338,6 +344,11 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         assert dialog.parse_button.isEnabled()
     finally:
         dialog.close()
+        wait_until(app, review_settled)
+        app.processEvents()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
 
 
 def test_changed_selected_source_is_blocked_by_real_worker(app, reviewed):

@@ -21,6 +21,7 @@ from metroliza.reports.report_metadata_normalizers import is_missing_reference
 from metroliza.reports.report_metadata_review import (
     CORE_FIELDS,
     FieldOverride,
+    OcrSuggestionDecision,
     ReportMetadataOverride,
     ReviewRow,
     apply_metadata_override,
@@ -341,6 +342,68 @@ def test_second_ocr_run_keeps_edits_made_after_the_first(tmp_path, fake_ocr):
     assert row.cells["revision"].ocr_suggestion == "D.01"
 
 
+def test_deferred_ocr_can_be_resolved_and_rejection_is_specific_to_that_reading():
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    first = make_selection({"reference": ("FIRST", "header_exact", 0.74)})
+    latest = make_selection({"reference": ("SECOND", "header_exact", 0.92)})
+    row.apply_ocr(first)
+    assert row.defer_ocr_suggestion("reference")
+    assert row.value("reference") == "MANUAL"
+    assert row.has_deferred_ocr_suggestion("reference")
+    assert not row.defer_ocr_suggestion("reference")
+
+    row.apply_ocr(first)
+    assert row.has_deferred_ocr_suggestion("reference")
+    assert row.dismiss_ocr_suggestion("reference")
+    row.apply_ocr(first)
+    assert row.suggested_ocr_candidate("reference") is None
+    assert row.value("reference") == "MANUAL"
+
+    row.apply_ocr(latest)
+    assert row.suggested_ocr_candidate("reference") == latest.candidates[0]
+    assert not row.has_deferred_ocr_suggestion("reference")
+    assert row.defer_ocr_suggestion("reference")
+    row.mark_ocr_failed("No new OCR evidence")
+    assert not row.defer_ocr_suggestion("reference")
+    assert not row.dismiss_ocr_suggestion("reference")
+    assert row.accept_ocr_suggestions(("reference",)) == ()
+    row.apply_ocr(latest)
+    assert row.accept_ocr_suggestions(("reference",)) == ("reference",)
+    assert row.value("reference") == "SECOND"
+    assert row.to_override().ocr_decisions == ()
+
+
+def test_current_ocr_decision_audit_records_only_backed_conflicting_evidence():
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    first = make_selection({"reference": ("FIRST", "header_exact", 0.74)})
+    latest = make_selection({"reference": ("SECOND", "header_exact", 0.92)})
+    row.apply_ocr(first)
+    assert row.defer_ocr_suggestion("reference")
+    row.apply_ocr(latest)
+    assert not row.has_deferred_ocr_suggestion("reference")
+    assert row.suggested_ocr_candidate("reference") == latest.candidates[0]
+    decision, = row.to_override().ocr_decisions
+    assert decision == OcrSuggestionDecision("deferred", first.candidates[0])
+    audit = apply_metadata_override(latest, row.to_override())
+    assert audit.metadata.reference == "MANUAL"
+    assert replace(first.candidates[0], selected=False) in audit.candidates
+    assert audit.metadata.metadata_json["metadata_review"]["ocr_decisions"]["reference"]["value"] == "FIRST"
+
+    with pytest.raises(ValueError, match="matching OCR evidence"):
+        OcrSuggestionDecision("deferred", replace(first.candidates[0], selected=False))
+    with pytest.raises(ValueError, match="distinct confirmed value"):
+        ReportMetadataOverride(row.occurrence_id, row.fingerprint, ocr_decisions=(decision,))
+
+    # A fast reread can detect the same value as the manual override. Explicitly
+    # reverting to that detection drops the anchor and the review decision.
+    row.apply_fast(make_selection({"reference": "MANUAL"}))
+    assert row.set_user_value("reference", "MANUAL") == (True, None)
+    assert not row.conflict_fields
+    assert row.to_override().ocr_decisions == ()
+
+
 def test_explicit_acceptance_preserves_the_exact_ocr_candidate_after_another_read():
     row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
     row.set_user_value("reference", "MANUAL")
@@ -408,6 +471,7 @@ def test_review_cannot_resolve_a_previous_suggestion_on_an_unready_row(state):
     row.mark_failed("Synthetic unready row", state=state)
     assert row.accept_ocr_suggestions(("reference",)) == ()
     assert not row.dismiss_ocr_suggestion("reference")
+    assert not row.defer_ocr_suggestion("reference")
     assert row.value("reference") == "MANUAL"
 
 
@@ -731,16 +795,22 @@ def test_enrichment_protects_confirmed_ocr_value_and_original_selected_candidate
     source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,))
     row = next(iter(rows.values()))
     row.set_user_value("revision", "MANUAL-REV")
+    row.set_user_value("reference", "KEEP-REF")
+    row.set_user_value("sample_number", "19")
     _read(reader, rows, mode=MODE_OCR)
     assert row.accept_ocr_suggestions(("revision",)) == ("revision",)
+    assert row.dismiss_ocr_suggestion("reference")
+    assert row.defer_ocr_suggestion("sample_number")
     assert row.value("revision") == "D.01"
     assert row.value("operator_name") is None
+    assert not database.exists()
     plan = replace(_plan(source, database, review, build_overrides(rows.values())),
                    run_background_metadata_enrichment=True)
     stages = {}
     complete = ParseReportsThread._complete_requested_enrichment
     latest_items = [
-        dict(item, text="D.02") if item["text"] == "D.01" else item for item in FAKE_OCR_ITEMS
+        dict(item, text={"D.01": "D.02", "OCR-REF-9": "OCR-REF-10", "12": "13"}.get(item["text"], item["text"]))
+        for item in FAKE_OCR_ITEMS
     ] + [
         _item("OPERATOR", 167.2, 74.5, 218, 80), _item("CMM OPERATOR A", 225, 74.5, 288, 80),
     ]
@@ -776,11 +846,24 @@ def test_enrichment_protects_confirmed_ocr_value_and_original_selected_candidate
     before, _, parsed_before = stages["stored"]
     refreshed, candidates, parsed_after = stages["refreshed"]
     assert before["revision"] == refreshed["revision"] == "D.01"
+    assert before["reference"] == refreshed["reference"] == "KEEP-REF"
+    assert before["sample_number"] == refreshed["sample_number"] == "19"
     assert refreshed["operator_name"] == "CMM_OPERATOR_A"
     old_provenance = json.loads(before["metadata_json"])
     new_provenance = json.loads(refreshed["metadata_json"])
     assert new_provenance["field_sources"]["revision"] == old_provenance["field_sources"]["revision"]
     assert new_provenance["metadata_review"] == old_provenance["metadata_review"]
+    decisions = new_provenance["metadata_review"]["ocr_decisions"]
+    assert {name: (item["decision"], item["value"], item["region_name"], item["page_number"])
+            for name, item in decisions.items()} == {
+        "reference": ("rejected", "OCR-REF-9", "page1_header_band_ocr", 1),
+        "sample_number": ("deferred", "12", "page1_header_band_ocr", 1),
+    }
+    assert decisions["sample_number"]["source_type"] == "projected_from_stats_count"
+    assert all("raw_value" not in item and "evidence_text" not in item for item in decisions.values())
+    for name, decision in decisions.items():
+        assert any(item["field_name"] == name and item["normalized_value"] == decision["value"]
+                   and not item["is_selected"] for item in candidates)
     if not legacy_review:
         assert new_provenance["metadata_review"]["accepted_ocr_fields"] == ["revision"]
     assert "revision" in new_provenance["metadata_enrichment"]["preserved_fields"]

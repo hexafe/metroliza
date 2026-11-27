@@ -321,7 +321,7 @@ def test_metadata_actions_live_in_one_keyboard_reachable_menu_on_the_action_row(
     assert button.menu() is planner.metadata_menu and button.focusPolicy() != Qt.FocusPolicy.NoFocus
     assert button.accessibleName() == "Metadata actions"
     assert [a.text() for a in planner.metadata_menu.actions()] == [
-        "Use OCR suggestion", "Keep current value",
+        "Use OCR suggestion", "Keep current value", "Review later",
         "Copy to checked", "Undo copy to checked", "Reset to detected", "Stop metadata read",
     ]
     assert all(a.toolTip() for a in planner.metadata_menu.actions())
@@ -405,16 +405,29 @@ def test_metadata_menu_resolves_only_the_current_ocr_conflict(app, make_host, re
     planner.proxy.setData(revision, "MANUAL-REV")
     planner.table.setCurrentIndex(reference)
     actions = {action.text(): action for action in planner.metadata_menu.actions()}
-    assert "Use OCR suggestion" in actions and "Keep current value" in actions
-    accept, keep = actions["Use OCR suggestion"], actions["Keep current value"]
-    assert not accept.isEnabled() and not keep.isEnabled()
+    accept, keep, defer = (actions[name] for name in ("Use OCR suggestion", "Keep current value", "Review later"))
+    assert not any(action.isEnabled() for action in (accept, keep, defer))
 
     planner.ocr_button.click()
     settle(app, host)
     row = model.metadata_row("a.pdf")
     assert row.value("reference") == "MANUAL"
     assert reference.data(Qt.ItemDataRole.AccessibleTextRole) == "a.pdf, Reference: MANUAL. OCR suggests PROPOSED."
-    assert accept.isEnabled() and keep.isEnabled()
+    assert all(action.isEnabled() for action in (accept, keep, defer))
+    defer.trigger()
+    assert row.value("reference") == "MANUAL"
+    assert "Deferred OCR suggestion" in reference.data(Qt.ItemDataRole.ToolTipRole)
+    assert "Deferred OCR suggestion: PROPOSED" in reference.data(Qt.ItemDataRole.AccessibleTextRole)
+    assert "deferred OCR suggestion PROPOSED" in "\n".join(meta.details_lines(row))
+    assert accept.isEnabled() and keep.isEnabled() and not defer.isEnabled()
+    assert model.copy_value_to_checked("reference", "COPIED", occurrence_ids=("a.pdf",)) == (1, None)
+    assert not row.has_deferred_ocr_suggestion("reference")
+    assert model.undo_copy() == 1
+    assert row.value("reference") == "MANUAL" and row.has_deferred_ocr_suggestion("reference")
+    planner.table.setCurrentIndex(revision)
+    assert defer.isEnabled()
+    planner.table.setCurrentIndex(reference)
+    assert not defer.isEnabled()
     accept.trigger()
     assert row.value("reference") == "PROPOSED" and row.value("revision") == "MANUAL-REV"
     assert "Accepted OCR suggestion" in reference.data(Qt.ItemDataRole.ToolTipRole)
@@ -424,6 +437,7 @@ def test_metadata_menu_resolves_only_the_current_ocr_conflict(app, make_host, re
     assert keep.isEnabled()
     keep.trigger()
     assert row.value("revision") == "MANUAL-REV"
+    assert "Rejected the OCR suggestion" in planner.metadata_status_text
     assert not keep.isEnabled() and not row.conflict_fields
 
     gate = threading.Event()
@@ -440,12 +454,20 @@ def test_metadata_menu_resolves_only_the_current_ocr_conflict(app, make_host, re
     assert row.cells["revision"].ocr_suggestion == "B"
     assert accept.isEnabled()
 
+    planner.set_metadata_field_visible("revision", False)
+    planner.table.setCurrentIndex(revision)
+    planner._resolve_current_ocr_suggestion(decision="deferred")
+    assert not row.has_deferred_ocr_suggestion("revision")
+    planner.table.setCurrentIndex(reference)
+
     gate.clear()
     planner.ocr_button.click()
     assert row.cells["reference"].ocr_suggestion == "NEW-OCR"
-    assert not accept.isEnabled() and not keep.isEnabled()
-    planner._resolve_current_ocr_suggestion(accept=True)  # guard the dispatch, as well as disabled menu state
+    assert not any(action.isEnabled() for action in (accept, keep, defer))
+    planner._resolve_current_ocr_suggestion(decision="accepted")
+    planner._resolve_current_ocr_suggestion(decision="deferred")
     assert row.value("reference") == "PROPOSED"
+    assert not row.has_deferred_ocr_suggestion("reference")
     planner.stop_action.trigger()
     gate.set()
     settle(app, host)
@@ -456,6 +478,7 @@ def test_metadata_menu_resolves_only_the_current_ocr_conflict(app, make_host, re
     reference_override = next(item for item in override.fields if item.field_name == "reference")
     assert reference_override.value == "PROPOSED" and reference_override.origin == "ocr"
     assert reference_override.ocr_candidate.confidence == 0.75
+    assert [(item.decision, item.candidate.normalized_value) for item in override.ocr_decisions] == [("rejected", "A")]
 
 
 @pytest.mark.parametrize("kind", HOSTS)
