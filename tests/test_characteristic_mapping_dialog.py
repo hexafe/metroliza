@@ -2047,3 +2047,53 @@ def test_mapping_buttons_round_trip_json_through_the_review_window(tmp_path, qap
     finally:
         source_dialog.close()
         target_dialog.close()
+
+
+def test_alias_json_target_must_match_explicit_replacement_consent(tmp_path, qapplication_session):
+    from metroliza.charts.export_html_dashboard import _output_lock_path
+    from metroliza.exporting.output_publication import OutputConsent
+    from metroliza.ui.characteristic_mapping_dialog import _save_alias_json
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(database, 'Diameter', 'Common', 'global')
+    target = tmp_path / 'matches.json'
+    target.write_bytes(b'previous configuration')
+    old_consent = OutputConsent.for_path(target)
+    replacement = tmp_path / 'new.json'
+    replacement.write_bytes(b'updated by another writer')
+    replacement.replace(target)
+
+    with pytest.raises(FileExistsError, match='changed after confirmation'):
+        _save_alias_json(database, str(target), (old_consent,))
+    with pytest.raises(FileExistsError, match='already exists'):
+        _save_alias_json(database, str(target))
+    assert target.read_bytes() == b'updated by another writer'
+    assert {path.name for path in tmp_path.iterdir()} <= {
+        'source.db', 'source.db-wal', 'source.db-shm', 'matches.json', _output_lock_path(target).name,
+    }
+
+    confirmed = OutputConsent.for_path(target)
+    assert _save_alias_json(database, str(target), (confirmed,)) == 1
+    assert b'"canonical_name": "Common"' in target.read_bytes()
+
+
+def test_json_filter_refuses_a_csv_output_name_before_starting_the_worker(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    target = tmp_path / 'surprising.csv'
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName',
+                        lambda *_args: (str(target), 'Metroliza name matches (*.json)'))
+    errors = []
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: errors.append(_args[2]))
+    dialog = CharacteristicMappingDialog(db_file=database)
+    try:
+        _wait_impact(qapplication_session, lambda: not dialog.is_loading_source_options())
+        dialog.export_button.click()
+        assert errors and 'Use a .json filename' in errors[0]
+        assert dialog._alias_csv_thread is None
+        assert not target.exists()
+    finally:
+        dialog.close()

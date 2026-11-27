@@ -119,6 +119,17 @@ def test_alias_import_refuses_a_replaced_database_even_when_rows_match(tmp_path)
     assert target.read_bytes() == before
 
 
+@pytest.mark.parametrize('suffix', ['-wal', '-shm', '-journal'])
+def test_alias_csv_export_protects_the_database_companion_files(tmp_path, suffix):
+    database = str(tmp_path / 'db.sqlite')
+    ensure_characteristic_alias_schema(database)
+    companion = Path(database + suffix)
+    companion.write_bytes(b'simulated SQLite companion file')
+    with pytest.raises(ValueError, match='source database and its companion files'):
+        export_characteristic_aliases_csv(database, str(companion))
+    assert companion.read_bytes() == b'simulated SQLite companion file'
+
+
 class TestCharacteristicAliasService(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

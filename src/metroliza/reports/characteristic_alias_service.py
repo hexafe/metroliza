@@ -711,12 +711,19 @@ def apply_characteristic_alias_import(db_path: str, plan: AliasImportPlan, *, re
 def protect_alias_export_destination(db_path, destination_path) -> None:
     source = Path(db_path)
     destination = Path(destination_path)
+    for database_name in {source, source.resolve()}:
+        candidates = (database_name, *(Path(f'{database_name}{suffix}') for suffix in ('-wal', '-shm', '-journal')))
+        if any(_same_alias_file(candidate, destination) for candidate in candidates):
+            raise ValueError("Choose an export file separate from the source database and its companion files.")
+
+
+def _same_alias_file(source, destination):
+    if source.resolve() == destination.resolve():
+        return True
     try:
-        overlaps = source.resolve() == destination.resolve() or destination.samefile(source)
+        return destination.samefile(source)
     except FileNotFoundError:
-        overlaps = False
-    if overlaps:
-        raise ValueError("Choose an export file separate from the source database.")
+        return False
 
 
 def _portable_alias_rows(mappings, *, collapse_equal=False):

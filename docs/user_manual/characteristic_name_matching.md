@@ -169,6 +169,8 @@ names and their global or reference scope. It carries no report measurements, da
 or credentials. Choose **Import matches** to preview and apply the file in the selected database.
 The JSON format supports up to 5,000 mappings and a 1 MiB file. Metroliza rejects files made
 with an unsupported format version and asks you to resolve conflicting saved rules before export.
+Each imported alias and scope can appear once. Replacing an existing JSON file requires
+confirmation for the exact destination.
 
 ### Export CSV
 
