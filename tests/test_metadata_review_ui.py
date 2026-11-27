@@ -321,6 +321,7 @@ def test_metadata_actions_live_in_one_keyboard_reachable_menu_on_the_action_row(
     assert button.menu() is planner.metadata_menu and button.focusPolicy() != Qt.FocusPolicy.NoFocus
     assert button.accessibleName() == "Metadata actions"
     assert [a.text() for a in planner.metadata_menu.actions()] == [
+        "Use OCR suggestion", "Keep current value",
         "Copy to checked", "Undo copy to checked", "Reset to detected", "Stop metadata read",
     ]
     assert all(a.toolTip() for a in planner.metadata_menu.actions())
@@ -387,6 +388,74 @@ def test_ocr_fills_unedited_fields_keeps_manual_values_and_exposes_the_conflict(
     # The table can be corrected again after OCR.
     assert planner.proxy.setData(cell(planner, "b.pdf", "part_name"), "Fixed")
     assert "stopped" not in planner.metadata_status_text
+
+
+@pytest.mark.parametrize("kind", HOSTS)
+def test_metadata_menu_resolves_only_the_current_ocr_conflict(app, make_host, readers, started, kind):
+    host, _ = open_review(make_host, readers, kind, names=("a.pdf", "b.pdf"), ocr={
+        "a.pdf": {"reference": ("PROPOSED", "header_exact", 0.75), "revision": "A"},
+        "b.pdf": {"reference": "ANOTHER"},
+    })
+    settle(app, host)
+    planner, model = host.report_planner, host.report_planner.model
+    planner.set_metadata_field_visible("revision", True)
+    reference = cell(planner, "a.pdf", "reference")
+    revision = cell(planner, "a.pdf", "revision")
+    planner.proxy.setData(reference, "MANUAL")
+    planner.proxy.setData(revision, "MANUAL-REV")
+    planner.table.setCurrentIndex(reference)
+    actions = {action.text(): action for action in planner.metadata_menu.actions()}
+    assert "Use OCR suggestion" in actions and "Keep current value" in actions
+    accept, keep = actions["Use OCR suggestion"], actions["Keep current value"]
+    assert not accept.isEnabled() and not keep.isEnabled()
+
+    planner.ocr_button.click()
+    settle(app, host)
+    row = model.metadata_row("a.pdf")
+    assert row.value("reference") == "MANUAL"
+    assert reference.data(Qt.ItemDataRole.AccessibleTextRole) == "a.pdf, Reference: MANUAL. OCR suggests PROPOSED."
+    assert accept.isEnabled() and keep.isEnabled()
+    accept.trigger()
+    assert row.value("reference") == "PROPOSED" and row.value("revision") == "MANUAL-REV"
+    assert "Accepted OCR suggestion" in reference.data(Qt.ItemDataRole.ToolTipRole)
+    assert not accept.isEnabled() and not keep.isEnabled()
+
+    planner.table.setCurrentIndex(revision)
+    assert keep.isEnabled()
+    keep.trigger()
+    assert row.value("revision") == "MANUAL-REV"
+    assert not keep.isEnabled() and not row.conflict_fields
+
+    gate = threading.Event()
+    readers.options.update(ocr={"a.pdf": {"reference": "NEW-OCR", "revision": "B"}}, gate=gate)
+    planner.table.setCurrentIndex(reference)
+    planner.ocr_button.click()
+    assert not accept.isEnabled() and not keep.isEnabled()
+    accept.trigger()
+    assert row.value("reference") == "PROPOSED"
+    gate.set()
+    settle(app, host)
+    assert row.value("reference") == "PROPOSED"
+    assert row.cells["reference"].ocr_suggestion == "NEW-OCR"
+    assert row.cells["revision"].ocr_suggestion == "B"
+    assert accept.isEnabled()
+
+    gate.clear()
+    planner.ocr_button.click()
+    assert row.cells["reference"].ocr_suggestion == "NEW-OCR"
+    assert not accept.isEnabled() and not keep.isEnabled()
+    planner._resolve_current_ocr_suggestion(accept=True)  # guard the dispatch, as well as disabled menu state
+    assert row.value("reference") == "PROPOSED"
+    planner.stop_action.trigger()
+    gate.set()
+    settle(app, host)
+
+    host.parse_button.click()
+    wait_until(app, lambda: bool(started))
+    override = next(item for item in started[0].metadata_overrides if item.occurrence_id == "a.pdf")
+    reference_override = next(item for item in override.fields if item.field_name == "reference")
+    assert reference_override.value == "PROPOSED" and reference_override.origin == "ocr"
+    assert reference_override.ocr_candidate.confidence == 0.75
 
 
 @pytest.mark.parametrize("kind", HOSTS)

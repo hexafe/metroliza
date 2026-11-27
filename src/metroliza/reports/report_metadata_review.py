@@ -4,7 +4,7 @@ The review table is a transient, in-memory view of metadata that has been read
 from reports *before* anything is written to the database.  This module owns:
 
 * the per-report row state (``ReviewRow``) with fast-mode prefill, manual edits
-  and OCR results merged under the rule "OCR never overwrites a manual value";
+  and explicit OCR choices protected from later automatic readings;
 * the immutable ``ReportMetadataOverride`` that carries the confirmed values to
   the import (keyed by the import plan's occurrence id and source fingerprint);
 * ``apply_metadata_override`` which turns an override into the selected
@@ -130,11 +130,12 @@ def is_missing_value(field_name: str, value) -> bool:
 
 @dataclass(frozen=True)
 class FieldOverride:
-    """One confirmed field value and where it came from (``user`` or ``ocr``)."""
+    """One confirmed field value, with exact evidence for an explicit OCR choice."""
 
     field_name: str
     value: str | None
     origin: str
+    ocr_candidate: MetadataCandidate | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         if self.field_name not in REVIEW_FIELDS:
@@ -143,6 +144,11 @@ class FieldOverride:
             raise ValueError(f"Unsupported override origin: {self.origin}")
         if self.value is None and self.origin != ORIGIN_USER:
             raise ValueError("Only a user override may clear a field.")
+        if self.ocr_candidate is not None and (
+            self.origin != ORIGIN_OCR
+            or not _backs_ocr_choice(self.ocr_candidate, self.field_name, self.value)
+        ):
+            raise ValueError("The reviewed OCR candidate does not match the field override.")
 
 
 @dataclass(frozen=True)
@@ -175,6 +181,17 @@ class ReportMetadataOverride:
         return not self.fields and not self.ocr_candidates
 
 
+def _backs_ocr_choice(candidate: MetadataCandidate, field_name: str, value: str | None) -> bool:
+    return (
+        isinstance(candidate, MetadataCandidate)
+        and value is not None
+        and candidate.selected
+        and candidate.field_name == field_name
+        and candidate.normalized_value == value
+        and candidate.source_type not in (_FILENAME_SOURCE_TYPE, USER_SOURCE_TYPE)
+    )
+
+
 def _candidate_key(candidate: MetadataCandidate) -> tuple:
     return (
         candidate.field_name,
@@ -187,6 +204,50 @@ def _candidate_key(candidate: MetadataCandidate) -> tuple:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _select_ocr_override_candidate(candidates: list[MetadataCandidate], item: FieldOverride) -> str:
+    reviewed = item.ocr_candidate
+    if reviewed is not None:
+        # Preserve the exact chosen evidence alongside fresh detections of the same value.
+        unselected = replace(reviewed, selected=False)
+        for index, candidate in enumerate(candidates):
+            if candidate == unselected:
+                candidates[index] = reviewed
+                break
+        else:
+            candidates.append(reviewed)
+        return reviewed.source_type
+
+    backing = [
+        (index, candidate)
+        for index, candidate in enumerate(candidates)
+        if candidate.field_name == item.field_name
+        and candidate.normalized_value == item.value
+        and candidate.source_type not in (_FILENAME_SOURCE_TYPE, USER_SOURCE_TYPE)
+    ]
+    if backing:
+        index, candidate = max(backing, key=lambda pair: pair[1].confidence)
+        candidates[index] = replace(candidate, selected=True)
+        return candidate.source_type
+
+    candidates.append(
+        MetadataCandidate(
+            field_name=item.field_name,
+            raw_value=item.value,
+            normalized_value=item.value,
+            source_type=OCR_REVIEW_SOURCE_TYPE,
+            source_detail=MANUAL_OVERRIDE_SOURCE,
+            page_number=None,
+            region_name=MANUAL_OVERRIDE_SOURCE,
+            label_text=None,
+            rule_id=f"ocr_review:{item.field_name}",
+            confidence=0.5,
+            evidence_text=None,
+            selected=True,
+        )
+    )
+    return OCR_REVIEW_SOURCE_TYPE
 
 
 def apply_metadata_override(
@@ -246,36 +307,7 @@ def apply_metadata_override(
             }
         else:
             ocr_fields.append(name)
-            backing = [
-                (index, candidate)
-                for index, candidate in enumerate(candidates)
-                if candidate.field_name == name
-                and candidate.normalized_value == item.value
-                and candidate.source_type != _FILENAME_SOURCE_TYPE
-                and candidate.source_type != USER_SOURCE_TYPE
-            ]
-            if backing:
-                index, candidate = max(backing, key=lambda pair: pair[1].confidence)
-                candidates[index] = replace(candidate, selected=True)
-                source_type = candidate.source_type
-            else:
-                source_type = OCR_REVIEW_SOURCE_TYPE
-                candidates.append(
-                    MetadataCandidate(
-                        field_name=name,
-                        raw_value=item.value,
-                        normalized_value=item.value,
-                        source_type=OCR_REVIEW_SOURCE_TYPE,
-                        source_detail=MANUAL_OVERRIDE_SOURCE,
-                        page_number=None,
-                        region_name=MANUAL_OVERRIDE_SOURCE,
-                        label_text=None,
-                        rule_id=f"ocr_review:{name}",
-                        confidence=0.5,
-                        evidence_text=None,
-                        selected=True,
-                    )
-                )
+            source_type = _select_ocr_override_candidate(candidates, item)
         field_sources[name] = source_type
         if name == "sample_number":
             values["sample_number_kind"] = (
@@ -292,7 +324,7 @@ def apply_metadata_override(
         "applied_at": stamp,
         "edited_fields": sorted(edited_fields),
         "ocr_fields": sorted(ocr_fields),
-        "ocr_run": bool(override.ocr_candidates),
+        "ocr_run": bool(override.ocr_candidates) or any(item.ocr_candidate is not None for item in override.fields),
         "detected_values": detected_values,
     }
     return MetadataSelectionResult(
@@ -308,7 +340,7 @@ def apply_metadata_override(
 
 @dataclass
 class ReviewCell:
-    """One field of one reviewed report: detected value plus optional user value."""
+    """Detected metadata, an optional manual edit, and the current OCR review state."""
 
     auto_value: str | None = None
     auto_origin: str = ORIGIN_DETECTED
@@ -317,6 +349,7 @@ class ReviewCell:
     user_set: bool = False
     user_value: str | None = None
     ocr_suggestion: str | None = None
+    accepted_ocr: MetadataCandidate | None = field(default=None, repr=False)
 
     @property
     def value(self) -> str | None:
@@ -451,7 +484,7 @@ class ReviewRow:
         self.note = note
 
     def apply_ocr(self, selection: MetadataSelectionResult, *, note: str = "") -> tuple[str, ...]:
-        """Merge an OCR run. User values are kept; differing OCR values become suggestions.
+        """Merge an OCR run, protecting manual values and previously accepted OCR.
 
         Returns the fields whose displayed value changed.
         """
@@ -460,13 +493,14 @@ class ReviewRow:
         self.ocr_state = OCR_DONE
         self.ocr_note = note
         self.ocr_candidates = tuple(selection.candidates)
+        native_header = (selection.metadata.metadata_json or {}).get("header_extraction_mode") in ("words", "none")
         for name, (value, source, confidence) in selection_cell_values(selection).items():
             cell = self.cells[name]
             cell.ocr_suggestion = None
             if value is None:
                 continue
-            if cell.user_set:
-                if value != cell.user_value:
+            if cell.user_set or cell.accepted_ocr is not None:
+                if not native_header and value != cell.value and self._ocr_candidate(name, value) is not None:
                     cell.ocr_suggestion = value
                 continue
             if source == _FILENAME_SOURCE_TYPE or source is None:
@@ -487,6 +521,20 @@ class ReviewRow:
         self.ocr_note = note
 
     # -- user edits --------------------------------------------------------
+
+    def _ocr_candidate(self, field_name: str, value: str | None) -> MetadataCandidate | None:
+        return next(
+            (candidate for candidate in self.ocr_candidates if _backs_ocr_choice(candidate, field_name, value)),
+            None,
+        )
+
+    def suggested_ocr_candidate(self, field_name: str) -> MetadataCandidate | None:
+        """Return the candidate that can be acted on in the current review."""
+
+        if self.state != ROW_READY or field_name not in self.cells:
+            return None
+        suggestion = self.cells[field_name].ocr_suggestion
+        return self._ocr_candidate(field_name, suggestion) if suggestion is not None else None
 
     def set_user_value(self, field_name: str, text) -> tuple[bool, str | None]:
         """Set a manual value. Returns ``(accepted, error)``."""
@@ -516,18 +564,29 @@ class ReviewRow:
         return count
 
     def accept_ocr_suggestions(self, fields=None) -> tuple[str, ...]:
-        """Explicitly replace manual values by the held-back OCR values."""
+        """Replace chosen cells with their backed OCR suggestions and protect them."""
 
         accepted = []
-        for name in fields or self.conflict_fields:
-            cell = self.cells[name]
-            if cell.ocr_suggestion is None:
+        reviewed_fields = self.conflict_fields if fields is None else fields
+        for name in reviewed_fields:
+            candidate = self.suggested_ocr_candidate(name)
+            if candidate is None:
                 continue
-            cell.auto_value, cell.auto_origin = cell.ocr_suggestion, ORIGIN_OCR
-            cell.auto_source, cell.auto_confidence = OCR_REVIEW_SOURCE_TYPE, None
+            cell = self.cells[name]
+            cell.accepted_ocr = candidate
+            cell.auto_value, cell.auto_origin = candidate.normalized_value, ORIGIN_OCR
+            cell.auto_source, cell.auto_confidence = candidate.source_type, candidate.confidence
             cell.user_set, cell.user_value, cell.ocr_suggestion = False, None, None
             accepted.append(name)
         return tuple(accepted)
+
+    def dismiss_ocr_suggestion(self, field_name: str) -> bool:
+        """Keep the current value and dismiss this suggestion until a new read."""
+
+        if self.suggested_ocr_candidate(field_name) is None:
+            return False
+        self.cells[field_name].ocr_suggestion = None
+        return True
 
     # -- import hand-off ---------------------------------------------------
 
@@ -542,7 +601,7 @@ class ReviewRow:
             if cell.user_set:
                 fields.append(FieldOverride(name, cell.user_value, ORIGIN_USER))
             elif cell.auto_origin == ORIGIN_OCR and cell.auto_value is not None:
-                fields.append(FieldOverride(name, cell.auto_value, ORIGIN_OCR))
+                fields.append(FieldOverride(name, cell.auto_value, ORIGIN_OCR, ocr_candidate=cell.accepted_ocr))
         override = ReportMetadataOverride(
             occurrence_id=self.occurrence_id,
             fingerprint=self.fingerprint,

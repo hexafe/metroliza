@@ -450,6 +450,20 @@ class ReportPlannerModel(QAbstractTableModel):
         self._row_changed(reading.occurrence_id)
         return changed
 
+    def resolve_ocr_suggestion(self, occurrence_id: str, field_name: str, *, accept: bool) -> bool:
+        """Apply one explicit decision to the selected cell in the current review."""
+
+        row = self._meta_rows.get(occurrence_id)
+        if not self.valid or row is None:
+            return False
+        resolved = (
+            bool(row.accept_ocr_suggestions((field_name,))) if accept
+            else row.dismiss_ocr_suggestion(field_name)
+        )
+        if resolved:
+            self._row_changed(occurrence_id)
+        return resolved
+
     def reset_row(self, occurrence_id: str) -> int:
         """Drop the manual edits of one report; returns how many were dropped."""
 

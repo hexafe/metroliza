@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from metroliza.reports.report_metadata_models import MetadataCandidate
 from metroliza.reports.report_metadata_review import (
     FIELD_LABELS,
     ORIGIN_OCR,
@@ -21,6 +22,7 @@ from metroliza.reports.report_metadata_review import (
     ROW_CHANGED,
     ROW_FAILED,
     ROW_PENDING,
+    ROW_READY,
     ROW_UNSUPPORTED,
     ReviewRow,
 )
@@ -100,7 +102,7 @@ def is_low_confidence(row: ReviewRow | None, field_name: str) -> bool:
 
 
 def has_conflict(row: ReviewRow | None, field_name: str) -> bool:
-    return row is not None and row.cells[field_name].ocr_suggestion is not None
+    return row is not None and row.state == ROW_READY and row.cells[field_name].ocr_suggestion is not None
 
 
 def cell_style(row: ReviewRow | None, field_name: str) -> CellStyle:
@@ -155,7 +157,10 @@ def accessible_text(row: ReviewRow | None, report_name: str, field_name: str) ->
         value = "not read yet"
     else:
         value = row.value(field_name) or "missing"
-    return f"{report_name}, {FIELD_LABELS[field_name]}: {value}"
+    text = f"{report_name}, {FIELD_LABELS[field_name]}: {value}"
+    if row is not None and has_conflict(row, field_name):
+        text += f". OCR suggests {row.cells[field_name].ocr_suggestion}."
+    return text
 
 
 def _value_tooltip_lines(row: ReviewRow, field_name: str) -> list[str]:
@@ -170,7 +175,9 @@ def _value_tooltip_lines(row: ReviewRow, field_name: str) -> list[str]:
     if cell.value:
         lines = [f"Source: {source_label(cell.source, cell.origin) or 'unknown'}{_percent(cell.confidence)}"]
         if cell.origin == ORIGIN_OCR:
-            lines.append(_ocr_candidate_source(row, field_name, cell.value))
+            lines.append(_ocr_candidate_source(row, field_name, cell.value, candidate=cell.accepted_ocr))
+            if cell.accepted_ocr is not None:
+                lines.append("Accepted OCR suggestion.")
         if is_low_confidence(row, field_name):
             lines.append("Low confidence: check this value.")
         return lines
@@ -179,9 +186,12 @@ def _value_tooltip_lines(row: ReviewRow, field_name: str) -> list[str]:
     return []
 
 
-def _ocr_candidate_source(row: ReviewRow, field_name: str, value: str) -> str:
-    candidate = next((item for item in row.ocr_candidates if item.selected
-                      and item.field_name == field_name and item.normalized_value == value), None)
+def _ocr_candidate_source(
+    row: ReviewRow, field_name: str, value: str | None, *, candidate: MetadataCandidate | None = None,
+) -> str:
+    if candidate is None:
+        candidate = next((item for item in row.ocr_candidates if item.selected
+                          and item.field_name == field_name and item.normalized_value == value), None)
     if candidate is None:
         return "OCR review source unavailable."
     source = _OCR_REGION_LABELS.get(candidate.region_name) or _SOURCE_LABELS.get(candidate.source_type)
@@ -198,11 +208,13 @@ def cell_tooltip(row: ReviewRow | None, report_name: str, field_name: str, *, st
         lines.append(row.note or _ROW_STATE_NOTES.get(row.state, ""))
     else:
         lines.extend(_value_tooltip_lines(row, field_name))
-        suggestion = row.cells[field_name].ocr_suggestion
-        if suggestion is not None:
+        candidate = row.suggested_ocr_candidate(field_name)
+        if candidate is not None:
+            suggestion = candidate.normalized_value
             lines.append(f"OCR suggests {suggestion}; your value is kept.")
-            lines.append(_ocr_candidate_source(row, field_name, suggestion))
+            lines.append(_ocr_candidate_source(row, field_name, suggestion, candidate=candidate))
             lines.append("Compare the suggested value with the report before accepting it.")
+            lines.append("Select the cell, then use Metadata to choose the suggestion or keep the current value.")
         if not _is_pending(row):
             lines.append("Double-click or press F2 to edit.")
     return "\n".join(line for line in lines if line)
@@ -275,7 +287,7 @@ def _field_detail_line(row: ReviewRow, name: str) -> str:
             parts.append("low confidence")
     if cell.user_set and cell.auto_value:
         parts.append(f"detected {cell.auto_value}")
-    if cell.ocr_suggestion is not None:
+    if has_conflict(row, name):
         parts.append(f"OCR suggests {cell.ocr_suggestion}; your value is kept")
     alternatives = _alternatives(row, name)
     if alternatives:
