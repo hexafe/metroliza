@@ -14,7 +14,7 @@ from metroliza.industrial.realtime.stream_contracts import (
     SignalDefinition,
 )
 from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp, utc_now_text
-from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
 
 
 def utc_timestamp() -> str:
@@ -486,6 +486,10 @@ class RealtimeSampleRepository:
             return samples
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
+    def open_readonly(self):
+        """Open the sample store for replay without initializing its schema."""
+        return sqlite_readonly_connection_scope(self.database)
 
     @staticmethod
     def with_sample_id(sample: IndustrialSample, sample_id: int) -> IndustrialSample:

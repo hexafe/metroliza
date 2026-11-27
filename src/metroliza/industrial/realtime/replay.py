@@ -26,7 +26,6 @@ from metroliza.industrial.realtime.sample_repository import RealtimeSampleReposi
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
 from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.industrial.realtime.timestamps import validate_source_timezone
-from metroliza.reports.db import sqlite_readonly_connection_scope
 
 
 _BASELINE_DETECTORS = frozenset({"iqr", "mad_zscore"})
@@ -269,15 +268,16 @@ def run_detectors_for_samples(
 def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     request = _validated_replay_request(request)
     _validate_replay_input_order(request)
+    sample_repository = RealtimeSampleRepository(request.database)
     needs_baselines = bool(_BASELINE_DETECTORS.intersection(request.detectors))
-    with _replay_read_cursor(request, needs_baselines=needs_baselines) as cursor:
-        return _replay_ordered_stream(request, cursor, needs_baselines=needs_baselines)
+    with _replay_read_cursor(sample_repository, needed=request.dry_run or needs_baselines) as cursor:
+        return _replay_ordered_stream(request, sample_repository, cursor, needs_baselines=needs_baselines)
 
 
 @contextmanager
-def _replay_read_cursor(request: ReplayRequest, *, needs_baselines: bool):
-    if (request.dry_run or needs_baselines) and Path(request.database).exists():
-        with sqlite_readonly_connection_scope(request.database) as connection, closing(connection.cursor()) as cursor:
+def _replay_read_cursor(repository: RealtimeSampleRepository, *, needed: bool):
+    if needed and Path(repository.database).exists():
+        with repository.open_readonly() as connection, closing(connection.cursor()) as cursor:
             yield cursor
     else:
         yield None
@@ -320,8 +320,13 @@ def _replay_baseline_lookup(cursor, signal: SignalDefinition | None, metric_colu
     )
 
 
-def _replay_ordered_stream(request: ReplayRequest, cursor, *, needs_baselines: bool) -> ReplaySummary:
-    sample_repository = RealtimeSampleRepository(request.database)
+def _replay_ordered_stream(
+    request: ReplayRequest,
+    sample_repository: RealtimeSampleRepository,
+    cursor,
+    *,
+    needs_baselines: bool,
+) -> ReplaySummary:
     existing_signal = _stored_replay_signal(request, sample_repository, cursor)
     baseline_lookup = (
         _replay_baseline_lookup(cursor, existing_signal, request.metric_column) if needs_baselines else None
