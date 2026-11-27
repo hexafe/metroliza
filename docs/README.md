@@ -54,6 +54,7 @@ Start here for current product scope, architecture, planning, and development pr
 - `user_manual/group_analysis/user_manual.pdf` — optional printable companion version.
 - `documentation_policy.md` — policy for permanent vs temporary docs, archival, and ownership.
 - `realtime_industrial_validation.md` — deterministic fixture matrix for realtime industrial detector validation.
+- [Realtime monitoring MVP deployment decision](engineering/realtime_deployment_adr.md) — local worker boundary, replay policy and synthetic alert-cost comparison.
 - `perf_realtime_detectors.md` — local throughput benchmark guide for deterministic realtime industrial detectors.
 - `perf_csv_pipeline_1028.md` — bounded CSV analytics/export measurement protocol, optimization evidence, and remaining proof limits for Issue #1028.
 - [`engineering/performance_envelope.md`](engineering/performance_envelope.md) — reference workloads, resource limits, measurement format and baseline evidence for #952.

@@ -173,6 +173,9 @@ bounded internal modules without changing DOM/storage contracts or requiring a f
 5. Dashboard refresh reads a consistent SQLite snapshot and refuses stale health/status overwrite.
 6. Shutdown waits for database workers and dependent consumers before session cleanup.
 
+The [MVP deployment decision](../engineering/realtime_deployment_adr.md) defines the local worker
+boundary and the evidence required before a live rollout.
+
 ## 5. Dependency direction
 
 Preferred direction:

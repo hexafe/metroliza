@@ -32,12 +32,26 @@ The default validation constants are nominal `100`, warning limits `95` and `105
 | `station_segment_baselines.csv` | Station-specific baselines avoid cross-station false positives. | Only the injected high value for station S2 is flagged with the S2 baseline. |
 | `low_sample_count.csv` | Statistical detectors respect minimum history requirements. | No IQR, MAD, or rolling z-score events. |
 
+## Stored baselines in replay
+
+IQR and MAD use the latest stored baseline for the exact signal and segment, ordered by
+creation time and then baseline ID. Select the metric column used by the stored signal.
+Replay builds the segment from the stored signal's configured segment fields. With an empty
+configuration it uses the unsegmented baseline. If a configured column is absent from the CSV,
+replay stops before writing. If a sample lacks a configured value, IQR and MAD skip scoring it.
+When retrying older samples, replay uses the configured dimensions already stored on each sample
+and preserves the stored sample. Both detectors require a matching baseline for that key.
+
+Replay admits baseline IDs present at the start and ignores later appends until the next run.
+This uses the stored baselines as fixed reference data for the run. It does not reconstruct
+which baseline would have been available at each sample's event time. Stored IQR and MAD events
+include the baseline ID, version and available window bounds. Dry-run reads an existing database
+without initializing its schema and leaves an absent destination absent. SQLite can create WAL
+and shared-memory sidecars when reading an existing WAL-mode database.
+
 ## Known MVP Gaps
 
 - There is no dedicated gradual-drift detector yet. Drift is visible only through warning/spec
   limits or a static statistical baseline.
 - There is no dedicated step-change detector. Rolling z-score catches the initial jump, then adapts.
 - There is no stuck-sensor detector. Repeated identical values create zero variance and are skipped.
-- Replay does not load persisted baselines yet, so IQR and MAD validation supplies baselines directly
-  in tests.
-- Segment-specific baselines are test-driven but not automatically selected by replay orchestration.
