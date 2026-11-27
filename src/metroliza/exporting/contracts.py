@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from metroliza.charts.dashboard_visual_options import normalize_dashboard_visual_settings
 from metroliza.exporting.output_publication import OutputConsent, output_paths, validate_sources_outside_outputs
@@ -12,6 +12,9 @@ from metroliza.tabular.contracts import (
     GroupingAssignments,
     validate_grouping_df,
 )
+
+if TYPE_CHECKING:
+    from metroliza.reports.report_typed_filter import ReportTypedFilterScope
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,7 @@ class ExportRequest:
     approved_report_ids: tuple[int, ...] = field(default=(), repr=False)
     filter_description: str = field(default="", repr=False)
     application_version: str = ""
+    typed_report_scope: ReportTypedFilterScope | None = field(default=None, repr=False)
 
 
 _ALLOWED_EXPORT_TYPES = {"line", "scatter"}
@@ -112,6 +116,8 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
     if not isinstance(request.application_version, str):
         raise ValueError("Application version must be text.")
     _validate_approved_source_scope(request)
+    if request.typed_report_scope is not None:
+        _validate_typed_report_scope(request, validated_paths, validated_options)
 
     _validate_output_namespace(validated_paths, validated_options)
 
@@ -125,9 +131,26 @@ def validate_export_request(request: ExportRequest) -> ExportRequest:
         existing_database_identity=request.existing_database_identity,
         approved_source_digests=request.approved_source_digests,
         approved_report_ids=request.approved_report_ids,
-        filter_description=request.filter_description.strip()[:2000],
+        filter_description=(request.typed_report_scope.describe()[:2000] if request.typed_report_scope is not None
+                            else request.filter_description.strip()[:2000]),
         application_version=request.application_version.strip()[:64],
+        typed_report_scope=request.typed_report_scope,
     )
+
+
+def _validate_typed_report_scope(request, paths, options):
+    from metroliza.reports.report_typed_filter import REPORT_TYPED_FILTER_MODE_HINT, ReportTypedFilterScope
+
+    scope = request.typed_report_scope
+    if type(scope) is not ReportTypedFilterScope:
+        raise ValueError("Invalid typed report filter scope.")
+    if (request.filter_query is not None or request.grouping_df is not None
+            or request.existing_database_identity is not None or options.preset != "fast_diagnostics"
+            or options.export_target != "excel_xlsx" or options.backend_target != "excel"
+            or options.generate_html_dashboard or options.include_industrial_context
+            or options.group_analysis_level != "off"):
+        raise ValueError(REPORT_TYPED_FILTER_MODE_HINT)
+    scope.require_current_database(paths.db_file)
 
 
 def _validate_output_namespace(paths, options):

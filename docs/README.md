@@ -57,6 +57,7 @@ Start here for current product scope, architecture, planning, and development pr
 - [Realtime monitoring MVP deployment decision](engineering/realtime_deployment_adr.md) — local worker boundary, replay policy and synthetic alert-cost comparison.
 - `perf_realtime_detectors.md` — local throughput benchmark guide for deterministic realtime industrial detectors.
 - `perf_csv_pipeline_1028.md` — bounded CSV analytics/export measurement protocol, optimization evidence, and remaining proof limits for Issue #1028.
+- [`engineering/performance_envelope.md`](engineering/performance_envelope.md) — reference workloads, resource limits, measurement format and baseline evidence for #952.
 - [`engineering/performance-boost-step2.md`](engineering/performance-boost-step2.md) — Performance Boost STEP2 audit (Polish, PO report): measured losses, loading-indicator gaps, first-run splash audit and PoC, batching/concurrency map, ranking and PR plan.
 - [`engineering/performance-boost-step2-flows.md`](engineering/performance-boost-step2-flows.md) — STEP2 module/window/flow matrix with coverage status and evidence.
 - `google_conversion_smoke_runbook.md` — local Google Sheets conversion smoke guidance.

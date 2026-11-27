@@ -1948,13 +1948,10 @@ def benchmark_csv_summary_large_data_probe(
     release checks can use --large-csv-rows 1000000 --large-csv-columns 20.
     """
 
-    from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex
     from metroliza.tabular.tabular_analytics_service import (
-        build_tabular_grouping_dataframe,
+        cleanup_tabular_load_result,
         load_tabular_analytics_files,
-        materialize_tabular_dataframe,
     )
-    from metroliza.reports.db import sqlite_connection_scope
 
     csv_path = temp_dir / 'summary_large_probe.csv'
     fixture_metrics = _create_csv_fixture(csv_path, row_count=row_count, data_columns=data_columns)
@@ -1962,7 +1959,34 @@ def benchmark_csv_summary_large_data_probe(
 
     load_start = time.perf_counter()
     loaded = load_tabular_analytics_files((str(csv_path),), reference_column='PART', force_sqlite=True)
-    load_s = time.perf_counter() - load_start
+    try:
+        load_s = time.perf_counter() - load_start
+        return _measure_csv_summary_large_data_probe(
+            loaded,
+            fixture_metrics=fixture_metrics,
+            load_s=load_s,
+            search=search,
+            materialize_columns=materialize_columns,
+        )
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def _measure_csv_summary_large_data_probe(
+    loaded: Any,
+    *,
+    fixture_metrics: dict[str, int],
+    load_s: float,
+    search: str,
+    materialize_columns: int,
+) -> ScenarioResult:
+    from metroliza.reports.db import sqlite_connection_scope
+    from metroliza.shared.grouping_filter_core import DataFrameGroupingIndex
+    from metroliza.tabular.tabular_analytics_service import (
+        build_tabular_grouping_dataframe,
+        materialize_tabular_dataframe,
+    )
+
     load_timings = dict(getattr(loaded, 'load_timings_s', {}) or {})
 
     def load_timing(name: str) -> float:

@@ -167,7 +167,8 @@ def _record_export_request_options(request):
                 "allow_chart_skipping": bool(options.allow_non_essential_chart_skipping),
                 "chart_line": options.export_type == "line",
                 "chart_scatter": options.export_type == "scatter",
-                "filters_applied": bool(request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
+                "filters_applied": bool(getattr(request, "typed_report_scope", None)
+                                        or request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
                 "grouping_applied": request.grouping_df is not None,
                 "group_analysis_light": options.group_analysis_level == "light",
                 "group_analysis_standard": options.group_analysis_level == "standard",
@@ -454,6 +455,7 @@ class ExportDialog(QDialog):
         self._chart_profile_loaded = False
         self.filter_query = DEFAULT_FILTER_QUERY
         self.filter_state = None
+        self._typed_report_scope = None
         self.df_for_grouping = None
 
         self.filter_window = None
@@ -1426,6 +1428,8 @@ class ExportDialog(QDialog):
         self._refresh_draft_request_summary()
 
     def _scope_for_query(self, query):
+        if (scope := getattr(self, "_typed_report_scope", None)) is not None:
+            return scope.describe()
         if not query or query == DEFAULT_FILTER_QUERY:
             return "all rows"
         if query is getattr(self, "_described_filter_query", None):
@@ -1495,7 +1499,8 @@ class ExportDialog(QDialog):
 
     def _refresh_background_controls(self):
         self.content_widget.setEnabled(not self._settings_locked())
-        self.save_recipe_button.setEnabled(not self._settings_locked() and self._scope_mode() == _WHOLE_DATABASE)
+        self.save_recipe_button.setEnabled(not self._settings_locked() and self._scope_mode() == _WHOLE_DATABASE
+                                          and getattr(self, "_typed_report_scope", None) is None)
         self.stop_export_button.setVisible(self.export_thread is not None)
         self.stop_export_button.setEnabled(not self._cancel_requested)
         self._update_export_button_enabled_state()
@@ -1546,6 +1551,7 @@ class ExportDialog(QDialog):
 
     def _export_draft_signature(self):
         return (str(self.db_file), self.filter_query, id(self.df_for_grouping),
+                getattr(self, "_typed_report_scope", None),
                 self._scope_mode(), self._import_batch,
                 self.preset_combobox.currentText(), self.export_type_combobox.currentText(),
                 self.sort_measurements_combobox.currentText(), self.violin_plot_min_samplesize.text(),
@@ -1654,6 +1660,7 @@ class ExportDialog(QDialog):
 
             self.filter_query = DEFAULT_FILTER_QUERY
             self.filter_state = None
+            self._typed_report_scope = None
             self.df_for_grouping = None
             self._refresh_filter_state_summary()
             self.set_grouping_applied(False)
@@ -1692,6 +1699,9 @@ class ExportDialog(QDialog):
         try:
             if self._settings_locked() or self._scope_mode() != _WHOLE_DATABASE:
                 return
+            if getattr(self, "_typed_report_scope", None) is not None:
+                QMessageBox.information(self, "Grouping", "Clear the typed filter before editing grouping.")
+                return
             if not str(self.db_file or "").strip():
                 self._show_database_required_warning("edit grouping")
                 return
@@ -1713,8 +1723,12 @@ class ExportDialog(QDialog):
 
     def set_filter_query(self, query):
         try:
+            had_typed_scope = getattr(self, "_typed_report_scope", None) is not None
+            self._typed_report_scope = None
             self.filter_query = query
             self._refresh_draft_request_summary()
+            if had_typed_scope:
+                self._refresh_background_controls()
         except Exception as e:
             self.log_and_exit(e)
 
@@ -1727,6 +1741,33 @@ class ExportDialog(QDialog):
             self._refresh_draft_request_summary()
         except Exception as e:
             self.log_and_exit(e)
+
+    def typed_report_filter_blocker(self):
+        from metroliza.reports.report_typed_filter import REPORT_TYPED_FILTER_MODE_HINT
+
+        compatible = (
+            self._scope_mode() == _WHOLE_DATABASE
+            and self._base_preset_id(self._active_preset_id()) == "fast_diagnostics"
+            and not self._preset_pending()
+            and self._selected_export_target() == "excel_xlsx"
+            and not self.generate_html_dashboard_checkbox.isChecked()
+            and not self.include_industrial_context_checkbox.isChecked()
+            and self._selected_group_analysis_level() == "off"
+            and not self._grouping_is_applied()
+            and self.df_for_grouping is None
+        )
+        return "" if compatible else REPORT_TYPED_FILTER_MODE_HINT
+
+    def set_typed_report_filter(self, scope):
+        blocker = self.typed_report_filter_blocker()
+        if blocker:
+            raise ValueError(blocker)
+        scope.require_current_database(self.db_file)
+        self._typed_report_scope = scope
+        self.filter_query = DEFAULT_FILTER_QUERY
+        self.set_filter_state(scope.state)
+        self.set_filter_applied(scope.state)
+        self._refresh_background_controls()
 
     def set_df_for_grouping(self, df):
         try:
@@ -1753,6 +1794,8 @@ class ExportDialog(QDialog):
 
     def _refresh_filter_state_summary(self):
         summary_label, details = summarize_filter_state(self.filter_state)
+        if getattr(self, "_typed_report_scope", None) is not None:
+            summary_label = "Typed · " + summary_label
         if hasattr(self.select_filter_label, "setText"):
             self.select_filter_label.setText(summary_label)
         if hasattr(self.select_filter_label, "setToolTip"):
@@ -1760,11 +1803,15 @@ class ExportDialog(QDialog):
 
     def clear_filters(self):
         try:
+            had_typed_scope = getattr(self, "_typed_report_scope", None) is not None
             self.filter_query = DEFAULT_FILTER_QUERY
             self.filter_state = None
+            self._typed_report_scope = None
             self._refresh_filter_state_summary()
             self._discard_child_dialog('filter_window')
             self._refresh_draft_request_summary()
+            if had_typed_scope:
+                self._refresh_background_controls()
             _record_export_action(BugReportAction.OPTION_EXPORT_FILTERS_APPLIED, enabled=False)
         except Exception as e:
             self.log_and_exit(e)
@@ -1838,6 +1885,11 @@ class ExportDialog(QDialog):
             mode = _STALE_IMPORT
         if mode == _STALE_IMPORT:
             raise ValueError("The last import selection expired. Choose the report scope again.")
+        typed = getattr(self, "_typed_report_scope", None)
+        if typed is not None:
+            blocker = self.typed_report_filter_blocker()
+            if blocker:
+                raise ValueError(blocker)
         violin_input = self.violin_plot_min_samplesize.text()
         summary_scale_input = self.summary_plot_scale.text()
         selected_preset = self._base_preset_id(self._active_preset_id())
@@ -1861,13 +1913,17 @@ class ExportDialog(QDialog):
                 if hasattr(self, "include_industrial_context_checkbox")
                 else False
             ),
-            filter_query=self.filter_query if batch is None else None,
+            filter_query=self.filter_query if batch is None and typed is None else None,
             grouping_df=self.df_for_grouping if batch is None else None,
             group_analysis_level=self._selected_group_analysis_level(),
             group_analysis_scope=self._selected_group_analysis_scope(),
             dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
         )
         request = replace(request, application_version=VERSION_LABEL)
+        if typed is not None:
+            from metroliza.exporting.contracts import validate_export_request
+
+            request = validate_export_request(replace(request, typed_report_scope=typed))
         if batch is None:
             description = self._scope_for_query(request.filter_query)
             if description not in {"all rows", "custom applied filter (review Filters)"}:
@@ -1881,6 +1937,8 @@ class ExportDialog(QDialog):
         )
 
     def _build_recipe_export_request(self):
+        if getattr(self, "_typed_report_scope", None) is not None:
+            raise ValueError("Clear the typed filter before saving a recipe.")
         if self._scope_mode() != _WHOLE_DATABASE:
             raise ValueError("Choose Whole database before saving a recipe.")
         return self._build_export_request()
@@ -1983,7 +2041,8 @@ class ExportDialog(QDialog):
         self.export_thread.canceled.connect(self.on_export_canceled)
         _record_export_option_states(
             request.options,
-            filters_applied=bool(request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
+            filters_applied=bool(request.typed_report_scope
+                                 or request.filter_query and request.filter_query != DEFAULT_FILTER_QUERY),
             grouping_applied=request.grouping_df is not None,
         )
         self.export_thread._bugreport_option_token = _record_export_request_options(request)
