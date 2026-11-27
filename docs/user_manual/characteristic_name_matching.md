@@ -161,13 +161,18 @@ If the message says no report/export names were found in the database, check tha
 
 Select one row in **Report/export names in this database** first. If no rows are visible, clear the search or choose the correct database.
 
-## Import/export CSV
+## Move name matches between databases
 
-CSV import/export is for moving the mapping rules, not the report measurements themselves.
+Use **Export matches** and select **Metroliza name matches** to save a versioned JSON file
+for reuse in another workspace or database. The file contains the saved original and shared
+names and their global or reference scope. It carries no report measurements, database paths,
+or credentials. Choose **Import matches** to preview and apply the file in the selected database.
+The JSON format supports up to 5,000 mappings and a 1 MiB file. Metroliza rejects files made
+with an unsupported format version and asks you to resolve conflicting saved rules before export.
 
 ### Export CSV
 
-Use **Export CSV** to save the current saved matches to a CSV file.
+Use **Export matches** and select **CSV files** for a spreadsheet or an external mapping system.
 
 This is useful for:
 
@@ -183,13 +188,13 @@ alias_name,canonical_name,scope_type,scope_value
 
 ### Import CSV
 
-Use **Import CSV** to load name matches from a CSV file.
+Use **Import matches** to load either a saved Metroliza JSON file or an existing CSV.
 
 Before saving, review the Added / Replaced / Unchanged counts and the old → new names
 for replacements. **Import only new** is the default; **Import and replace N** explicitly
 allows replacements. Cancel saves nothing. If affected rules change after preview, the
-import aborts without saving; preview the CSV again.
-Export the current rules to CSV first if you may need to restore a rule that the import
+import aborts without saving. Preview the file again.
+Export the current rules first if you may need to restore a rule that the import
 replaces.
 
 This is useful when you already maintain a mapping list externally or want to load many matches at once.

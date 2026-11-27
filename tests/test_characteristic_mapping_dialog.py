@@ -1,5 +1,6 @@
 import os
 import importlib.util
+from pathlib import Path
 import tempfile
 import threading
 import time
@@ -1989,3 +1990,60 @@ def test_mapping_dialog_resolves_exact_reviewed_scope_without_deleting_rows(tmp_
             ]
     finally:
         dialog.close()
+
+
+def test_mapping_buttons_round_trip_json_through_the_review_window(tmp_path, qapplication_session, monkeypatch):
+    from metroliza.reports.characteristic_alias_service import fetch_all_characteristic_aliases
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    original = str(tmp_path / 'source.db')
+    target = str(tmp_path / 'target.db')
+    portable = tmp_path / 'portable.json'
+    for database in (original, target):
+        ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(original, 'Diameter', 'New label', 'global')
+    upsert_characteristic_alias(original, 'Width', 'Width mm', 'reference', 'R1')
+    upsert_characteristic_alias(target, 'Diameter', 'Old label', 'global')
+    monkeypatch.setattr(QMessageBox, 'information', lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: pytest.fail(str(_args[2])))
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName',
+                        lambda *_args: (str(portable.with_suffix('')), 'Metroliza name matches (*.json)'))
+    monkeypatch.setattr(native.QFileDialog, 'getOpenFileName',
+                        lambda *_args: (str(portable), 'Metroliza name matches (*.json)'))
+    source_dialog = CharacteristicMappingDialog(db_file=original)
+    target_dialog = CharacteristicMappingDialog(db_file=target)
+    try:
+        _wait_impact(qapplication_session, lambda: not source_dialog.is_loading_source_options())
+        source_before = Path(original).read_bytes()
+        source_dialog.export_button.click()
+        assert source_dialog._alias_csv_thread is not None
+        _wait_impact(qapplication_session, lambda: source_dialog._alias_csv_thread is None)
+        assert portable.is_file()
+        assert Path(original).read_bytes() == source_before
+
+        _wait_impact(qapplication_session, lambda: not target_dialog.is_loading_source_options())
+        choices = iter(('Cancel', 'Import only new', 'Import and replace 1'))
+
+        def choose(box):
+            assert 'Old label → New label' in box.text()
+            assert box.defaultButton().text() == 'Import only new'
+            label = next(choices)
+            button = next(button for button in box.buttons() if button.text() == label)
+            button.click()
+            return 0
+
+        monkeypatch.setattr(native.QMessageBox, 'exec', choose)
+        before = Path(target).read_bytes()
+        target_dialog.import_button.click()
+        assert target_dialog._alias_csv_thread is not None
+        _wait_impact(qapplication_session, lambda: target_dialog._alias_csv_thread is None)
+        assert Path(target).read_bytes() == before
+        for expected in ('Old label', 'New label'):
+            target_dialog.import_button.click()
+            _wait_impact(qapplication_session, lambda: target_dialog._alias_csv_thread is None)
+            assert [item['canonical_name'] for item in fetch_all_characteristic_aliases(target)] == [
+                expected, 'Width mm',
+            ]
+    finally:
+        source_dialog.close()
+        target_dialog.close()

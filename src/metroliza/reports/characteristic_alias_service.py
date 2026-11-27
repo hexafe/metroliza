@@ -36,6 +36,10 @@ CHARACTERISTIC_ALIAS_SCHEMA_STATEMENTS = (
 )
 
 CSV_ALIAS_HEADERS = ('alias_name', 'canonical_name', 'scope_type', 'scope_value')
+_ALIAS_FILE_FORMAT = 'metroliza.characteristic_aliases'
+_ALIAS_FILE_VERSION = 1
+_MAX_ALIAS_FILE_BYTES = 1024 * 1024
+_MAX_ALIAS_FILE_ROWS = 5_000
 
 
 class CharacteristicAliasImportValidationError(ValueError):
@@ -286,6 +290,7 @@ def fetch_all_characteristic_aliases(
     *,
     connection: sqlite3.Connection | None = None,
     include_identity: bool = False,
+    limit: int = -1,
 ) -> list[dict[str, str | int | None]]:
     """Fetch alias mappings in display order, optionally including storage IDs for review."""
     query = '''
@@ -295,11 +300,12 @@ def fetch_all_characteristic_aliases(
                  scope_type ASC,
                  scope_value COLLATE NOCASE ASC,
                  id ASC
+        LIMIT ?
     '''
     rows = execute_with_retry(
         db_path,
         query,
-        params=(),
+        params=(limit,),
         connection=connection,
     )
     fields = (*CSV_ALIAS_HEADERS, 'id') if include_identity else CSV_ALIAS_HEADERS
@@ -523,6 +529,7 @@ def export_characteristic_aliases_csv(
     connection: sqlite3.Connection | None = None,
 ) -> int:
     """Export all alias mappings to a CSV file."""
+    protect_alias_export_destination(db_path, destination_path)
     rows = fetch_all_characteristic_aliases(db_path, connection=connection)
     with open(destination_path, 'w', newline='', encoding='utf-8') as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=list(CSV_ALIAS_HEADERS))
@@ -634,6 +641,8 @@ class AliasImportPlan:
     added: int
     replaced: int
     unchanged: int
+    database_path: Path | None = None
+    database_identity: tuple[int, int] | None = None
 
     def replacement_lines(self, limit=20):
         limit = max(0, int(limit))
@@ -654,13 +663,20 @@ def _alias_key_snapshot(cursor, rows):
 
 
 def preview_characteristic_aliases_csv(db_path: str, source_path: str) -> AliasImportPlan:
-    rows = tuple(tuple(row[field] for field in CSV_ALIAS_HEADERS) for row in _read_alias_csv(source_path))
+    return _preview_alias_rows(db_path, _read_alias_csv(source_path))
+
+
+def _preview_alias_rows(db_path, mappings) -> AliasImportPlan:
+    rows = tuple(tuple(row[field] for field in CSV_ALIAS_HEADERS) for row in mappings)
     snapshot = tuple(() for _ in rows)
-    if Path(db_path).exists():
-        with sqlite_readonly_connection_scope(db_path) as connection:
+    path = Path(db_path).expanduser().resolve()
+    identity = sqlite_file_identity(path)
+    if identity is not None:
+        with sqlite_readonly_connection_scope(path) as connection:
             cursor = connection.cursor()
             try:
                 cursor.execute("BEGIN")
+                _check_alias_database_owner(db_path, path, identity, cursor)
                 snapshot = _alias_key_snapshot(cursor, rows)
             finally:
                 cursor.close()
@@ -668,21 +684,106 @@ def preview_characteristic_aliases_csv(db_path: str, source_path: str) -> AliasI
         raise CharacteristicAliasConflictError()
     added = sum(not old for old in snapshot)
     replaced = sum(bool(old) and old[0][1] != row[1] for row, old in zip(rows, snapshot))
-    return AliasImportPlan(rows, snapshot, added, replaced, len(rows) - added - replaced)
+    return AliasImportPlan(rows, snapshot, added, replaced, len(rows) - added - replaced, path, identity)
 
 
 def apply_characteristic_alias_import(db_path: str, plan: AliasImportPlan, *, replace: bool = False) -> int:
     """Recheck all affected keys under the write lock before the first mutation."""
+    if plan.database_path is not None:
+        if (Path(db_path).expanduser().resolve() != plan.database_path
+                or sqlite_file_identity(plan.database_path) != plan.database_identity):
+            raise ValueError("The selected database changed after preview. Preview the mapping file again.")
+
     def operation(cursor):
         cursor.execute("BEGIN IMMEDIATE")
+        if plan.database_identity is not None:
+            _check_alias_database_owner(db_path, plan.database_path, plan.database_identity, cursor)
         if _alias_key_snapshot(cursor, plan.rows) != plan.snapshot:
-            raise ValueError("Mappings changed after preview. Nothing was imported; preview the CSV again.")
+            raise ValueError("Mappings changed after preview. Nothing was imported; preview the mapping file again.")
         rows = [dict(zip(CSV_ALIAS_HEADERS, row)) for row, old in zip(plan.rows, plan.snapshot)
                 if not old or (replace and old[0][1] != row[1])]
         return upsert_characteristic_aliases_bulk(
             db_path, rows, connection=cursor.connection, join_transaction=True,
         )
     return run_transaction_with_retry(db_path, operation)
+
+
+def protect_alias_export_destination(db_path, destination_path) -> None:
+    source = Path(db_path)
+    destination = Path(destination_path)
+    try:
+        overlaps = source.resolve() == destination.resolve() or destination.samefile(source)
+    except FileNotFoundError:
+        overlaps = False
+    if overlaps:
+        raise ValueError("Choose an export file separate from the source database.")
+
+
+def _portable_alias_rows(mappings, *, collapse_equal=False):
+    if not isinstance(mappings, list) or len(mappings) > _MAX_ALIAS_FILE_ROWS:
+        raise ValueError(f"The mapping file supports up to {_MAX_ALIAS_FILE_ROWS:,} entries.")
+    rows = {}
+    for number, mapping in enumerate(mappings, start=1):
+        if not isinstance(mapping, dict) or mapping.keys() != set(CSV_ALIAS_HEADERS):
+            raise ValueError(f"Mapping {number} must contain only names and scope fields.")
+        if any(not isinstance(mapping[key], str) for key in CSV_ALIAS_HEADERS[:-1]):
+            raise ValueError(f"Mapping {number} names and scope type must be text.")
+        if mapping['scope_value'] is not None and not isinstance(mapping['scope_value'], str):
+            raise ValueError(f"Mapping {number} scope value must be text or null.")
+        normalized = _normalize_alias_mapping_payload(mapping, row_number=number)
+        key = effective_alias_scope(
+            normalized['alias_name'], normalized['scope_type'], normalized['scope_value'],
+        )
+        if key in rows and (not collapse_equal or normalized != rows[key]):
+            raise ValueError(f"Mapping {number} repeats an effective alias scope. Resolve the duplicate first.")
+        rows[key] = normalized
+    return list(rows.values())
+
+
+def _unique_alias_fields(pairs):
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("The mapping file contains a duplicate JSON field.")
+    return fields
+
+
+def preview_characteristic_aliases_json(db_path: str, source_path: str) -> AliasImportPlan:
+    """Validate a portable mapping file before calling the shared read-only preview."""
+    with open(source_path, 'rb') as source:
+        raw = source.read(_MAX_ALIAS_FILE_BYTES + 1)
+    if len(raw) > _MAX_ALIAS_FILE_BYTES:
+        raise ValueError("The mapping file is larger than 1 MiB.")
+    try:
+        document = json.loads(raw.decode('utf-8-sig'), object_pairs_hook=_unique_alias_fields)
+    except (UnicodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError("The mapping file is not valid UTF-8 JSON.") from exc
+    if not isinstance(document, dict) or document.get('format') != _ALIAS_FILE_FORMAT:
+        raise ValueError("Choose a Metroliza name-matches JSON file.")
+    if type(document.get('version')) is not int or document['version'] != _ALIAS_FILE_VERSION:
+        raise ValueError("This Metroliza version does not support the mapping file version.")
+    if document.keys() != {'format', 'version', 'mappings'}:
+        raise ValueError("The mapping file contains unsupported fields.")
+    return _preview_alias_rows(db_path, _portable_alias_rows(document['mappings']))
+
+
+def build_characteristic_aliases_json(db_path: str) -> tuple[bytes, int]:
+    """Export versioned name/scope fields, independent of database identities and rows."""
+    with sqlite_readonly_connection_scope(db_path) as connection:
+        connection.execute('BEGIN')
+        table = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='CHARACTERISTIC_ALIASES' COLLATE NOCASE"
+        ).fetchone()
+        rows = fetch_all_characteristic_aliases(
+            db_path, connection=connection, limit=_MAX_ALIAS_FILE_ROWS + 1,
+        ) if table else []
+    mappings = _portable_alias_rows(rows, collapse_equal=True)
+    payload = json.dumps(
+        {'format': _ALIAS_FILE_FORMAT, 'version': _ALIAS_FILE_VERSION, 'mappings': mappings},
+        ensure_ascii=False, indent=2,
+    ).encode('utf-8') + b'\n'
+    if len(payload) > _MAX_ALIAS_FILE_BYTES:
+        raise ValueError("The mapping configuration exceeds the 1 MiB file limit.")
+    return payload, len(mappings)
 
 
 def save_manual_characteristic_alias(db_path, payload, previous=None) -> None:

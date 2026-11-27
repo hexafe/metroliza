@@ -13,7 +13,7 @@ import weakref
 from pathlib import Path
 
 from PyQt6 import sip
-from PyQt6.QtCore import QCoreApplication, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QCoreApplication, QIODeviceBase, QSaveFile, QThread, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -38,6 +38,7 @@ from metroliza.reports.characteristic_alias_service import (
     CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     CHARACTERISTIC_ALIAS_TABLE,
+    build_characteristic_aliases_json,
     conflicting_alias_targets,
     delete_characteristic_alias,
     effective_alias_scope,
@@ -46,6 +47,8 @@ from metroliza.reports.characteristic_alias_service import (
     fetch_all_characteristic_aliases,
     import_characteristic_aliases_csv,
     preview_characteristic_aliases_csv,
+    preview_characteristic_aliases_json,
+    protect_alias_export_destination,
     apply_characteristic_alias_import,
     normalize_scope_type,
     repair_characteristic_alias_conflict,
@@ -97,6 +100,32 @@ _DEFAULT_ALIAS_SCHEMA = ensure_characteristic_alias_schema
 _DEFAULT_ALIAS_IMPORT = import_characteristic_aliases_csv
 _DEFAULT_ALIAS_EXPORT = export_characteristic_aliases_csv
 _DEFAULT_ALIAS_FETCH = fetch_all_characteristic_aliases
+_JSON_ALIAS_FILTER = 'Metroliza name matches (*.json)'
+_ALIAS_FILE_FILTERS = f'{_JSON_ALIAS_FILTER};;CSV files (*.csv);;All files (*)'
+
+
+def _is_alias_json(filename):
+    return Path(filename).suffix.casefold() == '.json'
+
+
+def _preview_alias_file(db_file, filename):
+    preview = preview_characteristic_aliases_json if _is_alias_json(filename) else preview_characteristic_aliases_csv
+    return preview(db_file, filename)
+
+
+def _save_alias_json(db_file, filename):
+    protect_alias_export_destination(db_file, filename)
+    payload, count = build_characteristic_aliases_json(db_file)
+    target = QSaveFile(filename)
+    if not target.open(QIODeviceBase.OpenModeFlag.WriteOnly):
+        raise OSError(target.errorString())
+    if target.write(payload) != len(payload):
+        target.cancelWriting()
+        raise OSError(target.errorString())
+    protect_alias_export_destination(db_file, filename)
+    if not target.commit():
+        raise OSError(target.errorString())
+    return count
 
 
 @contextmanager
@@ -202,7 +231,7 @@ class _AliasCsvThread(QThread):
     def run(self):
         try:
             if self.operation == 'import':
-                plan = preview_characteristic_aliases_csv(self.db_file, self.filename)
+                plan = _preview_alias_file(self.db_file, self.filename)
                 self.preview_ready.emit(plan)
                 while not self.reviewed.wait(0.1):
                     if self.isInterruptionRequested() or self.discard_result:
@@ -223,8 +252,11 @@ class _AliasCsvThread(QThread):
             else:
                 with self._outcome_lock:
                     self._phase = 'applying'
-                _DEFAULT_ALIAS_SCHEMA(self.db_file)
-                self.count = self.producer(self.db_file, self.filename)
+                if _is_alias_json(self.filename):
+                    self.count = _save_alias_json(self.db_file, self.filename)
+                else:
+                    _DEFAULT_ALIAS_SCHEMA(self.db_file)
+                    self.count = self.producer(self.db_file, self.filename)
                 self._result_confirmed = True
         except Exception as exc:
             self.error = exc
@@ -749,8 +781,8 @@ class CharacteristicMappingDialog(QDialog):
         self.add_button = QPushButton('Add manually')
         self.edit_button = QPushButton('Edit selected')
         self.delete_button = QPushButton('Delete selected')
-        self.import_button = QPushButton('Import CSV')
-        self.export_button = QPushButton('Export CSV')
+        self.import_button = QPushButton('Import matches')
+        self.export_button = QPushButton('Export matches')
         self.close_button = QPushButton('Close')
 
         table_actions_row = QHBoxLayout()
@@ -1570,7 +1602,7 @@ class CharacteristicMappingDialog(QDialog):
             self,
             'Import name matches',
             str(self.db_file or ''),
-            'CSV files (*.csv);;All files (*)',
+            _ALIAS_FILE_FILTERS,
         )
         if not filename:
             return
@@ -1582,10 +1614,10 @@ class CharacteristicMappingDialog(QDialog):
             return
 
         def produce():
-            if import_characteristic_aliases_csv is not _DEFAULT_ALIAS_IMPORT:
+            if not _is_alias_json(filename) and import_characteristic_aliases_csv is not _DEFAULT_ALIAS_IMPORT:
                 ensure_characteristic_alias_schema(self.db_file)
                 return import_characteristic_aliases_csv(self.db_file, filename)
-            plan = preview_characteristic_aliases_csv(self.db_file, filename)
+            plan = _preview_alias_file(self.db_file, filename)
             choice = self._confirm_alias_import(plan)
             if choice is not None:
                 try:
@@ -1681,14 +1713,17 @@ class CharacteristicMappingDialog(QDialog):
         if not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
             return
 
-        filename, _ = QFileDialog.getSaveFileName(
+        filename, selected_filter = QFileDialog.getSaveFileName(
             self,
             'Export name matches',
-            'characteristic_aliases.csv',
-            'CSV files (*.csv);;All files (*)',
+            'characteristic_aliases',
+            _ALIAS_FILE_FILTERS,
         )
         if not filename:
             return
+        if not Path(filename).suffix:
+            suffix = '.json' if selected_filter == _JSON_ALIAS_FILTER else '.csv'
+            filename = filename + suffix
 
         _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_STARTED)
 
@@ -1697,6 +1732,8 @@ class CharacteristicMappingDialog(QDialog):
             return
 
         def produce():
+            if _is_alias_json(filename):
+                return _save_alias_json(self.db_file, filename)
             ensure_characteristic_alias_schema(self.db_file)
             return export_characteristic_aliases_csv(self.db_file, filename)
 

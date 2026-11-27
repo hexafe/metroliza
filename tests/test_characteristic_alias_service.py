@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from sqlite3 import IntegrityError, connect
 
+import pytest
+
 from modules.characteristic_alias_service import (
     CharacteristicAliasConflictError,
     CharacteristicAliasCsvSchemaError,
@@ -25,6 +27,96 @@ from modules.characteristic_alias_service import (
     upsert_characteristic_aliases_bulk,
 )
 from metroliza.reports.db import sqlite_file_identity
+from metroliza.reports.characteristic_alias_service import (
+    apply_characteristic_alias_import,
+    build_characteristic_aliases_json,
+    preview_characteristic_aliases_json,
+)
+
+
+def test_portable_alias_file_publishes_only_effective_name_and_scope_fields(tmp_path):
+    source = str(tmp_path / 'source.db')
+    target = str(tmp_path / 'target.db')
+    ensure_characteristic_alias_schema(source)
+    ensure_characteristic_alias_schema(target)
+    upsert_characteristic_alias(source, '=1+1', 'Średnica', 'global')
+    upsert_characteristic_alias(source, '=1+1', 'Lokalna', 'reference', 'R1')
+    with closing(connect(source)) as connection, connection:
+        connection.execute(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value) '
+            "VALUES ('=1+1', 'Średnica', 'global', 'legacy ignored scope')"
+        )
+    data, count = build_characteristic_aliases_json(source)
+    assert count == 2
+    assert json.loads(data) == {
+        'format': 'metroliza.characteristic_aliases',
+        'version': 1,
+        'mappings': [
+            {'alias_name': '=1+1', 'canonical_name': 'Średnica', 'scope_type': 'global', 'scope_value': None},
+            {'alias_name': '=1+1', 'canonical_name': 'Lokalna', 'scope_type': 'reference', 'scope_value': 'R1'},
+        ],
+    }
+    exported = tmp_path / 'matches.json'
+    exported.write_bytes(data)
+    before = Path(target).read_bytes()
+    plan = preview_characteristic_aliases_json(target, str(exported))
+    assert Path(target).read_bytes() == before
+    assert (plan.added, plan.replaced, plan.unchanged) == (2, 0, 0)
+    assert apply_characteristic_alias_import(target, plan) == 2
+    assert resolve_characteristic_alias('=1+1', reference='R1', db_path=target) == 'Lokalna'
+    assert resolve_characteristic_alias('=1+1', reference='R2', db_path=target) == 'Średnica'
+
+    original = Path(source).read_bytes()
+    with pytest.raises(ValueError, match='separate from the source database'):
+        export_characteristic_aliases_csv(source, source)
+    assert Path(source).read_bytes() == original
+
+    with closing(connect(source)) as connection, connection:
+        connection.execute(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type) '
+            "VALUES ('=1+1', 'Other name', 'global')"
+        )
+    with pytest.raises(ValueError, match='effective alias scope'):
+        build_characteristic_aliases_json(source)
+
+
+@pytest.mark.parametrize(
+    ('contents', 'message'),
+    [
+        (b'{"format":"metroliza.characteristic_aliases","version":123,"mappings":[]}', 'does not support'),
+        (b'{"format":"metroliza.characteristic_aliases","version":1,"version":1,"mappings":[]}', 'duplicate'),
+        (b'{"format":"metroliza.characteristic_aliases","version":1,"mappings":[],"source":"private"}', 'unsupported fields'),
+        (b' ' * (1024 * 1024 + 1), 'larger than 1 MiB'),
+    ],
+)
+def test_portable_alias_preview_rejects_unsupported_files_without_writing(tmp_path, contents, message):
+    database = str(tmp_path / 'target.db')
+    ensure_characteristic_alias_schema(database)
+    source = tmp_path / 'matches.json'
+    source.write_bytes(contents)
+    before = Path(database).read_bytes()
+    with pytest.raises(ValueError, match=message):
+        preview_characteristic_aliases_json(database, str(source))
+    assert Path(database).read_bytes() == before
+
+
+def test_alias_import_refuses_a_replaced_database_even_when_rows_match(tmp_path):
+    target = tmp_path / 'target.db'
+    replacement = tmp_path / 'replacement.db'
+    for database in (target, replacement):
+        ensure_characteristic_alias_schema(str(database))
+    source = tmp_path / 'matches.json'
+    source.write_text(json.dumps({
+        'format': 'metroliza.characteristic_aliases', 'version': 1, 'mappings': [{
+            'alias_name': 'Width', 'canonical_name': 'Width mm', 'scope_type': 'global', 'scope_value': None,
+        }],
+    }))
+    plan = preview_characteristic_aliases_json(str(target), str(source))
+    replacement.replace(target)
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match='database changed after preview'):
+        apply_characteristic_alias_import(str(target), plan, replace=True)
+    assert target.read_bytes() == before
 
 
 class TestCharacteristicAliasService(unittest.TestCase):
