@@ -60,6 +60,7 @@ class DetectorContext:
     state: DetectorState = field(default_factory=DetectorState)
     now: str | None = None
     parameters: Mapping[str, Any] = field(default_factory=dict)
+    window_segment: Mapping[str, Any] | None = None
 
 
 class Detector(Protocol):

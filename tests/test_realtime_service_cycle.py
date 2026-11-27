@@ -1,3 +1,5 @@
+from hashlib import sha256
+
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
@@ -6,6 +8,7 @@ from metroliza.industrial.realtime.event_stream_repository import RealtimeEventS
 from metroliza.industrial.realtime.db_poller import SourceReadResult
 from metroliza.industrial.realtime.offset_store import StreamOffsetStore
 from metroliza.industrial.realtime.realtime_service import _load_persisted_samples, run_polling_cycle
+from metroliza.industrial.realtime.replay import ReplayRequest, replay_industrial_stream
 from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
 from metroliza.industrial.realtime.stream_config import RealtimePollConfig
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition, StreamOffset
@@ -127,6 +130,21 @@ def test_realtime_poll_cycle_creates_explainable_detector_events(tmp_path):
     assert result.detector_events_created == 1
     assert events[0].severity == "critical"
     assert "above USL" in events[0].explanation
+    evidence = events[0].context["detector_evidence"]
+    assert evidence["source_profile_id"] == profile.id
+    assert evidence["configuration"]["parameters"]["usl"] == config_signal.usl
+    assert evidence["window"] == {"kind": "trigger_sample"}
+
+    source = tmp_path / "replay.csv"
+    source.write_text("record_id,event_time,cycle_time_s\nreplayed,2026-06-13T10:03:00Z,13.5\n", encoding="utf-8")
+    replayed = replay_industrial_stream(ReplayRequest(
+        input_file=str(source), database=db_path, source_profile_id=profile.id,
+        signal_key=config_signal.signal_key, metric_column="cycle_time_s",
+        event_time_column="event_time", record_key_column="record_id",
+    ))
+    assert replayed.detector_events_created == 1
+    replay_event = max(AnomalyEventRepository(db_path).list_events(), key=lambda event: event.id)
+    assert replay_event.context["detector_evidence"] == evidence
 
 
 def test_default_detector_runner_supplies_current_time_to_stale_source(monkeypatch):
@@ -240,6 +258,9 @@ def test_realtime_poll_cycle_loads_segment_baseline_for_iqr_detector(tmp_path):
     assert events[0].detector_key == "iqr"
     assert events[0].threshold["n"] == 25
     assert events[0].threshold["iqr"] == 2.0
+    evidence = events[0].context["detector_evidence"]
+    assert evidence["window"]["kind"] == "stored_baseline"
+    assert evidence["window"]["id"] > 0 and evidence["window"]["count"] == 25
 
 
 def test_realtime_poll_cycle_seeds_rolling_detector_from_persisted_history(tmp_path):
@@ -292,6 +313,10 @@ def test_realtime_poll_cycle_seeds_rolling_detector_from_persisted_history(tmp_p
     assert events[0].detector_key == "rolling_zscore"
     assert events[0].threshold["n"] == 30
     assert events[0].sample_id not in {sample_id for sample_id in range(1, 31)}
+    evidence = events[0].context["detector_evidence"]
+    assert evidence["window"]["last_sample_id"] == 30
+    assert evidence["window"]["last_event_time"] == "2026-06-13T10:29:00.000000Z"
+    assert evidence["window"]["segment_sha256"] == sha256(b'{"station":"S1"}').hexdigest()
 
 
 def test_realtime_poll_cycle_does_not_advance_offset_on_adapter_error(tmp_path):

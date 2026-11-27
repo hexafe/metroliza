@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from metroliza.industrial.anomaly.contracts import DetectorContext
@@ -73,3 +75,22 @@ def test_spec_limit_detector_returns_none_inside_limits():
     )
 
     assert SpecLimitDetector().score_one(_sample(10.0), DetectorContext(signal=signal)) is None
+
+
+def test_spec_limit_configuration_identity_tracks_effective_parameters():
+    signal = SignalDefinition(1, "diameter", "diameter_mm", id=5, nominal=10.0, usl=10.5)
+    detector = SpecLimitDetector()
+    sample = _sample(12.0)
+
+    def evidence(**changes):
+        result = detector.score_one(sample, DetectorContext(signal=replace(signal, **changes)))
+        assert result is not None
+        return result.context["detector_evidence"]
+
+    original = evidence()
+    assert original["schema_version"] == 1 and original["window"] == {"kind": "trigger_sample"}
+    assert original["configuration"]["parameters"]["usl"] == 10.5
+    assert original == evidence(updated_at="2026-06-13T11:00:00Z")
+    assert original["configuration_revision"] != evidence(usl=11.0)["configuration_revision"]
+    assert original["configuration_revision"] == evidence(nominal=None)["configuration_revision"]
+    assert evidence(usl=11)["configuration_revision"] == evidence(usl=11.0)["configuration_revision"]
