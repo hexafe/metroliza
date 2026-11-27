@@ -207,19 +207,32 @@ def _nested_condition(group_count):
 
 
 def test_typed_depth_is_bounded_before_mask_and_compile(selected_rows):
-    selected_rows(load_typed_filter(document(_nested_condition(31)), FIELDS), [6])
-    selected_rows(parse_typed_filter("(" * 32 + "Measurement = 0" + ")" * 32, FIELDS), [6])
-    quoted_parentheses = "(" * 33
+    selected_rows(load_typed_filter(document(_nested_condition(23)), FIELDS), [6])
+    selected_rows(parse_typed_filter("(" * 24 + "Measurement = 0" + ")" * 24, FIELDS), [6])
+    quoted_parentheses = "(" * 25
     selected_rows(parse_typed_filter(f'Label = "{quoted_parentheses}"', FIELDS), [])
-    for depth in (32, 400):
-        with pytest.raises(FilterValidationError, match="32") as failure:
+    for depth in (24, 400):
+        with pytest.raises(FilterValidationError, match="24") as failure:
             load_typed_filter(document(_nested_condition(depth)), FIELDS)
         assert failure.value.code == "nested_expression"
-    too_deep = "(" * 33 + "Measurement = 0" + ")" * 33
-    with pytest.raises(FilterValidationError, match="32") as failure:
+    too_deep = "(" * 25 + "Measurement = 0" + ")" * 25
+    with pytest.raises(FilterValidationError, match="24") as failure:
         parse_typed_filter(too_deep, FIELDS)
     assert failure.value.code == "nested_expression"
     assert parse_filter_expression(too_deep, ["Measurement"]).expression is not None
+
+
+def test_reference_adapters_agree_on_alternating_groups_at_depth_limit(selected_rows):
+    leaf = condition("n", "number", "equals", 0)
+    tree = leaf
+    text = "Measurement = 0"
+    for group_index in range(23):
+        operator = "or" if group_index % 2 else "and"
+        tree = {"operator": operator, "children": [leaf, tree]}
+        text = f"Measurement = 0 {operator} ({text})"
+
+    selected_rows(load_typed_filter(document(tree), FIELDS), [6])
+    selected_rows(parse_typed_filter(text, FIELDS), [6])
 
 
 @pytest.mark.parametrize("operator", ["and", "or"])

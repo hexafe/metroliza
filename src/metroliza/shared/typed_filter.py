@@ -46,7 +46,8 @@ _SYMBOLS = {
 _NEGATIVE = frozenset({"not_equals", "not_contains", "not_in", "is_blank"})
 _GLOB_LITERALS = str.maketrans({"?": "[?]", "[": "[[]", "]": "[]]"})
 _SQLITE_FUNCTION = "mz_reference_filter_match"
-_MAX_DEPTH = 32
+# Keep right-nested boolean groups within the fixed parser stack of older SQLite builds.
+_MAX_DEPTH = 24
 _MAX_NODES = 128
 _MAX_OPERANDS = 1024
 

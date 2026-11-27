@@ -351,11 +351,12 @@ and blank checks through the structured document.
 The JSON document contains `version: 1` and `expression`. An empty expression is
 `null`. Groups contain `operator` and `children`. Conditions contain `field`,
 `kind`, `operator`, `values`, `case_sensitive`, `wildcards` and `dayfirst`.
-Typed expressions allow at most 32 levels, counting the root as level 1, with
+Typed expressions allow at most 24 levels, counting the root as level 1, with
 128 groups and conditions combined and 1,024 values across all conditions.
-Typed expression text also allows up to 32 levels of nested parentheses.
-These limits keep accepted expressions small enough for reference evaluation
-and compilation. Reduce nesting, conditions or values if a limit is reached.
+Typed expression text can have up to 24 levels of nested parentheses and must
+also fit the expression limits. This keeps evaluation and compilation compatible
+with the smaller parser stack of older SQLite builds. Reduce nesting, conditions
+or values if a limit is reached.
 Group operators are `and` and `or`. Common condition operators are `equals`,
 `not_equals`, `in`, `not_in`, `is_blank` and `is_not_blank`. Numbers and dates
 also allow `less_than`, `less_or_equal`, `greater_than`, `greater_or_equal`
