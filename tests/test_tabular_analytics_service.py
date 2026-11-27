@@ -2109,6 +2109,77 @@ def test_tabular_workbook_export_writes_separate_parameter_sheets(tmp_path) -> N
         assert {"Length Mm", "Width Mm"}.issubset(workbook.sheet_names)
 
 
+@pytest.mark.parametrize(("rows", "columns"), [(1_048_576, 1), (1, 16_385)])
+def test_tabular_workbook_refuses_oversized_tables_before_opening_output(tmp_path, monkeypatch, rows, columns):
+    from metroliza.exporting.xlsx_writer_policy import XlsxWorksheetCapacityError
+
+    output = tmp_path / "previous.xlsx"
+    output.write_bytes(b"previous workbook bytes")
+    frame = pd.DataFrame(index=pd.RangeIndex(rows), columns=pd.RangeIndex(columns))
+
+    def fail_if_normalized(_frame):
+        pytest.fail("The oversized table reached workbook preparation")
+
+    monkeypatch.setattr(canonical_tabular_service, "_excel_safe_dataframe", fail_if_normalized)
+    with pytest.raises(XlsxWorksheetCapacityError, match=r"Table Data contains .*1,048,575 data rows"):
+        export_tabular_analytics_workbook(dataframe=frame, metric_candidates=(), output_file=output)
+
+    assert output.read_bytes() == b"previous workbook bytes"
+    assert list(tmp_path.iterdir()) == [output]
+
+
+@pytest.mark.parametrize("serializer", ["worksheet", "shared strings"])
+def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, monkeypatch, serializer):
+    import errno
+    import tempfile
+
+    from xlsxwriter import workbook as xlsx_workbook
+    from xlsxwriter.exceptions import FileCreateError
+    from xlsxwriter.sharedstrings import SharedStrings
+    from xlsxwriter.worksheet import Worksheet
+
+    from metroliza.industrial.industrial_analytics_workflow import _export_tabular_workbook_with_temp
+
+    output = tmp_path / "previous.xlsx"
+    output.write_bytes(b"previous workbook bytes")
+    scratch = tmp_path / "writer-scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    opened = []
+    handles, archives = [], []
+    open_zip = xlsx_workbook.ZipFile
+
+    def remember_archive(*args, **kwargs):
+        archive = open_zip(*args, **kwargs)
+        archives.append(archive)
+        return archive
+
+    def fail_xml_write(writer):
+        opened.extend(path for path in scratch.rglob("*") if path.is_file())
+        handles.append(writer.fh)
+        raise OSError(errno.ENOSPC, "synthetic workbook writer exhaustion")
+
+    monkeypatch.setattr(xlsx_workbook, "ZipFile", remember_archive)
+    if serializer == "worksheet":
+        monkeypatch.setattr(Worksheet, "_write_sheet_data", fail_xml_write)
+    else:
+        monkeypatch.setattr(SharedStrings, "_assemble_xml_file", fail_xml_write)
+    with pytest.raises(FileCreateError, match="synthetic workbook writer exhaustion"):
+        _export_tabular_workbook_with_temp(
+            output_workbook_file=str(output), dataframe=pd.DataFrame({"metric": [1, 2]}),
+            metric_candidates=(), aggregation_result=None, groupstats_result=None, diagnostics=(),
+            separate_parameter_sheets=False, chart_selection=ProductionChartSelection(),
+            group_fields=(), cancel_check=None,
+        )
+
+    assert opened, "the writer must have allocated its real scratch files before failing"
+    assert handles and all(handle.closed for handle in handles)
+    assert archives and all(archive.fp is None for archive in archives)
+    assert not list(scratch.iterdir())
+    assert output.read_bytes() == b"previous workbook bytes"
+    assert {path.name for path in tmp_path.iterdir()} == {"previous.xlsx", "writer-scratch"}
+
+
 def test_tabular_workbook_export_keeps_formula_like_source_values_literal(tmp_path) -> None:
     output_file = tmp_path / "literal_source_values.xlsx"
     dataframe = pd.DataFrame(

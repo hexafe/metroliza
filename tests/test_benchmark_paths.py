@@ -1,6 +1,7 @@
 import csv
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -324,6 +325,43 @@ def test_csv_summary_large_data_probe_smoke(tmp_path):
     assert result.input_metrics['materialized_columns'] >= 3
     assert result.input_metrics['preview_multi_column_group_total'] >= 1
     assert result.input_metrics['assign_filtered_scope_rows'] >= 1
+
+
+@pytest.mark.parametrize('fail_after_materialization', [False, True], ids=['success', 'failure'])
+def test_csv_summary_large_data_probe_releases_sqlite_store(
+    tmp_path, monkeypatch, fail_after_materialization,
+):
+    from metroliza.tabular import tabular_analytics_service
+
+    sqlite_dir = tmp_path / 'sqlite'
+    sqlite_dir.mkdir()
+    monkeypatch.setattr(tempfile, 'tempdir', str(sqlite_dir))
+    materialize = tabular_analytics_service.materialize_tabular_dataframe
+    seen_stores = []
+
+    def observe_materialization(loaded, **kwargs):
+        store_path = Path(loaded.sqlite_store.path)
+        assert store_path.parent == sqlite_dir
+        assert store_path.is_file()
+        seen_stores.append(store_path)
+        materialized = materialize(loaded, **kwargs)
+        if fail_after_materialization:
+            raise RuntimeError('synthetic failure after materialization')
+        return materialized
+
+    monkeypatch.setattr(
+        tabular_analytics_service, 'materialize_tabular_dataframe', observe_materialization,
+    )
+    options = dict(row_count=24, data_columns=3, search_text='P-00', materialize_columns=2)
+    if fail_after_materialization:
+        with pytest.raises(RuntimeError, match='synthetic failure after materialization'):
+            benchmark_csv_summary_large_data_probe(tmp_path, **options)
+    else:
+        result = benchmark_csv_summary_large_data_probe(tmp_path, **options)
+        assert result.input_metrics['materialized_rows'] == 24
+
+    assert len(seen_stores) == 1
+    assert not list(sqlite_dir.glob('metroliza_csv_summary_*.sqlite*'))
 
 
 def test_population_static_render_probe_smoke(tmp_path):
