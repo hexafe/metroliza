@@ -2752,7 +2752,8 @@ def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
 def test_csv_filters_groups_typed_preview_and_exports_the_same_rows(tmp_path, monkeypatch, group_before_filter):
     import json
 
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtTest import QTest
 
     from metroliza.shared.typed_filter import FilterPreview
     from metroliza.ui import export_dialog, tabular_analytics_filter_dialog as filters
@@ -2772,6 +2773,9 @@ def test_csv_filters_groups_typed_preview_and_exports_the_same_rows(tmp_path, mo
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
 
     def enter_typed_filter(typed):
+        preview_key = Qt.Key.Key_Return if group_before_filter else Qt.Key.Key_Enter
+        acceptances = []
+        typed.accepted.connect(lambda: acceptances.append(True))
         assert not typed.apply_button.isEnabled()
         for index in range(typed.field_combo.count()):
             if "Size mm (occurrence 2)" in typed.field_combo.itemText(index):
@@ -2781,18 +2785,23 @@ def test_csv_filters_groups_typed_preview_and_exports_the_same_rows(tmp_path, mo
             pytest.fail("Duplicate source occurrence missing from typed filter catalog")
         rule = typed.field_combo.currentData() + " < 4"
         typed.expression_input.setText(typed.field_combo.currentData() + ' = "invalid number"')
-        typed.preview_button.click()
+        QTest.keyClick(typed.expression_input, preview_key)
         assert typed.result_preview is None
         assert not typed.apply_button.isEnabled()
+        assert not acceptances
         typed.expression_input.setText(rule)
-        typed.preview_button.click()
+        QTest.keyClick(typed.expression_input, preview_key)
+        assert typed.isVisible()
+        assert not acceptances
         receipts.append(typed.result_preview)
         assert typed.apply_button.isEnabled()
         typed.expression_input.setText(rule + " and > 3")
         assert not typed.apply_button.isEnabled()
         typed.expression_input.setText(rule)
-        typed.preview_button.click()
+        QTest.keyClick(typed.expression_input, preview_key)
+        assert typed.isVisible()
         typed.apply_button.click()
+        assert acceptances == [True]
 
     def drive_typed_filter():
         typed = app.activeModalWidget()

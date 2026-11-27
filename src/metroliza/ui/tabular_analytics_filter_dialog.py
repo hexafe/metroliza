@@ -128,12 +128,13 @@ class _FilterBody(QWidget):
             layout.setGeometry(self.rect())
 
 
-class _ValueSearchLineEdit(QLineEdit):
-    """Submit value searches without also invoking the dialog's default Apply."""
+class _LocalReturnLineEdit(QLineEdit):
+    """Submit a field without also invoking the dialog's default Apply."""
 
     def keyPressEvent(self, event) -> None:
+        is_return = event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
         super().keyPressEvent(event)
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+        if is_return:
             event.accept()
 
 
@@ -298,7 +299,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         layout.addLayout(column_actions)
 
         layout.addWidget(QLabel("Values for selected column"))
-        self.matching_search = _ValueSearchLineEdit()
+        self.matching_search = _LocalReturnLineEdit()
         self.matching_search.setPlaceholderText("Search values in selected column")
         configure_accessibility(self.matching_search, name="Search CSV row-filter values")
         layout.addWidget(self.matching_search)
@@ -1365,7 +1366,7 @@ class TabularTypedFilterDialog(QDialog):
         insert.clicked.connect(lambda: self.expression_input.insert(self.field_combo.currentData() or ""))
         field_row.addWidget(insert)
         layout.addLayout(field_row)
-        self.expression_input = QLineEdit(expression)
+        self.expression_input = _LocalReturnLineEdit(expression)
         self.expression_input.setAccessibleName("Typed filter expression")
         self.expression_input.setMaxLength(8192)
         self.expression_input.setPlaceholderText("Insert a field, then add a condition such as >= 10")
