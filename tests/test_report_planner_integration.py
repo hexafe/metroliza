@@ -218,15 +218,18 @@ def test_worker_start_failure_releases_busy_state_and_allows_retry(app, reviewed
 
 
 @pytest.mark.parametrize("terminal", ["missing", "failed", "cancelled"])
-def test_persistent_outcome_never_invents_success_without_result(reviewed, terminal):
+def test_persistent_outcome_never_invents_success_without_result(reviewed, monkeypatch, terminal):
     from types import SimpleNamespace
 
     dialog, _source, database = reviewed
     dialog.parse_thread = SimpleNamespace(last_parse_result=None)
     dialog.parse_error_message = "Synthetic worker failure" if terminal == "failed" else None
     dialog.parsing_canceled = terminal == "cancelled"
+    sender_lookups = []
+    monkeypatch.setattr(type(dialog), "sender", lambda _dialog: sender_lookups.append(True))
     dialog.on_parse_finished()
     dialog._on_parse_thread_stopped(dialog.parse_thread)
+    assert sender_lookups == []
     text = dialog.report_planner.outcome.toPlainText()
     assert "outcome unavailable" in text
     assert "successful" not in text

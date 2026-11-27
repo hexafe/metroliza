@@ -1512,9 +1512,10 @@ class _ReportOperations:
                 execution_request = ImportPlan.all_atomic_candidates(request, self._preflight_result)
             self.parse_thread = self._create_parse_worker(execution_request, bind_destination=import_plan is not None)
             _operation.worker = self.parse_thread
-            self.parse_thread.finished.connect(self.on_parse_finished)
+            self._connect_parse_completion(self.parse_thread)
             self.parse_thread.finished.connect(
-                lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread)
+                lambda thread=self.parse_thread: self._on_parse_thread_stopped(thread),
+                Qt.ConnectionType.QueuedConnection,
             )
             self.parse_thread.update_label.connect(self.loading_label.setText)
             self.parse_thread.update_progress.connect(self.loading_bar.setValue)
@@ -1616,23 +1617,22 @@ class _ReportOperations:
         self.parse_error_message = message
         self.loading_label.setText(build_three_line_status("Parsing failed.", "See error details for context", "ETA --"))
 
-    @pyqtSlot()
-    def on_parse_finished(self):
+    def _connect_parse_completion(self, worker):
+        worker.finished.connect(lambda: self.on_parse_finished(worker), Qt.ConnectionType.QueuedConnection)
+
+    def on_parse_finished(self, worker=None):
         """Handle parse completion, including cancellation and error paths."""
         try:
-            worker = self.parse_thread
+            worker = self.parse_thread if worker is None else worker
             operation = getattr(self, "import_operation", None)
-            if operation is not None and operation.worker is not worker:
-                return  # A disproven binding needs no Qt sender lookup.
-            sender = self.sender()
-            if sender is not None and sender is not worker:
-                return  # A retired worker cannot replace the current operation's UI.
+            if worker is not self.parse_thread or (operation is not None and operation.worker is not worker):
+                return
             self._complete_parse_operation(worker)
         except Exception as e:
             self.log_and_exit(e)
 
     def _complete_parse_operation(self, worker):
-        """Present completion after the public slot verifies worker ownership."""
+        """Present completion after verifying worker ownership."""
         try:
             close_requested = getattr(self, "_close_requested", False)
             # Retain both stage outcomes before stopped-thread cleanup or flag resets.
