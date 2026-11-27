@@ -15,7 +15,9 @@ from PyQt6.QtWidgets import (
 )
 
 from metroliza.parsing.preflight import ParsePreflightStatus
-from metroliza.reports.report_metadata_review import CORE_FIELDS, FIELD_LABELS, REVIEW_FIELDS
+from metroliza.reports.report_metadata_review import (
+    CORE_FIELDS, FIELD_LABELS, OCR_ACCEPTED, OCR_DEFERRED, OCR_REJECTED, REVIEW_FIELDS,
+)
 from metroliza.ui.report_planner_model import ReportPlannerFilterModel, ReportPlannerModel
 from metroliza.ui.shortcuts import bind_search_shortcut
 from metroliza.ui import ui_theme_tokens as tokens
@@ -207,13 +209,17 @@ class ReportPlanner(QWidget):
         self.metadata_menu.setToolTipsVisible(True)
         self.metadata_menu.aboutToShow.connect(lambda: self._update_metadata_actions(include_copy_counts=True))
         self.accept_ocr_action = self._add_menu_action(
-            "Use OCR suggestion", lambda: self._resolve_current_ocr_suggestion(accept=True),
+            "Use OCR suggestion", lambda: self._resolve_current_ocr_suggestion(decision=OCR_ACCEPTED),
         )
         self.accept_ocr_action.setToolTip("Use the OCR suggestion for the current cell after checking the report.")
         self.keep_value_action = self._add_menu_action(
-            "Keep current value", lambda: self._resolve_current_ocr_suggestion(accept=False),
+            "Keep current value", lambda: self._resolve_current_ocr_suggestion(decision=OCR_REJECTED),
         )
-        self.keep_value_action.setToolTip("Dismiss this cell's suggestion. Reading again can show another suggestion.")
+        self.keep_value_action.setToolTip("Reject this OCR suggestion and keep the current value.")
+        self.defer_ocr_action = self._add_menu_action(
+            "Review later", lambda: self._resolve_current_ocr_suggestion(decision=OCR_DEFERRED),
+        )
+        self.defer_ocr_action.setToolTip("Keep the current value and leave this suggestion open for review.")
         self.copy_to_checked = self._add_menu_action("Copy to checked", self.copy_current_value_to_checked)
         self.undo_copy_action = self._add_menu_action("Undo copy to checked", self.undo_copy)
         self.reset_to_detected = self._add_menu_action("Reset to detected", self.reset_current_row)
@@ -414,14 +420,18 @@ class ReportPlanner(QWidget):
             and row.suggested_ocr_candidate(field_name) is not None
         )
 
-    def _resolve_current_ocr_suggestion(self, *, accept):
+    def _resolve_current_ocr_suggestion(self, *, decision):
         row, field_name = self.current_metadata_cell()
         if not self._can_resolve_ocr_suggestion(row, field_name):
             return
-        if self.model.resolve_ocr_suggestion(row.occurrence_id, field_name, accept=accept):
+        if self.model.resolve_ocr_suggestion(row.occurrence_id, field_name, decision=decision):
             field = FIELD_LABELS[field_name]
-            message = f"Used the OCR suggestion for {field}." if accept else f"Kept the current value for {field}."
-            self.set_metadata_status(message, "success" if accept else "neutral")
+            message = {
+                OCR_ACCEPTED: f"Used the OCR suggestion for {field}.",
+                OCR_REJECTED: f"Rejected the OCR suggestion for {field}. The current value was kept.",
+                OCR_DEFERRED: f"Deferred the OCR suggestion for {field}. Select the cell to review it again.",
+            }[decision]
+            self.set_metadata_status(message, "success" if decision == OCR_ACCEPTED else "neutral")
 
     def copy_current_value_to_checked(self):
         row, field_name = self.current_metadata_cell()
@@ -522,6 +532,7 @@ class ReportPlanner(QWidget):
         can_resolve = self._can_resolve_ocr_suggestion(row, field_name)
         self.accept_ocr_action.setEnabled(can_resolve)
         self.keep_value_action.setEnabled(can_resolve)
+        self.defer_ocr_action.setEnabled(can_resolve and not row.has_deferred_ocr_suggestion(field_name))
         can_copy = usable and editable and self._worker_mode is None and bool(row.value(field_name))
         self.copy_to_checked.setEnabled(can_copy)
         self.undo_copy_action.setEnabled(usable and self._worker_mode is None and self.model.can_undo_copy)

@@ -46,7 +46,7 @@ class _DummyParent(QWidget if QWidget is not None else object):
 
 
 class _Signal:
-    def connect(self, _callback):
+    def connect(self, _callback, _connection_type=None):
         return None
 
 

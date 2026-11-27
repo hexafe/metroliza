@@ -390,8 +390,9 @@ def test_running_import_results_remain_bound_to_actual_operation(app, dialog, mo
             assert owner._preflight_result is None and owner.report_planner.model.rowCount() == 0
         else:
             if change == "foreign_finish":
-                foreign.finished.connect(owner.on_parse_finished)
+                owner._connect_parse_completion(foreign)
                 foreign.finished.emit()
+                app.processEvents()
             else:
                 owner.import_operation.worker = foreign
 
