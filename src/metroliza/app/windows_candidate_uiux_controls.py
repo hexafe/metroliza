@@ -23,10 +23,10 @@ ERROR_CODES = ('controls_gate_missing', 'controls_fixture_invalid', 'controls_ap
                'capture_name_invalid', 'capture_owner_invalid', 'capture_pixels_failed',
                'capture_state_failed', 'unexpected_exception')
 CAPTURE_STATES = {
-    'reports-saved-top': dict(rows=12, saved=12, failed=0, unknown=0, attention=0, viewport='top'),
-    'reports-saved-bottom': dict(rows=12, saved=12, failed=0, unknown=0, attention=0, viewport='bottom'),
-    'reports-partial-error': dict(rows=12, saved=11, failed=1, unknown=0, attention=1, viewport='top'),
-    'reports-partial-cancel': dict(rows=12, saved=1, failed=0, unknown=11, attention=11, viewport='top'),
+    'reports-saved-top': dict(rows=12, saved=12, failed=0, cancelled=0, unknown=0, attention=0, viewport='top'),
+    'reports-saved-bottom': dict(rows=12, saved=12, failed=0, cancelled=0, unknown=0, attention=0, viewport='bottom'),
+    'reports-partial-error': dict(rows=12, saved=11, failed=1, cancelled=0, unknown=0, attention=1, viewport='top'),
+    'reports-partial-cancel': dict(rows=12, saved=1, failed=0, cancelled=11, unknown=0, attention=11, viewport='top'),
     'csv-busy': dict(worker_running=True, modal_blocker=False, source_rows=8, selected_rows=4),
     'csv-resumed': dict(completed=True, rows=4, formats=['html', 'xlsx']),
     'grouping-members': dict(source_rows=3000, ids=[1, 13, 25], date_field='captured_at'),
@@ -160,7 +160,8 @@ class CaptureSession:
             counts = Counter(row.status.value for row in rows)
             viewport = 'bottom' if name == 'reports-saved-bottom' else 'top'
             _require(bar.value() == (bar.maximum() if viewport == 'bottom' else bar.minimum()), 'capture_state_failed')
-            state = dict(rows=len(rows), saved=counts['saved'], failed=counts['failed'], unknown=counts['unknown'],
+            state = dict(rows=len(rows), saved=counts['saved'], failed=counts['failed'],
+                         cancelled=counts['cancelled'], unknown=counts['unknown'],
                          attention=sum(row.needs_attention for row in rows), viewport=viewport)
             pairs = [('navigation', window.navigation_list), ('summary', planner.counts), ('table', planner.table), ('outcome', planner.outcome)]
             pinned = {'summary', 'table'}
