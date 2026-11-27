@@ -156,8 +156,7 @@ def _has_fully_quoted_header(path: Path, sample: CsvSourceSample) -> bool:
         return False
 
 
-def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) -> list[CsvSourceSample]:
-    """Rank strict CSV samples, with malformed interpretations used only as a veto."""
+def _rank_csv_sources(path: Path, preferred_delimiter: str | None):
     ranked: list[tuple[tuple[bool, int, int, bool], CsvSourceSample, bool]] = []
     for delimiter in _DELIMITERS:
         strict = True
@@ -175,9 +174,14 @@ def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) ->
         )
         rank = (width > 1, complete_rows, width, delimiter == preferred_delimiter)
         ranked.append((rank, sample, strict))
+    return sorted(ranked, key=lambda item: item[0], reverse=True)
+
+
+def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) -> list[CsvSourceSample]:
+    """Rank strict CSV samples, with malformed interpretations used only as a veto."""
+    ranked = _rank_csv_sources(path, preferred_delimiter)
     if not ranked:
         raise ValueError("Unable to read the CSV file. Check that it is a UTF-8 CSV.")
-    ranked.sort(key=lambda item: item[0], reverse=True)
     strict_samples = [(rank, sample) for rank, sample, strict in ranked if strict]
     if not strict_samples:
         raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
