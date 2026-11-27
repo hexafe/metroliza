@@ -249,7 +249,10 @@ def _find_deferred_candidate(connection, report_id, field_name, evidence, record
         if row is None:
             return None  # The bounded snapshot cannot prove uniqueness.
         candidate = tuple(row)
-        if has_digest and MetadataCandidate(*candidate[1:-2]).evidence_digest() != digest:
+        candidate_evidence = candidate[1:-2]
+        if any(isinstance(value, bytes) for value in candidate_evidence):
+            return None  # SQLite can store a BLOB in a text-affinity column.
+        if has_digest and MetadataCandidate(*candidate_evidence).evidence_digest() != digest:
             continue
         if match is not None or candidate[-1] != 0:
             return None

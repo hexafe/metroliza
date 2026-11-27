@@ -785,7 +785,10 @@ def test_complete_enrichment_preserves_manual_edit_after_snapshot(tmp_path, fake
     assert _single_report(database)[0]["reference"] == "NEW-MANUAL"
 
 
-def test_deferred_review_distinguishes_same_value_with_different_header_evidence(tmp_path, fake_ocr, monkeypatch):
+@pytest.mark.parametrize("malformed_evidence", [False, True], ids=["different-reading", "unreadable-candidate"])
+def test_deferred_review_distinguishes_same_value_with_different_header_evidence(
+    tmp_path, fake_ocr, monkeypatch, malformed_evidence,
+):
     from metroliza.parsing.metadata_enrichment_thread import (
         MetadataEnrichmentWorkItem,
         enrich_existing_report_metadata,
@@ -831,6 +834,21 @@ def test_deferred_review_distinguishes_same_value_with_different_header_evidence
 
     decision, = load_stored_report_context(str(database), report["id"]).ocr_decisions
     assert decision.approval is not None and decision.approval.candidate_id == original_row["id"]
+    if malformed_evidence:
+        sibling, = [item for item in matching if item["id"] != original_row["id"]]
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute(
+                "UPDATE report_metadata_candidates SET evidence_text = ? WHERE id = ?",
+                (sqlite3.Binary(b"unreadable OCR evidence"), sibling["id"]),
+            )
+        before = _graph(database)
+        invalid, = load_stored_report_context(str(database), report["id"]).ocr_decisions
+        assert invalid.decision == "deferred" and invalid.approval is None
+        with pytest.raises(ValueError, match="stored OCR suggestion changed"):
+            ReportRepository(str(database)).accept_deferred_ocr(decision.approval)
+        assert _graph(database) == before
+        return
+
     receipt = json.loads(metadata["metadata_json"])["metadata_review"]["ocr_decisions"]["reference"]
     assert original.evidence_text not in json.dumps(receipt)
     pdf = source / NAME
