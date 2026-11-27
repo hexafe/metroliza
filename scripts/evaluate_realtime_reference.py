@@ -14,7 +14,7 @@ from metroliza.industrial.anomaly.contracts import DetectorContext
 from metroliza.industrial.anomaly.detectors import IQRDetector, RollingZScoreDetector, SpecLimitDetector
 from metroliza.industrial.anomaly.isolation_forest import MODEL_TYPE, IsolationForestAnomalyDetector
 from metroliza.industrial.anomaly.model_registry import ModelArtifact
-from metroliza.industrial.anomaly.optional_dependencies import load_sklearn_ensemble
+from metroliza.industrial.anomaly.optional_dependencies import import_sklearn, load_sklearn_ensemble
 from metroliza.industrial.realtime.replay import ReplayRequest, load_csv_rows, rows_to_samples
 from metroliza.industrial.realtime.stream_contracts import SignalDefinition
 
@@ -87,11 +87,10 @@ def evaluate():
     detectors = [IQRDetector(), RollingZScoreDetector()]
     try:
         ensemble = load_sklearn_ensemble()
+        sklearn_version = import_sklearn().__version__
     except ImportError:
         sklearn_version = None
     else:
-        from sklearn import __version__ as sklearn_version
-
         model = ensemble.IsolationForest(contamination=0.01, n_estimators=100, random_state=919, n_jobs=1)
         model.fit([[value] for value in training])
         artifact = ModelArtifact("synthetic-reference", MODEL_TYPE, "", "", metrics={"training_mean": fmean(training)})
