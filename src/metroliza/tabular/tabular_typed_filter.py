@@ -24,13 +24,24 @@ from metroliza.tabular.tabular_analytics_service import (
 _ROW_ID = "source_row_number"
 _PREVIEW_LIMIT = 20
 STALE_TYPED_FILTER = "The typed filter needs a new preview for these rows. Open Filters or clear the filter."
-TYPED_FILTER_COMBINATION = "Clear the existing row filters and groups before using a typed expression."
+TYPED_FILTER_COMBINATION = (
+    "Clear the existing row filters and manual groups, including auto-created file groups, "
+    "before using a typed expression."
+)
 
 
 def supports_tabular_typed_filter(loaded: TabularAnalyticsLoadResult | None) -> bool:
     return bool(isinstance(loaded, TabularAnalyticsLoadResult) and loaded.source_snapshots and loaded.source_column_identities
                 and loaded.sqlite_store is not None and loaded.sqlite_store.owns_file
                 and all(snapshot.file_identity is not None for snapshot in loaded.source_snapshots))
+
+
+def tabular_file_group_rule_columns(loaded: TabularAnalyticsLoadResult) -> tuple[str, ...]:
+    """Return loaded source columns, including the file label for multi-file imports."""
+    store = loaded.sqlite_store
+    if len(loaded.source_snapshots) > 1 and "source_file" in store.columns:
+        return (*store.source_columns, "source_file")
+    return store.source_columns
 
 
 def _field_bindings(loaded):

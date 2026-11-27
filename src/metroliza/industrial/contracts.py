@@ -28,7 +28,9 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
 )
-from metroliza.tabular.tabular_typed_filter import TYPED_FILTER_COMBINATION, TabularTypedFilterScope
+from metroliza.tabular.tabular_typed_filter import (
+    TYPED_FILTER_COMBINATION, TabularTypedFilterScope, tabular_file_group_rule_columns,
+)
 
 
 
@@ -167,10 +169,15 @@ def _normalize_tabular_typed_filter(request, source_kind, aggregation):
         raise ValueError("Typed expressions require a loaded CSV or Excel file.")
     if request.grouping_df is not None or any((
         request.tabular_filter_columns, request.tabular_filter_keys, request.tabular_column_filters,
-        request.tabular_filter_expression, aggregation.group_fields,
+        request.tabular_filter_expression,
     )):
         raise ValueError(TYPED_FILTER_COMBINATION)
-    scope.require_loaded(request.tabular_load_result)
+    loaded = request.tabular_load_result
+    scope.require_loaded(loaded)
+    fields = aggregation.group_fields
+    if fields and (len(fields) != 1 or fields[0] not in tabular_file_group_rule_columns(loaded)
+                   or fields[0] in loaded.sqlite_store.metric_columns):
+        raise ValueError("Select one source column from the grouping dropdown for a typed expression.")
     return scope
 
 

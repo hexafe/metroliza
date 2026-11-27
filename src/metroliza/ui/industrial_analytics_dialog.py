@@ -81,7 +81,7 @@ from metroliza.ui.tabular_analytics_filter_dialog import (
     OPEN_TYPED_FILTER, TabularAnalyticsFilterDialog, TabularTypedFilterDialog,
 )
 from metroliza.tabular.tabular_typed_filter import (
-    STALE_TYPED_FILTER, TYPED_FILTER_COMBINATION, supports_tabular_typed_filter,
+    STALE_TYPED_FILTER, TYPED_FILTER_COMBINATION, supports_tabular_typed_filter, tabular_file_group_rule_columns,
 )
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
 from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
@@ -2118,7 +2118,7 @@ class IndustrialAnalyticsDialog(QDialog):
     def _typed_filter_blocker(self) -> str:
         if self._tabular_source_busy():
             return "Wait for the current CSV/Excel operation before applying a typed expression."
-        if any(self._tabular_filter_state_key()) or self.grouping_applied or self.group_field_combo.currentData():
+        if any(self._tabular_filter_state_key()) or self.grouping_applied:
             return TYPED_FILTER_COMBINATION
         return ""
 
@@ -2270,8 +2270,11 @@ class IndustrialAnalyticsDialog(QDialog):
         selected = tuple(replace(metric, field_name=fields[metric.field_name]) for metric in choices.selected
                          if fields.get(metric.field_name) in candidates)
         limits = {fields[name]: limit for name, limit in choices.limits.items() if fields.get(name) in candidates}
-        group_field = fields.get(choices.group_field, "")
-        if group_field not in _tabular_load_columns(loaded) or group_field in candidates:
+        generated_field = (
+            "source_file" if choices.group_field == "source_file" and not self.is_preloaded_tabular_source else ""
+        )
+        group_field = fields.get(choices.group_field, generated_field)
+        if group_field not in self._tabular_group_rule_columns(loaded) or group_field in candidates:
             group_field = ""
         filters, lost_filters = compatible_filters(choices.filters, previous, loaded, fields)
         groups = (choices.grouping, ())
@@ -2347,6 +2350,11 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_worksheet_scope(loaded):
         return tuple(snapshot.sheet_name for snapshot in loaded.source_snapshots)
 
+    def _tabular_group_rule_columns(self, loaded) -> tuple[str, ...]:
+        if not self.is_preloaded_tabular_source and supports_tabular_typed_filter(loaded):
+            return tabular_file_group_rule_columns(loaded)
+        return _tabular_load_columns(loaded)
+
     def _replace_tabular_snapshot(self, loaded, choices, populate_metrics):
         self._tabular_reload_notice = ""
         self._set_tabular_load_result(loaded)
@@ -2356,7 +2364,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._reset_group_options(
             tuple(
                 (column.replace("_", " ").title(), column)
-                for column in _tabular_load_columns(loaded)
+                for column in self._tabular_group_rule_columns(loaded)
                 if column not in {metric.field_name for metric in self.metric_candidates}
             )
         )
@@ -2915,10 +2923,11 @@ class IndustrialAnalyticsDialog(QDialog):
             clear_typed if typed is not None else "Wybierz „Brak reguły”, aby ustawić grupy ręczne." if rule_active else ""
         )
         if not self.is_production_source:
-            self.group_field_combo.setEnabled(source_stable and typed is None and not self.grouping_applied
+            self.group_field_combo.setEnabled(source_stable and not self.grouping_applied
                                               and self.group_field_combo.count() > 1)
             self.group_field_combo.setToolTip(
-                clear_typed if typed is not None else "Usuń grupy ręczne, aby wybrać regułę." if self.grouping_applied
+                "Usuń grupy ręczne, aby wybrać regułę." if self.grouping_applied
+                else "Group matching rows by the selected source column." if typed is not None
                 else "Podziel analizę według wartości kolumny. Receptura zapisze wybraną regułę."
             )
         self.clear_filter_button.setEnabled(
@@ -3297,9 +3306,11 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def _tabular_publication_scope(self) -> tuple:
+        group_field = None if self.is_preloaded_tabular_source else self.group_field_combo.currentData()
         return (self._selected_input_files(), self.output_dashboard_file,
                 self.output_workbook_file if self.workbook_checkbox.isChecked() else "",
-                self._tabular_filter_state_key(), self._tabular_typed_filter, self._grouping_snapshot_owner.revision)
+                self._tabular_filter_state_key(), self._tabular_typed_filter,
+                self._grouping_snapshot_owner.revision, group_field)
 
     def _tabular_publication_sources(self, request) -> tuple[Path, ...]:
         loaded = request.tabular_load_result

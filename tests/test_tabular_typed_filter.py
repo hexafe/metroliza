@@ -97,12 +97,19 @@ def test_typed_filter_source_staleness_and_mixed_request_are_rejected(measuremen
     )
     assert validate_industrial_analytics_request(request).tabular_typed_filter is scope
     assert scope.preview().sample_row_ids == (1, 2, 7)
-    with pytest.raises(ValueError, match="Clear the existing row filters and groups"):
+    with pytest.raises(ValueError, match="Clear the existing row filters and manual groups"):
         validate_industrial_analytics_request(replace(request, tabular_filter_expression='Label = "001"'))
-    with pytest.raises(ValueError, match="Clear the existing row filters and groups"):
-        validate_industrial_analytics_request(replace(request, aggregation_state=ProductionAggregationState(
-            group_fields=("label",),
-        )))
+    by_label = replace(request, aggregation_state=ProductionAggregationState(group_fields=("label",)))
+    assert validate_industrial_analytics_request(by_label).aggregation_state.group_fields == ("label",)
+    with pytest.raises(ValueError, match="Clear the existing row filters and manual groups"):
+        validate_industrial_analytics_request(replace(
+            by_label, grouping_df=pd.DataFrame({"REPORT_ID": [1], "GROUP": ["Manual selection"]}),
+        ))
+    for fields in (("GROUP",), ("label", "measured_date"), ("reading_mm",), ("source_file",), ("missing",)):
+        with pytest.raises(ValueError, match="Select one source column"):
+            validate_industrial_analytics_request(replace(request, aggregation_state=ProductionAggregationState(
+                group_fields=fields,
+            )))
     with pytest.raises(ValueError, match="Clear the typed filter before saving a recipe"):
         capture(request)
     legacy = capture(replace(request, tabular_typed_filter=None))
@@ -245,6 +252,12 @@ def test_mixed_csv_and_workbook_use_inferred_number_for_exact_combined_rows(tmp_
         field = next(item for item in tabular_typed_filter_fields(loaded) if item.label == "Rate (occurrence 2)")
         assert field.kind == "number"
         scope = prepare_tabular_typed_filter(loaded, '`Rate (occurrence 2)` > 10')
+        request = IndustrialAnalyticsRequest(
+            source_kind="tabular_file", input_file=str(csv_input), output_dashboard_file=str(tmp_path / "out.html"),
+            tabular_load_result=loaded, tabular_typed_filter=scope,
+            aggregation_state=ProductionAggregationState(group_fields=("source_file",)),
+        )
+        assert validate_industrial_analytics_request(request).aggregation_state.group_fields == ("source_file",)
         frame = pd.DataFrame({"source_row_number": [1, 2, 3, 4], field.field_id: [8.2, 10.4, 9.6, 11.5]})
         expected = FilterPreview(2, (2, 4))
         reference = PandasFilterAdapter(frame, "source_row_number").prepare(scope.expression)

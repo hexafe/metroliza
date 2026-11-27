@@ -1750,7 +1750,7 @@ def _finish_analytics(dialog) -> None:
     assert dialog.analytics_thread is None
 
 
-def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=()) -> None:
+def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=(), before_choice=None) -> None:
     from PyQt6.QtCore import QTimer
 
     observed = []
@@ -1760,6 +1760,8 @@ def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing
         if not isinstance(prompt, QMessageBox) or prompt.parentWidget() is not dialog:
             return
         observed.append((prompt.defaultButton().text(), prompt.text()))
+        if before_choice is not None:
+            before_choice()
         if choice == "default":
             prompt.defaultButton().click()
         elif choice == "cancel":
@@ -2746,7 +2748,10 @@ def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
         _dispose_dialog(dialog)
 
 
-def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize("group_before_filter", [True, False], ids=["group-first-workbook", "filter-first-html"])
+def test_csv_filters_groups_typed_preview_and_exports_the_same_rows(tmp_path, monkeypatch, group_before_filter):
+    import json
+
     from PyQt6.QtCore import QTimer
 
     from metroliza.shared.typed_filter import FilterPreview
@@ -2755,10 +2760,10 @@ def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, mon
     app = _app()
     source = tmp_path / "readings.csv"
     source.write_text(
-        "Part;Measured Date;Size mm;Size mm;Size!mm\n"
-        "A;2026-02-15;10,2;2,5;90,1\n"
-        "B;2026-02-16;10,3;9,5;90,2\n"
-        "C;2026-02-17;10,4;3,5;90,3\n",
+        "Part;Measured Date;Line;Station;Size mm;Size mm;Size!mm\n"
+        "A;2026-02-15;LineNorth;Bench A;10,2;2,5;90,1\n"
+        "B;2026-02-16;EXCLUDED_CATEGORY_123;Bench B;10,3;9,5;90,2\n"
+        "C;2026-02-17;LineSouth;Bench C;10,4;3,5;90,3\n",
         encoding="utf-8",
     )
     messages, receipts, failures = [], [], []
@@ -2811,6 +2816,12 @@ def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, mon
             if legacy is not None:
                 legacy.reject()
 
+    def select_group(field):
+        index = dialog.group_field_combo.findData(field)
+        assert index > 0
+        dialog.group_field_combo.setCurrentIndex(index)
+        dialog.group_field_combo.activated.emit(index)
+
     try:
         dialog.input_file = str(source)
         dashboard = tmp_path / "typed.html"
@@ -2819,8 +2830,10 @@ def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, mon
         dialog.output_workbook_file = str(workbook)
         dialog.load_metrics()
         _wait_for_tabular_load(dialog)
-        dialog.workbook_checkbox.setChecked(True)
+        dialog.workbook_checkbox.setChecked(group_before_filter)
         dialog.time_series_checkbox.setChecked(True)
+        if group_before_filter:
+            select_group("line")
         QTimer.singleShot(0, open_typed_filter)
         dialog.filters_button.click()
         assert not failures, failures
@@ -2828,28 +2841,113 @@ def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, mon
         assert dialog._tabular_filtered_row_count() == 2
         assert not dialog.save_recipe_button.isEnabled()
         assert not dialog.edit_groups_button.isEnabled()
-        assert not dialog.group_field_combo.isEnabled()
+        assert dialog.group_field_combo.isEnabled()
+        if not group_before_filter:
+            select_group("line")
+            assert dialog._tabular_filtered_row_count() == 2
+        assert dialog._build_analytics_request().aggregation_state.group_fields == ("line",)
         assert not dialog.column_types_button.isEnabled()
         assert dialog.start_button.isEnabled()
         dialog.start_button.click()
-        deadline = time.monotonic() + 15
-        while dialog.analytics_thread is not None and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(0.01)
-        assert dialog.analytics_thread is None
+        _finish_analytics(dialog)
         assert not messages
         assert dashboard.is_file()
         contents = dashboard.read_text(encoding="utf-8")
         assert "Applied the typed CSV/Excel row filter." in contents
         assert "all 2 rows rendered" in contents
-        table = pd.read_excel(workbook, sheet_name="Table Data")
-        assert table["source_row_number"].tolist() == [1, 3]
-        assert table["size_mm_2"].tolist() == [2.5, 3.5]
+        assert all(category in contents for category in ("LineNorth", "LineSouth"))
+        assert "EXCLUDED_CATEGORY_123" not in contents
+        charts_payload = contents.split('<script id="production-dashboard-charts" type="application/json">', 1)[1]
+        charts = json.loads(charts_payload.split("</script>", 1)[0])
+        plot = next(chart["plotly_spec"] for chart in charts if chart["id"] == "time-series-size_mm_2")
+        assert {trace["name"]: (trace["x"], trace["y"]) for trace in plot["data"]} == {
+            "LineNorth": (["2026-02-15T00:00:00+00:00"], [2.5]),
+            "LineSouth": (["2026-02-17T00:00:00+00:00"], [3.5]),
+        }
+        if group_before_filter:
+            with pd.ExcelFile(workbook) as result:
+                table = pd.read_excel(result, sheet_name="Table Data")
+                assert table["source_row_number"].tolist() == [1, 3]
+                assert table["size_mm_2"].tolist() == [2.5, 3.5]
+                assert table["line"].tolist() == ["LineNorth", "LineSouth"]
+                aggregates = pd.read_excel(result, sheet_name="Aggregates")
+                assert set(aggregates["line"]) == {"LineNorth", "LineSouth"}
+            original = (dashboard.read_bytes(), workbook.read_bytes())
+            _choose_analytics_collision(
+                dialog, "replace", (), before_choice=lambda: select_group("station"),
+            )
+            assert dialog.analytics_thread is None
+            assert messages == ["Settings changed while choosing outputs. Review the scope and generate again."]
+            assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+            select_group("line")
+        else:
+            assert not workbook.exists()
         dialog.load_metrics()
         _wait_for_tabular_load(dialog)
         assert not dialog.start_button.isEnabled()
         assert "new preview" in dialog.readiness_label.text()
         dialog.clear_filter_button.click()
         assert dialog.start_button.isEnabled()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_mixed_inputs_offer_path_free_file_grouping_and_keep_manual_groups_exclusive(tmp_path):
+    from PyQt6.QtCore import QTimer
+
+    from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+
+    app = _app()
+    paths = []
+    for directory, rows in (("private-a", "A,1.5\nB,2.5\n"), ("private-b", "C,3.5\nD,4.5\n")):
+        folder = tmp_path / directory
+        folder.mkdir()
+        source = folder / "readings.csv"
+        source.write_text("Part,Reading\n" + rows, encoding="utf-8")
+        paths.append(str(source))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    observed = []
+
+    def inspect_filter_dialog():
+        modal = app.activeModalWidget()
+        if not isinstance(modal, TabularAnalyticsFilterDialog):
+            return
+        observed.append((modal.typed_filter_button.isEnabled(), modal.typed_filter_button.toolTip()))
+        modal.reject()
+
+    try:
+        dialog.input_file = paths[0]
+        dialog.input_files = tuple(paths)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        combo = dialog.group_field_combo
+        index = combo.findData("source_file")
+        assert index > 0
+        assert combo.currentData() == ""
+        assert not dialog.grouping_applied
+        assert dialog.tabular_load_result.row_table["source_file"].tolist() == [
+            "readings.csv", "readings.csv", "readings (2).csv", "readings (2).csv",
+        ]
+
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [1], "GROUP": ["Manually selected"]}))
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+        assert not combo.isEnabled()
+        QTimer.singleShot(0, inspect_filter_dialog)
+        dialog.filters_button.click()
+        assert observed and not observed[0][0] and "manual groups" in observed[0][1]
+        assert dialog.grouping_applied
+
+        dialog.clear_groups_button.click()
+        assert combo.isEnabled()
+        combo.setCurrentIndex(index)
+        combo.activated.emit(index)
+        assert not dialog.grouping_applied
+        assert dialog._build_analytics_request().aggregation_state.group_fields == ("source_file",)
+
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert combo.currentData() == "source_file"
+        assert not dialog.grouping_applied
     finally:
         _dispose_dialog(dialog)

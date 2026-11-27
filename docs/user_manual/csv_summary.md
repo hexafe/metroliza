@@ -205,9 +205,11 @@ Quote text such as `"001"` to keep its leading zeros.
 
 Select **Preview rows** to see the exact match count and up to 20 source row IDs. Select
 **Apply typed filter** to use that previewed rule when creating the dashboard and workbook.
-Reloaded data requires a new preview. Clear existing row filters and any groups before using
-a typed expression. Clear the typed filter before editing groups, changing column roles or types,
-or saving a recipe.
+Reloaded data requires a new preview. Clear existing row filters and manual or auto-created
+file groups before using a typed expression. You can select **Reguła grupowania** before or after
+applying the typed filter. Only matching rows contribute to those groups. For multiple inputs,
+**Source File** groups matching rows by their displayed source labels. Clear the typed filter
+before editing manual groups, changing column roles or types, or saving a recipe.
 
 ### 4. Choose Grouping And Aggregation
 
