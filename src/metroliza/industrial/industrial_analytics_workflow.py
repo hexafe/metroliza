@@ -345,7 +345,7 @@ def run_tabular_file_analytics(
             tabular_filter_keys=tabular_filter_keys or (),
             tabular_column_filters=tabular_column_filters or (),
             tabular_filter_expression=tabular_filter_expression or "",
-            tabular_typed_filter=tabular_typed_filter,
+            _tabular_typed_filter=tabular_typed_filter,
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,

@@ -3257,7 +3257,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
                 tabular_filter_expression=self.tabular_filter_expression,
-                tabular_typed_filter=self._tabular_typed_filter,
+                _tabular_typed_filter=self._tabular_typed_filter,
                 grouping_df=(snapshot.assignments if snapshot is not None
                              else self.df_for_grouping if self.grouping_applied else None),
                 _grouping_snapshot=snapshot,

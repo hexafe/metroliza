@@ -93,7 +93,7 @@ def test_typed_filter_source_staleness_and_mixed_request_are_rejected(measuremen
     scope = prepare_tabular_typed_filter(loaded, 'Label = "001"')
     request = IndustrialAnalyticsRequest(
         source_kind="tabular_file", input_file=str(path), output_dashboard_file=str(tmp_path / "out.html"),
-        tabular_load_result=loaded, tabular_typed_filter=scope,
+        tabular_load_result=loaded, _tabular_typed_filter=scope,
     )
     assert validate_industrial_analytics_request(request).tabular_typed_filter is scope
     assert scope.preview().sample_row_ids == (1, 2, 7)
@@ -112,7 +112,7 @@ def test_typed_filter_source_staleness_and_mixed_request_are_rejected(measuremen
             )))
     with pytest.raises(ValueError, match="Clear the typed filter before saving a recipe"):
         capture(request)
-    legacy = capture(replace(request, tabular_typed_filter=None))
+    legacy = capture(replace(request, _tabular_typed_filter=None))
     assert "tabular_typed_filter" not in repr(legacy.binding)
     with pytest.raises(ValueError, match="needs a new preview"):
         materialize_tabular_dataframe(replace(loaded), typed_scope=scope)
@@ -254,7 +254,7 @@ def test_mixed_csv_and_workbook_use_inferred_number_for_exact_combined_rows(tmp_
         scope = prepare_tabular_typed_filter(loaded, '`Rate (occurrence 2)` > 10')
         request = IndustrialAnalyticsRequest(
             source_kind="tabular_file", input_file=str(csv_input), output_dashboard_file=str(tmp_path / "out.html"),
-            tabular_load_result=loaded, tabular_typed_filter=scope,
+            tabular_load_result=loaded, _tabular_typed_filter=scope,
             aggregation_state=ProductionAggregationState(group_fields=("source_file",)),
         )
         assert validate_industrial_analytics_request(request).aggregation_state.group_fields == ("source_file",)

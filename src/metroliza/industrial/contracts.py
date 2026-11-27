@@ -58,13 +58,18 @@ class IndustrialAnalyticsRequest:
     tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
     tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
     tabular_filter_expression: str = ""
-    tabular_typed_filter: TabularTypedFilterScope | None = field(default=None, repr=False, kw_only=True)
     grouping_df: GroupingAssignments | None = None
     grouping_default_group_label: str | None = None
     _grouping_snapshot: _ValidatedGroupingSnapshot | None = field(default=None, repr=False, compare=False, kw_only=True)
     _grouping_owner: _GroupingSnapshotOwner | None = field(default=None, repr=False, compare=False, kw_only=True)
     dashboard_visual_settings: dict[str, Any] | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict[str, Any] | None = None
+    _tabular_typed_filter: TabularTypedFilterScope | None = field(default=None, repr=False, kw_only=True)
+
+    @property
+    def tabular_typed_filter(self) -> TabularTypedFilterScope | None:
+        """Expose the prepared filter separately from public positional fields."""
+        return self._tabular_typed_filter
 
 
 _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
@@ -143,7 +148,7 @@ def validate_industrial_analytics_request(
             request.tabular_filter_expression,
             field_name="tabular filter expression",
         ),
-        tabular_typed_filter=_normalize_tabular_typed_filter(request, source_kind, aggregation),
+        _tabular_typed_filter=_normalize_tabular_typed_filter(request, source_kind, aggregation),
         grouping_df=(grouping := _normalize_request_grouping(request))[0],
         grouping_default_group_label=normalize_default_group_label(
             request.grouping_default_group_label,
