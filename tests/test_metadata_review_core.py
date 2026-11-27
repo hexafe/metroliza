@@ -23,12 +23,14 @@ from metroliza.reports.report_metadata_review import (
     FieldOverride,
     ReportMetadataOverride,
     ReviewRow,
+    apply_metadata_override,
     apply_value_to_rows,
     build_overrides,
     normalize_review_value,
 )
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.shared.parse_contracts import ParseRequest
+from tests.metadata_review_fakes import FILE_NAME, make_selection
 
 
 FIXTURE = Path(__file__).parent / "fixtures" / "pdf" / "cmm_smoke_fixture.pdf"
@@ -289,7 +291,7 @@ def test_normalize_review_value_supports_all_review_fields():
 
 
 def test_ocr_fills_unedited_fields_and_never_overwrites_manual_values(tmp_path, fake_ocr):
-    *_, rows, reader = _prefilled_rows(tmp_path, (NAME,))
+    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,))
     row = next(iter(rows.values()))
     row.set_user_value("reference", "MY-MANUAL-REF")
 
@@ -314,6 +316,19 @@ def test_ocr_fills_unedited_fields_and_never_overwrites_manual_values(tmp_path, 
     # Only an explicit action replaces the manual value with the OCR one.
     assert row.accept_ocr_suggestions() == ("reference",)
     assert row.value("reference") == "OCR-REF-9" and row.cells["reference"].origin == "ocr"
+    choices = build_overrides(rows.values())
+    candidate = next(item.ocr_candidate for item in choices[0].fields if item.field_name == "reference")
+    assert candidate.region_name == "page1_header_band_ocr" and candidate.page_number == 1
+    assert not database.exists()
+    worker = ParseReportsThread(_plan(source, database, review, overrides=choices))
+    worker.run()
+    assert worker.last_parse_result.imported_files == 1
+    with closing(sqlite3.connect(database)) as connection:
+        assert connection.execute("SELECT reference FROM report_metadata").fetchone() == ("OCR-REF-9",)
+        assert connection.execute(
+            "SELECT normalized_value, region_name, page_number, confidence "
+            "FROM report_metadata_candidates WHERE field_name = 'reference' AND is_selected = 1"
+        ).fetchall() == [("OCR-REF-9", candidate.region_name, 1, candidate.confidence)]
 
 
 def test_second_ocr_run_keeps_edits_made_after_the_first(tmp_path, fake_ocr):
@@ -324,6 +339,76 @@ def test_second_ocr_run_keeps_edits_made_after_the_first(tmp_path, fake_ocr):
     _read(reader, rows, mode=MODE_OCR)
     assert row.value("revision") == "Z"
     assert row.cells["revision"].ocr_suggestion == "D.01"
+
+
+def test_explicit_acceptance_preserves_the_exact_ocr_candidate_after_another_read():
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    row.set_user_value("revision", "MANUAL-REV")
+    first = make_selection({
+        "reference": ("FIRST", "header_exact", 0.74), "revision": "A",
+    })
+    accepted_candidate = replace(
+        first.candidates[0], raw_value=" FIRST ", region_name="page1_header_band_ocr",
+    )
+    row.apply_ocr(replace(first, candidates=(accepted_candidate, first.candidates[1])))
+
+    assert row.value("reference") == "MANUAL"
+    assert row.accept_ocr_suggestions(("reference",)) == ("reference",)
+    assert row.cells["reference"].source == accepted_candidate.source_type
+    assert row.cells["reference"].confidence == accepted_candidate.confidence
+    assert row.value("revision") == "MANUAL-REV"
+    latest = make_selection({"reference": ("SECOND", "header_exact", 0.95), "revision": "B"})
+    row.apply_ocr(latest)
+    assert row.value("reference") == "FIRST"
+    assert row.cells["reference"].ocr_suggestion == "SECOND"
+    assert row.value("revision") == "MANUAL-REV"
+
+    # A different reading can find the same normalized value with higher confidence
+    # and the same candidate key. It must retain its own evidence as an alternative.
+    fresh_candidate = replace(accepted_candidate, confidence=0.99, region_name="page1_header_band_words")
+    fresh = replace(first, candidates=(fresh_candidate, first.candidates[1]))
+    applied = apply_metadata_override(fresh, row.to_override(), applied_at="2026-01-01")
+    assert applied.metadata.reference == "FIRST"
+    assert [item for item in applied.candidates if item.field_name == "reference" and item.selected] == [
+        accepted_candidate,
+    ]
+    assert replace(fresh_candidate, selected=False) in applied.candidates
+    assert replace(latest.candidates[0], selected=False) in applied.candidates
+    assert applied.metadata.revision == "MANUAL-REV"
+    row.mark_ocr_failed("Synthetic failed reread")
+    assert row.value("reference") == "FIRST"
+    assert accepted_candidate in apply_metadata_override(fresh, row.to_override()).candidates
+
+    assert row.set_user_value("reference", "CORRECTED") == (True, None)
+    row.apply_ocr(latest)
+    assert row.value("reference") == "CORRECTED"
+    assert row.to_override().fields[0] == FieldOverride("reference", "CORRECTED", "user")
+
+
+@pytest.mark.parametrize("source,extraction_mode", [(FILE_NAME, "ocr"), ("header_exact", "words")])
+def test_fallback_cannot_be_accepted_as_ocr(source, extraction_mode):
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    result = make_selection({"reference": ("FALLBACK", source, 0.8)})
+    row.apply_ocr(replace(result, metadata=replace(result.metadata, metadata_json={
+        **result.metadata.metadata_json, "header_extraction_mode": extraction_mode,
+    })))
+    assert not row.conflict_fields
+    assert row.accept_ocr_suggestions(("reference",)) == ()
+    assert row.value("reference") == "MANUAL"
+
+
+@pytest.mark.parametrize("state", ["pending", "changed", "unsupported", "failed"])
+def test_review_cannot_resolve_a_previous_suggestion_on_an_unready_row(state):
+    row = ReviewRow("one.pdf", "sha256:one", "one.pdf", "cmm")
+    row.set_user_value("reference", "MANUAL")
+    row.apply_ocr(make_selection({"reference": "OCR"}))
+    assert row.conflict_fields == ("reference",)
+    row.mark_failed("Synthetic unready row", state=state)
+    assert row.accept_ocr_suggestions(("reference",)) == ()
+    assert not row.dismiss_ocr_suggestion("reference")
+    assert row.value("reference") == "MANUAL"
 
 
 def test_unavailable_ocr_backend_is_reported_with_a_coarse_note(tmp_path, monkeypatch):
