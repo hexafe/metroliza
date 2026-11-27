@@ -55,6 +55,8 @@ tooltip and report details. Compare it with the report, select the cell, then op
 Import saves accepted values with their OCR source and records deferred or rejected suggestions
 with their source details. Later metadata enrichment keeps reviewed values and records different
 readings as alternatives. You can still correct the value before import or in **Modify Database**.
+After import, select a report in **Modify Database** and open **Report details** to read its saved
+deferred or rejected suggestions and their OCR sources.
 
 ## Progress, cancellation and outcomes
 

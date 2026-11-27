@@ -28,7 +28,9 @@ from metroliza.reports.db import (
     quote_identifier,
     sqlite_file_identity,
 )
-from metroliza.reports.report_curation import DETAIL_ROW_LIMIT, load_stored_report_context, report_context_projections
+from metroliza.reports.report_curation import (
+    DETAIL_ROW_LIMIT, StoredOcrDecision, load_stored_report_context, report_context_projections,
+)
 from metroliza.reports.report_edit_service import (
     LEGACY_MEASUREMENT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS,
     LEGACY_REPORT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_REPORT_FIELDS,
@@ -57,6 +59,7 @@ from metroliza.ui.modify_db_records import (
 )
 from metroliza.reports.report_repository import ReportRepository, validate_manual_number
 from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
+from metroliza.reports.report_metadata_review import FIELD_LABELS
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -106,6 +109,25 @@ def _record_database_edit_outcome(token, outcome: ContextOperationOutcome) -> No
             _bugreport_recorder.record_option_outcome(token, outcome)
     except Exception:
         return
+
+
+def _stored_ocr_decision_lines(decisions: tuple[StoredOcrDecision, ...]) -> list[str]:
+    if not decisions:
+        return []
+    lines = ["", "Stored OCR decisions"]
+    for decision in decisions:
+        provenance = [decision.source_type]
+        if decision.region_name:
+            provenance.append(decision.region_name)
+        if decision.page_number is not None:
+            provenance.append(f"page {decision.page_number}")
+        if decision.confidence is not None:
+            provenance.append(f"{round(decision.confidence * 100)}% confidence")
+        lines.append(
+            f"{FIELD_LABELS[decision.field_name]} · {decision.decision.capitalize()} · "
+            f"Suggested value: {decision.value} ({' / '.join(provenance)})"
+        )
+    return lines
 
 
 QItemSelection = getattr(QtCore, "QItemSelection", None)
@@ -669,6 +691,7 @@ class ModifyDB(QDialog):
             ("parse_status", "Parse status"), ("measurement_count", "Measurements"), ("nok_count", "NOK measurements"),
         )
         lines = [f"{label}: {context.report[field]}" for field, label in names if context.report.get(field) is not None]
+        lines.extend(_stored_ocr_decision_lines(context.ocr_decisions))
         count = context.report.get("review_warning_count")
         if count is not None:
             lines.extend(("", f"Review warnings: {count}"))

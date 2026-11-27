@@ -2,6 +2,7 @@
 
 from contextlib import closing
 import hashlib
+import json
 import sqlite3
 import threading
 
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import QDialog, QPlainTextEdit
 
 from metroliza.reports import characteristic_alias_service as aliases
 from metroliza.reports.db import run_transaction_with_retry
+from metroliza.reports.report_curation import load_stored_report_context
 from metroliza.reports.report_edit_service import ReportEditService
 from metroliza.reports.report_metadata_models import MetadataCandidate, MetadataWarning
 from metroliza.reports.report_repository import ReportRepository
@@ -292,12 +294,32 @@ def test_stored_report_review_filters_and_selected_context_are_read_only(tmp_pat
         *(MetadataWarning(f"code_{i}", None, "warning", "Stored review evidence.") for i in range(24)),
     ))
     repository.replace_metadata_warnings(other, (MetadataWarning("info_note", None, "info", "Info only."),))
+    reference_decision = {
+        "decision": "deferred", "value": "OCR-REFERENCE", "source_type": "header_exact",
+        "region_name": "page1_header_band_ocr", "page_number": 1, "confidence": 0.79,
+        "rule_id": "review:reference", "evidence_text": "unprojected-evidence-sentinel",
+    }
+    decisions = {
+        "reference": reference_decision,
+        "revision": {**reference_decision, "decision": "rejected", "value": "B", "confidence": 0.84},
+        "comment": {**reference_decision, "value": "line one\nline two\u202e " + "x" * 121 + "tail-sentinel"},
+        "operator_name": {**reference_decision, "decision": "accepted", "value": "invalid-status-sentinel"},
+        "unknown": {**reference_decision, "value": "unknown-field-sentinel"},
+    }
     with closing(sqlite3.connect(path)) as connection, connection:
         connection.execute("UPDATE parsed_reports SET parser_id = 'other_parser' WHERE id = ?", (other,))
         connection.execute(
-            "UPDATE report_metadata SET metadata_profile_id = 'inspection', metadata_profile_version = '3.1' "
-            "WHERE report_id = ?", (report,),
+            "UPDATE report_metadata SET metadata_profile_id = 'inspection', metadata_profile_version = '3.1', "
+            "metadata_json = ? WHERE report_id = ?", (json.dumps({
+                "header_text": "unprojected-header-sentinel",
+                "metadata_review": {"version": 1, "ocr_decisions": decisions},
+            }), report),
         )
+        connection.execute("UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?", (json.dumps({
+            "metadata_review": {"version": 1, "ocr_decisions": {
+                "part_name": {**reference_decision, "decision": "rejected", "value": "OTHER-REPORT-DECISION"},
+            }},
+        }), other))
     before = _dump(path)
     dialog = ModifyDB(db_file=path, modal=False)
     try:
@@ -336,6 +358,7 @@ def test_stored_report_review_filters_and_selected_context_are_read_only(tmp_pat
                              if window.windowTitle() == f"Report details · #{report}")
         detail_view = detail_window.findChild(QPlainTextEdit)
         assert detail_view.isReadOnly()
+        assert detail_view.accessibleName() == "Stored report details"
         detail = detail_view.toPlainText()
         assert f"Source path: {tmp_path / 'report.pdf'}" in detail
         assert f"Source SHA-256: {hashlib.sha256(b'report.pdf-content').hexdigest()}" in detail
@@ -348,10 +371,62 @@ def test_stored_report_review_filters_and_selected_context_are_read_only(tmp_pat
         assert "end-marker" not in detail and "info_note" not in detail
         assert "report_date: 2024-01-01 (header_exact / ocr)" in detail
         assert "reference: MANUAL (Manual /" in detail
+        assert "Stored OCR decisions" in detail
+        assert "Reference · Deferred · Suggested value: OCR-REFERENCE" in detail
+        assert "Revision · Rejected · Suggested value: B" in detail
+        assert "header_exact / page1_header_band_ocr / page 1 / 79% confidence" in detail
+        assert "Comment · Deferred · Suggested value: line one line two" in detail and "…" in detail
+        assert "sentinel" not in detail and "\u202e" not in detail and "OTHER-REPORT-DECISION" not in detail
         detail_window.reject()
+
+        dialog.report_warnings_filter.setChecked(False)
+        dialog.report_filter_edit.setText("other_parser")
+        dialog.flush_record_filters()
+        dialog.report_records_table.setCurrentIndex(model.index(0, 0))
+        dialog.report_details_button.click()
+        second_window = next(window for window in dialog.findChildren(QDialog)
+                             if window.windowTitle() == f"Report details · #{other}")
+        other_detail = second_window.findChild(QPlainTextEdit).toPlainText()
+        assert "Part name · Rejected · Suggested value: OTHER-REPORT-DECISION" in other_detail
+        assert "OCR-REFERENCE" not in other_detail and "Comment · Deferred" not in other_detail
+        second_window.reject()
         assert not dialog.has_pending_changes() and _dump(path) == before
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize("payload", [
+    None, "", b"\x80", "{", "[" * 2000 + "]" * 2000,
+    '{"metadata_review":{"version":1,"ocr_fields":["reference"]}}',
+    '{"metadata_review":{"version":true,"ocr_decisions":{"reference":{}}}}',
+    '{"metadata_review":{"version":2,"ocr_decisions":{"reference":{}}}}',
+    '{"metadata_review":{"version":1,"ocr_decisions":[]}}',
+    '{"metadata_review":{"version":1,"ocr_decisions":{"reference":{"decision":"deferred","value":7}}}}',
+    '{"metadata_review":{"version":1,"ocr_decisions":{"reference":{"decision":"deferred",'
+    '"value":"SKIP-OVERLONG", "source_type":"header_exact"}}},"extra":"' + "x" * 300_000 + '"}',
+], ids=["missing", "blank", "invalid-utf8", "invalid-json", "deep-json", "pre-disposition", "wrong-version-type",
+        "future-version", "invalid-decisions", "invalid-value", "oversized"])
+def test_stored_report_context_ignores_unusable_ocr_receipts(tmp_path, payload):
+    path, _repository, report, _other, _measurements = _database(tmp_path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("UPDATE report_metadata SET metadata_json = CAST(? AS TEXT) WHERE report_id = ?",
+                           (payload, report))
+    before = (tmp_path / "reports.db").read_bytes()
+    context = load_stored_report_context(path, report)
+    assert context.report["file_name"] == "report.pdf" and context.ocr_decisions == ()
+    assert load_stored_report_context(path, 999_999) is None
+    assert (tmp_path / "reports.db").read_bytes() == before
+
+
+def test_stored_report_context_accepts_an_older_database_without_a_receipt_column(tmp_path):
+    path = tmp_path / "older.db"
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.execute("CREATE TABLE report_metadata (report_id INTEGER PRIMARY KEY, reference TEXT)")
+        connection.execute("CREATE VIEW vw_report_overview AS SELECT 7 AS report_id, 'legacy.pdf' AS file_name")
+    before = path.read_bytes()
+    context = load_stored_report_context(str(path), 7)
+    assert context.report == {"report_id": 7, "file_name": "legacy.pdf"}
+    assert context.ocr_decisions == () and path.read_bytes() == before
 
 
 def test_external_record_update_keeps_pending_modify_db_draft(tmp_path, qapplication_session, monkeypatch):
