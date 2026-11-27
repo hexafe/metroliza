@@ -299,6 +299,8 @@ class TestGroupAnalysisWriter(unittest.TestCase):
         )
         pairwise_data_height = next(height for row, height, *_ in worksheet.rows if row == pairwise_data_row)
         self.assertGreater(pairwise_data_height, 22)
+        self.assertFalse(any(value in ('Group A ID', 'Group B ID', 'N A', 'N B')
+                             for _, _, value in worksheet.writes))
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('align'), 'left')
         self.assertEqual(worksheet.write_formats[(pairwise_data_row, 14)].get('props', {}).get('valign'), 'top')
 

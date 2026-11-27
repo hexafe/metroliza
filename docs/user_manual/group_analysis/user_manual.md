@@ -164,6 +164,12 @@ Open **Detailed tables** when you need the supporting numbers. The dashboard may
 - **Distribution difference**: context for how the full distributions differ.
 - **Distribution pairwise comparison**: pair-by-pair distribution-shape detail when available.
 
+For Reports exports using grouping rules, each comparison shows **N A** and **N B**, the number
+of finite measurements used from each group for that metric. These counts exclude missing and
+non-finite values. **Group A ID** and **Group B ID** match the entries under **Group definitions**,
+even if a group was renamed. The dashboard shows these fields in the comparison table. The
+**Group Analysis** worksheet puts them directly under the corresponding comparison row.
+
 Most training and routine review should start in the dashboard summary and metric blocks. Detailed
 tables are secondary unless you are validating a decision, investigating a warning, or preparing a
 technical review.

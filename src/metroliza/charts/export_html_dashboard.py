@@ -2648,6 +2648,10 @@ def _humanize_field_label(value: str) -> str:
         "cpk": "Cpk",
         "group_a": "Group A",
         "group_b": "Group B",
+        "n_a": "N A",
+        "n_b": "N B",
+        "group_a_id": "Group A ID",
+        "group_b_id": "Group B ID",
         "delta_mean": "Delta mean",
         "adjusted_p_value": "Adj p",
         "effect_size": "Effect size",
@@ -2865,6 +2869,10 @@ def _normalize_group_analysis_manifest(
                     preferred_columns=[
                         "group_a",
                         "group_b",
+                        "n_a",
+                        "n_b",
+                        "group_a_id",
+                        "group_b_id",
                         "delta_mean",
                         "adjusted_p_value",
                         "effect_size",
@@ -2873,6 +2881,7 @@ def _normalize_group_analysis_manifest(
                         "takeaway",
                         "test_rationale",
                     ],
+                    hidden_columns=[] if descriptors else ["n_a", "n_b"],
                 ),
                 "distribution_difference": distribution_rows,
                 "distribution_pairwise_rows": _normalize_rows_table(raw_metric.get("distribution_pairwise_rows")),
@@ -4933,7 +4942,9 @@ def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_label
     )
 
     raw_table_sections = []
-    group_columns = ("group", "group_a", "group_b", "Group A", "Group B") if literal_group_labels else ()
+    group_columns = (
+        "group", "group_a", "group_b", "Group A", "Group B", "group_a_id", "group_b_id"
+    ) if literal_group_labels else ()
     if descriptive_stats.get("rows"):
         raw_table_sections.append(
             '<div class="subsection-title">Descriptive stats</div>'

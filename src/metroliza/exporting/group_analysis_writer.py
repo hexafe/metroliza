@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+from xlsxwriter.utility import xl_col_to_name
+
 from metroliza.exporting.export_summary_composition_service import (
     classify_capability_status as _classify_capability_status,
     classify_capability_value as _classify_capability_value,
@@ -1584,7 +1586,7 @@ def _write_metric_index(worksheet, row, metric_rows, *, sheet_state=None):
     return row + SECTION_GAP, {'header_row': header_row, 'first_data_row': first_data_row}
 
 
-def _apply_metric_pairwise_formats(worksheet, bounds):
+def _apply_metric_pairwise_formats(worksheet, bounds, *, include_evidence=False):
     headers = bounds['headers']
     first = bounds['first_data_row']
     last = bounds['last_data_row']
@@ -1602,6 +1604,13 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
                 return headers.index(label)
         raise ValueError(f'Missing expected pairwise column: {labels}')
 
+    def apply(col, style, **options):
+        if include_evidence:
+            # Format the comparison rows while leaving the interleaved evidence rows alone.
+            column_name = xl_col_to_name(col)
+            options['multi_range'] = ' '.join(f'{column_name}{row + 1}' for row in range(first, last + 1, 2))
+        _apply_conditional(worksheet, first, col, last, col, _style_rule(formats, style, **options))
+
     difference_col = _column_for('Status', 'difference')
     comment_col = _column_for('Comment', 'Action', 'Insight / action', 'caution')
     flags_col = column_lookup.get('Flags')
@@ -1613,30 +1622,23 @@ def _apply_metric_pairwise_formats(worksheet, bounds):
     if delta_mean_col is None and 'Delta mean' in headers:
         delta_mean_col = headers.index('Delta mean')
 
-    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='USE CAUTION'))
-    _apply_conditional(worksheet, first, difference_col, last, difference_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='APPROXIMATE'))
-    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='Caution:'))
-    _apply_conditional(worksheet, first, comment_col, last, comment_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='descriptive only'))
+    apply(difference_col, 'warning', type='text', criteria='containing', value='USE CAUTION')
+    apply(difference_col, 'warning', type='text', criteria='containing', value='APPROXIMATE')
+    apply(comment_col, 'warning', type='text', criteria='containing', value='Caution:')
+    apply(comment_col, 'warning', type='text', criteria='containing', value='descriptive only')
 
     if flags_col is not None:
-        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='LOW N'))
-        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='IMBALANCED N'))
-        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'warning', type='text', criteria='containing', value='SPEC?'))
-        _apply_conditional(worksheet, first, flags_col, last, flags_col, _style_rule(formats, 'strong_warning', type='text', criteria='containing', value='SEVERELY IMBALANCED N'))
+        apply(flags_col, 'warning', type='text', criteria='containing', value='LOW N')
+        apply(flags_col, 'warning', type='text', criteria='containing', value='IMBALANCED N')
+        apply(flags_col, 'warning', type='text', criteria='containing', value='SPEC?')
+        apply(flags_col, 'strong_warning', type='text', criteria='containing', value='SEVERELY IMBALANCED N')
 
     # Restrained emphasis for clearly significant p-values and very large effects.
-    _apply_conditional(worksheet, first, pvalue_col, last, pvalue_col, _style_rule(formats, 'positive', type='cell', criteria='<', value=0.01))
-    _apply_conditional(worksheet, first, effect_col, last, effect_col, _style_rule(formats, 'positive', type='cell', criteria='>=', value=1.0))
+    apply(pvalue_col, 'positive', type='cell', criteria='<', value=0.01)
+    apply(effect_col, 'positive', type='cell', criteria='>=', value=1.0)
 
     if delta_mean_col is not None:
-        _apply_conditional(
-            worksheet,
-            first,
-            delta_mean_col,
-            last,
-            delta_mean_col,
-            _style_rule(formats, 'delta_mean_fixed_3', type='no_blanks'),
-        )
+        apply(delta_mean_col, 'delta_mean_fixed_3', type='no_blanks')
 
 
 def _write_metric_snapshot(worksheet, row, metric_row, capability_summary_text, *, compact=False):
@@ -1756,6 +1758,25 @@ def _write_descriptive_stats_block(worksheet, row, metric_row):
     return row + SECTION_GAP
 
 
+def _write_pairwise_evidence_row(worksheet, row, entry, formats):
+    label_format = formats.get('detail_label_fmt')
+    value_format = formats.get('detail_value_fmt')
+    write_id = getattr(_get_native_worksheet(worksheet), 'write_string', worksheet.write)
+    for label, key, first, last in (
+        ('Group A ID', 'group_a_id', 1, 4),
+        ('Group B ID', 'group_b_id', 9, 12),
+    ):
+        _merge_row(worksheet, row, first - 1, first - 1, label, label_format)
+        _merge_row(worksheet, row, first, last, '', value_format)
+        if entry.get(key) is not None:
+            write_id(row, first, entry[key], value_format)
+    worksheet.write(row, 5, 'N A', label_format)
+    worksheet.write(row, 6, entry.get('n_a'), value_format)
+    worksheet.write(row, 13, 'N B', label_format)
+    worksheet.write(row, 14, entry.get('n_b'), value_format)
+    _set_row_height(worksheet, row, 22, value_format)
+
+
 def _write_pairwise_comparisons_block(worksheet, row, metric_row):
     formats = _build_formats(worksheet)
     section_row = row
@@ -1790,9 +1811,10 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
         return row + 1 + SECTION_GAP
 
     first_data_row = row
-    for entry in pairwise_rows:
+    include_evidence = any('group_a_id' in entry for entry in pairwise_rows)
+    for index, entry in enumerate(pairwise_rows):
         status_label = _coerce_status_label(entry.get('difference_label') or entry.get('difference')) or 'REVIEW'
-        banded = _is_banded_row(row, anchor_row=first_data_row)
+        banded = index % 2 == 1
         takeaway_text = _format_pairwise_takeaway(entry)
         action_text = _format_pairwise_action(entry)
         test_name = _format_pairwise_test_context(entry)
@@ -1830,6 +1852,9 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
             ),
         )
         row += 1
+        if include_evidence:
+            _write_pairwise_evidence_row(worksheet, row, entry, formats)
+            row += 1
 
     _apply_metric_pairwise_formats(
         worksheet,
@@ -1837,8 +1862,9 @@ def _write_pairwise_comparisons_block(worksheet, row, metric_row):
             'headers': headers,
             'column_lookup': {label: first_col for label, first_col, _last_col in header_specs},
             'first_data_row': first_data_row,
-            'last_data_row': row - 1,
+            'last_data_row': row - (2 if include_evidence else 1),
         },
+        include_evidence=include_evidence,
     )
     return row + SECTION_GAP
 
