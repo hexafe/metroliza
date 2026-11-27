@@ -562,12 +562,7 @@ class FilterDialog(QDialog):
         footer_layout.setVerticalSpacing(2)
 
         footer_layout.addWidget(self.expression_label, 0, 0)
-        footer_layout.addWidget(self.expression_input, 0, 1, 1, 2 if self.typed_mode_button else 3)
-        if self.typed_mode_button is not None:
-            mode_layout = QtWidgets.QHBoxLayout()
-            mode_layout.addWidget(self.typed_mode_button)
-            mode_layout.addWidget(self.typed_preview_button)
-            footer_layout.addLayout(mode_layout, 0, 3)
+        footer_layout.addWidget(self.expression_input, 0, 1, 1, 3)
         footer_layout.addWidget(self.date_range_label, 1, 0)
         footer_layout.addWidget(self.date_range_selector, 1, 1)
         footer_layout.addWidget(self.date_from_label, 2, 0)
@@ -585,6 +580,9 @@ class FilterDialog(QDialog):
 
         action_layout = QtWidgets.QHBoxLayout()
         action_layout.setContentsMargins(0, 0, 0, 0)
+        if self.typed_mode_button is not None:
+            action_layout.addWidget(self.typed_mode_button)
+            action_layout.addWidget(self.typed_preview_button)
         action_layout.addStretch(1)
         action_layout.addWidget(self.reset_button)
         action_layout.addWidget(self.cancel_button)
