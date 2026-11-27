@@ -35,8 +35,13 @@ REPORT_FILTER_FIELDS = frozenset(field.name for field in fields(FilterState))
 
 def decode_filter_state(values: dict) -> FilterState:
     """Read the same typed Reports filter from presets and saved configurations."""
-    if type(values) is not dict or values.keys() != REPORT_FILTER_FIELDS:
+    if type(values) is not dict:
         raise ValueError("Unknown report filter fields.")
+    if values.keys() != REPORT_FILTER_FIELDS:
+        unexpected = values.keys() - REPORT_FILTER_FIELDS
+        missing = REPORT_FILTER_FIELDS - values.keys()
+        fields_to_check = sorted(map(str, unexpected or missing))
+        raise ValueError(f"Unknown report filter fields. Check {', '.join(fields_to_check)}.")
     decoded = {}
     for name, value in values.items():
         if name.endswith("_values"):

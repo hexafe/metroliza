@@ -236,6 +236,7 @@ Use **Clear filters** in the Export dialog to reset the export back to the defau
 If you want to revise filters instead, reopen the dialog, change the selections, and click **Apply filters** again.
 
 Use **Saved filters… → Save filter draft as…** to keep the current conditions under a name.
+Reusing a name asks for confirmation even if the saved entry is unavailable. Choose **No** to keep the existing entry.
 Selecting a saved filter loads it as a draft. Review the selections and choose **Apply Filters** to use it.
 The draft identifies any values that are unavailable in the loaded choices.
 
@@ -317,3 +318,58 @@ only that expression. **Reset draft [Ctrl+Shift+R]** resets all draft conditions
 confirmation; the applied filter remains unchanged until Apply.
 **Cancel [Ctrl+W]** or Esc uses the existing discard confirmation. **Ctrl+F** focuses the
 search belonging to the active list. Existing Alt mnemonics remain secondary alternatives.
+
+## Typed filter contract for adapters
+
+The version 1 reference contract uses a field catalog. Each field has a stable ID,
+display label, source, type and allowed operators. The type determines how both values
+and cells are interpreted. For example, `Label = "001"` preserves the text `001` in
+a text field. Name lookup accepts the exact field ID or an unambiguous case-insensitive
+ID or label. An explicit field ID resolves an ambiguous display label.
+
+All types support equality, inequality, membership (`IN` and `NOT IN`) and blank
+checks. Number and date fields also support ordered comparisons and inclusive ranges.
+Text fields also support contains, does not contain, starts with and ends with.
+Conditions can be combined with AND and OR groups. The typed text parser supports
+the Magic comparison and membership syntax above. Builders can also supply ranges
+and blank checks through the structured document.
+
+- **Numbers** use complete finite values. Missing, malformed, partial, non-finite
+  and overflowing values match blank, inequality and `NOT IN`. Comparisons,
+  ranges and `IN` require a valid number. Integer forms within signed and unsigned
+  64-bit ranges remain exact. Other finite values use binary64 precision.
+- **Dates** compare calendar days in the source's wall time. A timezone suffix
+  leaves the source day intact. Ambiguous numeric dates prefer month first by
+  default. The date field can use day-first parsing. Missing and invalid dates
+  match blank, inequality and `NOT IN`. Comparisons, ranges and `IN` require a valid date.
+- **Text** is case-insensitive by default using Unicode case folding. Whitespace
+  is significant in comparisons and whitespace-only text counts as blank.
+  Missing text matches blank, inequality, does not contain and `NOT IN`.
+  With wildcards enabled, `*` matches zero or more characters in equality and
+  membership. Contains, starts with and ends with use literal text.
+
+The JSON document contains `version: 1` and `expression`. An empty expression is
+`null`. Groups contain `operator` and `children`. Conditions contain `field`,
+`kind`, `operator`, `values`, `case_sensitive`, `wildcards` and `dayfirst`.
+Typed expressions allow at most 24 levels, counting the root as level 1, with
+128 groups and conditions combined and 1,024 values across all conditions.
+Typed expression text can have up to 24 levels of nested parentheses and must
+also fit the expression limits. This keeps evaluation and compilation compatible
+with the smaller parser stack of older SQLite builds. Reduce nesting, conditions
+or values if a limit is reached.
+Group operators are `and` and `or`. Common condition operators are `equals`,
+`not_equals`, `in`, `not_in`, `is_blank` and `is_not_blank`. Numbers and dates
+also allow `less_than`, `less_or_equal`, `greater_than`, `greater_or_equal`
+and `between`. Text also allows `contains`, `not_contains`, `starts_with`
+and `ends_with`. Blank checks take zero values, ranges take two and membership
+takes one or more. Other conditions take one value.
+Dates are saved as ISO calendar days. Numbers are saved as decimal strings to
+preserve signed and unsigned integer precision in JSON readers. Saved filters
+bind by exact field ID. If a field is missing or renamed, the adapter can offer
+explicit remapping to a field of the same type with the needed operators.
+
+Both reference adapters apply these semantics. The SQLite adapter uses a
+connection-local evaluator, a qualified column map and bound condition values.
+This baseline can scan rows inside SQLite. Workflow adapters own source type
+mapping and indexed query planning. Existing Export filters, Reports presets
+and recipes continue to use the Magic rules above until their adapters migrate.
