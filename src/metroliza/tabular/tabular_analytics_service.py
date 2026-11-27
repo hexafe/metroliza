@@ -4698,13 +4698,16 @@ def export_tabular_analytics_workbook(
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
-    from metroliza.tabular.tabular_xlsx_writer import write_tabular_dataframe
+    from metroliza.tabular.tabular_xlsx_writer import validate_tabular_sheet_capacity, write_tabular_dataframe
     from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
     from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
     from metroliza.industrial.industrial_analytics_workbook_charts import (
         add_analytics_workbook_charts,
     )
 
+    validate_tabular_sheet_capacity(dataframe, "Table Data")
+    if aggregation_result is not None:
+        validate_tabular_sheet_capacity(aggregation_result.dataframe, "Aggregates")
     output_path = Path(output_file)
     if output_path.suffix.lower() != ".xlsx":
         output_path = output_path.with_suffix(".xlsx")

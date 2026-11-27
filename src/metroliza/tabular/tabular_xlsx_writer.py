@@ -4,6 +4,22 @@ from __future__ import annotations
 
 import numpy as np
 
+from metroliza.exporting.xlsx_writer_policy import (
+    XLSX_MAX_COLUMNS, XLSX_MAX_ROWS, XlsxWorksheetCapacityError,
+)
+
+
+def validate_tabular_sheet_capacity(dataframe, sheet_name: str) -> None:
+    """Reserve the header row before writing a tabular worksheet."""
+    rows, columns = dataframe.shape
+    row_capacity = XLSX_MAX_ROWS - (1 if columns else 0)
+    if rows > row_capacity or columns > XLSX_MAX_COLUMNS:
+        raise XlsxWorksheetCapacityError(
+            f"The sheet is too large. {sheet_name} contains {rows:,} data rows and {columns:,} columns. "
+            f"Excel allows up to {XLSX_MAX_ROWS - 1:,} data rows and {XLSX_MAX_COLUMNS:,} columns "
+            "per sheet with a header. Reduce the selected rows or columns before exporting."
+        )
+
 
 def _column_kind(series):
     from pandas.api.types import infer_dtype, is_datetime64_dtype
@@ -86,13 +102,14 @@ def write_tabular_dataframe(dataframe, writer, sheet_name):
     if not isinstance(dataframe, pd.DataFrame):
         dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
         return
+    validate_tabular_sheet_capacity(dataframe, sheet_name)
     kinds = [_column_kind(dataframe.iloc[:, index]) for index in range(len(dataframe.columns))]
     supported = {"string", "integer", "floating", "mixed-integer-float", "boolean", "empty", "datetime"}
-    if isinstance(dataframe.columns, pd.MultiIndex) or any(kind not in supported for kind in kinds):
-        dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
-        return
-    # Keep pandas' size validation before writing any data.
-    if len(dataframe.index) > 1_048_575 or len(dataframe.columns) > 16_384:
+    if (
+        isinstance(dataframe.columns, pd.MultiIndex)
+        or any(kind not in supported for kind in kinds)
+        or dataframe.shape == (XLSX_MAX_ROWS, 0)
+    ):
         dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
         return
     # Preserve header metadata callbacks/errors before any worksheet mutation.
