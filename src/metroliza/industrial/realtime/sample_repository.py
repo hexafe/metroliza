@@ -149,51 +149,41 @@ class RealtimeSampleRepository:
         signal_key: str,
     ) -> SignalDefinition | None:
         self.ensure_schema()
+        return run_transaction_with_retry(
+            self.database,
+            lambda cursor: RealtimeSampleRepository.read_signal_definition(
+                cursor, source_profile_id=source_profile_id, signal_key=signal_key,
+            ),
+            connection=self.connection,
+        )
 
-        def _get(cursor) -> SignalDefinition | None:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    source_profile_id,
-                    signal_key,
-                    metric_name,
-                    unit,
-                    nominal,
-                    lsl,
-                    usl,
-                    lower_warning,
-                    upper_warning,
-                    segment_fields_json,
-                    enabled,
-                    created_at,
-                    updated_at
-                FROM industrial_signal_definitions
-                WHERE source_profile_id = ? AND signal_key = ?
-                """,
-                (source_profile_id, signal_key),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return SignalDefinition(
-                id=int(row[0]),
-                source_profile_id=int(row[1]),
-                signal_key=str(row[2]),
-                metric_name=str(row[3]),
-                unit=row[4],
-                nominal=float(row[5]) if row[5] is not None else None,
-                lsl=float(row[6]) if row[6] is not None else None,
-                usl=float(row[7]) if row[7] is not None else None,
-                lower_warning=float(row[8]) if row[8] is not None else None,
-                upper_warning=float(row[9]) if row[9] is not None else None,
-                segment_fields=tuple(from_json(row[10], [])),
-                enabled=bool(row[11]),
-                created_at=str(row[12]),
-                updated_at=str(row[13]),
-            )
-
-        return run_transaction_with_retry(self.database, _get, connection=self.connection)
+    @staticmethod
+    def read_signal_definition(cursor, *, source_profile_id: int, signal_key: str) -> SignalDefinition | None:
+        """Read a signal from the caller's cursor without initializing its schema."""
+        cursor.execute(
+            """
+            SELECT
+                id,
+                source_profile_id,
+                signal_key,
+                metric_name,
+                unit,
+                nominal,
+                lsl,
+                usl,
+                lower_warning,
+                upper_warning,
+                segment_fields_json,
+                enabled,
+                created_at,
+                updated_at
+            FROM industrial_signal_definitions
+            WHERE source_profile_id = ? AND signal_key = ?
+            """,
+            (source_profile_id, signal_key),
+        )
+        row = cursor.fetchone()
+        return _signal_definition_from_row(row) if row is not None else None
 
     def list_signal_definitions_by_ids(
         self,

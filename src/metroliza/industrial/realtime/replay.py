@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import csv
+from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
+from functools import partial
 import math
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+from metroliza.industrial.anomaly.baseline_repository import BaselineRepository
 from metroliza.industrial.anomaly.contracts import DetectorContext, DetectorState, DetectionResult
 from metroliza.industrial.anomaly.detectors import (
     IQRDetector,
@@ -19,10 +22,15 @@ from metroliza.industrial.anomaly.detectors import (
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.realtime.detector_registry import normalize_detector_keys
 from metroliza.industrial.realtime.numeric_validation import exact_integral
-from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
+from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository, to_json
 from metroliza.industrial.realtime.stream_contracts import IndustrialSample, SignalDefinition
 from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.industrial.realtime.timestamps import validate_source_timezone
+from metroliza.reports.db import sqlite_readonly_connection_scope
+
+
+_BASELINE_DETECTORS = frozenset({"iqr", "mad_zscore"})
+_LEGACY_SEGMENT_FIELDS = ("reference", "part_number", "revision", "station", "line")
 
 
 @dataclass(frozen=True)
@@ -91,14 +99,22 @@ def iter_csv_rows(input_file: str, *, limit: int | None = None) -> Iterator[dict
                 break
 
 
-def rows_to_samples(rows: Iterable[Mapping[str, Any]], request: ReplayRequest, signal_id: int) -> list[IndustrialSample]:
-    return list(iter_rows_to_samples(rows, request, signal_id))
+def rows_to_samples(
+    rows: Iterable[Mapping[str, Any]],
+    request: ReplayRequest,
+    signal_id: int,
+    *,
+    segment_fields: tuple[str, ...] = _LEGACY_SEGMENT_FIELDS,
+) -> list[IndustrialSample]:
+    return list(iter_rows_to_samples(rows, request, signal_id, segment_fields=segment_fields))
 
 
 def iter_rows_to_samples(
     rows: Iterable[Mapping[str, Any]],
     request: ReplayRequest,
     signal_id: int,
+    *,
+    segment_fields: tuple[str, ...] = _LEGACY_SEGMENT_FIELDS,
 ) -> Iterator[IndustrialSample]:
     """Yield finite, canonical samples from replay source rows."""
 
@@ -134,7 +150,7 @@ def iter_rows_to_samples(
             batch_lot=str(row.get("batch_lot") or "") or None,
             segment_key={
                 key: str(row[key])
-                for key in ("reference", "part_number", "revision", "station", "line")
+                for key in segment_fields
                 if row.get(key) not in (None, "")
             },
             raw_record={
@@ -253,16 +269,77 @@ def run_detectors_for_samples(
 def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     request = _validated_replay_request(request)
     _validate_replay_input_order(request)
-    sample_repository = RealtimeSampleRepository(request.database)
-    existing_signal = sample_repository.get_signal_definition(
-        source_profile_id=request.source_profile_id,
-        signal_key=request.signal_key,
+    needs_baselines = bool(_BASELINE_DETECTORS.intersection(request.detectors))
+    with _replay_read_cursor(request, needs_baselines=needs_baselines) as cursor:
+        return _replay_ordered_stream(request, cursor, needs_baselines=needs_baselines)
+
+
+@contextmanager
+def _replay_read_cursor(request: ReplayRequest, *, needs_baselines: bool):
+    if (request.dry_run or needs_baselines) and Path(request.database).exists():
+        with sqlite_readonly_connection_scope(request.database) as connection, closing(connection.cursor()) as cursor:
+            yield cursor
+    else:
+        yield None
+
+
+def _has_table(cursor, name: str) -> bool:
+    return cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,),
+    ).fetchone() is not None
+
+
+def _stored_replay_signal(request, repository, cursor) -> SignalDefinition | None:
+    if cursor is not None:
+        if not _has_table(cursor, "industrial_signal_definitions"):
+            return None
+        return repository.read_signal_definition(
+            cursor, source_profile_id=request.source_profile_id, signal_key=request.signal_key,
+        )
+    if request.dry_run:
+        return None
+    return repository.get_signal_definition(
+        source_profile_id=request.source_profile_id, signal_key=request.signal_key,
     )
+
+
+def _replay_baseline_lookup(cursor, signal: SignalDefinition | None, metric_column: str):
+    if signal is None:
+        return None
+    if signal.metric_name != metric_column:
+        raise ValueError("Statistical replay requires the replay column to match the stored signal metric.")
+    if cursor is None or not _has_table(cursor, "industrial_baselines"):
+        return None
+    # Baseline writes append rows. Pin the admitted IDs without a read transaction
+    # spanning replay writes, which would block them under rollback journaling.
+    maximum_id = cursor.execute("SELECT MAX(id) FROM industrial_baselines").fetchone()[0]
+    if maximum_id is None:
+        return None
+    return partial(
+        BaselineRepository.read_latest_baseline, cursor, signal_id=signal.id, maximum_id=maximum_id,
+    )
+
+
+def _replay_ordered_stream(request: ReplayRequest, cursor, *, needs_baselines: bool) -> ReplaySummary:
+    sample_repository = RealtimeSampleRepository(request.database)
+    existing_signal = _stored_replay_signal(request, sample_repository, cursor)
+    baseline_lookup = (
+        _replay_baseline_lookup(cursor, existing_signal, request.metric_column) if needs_baselines else None
+    )
+    statistical_signal = existing_signal if needs_baselines else None
+    map_samples = rows_to_samples
+    if statistical_signal is not None:
+        _validate_segment_columns(request.input_file, statistical_signal.segment_fields)
+        map_samples = partial(rows_to_samples, segment_fields=statistical_signal.segment_fields)
     signal_candidate = SignalDefinition(
         id=existing_signal.id if existing_signal is not None else None,
         source_profile_id=request.source_profile_id,
         signal_key=request.signal_key,
         metric_name=request.metric_column,
+        unit=_signal_attr(statistical_signal, "unit"),
+        nominal=_signal_attr(statistical_signal, "nominal"),
+        segment_fields=_signal_attr(statistical_signal, "segment_fields") or (),
+        enabled=statistical_signal.enabled if statistical_signal is not None else True,
         lsl=request.lsl if request.lsl is not None else _signal_attr(existing_signal, "lsl"),
         usl=request.usl if request.usl is not None else _signal_attr(existing_signal, "usl"),
         lower_warning=(
@@ -277,16 +354,7 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
         ),
     )
     if request.dry_run:
-        signal = signal_candidate if signal_candidate.id is not None else SignalDefinition(
-            id=-1,
-            source_profile_id=request.source_profile_id,
-            signal_key=request.signal_key,
-            metric_name=request.metric_column,
-            lsl=signal_candidate.lsl,
-            usl=signal_candidate.usl,
-            lower_warning=signal_candidate.lower_warning,
-            upper_warning=signal_candidate.upper_warning,
-        )
+        signal = signal_candidate if signal_candidate.id is not None else replace(signal_candidate, id=-1)
     else:
         signal = sample_repository.upsert_signal_definition(signal_candidate)
     assert signal.id is not None
@@ -295,6 +363,7 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
         signal=signal,
         detectors=request.detectors,
         now=request.now,
+        baseline_lookup=baseline_lookup,
     )
     processed = 0
     inserted = 0
@@ -304,7 +373,7 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     event_repository = AnomalyEventRepository(request.database)
     rows = iter_csv_rows(request.input_file, limit=request.limit)
     for row_batch in _batched(rows, batch_size=batch_size):
-        samples = rows_to_samples(row_batch, request, signal.id)
+        samples = map_samples(row_batch, request, signal.id)
         processed += len(samples)
         if request.dry_run:
             persisted_samples = samples
@@ -339,6 +408,16 @@ def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
         detector_events_created=created,
         event_counts=event_counts,
     )
+
+
+def _validate_segment_columns(input_file: str, segment_fields: tuple[str, ...]) -> None:
+    if not segment_fields:
+        return
+    with Path(input_file).open("r", encoding="utf-8", newline="") as handle:
+        headers = csv.DictReader(handle).fieldnames or ()
+    missing = [field for field in segment_fields if field not in headers]
+    if missing:
+        raise ValueError(f"Replay CSV is missing configured segment columns: {', '.join(missing)}")
 
 
 def _validate_replay_input_order(request: ReplayRequest) -> None:
@@ -405,6 +484,7 @@ class _ReplayDetectorSession:
         signal: SignalDefinition,
         detectors: Iterable[str],
         now: str | None,
+        baseline_lookup=None,
     ) -> None:
         self.signal = signal
         detector_instances = _detector_instances(detectors)
@@ -420,27 +500,44 @@ class _ReplayDetectorSession:
             None,
         )
         self.now = now
+        self.baseline_lookup = baseline_lookup
         self.states: dict[str, DetectorState] = {}
         self.last_event_time: str | None = None
         self.latest_sample: IndustrialSample | None = None
 
     def score(self, samples: Iterable[IndustrialSample]) -> list[DetectionResult]:
         events: list[DetectionResult] = []
+        baselines: dict[str, Mapping[str, Any]] = {}
         for sample in sorted(_unique_samples_for_detection(samples), key=_sample_sort_key):
             if self.last_event_time is not None and sample.event_time < self.last_event_time:
                 raise ValueError(
                     "Replay input must be ordered by event time for bounded streaming detection."
                 )
+            baseline = self._baseline_for_sample(sample, baselines)
             for detector in self.detectors:
                 state = self.states.get(detector.detector_key, DetectorState())
-                context = DetectorContext(signal=self.signal, state=state)
+                detector_baseline = baseline if detector.detector_key in _BASELINE_DETECTORS else {}
+                context = DetectorContext(signal=self.signal, state=state, baseline=detector_baseline)
                 result = detector.score_one(sample, context)
                 if result is not None:
-                    events.append(result)
+                    events.append(_with_baseline_evidence(result, detector_baseline))
                 self.states[detector.detector_key] = detector.update_one(sample, context)
             self.last_event_time = sample.event_time
             self.latest_sample = sample
         return events
+
+    def _baseline_for_sample(self, sample, cache):
+        if self.baseline_lookup is None or sample.metric_name != self.signal.metric_name:
+            return {}
+        # Earlier replays may have stored extra dimensions. Use only the
+        # configured key and leave old samples with missing dimensions unscored.
+        segment = {field: sample.segment_key.get(field) for field in self.signal.segment_fields}
+        if any(value in (None, "") for value in segment.values()):
+            return {}
+        segment_json = to_json(segment)
+        if segment_json not in cache:
+            cache[segment_json] = self.baseline_lookup(segment_json=segment_json) or {}
+        return cache[segment_json]
 
     def finalize(self) -> list[DetectionResult]:
         """Evaluate source-level detectors once against the final replay watermark."""
@@ -456,6 +553,18 @@ class _ReplayDetectorSession:
         context = DetectorContext(signal=self.signal, state=state, now=self.now)
         result = self.stale_detector.score_one(sample, context)
         return [result] if result is not None else []
+
+
+def _with_baseline_evidence(event: DetectionResult, baseline: Mapping[str, Any]) -> DetectionResult:
+    if not baseline:
+        return event
+    return replace(event, context={
+        **event.context,
+        "baseline_id": baseline["id"],
+        "baseline_version": baseline["baseline_version"],
+        "baseline_window_start": baseline["window_start"],
+        "baseline_window_end": baseline["window_end"],
+    })
 
 
 def _batched(

@@ -11,6 +11,9 @@ from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
 from metroliza.reports.db import run_transaction_with_retry
 
 
+_MAX_SQLITE_ROW_ID = (1 << 63) - 1
+
+
 @dataclass(frozen=True)
 class IndustrialBaseline:
     signal_id: int
@@ -98,57 +101,66 @@ class BaselineRepository:
     def latest_baseline(self, *, signal_id: int, segment_key: dict[str, Any] | None = None) -> dict[str, Any] | None:
         self.ensure_schema()
         segment_json = to_json(dict(segment_key or {}))
+        return run_transaction_with_retry(
+            self.database,
+            lambda cursor: BaselineRepository.read_latest_baseline(
+                cursor, signal_id=signal_id, segment_json=segment_json,
+            ),
+            connection=self.connection,
+        )
 
-        def _latest(cursor) -> dict[str, Any] | None:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    signal_id,
-                    baseline_version,
-                    n,
-                    mean,
-                    std,
-                    median,
-                    mad,
-                    q1,
-                    q3,
-                    iqr,
-                    p01,
-                    p99,
-                    window_start,
-                    window_end,
-                    created_at
-                FROM industrial_baselines
-                WHERE signal_id = ? AND segment_key_json = ?
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-                """,
-                (signal_id, segment_json),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                return None
-            return {
-                "id": int(row[0]),
-                "signal_id": int(row[1]),
-                "baseline_version": str(row[2]),
-                "n": int(row[3]),
-                "mean": row[4],
-                "std": row[5],
-                "median": row[6],
-                "mad": row[7],
-                "q1": row[8],
-                "q3": row[9],
-                "iqr": row[10],
-                "p01": row[11],
-                "p99": row[12],
-                "window_start": row[13],
-                "window_end": row[14],
-                "created_at": str(row[15]),
-            }
-
-        return run_transaction_with_retry(self.database, _latest, connection=self.connection)
+    @staticmethod
+    def read_latest_baseline(
+        cursor, *, signal_id: int, segment_json: str, maximum_id: int = _MAX_SQLITE_ROW_ID,
+    ) -> dict[str, Any] | None:
+        """Read an exact segment via the caller's cursor and optional replay ceiling."""
+        cursor.execute(
+            """
+            SELECT
+                id,
+                signal_id,
+                baseline_version,
+                n,
+                mean,
+                std,
+                median,
+                mad,
+                q1,
+                q3,
+                iqr,
+                p01,
+                p99,
+                window_start,
+                window_end,
+                created_at
+            FROM industrial_baselines
+            WHERE signal_id = ? AND segment_key_json = ? AND id <= ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (signal_id, segment_json, maximum_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": int(row[0]),
+            "signal_id": int(row[1]),
+            "baseline_version": str(row[2]),
+            "n": int(row[3]),
+            "mean": row[4],
+            "std": row[5],
+            "median": row[6],
+            "mad": row[7],
+            "q1": row[8],
+            "q3": row[9],
+            "iqr": row[10],
+            "p01": row[11],
+            "p99": row[12],
+            "window_start": row[13],
+            "window_end": row[14],
+            "created_at": str(row[15]),
+        }
 
 
 def _canonical_optional(value: str | None) -> str | None:
