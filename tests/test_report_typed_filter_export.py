@@ -240,6 +240,8 @@ def test_normal_export_dialog_applies_the_previewed_scope(report_database, tmp_p
 
     monkeypatch.setattr(FilterDialog, "populate_list_widgets", lambda self: None)
     results = []
+    native_sender_lookups = []
+    monkeypatch.setattr(FilterDialog, "sender", lambda self: native_sender_lookups.append(True))
     monkeypatch.setattr(FilterDialog, "_show_typed_preview", lambda self, preview: results.append(preview))
     dialog = _build_dialog(monkeypatch, tmp_path, db_file=str(report_database))
     dialog.excel_file = tmp_path / "ui-export.xlsx"
@@ -265,6 +267,8 @@ def test_normal_export_dialog_applies_the_previewed_scope(report_database, tmp_p
                 break
             QTest.qWait(10)
         assert results and all(row[1] == "001" for row in results[0].rows)
+        QTest.qWait(20)
+        preview_status = editor.filter_summary_label.text()
         previewed = editor._typed_preview_scope
         editor.expression_input.setText('Ref = "1"')
         assert not editor.apply_button.isEnabled()
@@ -288,3 +292,5 @@ def test_normal_export_dialog_applies_the_previewed_scope(report_database, tmp_p
             dialog._build_export_request()
     finally:
         dialog.close()
+    assert native_sender_lookups == []
+    assert "matching measurements" in preview_status

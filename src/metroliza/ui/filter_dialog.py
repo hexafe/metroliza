@@ -1340,7 +1340,7 @@ class FilterDialog(QDialog):
             self._typed_preview_loader = loader
             loader.values_ready.connect(self._typed_preview_received)
             loader.load_failed.connect(self._typed_preview_failed)
-            loader.finished.connect(self._typed_preview_finished)
+            loader.preview_finished.connect(self._typed_preview_finished)
             self.typed_preview_button.setText("Cancel preview")
             self._typed_preview_status = "Counting typed matches…"
             loader.start()
@@ -1370,8 +1370,8 @@ class FilterDialog(QDialog):
         )
         self._refresh_filter_summary()
 
-    def _typed_preview_finished(self):
-        if self.sender() is self._typed_preview_loader:
+    def _typed_preview_finished(self, request):
+        if self._typed_preview_loader is not None and request == self._typed_preview_request:
             self._stop_typed_preview()
             self._typed_preview_status = "Preview canceled."
             self._refresh_filter_summary()

@@ -66,9 +66,17 @@ class FilterValuesLoader(QThread):
 class ReportTypedFilterLoader(FilterValuesLoader):
     """Use the same native-worker shutdown owner for report filter previews."""
 
+    preview_finished = pyqtSignal(int)
+
     def __init__(self, request_id, scope):
         super().__init__(request_id, str(scope.database), None, ())
         self.scope = scope
+
+    def run(self):
+        try:
+            super().run()
+        finally:
+            self.preview_finished.emit(self.request_id)
 
     def _load(self):
         from metroliza.reports.report_typed_filter import preview_report_typed_filter
