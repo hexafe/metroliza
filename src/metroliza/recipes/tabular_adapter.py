@@ -38,7 +38,9 @@ _TYPES = {cls.__name__: cls for cls in (
     state.ProductionAggregationState, state.ReferenceCohortState, state.ProductionChartSelection,
     TabularColumnFilter, GroupingAssignment, DashboardInteractivityOptions,
 )}
-_RUNTIME_FIELDS = frozenset({"tabular_load_result", "_grouping_snapshot", "_grouping_owner"})
+_RUNTIME_FIELDS = frozenset({
+    "tabular_load_result", "tabular_typed_filter", "_grouping_snapshot", "_grouping_owner",
+})
 
 
 @dataclass(frozen=True, repr=False)
@@ -170,6 +172,8 @@ def capabilities():
 
 def capture(request: IndustrialAnalyticsRequest, *, name="Analiza CSV/XLSX") -> StoredRecipe:
     request = validate(request)
+    if request.tabular_typed_filter is not None:
+        raise ValueError("Clear the typed filter before saving a recipe.")
     tabular = request.source_kind == "tabular_file"
     sources, signatures = _capture_tabular_sources(request) if tabular else ((request.db_file,), [])
     signature = _grouping_signature(signatures) if signatures else None

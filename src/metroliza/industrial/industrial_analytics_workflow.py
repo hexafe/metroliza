@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import stat
+import sqlite3
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -62,6 +63,7 @@ from metroliza.shared.dashboard_interactivity import (
     summarize_dashboard_sampling_options,
     summarize_dashboard_size_limit_options,
 )
+from metroliza.tabular.tabular_typed_filter import TabularTypedFilterScope
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_GROUP_COLUMN,
     TabularAnalyticsLoadResult,
@@ -304,6 +306,7 @@ def run_tabular_file_analytics(
     tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
     tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
     tabular_filter_expression: str | None = None,
+    tabular_typed_filter: TabularTypedFilterScope | None = None,
     dashboard_detail_mode: str = "full",
     grouping_df=None,
     grouping_default_group_label: str | None = None,
@@ -342,6 +345,7 @@ def run_tabular_file_analytics(
             tabular_filter_keys=tabular_filter_keys or (),
             tabular_column_filters=tabular_column_filters or (),
             tabular_filter_expression=tabular_filter_expression or "",
+            tabular_typed_filter=tabular_typed_filter,
             dashboard_detail_mode=dashboard_detail_mode,
             dashboard_interactivity_options=dashboard_interactivity_options,
             grouping_df=grouping_df,
@@ -436,14 +440,21 @@ def run_tabular_file_analytics(
             grouping_df=request.grouping_df,
         )
     )
-    filtered = materialize_tabular_dataframe(
-        loaded,
-        filter_columns=request.tabular_filter_columns,
-        selected_filter_keys=request.tabular_filter_keys,
-        column_filters=request.tabular_column_filters,
-        row_filter_expression=request.tabular_filter_expression,
-        required_columns=required_columns,
-    )
+    try:
+        filtered = materialize_tabular_dataframe(
+            loaded,
+            filter_columns=request.tabular_filter_columns,
+            selected_filter_keys=request.tabular_filter_keys,
+            column_filters=request.tabular_column_filters,
+            row_filter_expression=request.tabular_filter_expression,
+            required_columns=required_columns,
+            **({"typed_scope": request.tabular_typed_filter, "cancel_check": cancel_check}
+               if request.tabular_typed_filter is not None else {}),
+        )
+    except sqlite3.OperationalError:
+        if request.tabular_typed_filter is not None:
+            _raise_if_cancelled(cancel_check)
+        raise
     projection_diagnostic = _tabular_projection_diagnostic(
         loaded=loaded,
         required_columns=required_columns,

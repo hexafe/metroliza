@@ -56,6 +56,8 @@ except ImportError:  # pragma: no cover - compatibility for older forks without 
     _parse_grouping_filter_expression = None
 
 if TYPE_CHECKING:
+    from metroliza.tabular.tabular_typed_filter import TabularTypedFilterScope
+
     from metroliza.industrial.industrial_analytics_service import (
         ProductionAggregationResult,
         ProductionGroupstatsResult,
@@ -3294,8 +3296,32 @@ def materialize_tabular_dataframe(
     row_filter_expression: str | None = None,
     row_filter_aliases: Mapping[str, str] | None = None,
     required_columns: tuple[str, ...] | list[str] | None = None,
+    typed_scope: TabularTypedFilterScope | None = None,
+    cancel_check: TabularCancelCheck | None = None,
 ) -> TabularFilterResult:
     """Return rows for analytics, using SQLite pushdown when the load result has a store."""
+
+    if typed_scope is not None:
+        from metroliza.tabular.tabular_typed_filter import TYPED_FILTER_COMBINATION
+
+        if any((filter_columns, selected_filter_keys, column_filters, row_filter_expression)):
+            raise ValueError(TYPED_FILTER_COMBINATION)
+        typed_scope.require_loaded(loaded)
+        store = loaded.sqlite_store
+        columns = _normalized_tabular_required_columns(store.columns, required_columns)
+        query = typed_scope.query(", ".join(store._select_column_expression(column) for column in columns))
+        with typed_scope.read_connection(loaded, cancel_check=cancel_check) as connection:
+            dataframe = read_sql_dataframe(store.path, query.sql, query.params, connection=connection)
+        dataframe = _restore_sqlite_dataframe(dataframe, metric_columns=store.metric_columns)
+        return TabularFilterResult(
+            dataframe=dataframe,
+            diagnostics=(ProductionAnalyticsDiagnostic(
+                severity="info", code="tabular_typed_filter_applied",
+                message="Applied the typed CSV/Excel row filter.",
+                context={"input_row_count": store.row_count, "output_row_count": len(dataframe.index)},
+            ),),
+            applied=True, input_row_count=store.row_count, output_row_count=len(dataframe.index),
+        )
 
     if loaded.sqlite_store is None:
         return apply_tabular_row_filter(

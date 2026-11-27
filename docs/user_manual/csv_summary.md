@@ -176,7 +176,7 @@ The filter dialog lets you add source columns, search column names, and select m
 value combinations such as `TraceCode | Batch`. Filtering is applied before grouping,
 aggregation, charts, groupstats, dashboard output, and workbook output.
 
-Use **Magic filter** in the same dialog when you need a typed expression instead of value
+Use **Magic filter** in the same dialog when you need an expression instead of value
 selection. The expression syntax supports `=`, `!=`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`,
 `AND`, `OR`, parentheses, and `*` wildcards. Field names and operators are not
 case-sensitive, so `Param1`, `param1`, `AND`, `and`, `IN`, and `in` are interpreted the
@@ -194,6 +194,20 @@ when a file contains many numeric columns.
 Select the parameters you want to analyze. Use **Select all** or **Clear** in that dialog
 when you need to adjust many metrics at once. These selected parameters can also be written
 to separate workbook sheets.
+
+#### Typed expressions
+
+In **Filters**, choose **Typed expression…** to filter by the loaded number, date, and text
+types. Select a source field and use **Insert field** to identify the exact occurrence when
+headers repeat. Build a comparison such as `>= 10.5`, a list such as `IN (2, 4)`, or combine
+conditions with `AND`, `OR`, and parentheses. Use a decimal dot in the expression.
+Quote text such as `"001"` to keep its leading zeros.
+
+Select **Preview rows** to see the exact match count and up to 20 source row IDs. Select
+**Apply typed filter** to use that previewed rule when creating the dashboard and workbook.
+Reloaded data requires a new preview. Clear existing row filters and any groups before using
+a typed expression. Clear the typed filter before editing groups, changing column roles or types,
+or saving a recipe.
 
 ### 4. Choose Grouping And Aggregation
 

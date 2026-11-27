@@ -2744,3 +2744,112 @@ def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
         assert menu_keys[0] == "Export manual"  # menu order unchanged
     finally:
         _dispose_dialog(dialog)
+
+
+def test_csv_filters_opens_typed_preview_and_exports_the_same_rows(tmp_path, monkeypatch):
+    from PyQt6.QtCore import QTimer
+
+    from metroliza.shared.typed_filter import FilterPreview
+    from metroliza.ui import export_dialog, tabular_analytics_filter_dialog as filters
+
+    app = _app()
+    source = tmp_path / "readings.csv"
+    source.write_text(
+        "Part;Measured Date;Size mm;Size mm;Size!mm\n"
+        "A;2026-02-15;10,2;2,5;90,1\n"
+        "B;2026-02-16;10,3;9,5;90,2\n"
+        "C;2026-02-17;10,4;3,5;90,3\n",
+        encoding="utf-8",
+    )
+    messages, receipts, failures = [], [], []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: messages.append(text))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+
+    def enter_typed_filter(typed):
+        assert not typed.apply_button.isEnabled()
+        for index in range(typed.field_combo.count()):
+            if "Size mm (occurrence 2)" in typed.field_combo.itemText(index):
+                typed.field_combo.setCurrentIndex(index)
+                break
+        else:
+            pytest.fail("Duplicate source occurrence missing from typed filter catalog")
+        rule = typed.field_combo.currentData() + " < 4"
+        typed.expression_input.setText(typed.field_combo.currentData() + ' = "invalid number"')
+        typed.preview_button.click()
+        assert typed.result_preview is None
+        assert not typed.apply_button.isEnabled()
+        typed.expression_input.setText(rule)
+        typed.preview_button.click()
+        receipts.append(typed.result_preview)
+        assert typed.apply_button.isEnabled()
+        typed.expression_input.setText(rule + " and > 3")
+        assert not typed.apply_button.isEnabled()
+        typed.expression_input.setText(rule)
+        typed.preview_button.click()
+        typed.apply_button.click()
+
+    def drive_typed_filter():
+        typed = app.activeModalWidget()
+        try:
+            assert isinstance(typed, filters.TabularTypedFilterDialog)
+            enter_typed_filter(typed)
+        except BaseException as exc:
+            failures.append(exc)
+            if typed is not None:
+                typed.reject()
+
+    def open_typed_filter():
+        legacy = app.activeModalWidget()
+        try:
+            assert isinstance(legacy, filters.TabularAnalyticsFilterDialog)
+            assert legacy.typed_filter_button.isEnabled()
+            QTimer.singleShot(0, drive_typed_filter)
+            legacy.typed_filter_button.click()
+        except BaseException as exc:
+            failures.append(exc)
+            if legacy is not None:
+                legacy.reject()
+
+    try:
+        dialog.input_file = str(source)
+        dashboard = tmp_path / "typed.html"
+        workbook = tmp_path / "typed.xlsx"
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog.workbook_checkbox.setChecked(True)
+        dialog.time_series_checkbox.setChecked(True)
+        QTimer.singleShot(0, open_typed_filter)
+        dialog.filters_button.click()
+        assert not failures, failures
+        assert receipts == [FilterPreview(2, (1, 3))]
+        assert dialog._tabular_filtered_row_count() == 2
+        assert not dialog.save_recipe_button.isEnabled()
+        assert not dialog.edit_groups_button.isEnabled()
+        assert not dialog.group_field_combo.isEnabled()
+        assert not dialog.column_types_button.isEnabled()
+        assert dialog.start_button.isEnabled()
+        dialog.start_button.click()
+        deadline = time.monotonic() + 15
+        while dialog.analytics_thread is not None and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+        assert dialog.analytics_thread is None
+        assert not messages
+        assert dashboard.is_file()
+        contents = dashboard.read_text(encoding="utf-8")
+        assert "Applied the typed CSV/Excel row filter." in contents
+        assert "all 2 rows rendered" in contents
+        table = pd.read_excel(workbook, sheet_name="Table Data")
+        assert table["source_row_number"].tolist() == [1, 3]
+        assert table["size_mm_2"].tolist() == [2.5, 3.5]
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert not dialog.start_button.isEnabled()
+        assert "new preview" in dialog.readiness_label.text()
+        dialog.clear_filter_button.click()
+        assert dialog.start_button.isEnabled()
+    finally:
+        _dispose_dialog(dialog)

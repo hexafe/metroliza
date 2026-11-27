@@ -40,6 +40,7 @@ from metroliza.tabular.tabular_analytics_service import (
     apply_tabular_row_filter,
     selectable_tabular_source_columns,
 )
+from metroliza.tabular.tabular_typed_filter import prepare_tabular_typed_filter, tabular_typed_filter_fields
 from metroliza.ui.ui_foundation import (
     apply_list_selection_style,
     apply_metroliza_theme,
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
 
 
 _MAX_VISIBLE_MATCHES = 1000
+OPEN_TYPED_FILTER = 2
 _DETACHED_PREVIEW_THREADS: list[QThread] = []
 _SQLITE_SOURCE_EXCLUDED_COLUMNS = {
     "source_row_number",
@@ -149,6 +151,7 @@ class TabularAnalyticsFilterDialog(QDialog):
         column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
         filter_expression: str | None = None,
         sqlite_store=None,
+        typed_filter_blocker: str | None = None,
     ):
         super().__init__(parent)
         self.setWindowTitle("CSV / Excel row filter")
@@ -222,7 +225,15 @@ class TabularAnalyticsFilterDialog(QDialog):
         search_help.setWordWrap(True)
         layout.addWidget(search_help)
 
-        layout.addWidget(QLabel("Advanced expression (optional)"))
+        expression_title = QHBoxLayout()
+        expression_title.addWidget(QLabel("Advanced expression (optional)"))
+        if typed_filter_blocker is not None:
+            self.typed_filter_button = QPushButton("Typed expression…")
+            self.typed_filter_button.setEnabled(not typed_filter_blocker)
+            self.typed_filter_button.setToolTip(typed_filter_blocker or "Preview a typed rule before applying it.")
+            self.typed_filter_button.clicked.connect(self._open_typed_filter)
+            expression_title.addWidget(self.typed_filter_button)
+        layout.addLayout(expression_title)
         self.expression_input = QLineEdit()
         self.expression_input.setPlaceholderText("Param1 > 4000 and < 5000")
         self.expression_input.setText(self._initial_filter_expression)
@@ -954,6 +965,11 @@ class TabularAnalyticsFilterDialog(QDialog):
         if was_cleaned:
             self._refresh_all()
 
+    def _open_typed_filter(self) -> None:
+        if self._discard_draft_if_allowed():
+            self._cleanup_preview_once()
+            self.done(OPEN_TYPED_FILTER)
+
     def accept(self) -> None:
         self._capture_committed_filter_state()
         self._cleanup_preview_once()
@@ -1324,3 +1340,102 @@ class TabularAnalyticsFilterDialog(QDialog):
 
 
 __all__ = ["TabularAnalyticsFilterDialog"]
+
+
+class TabularTypedFilterDialog(QDialog):
+    """Preview one typed expression and apply exactly the rule that was previewed."""
+
+    def __init__(self, parent, *, loaded, expression=""):
+        super().__init__(parent)
+        self.setWindowTitle("Typed CSV / Excel row filter")
+        configure_window_size(self, minimum=(480, 230), initial=(680, 295))
+        self._loaded = loaded
+        self.result_scope = None
+        self.result_preview = None
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Fields and their loaded types"))
+        field_row = QHBoxLayout()
+        self.field_combo = QComboBox()
+        self.field_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.field_combo.setAccessibleName("Typed filter fields")
+        for item in tabular_typed_filter_fields(loaded):
+            self.field_combo.addItem(f"{item.label} · {item.kind}", item.field_id)
+        field_row.addWidget(self.field_combo, 1)
+        insert = QPushButton("Insert field")
+        insert.clicked.connect(lambda: self.expression_input.insert(self.field_combo.currentData() or ""))
+        field_row.addWidget(insert)
+        layout.addLayout(field_row)
+        self.expression_input = QLineEdit(expression)
+        self.expression_input.setAccessibleName("Typed filter expression")
+        self.expression_input.setMaxLength(8192)
+        self.expression_input.setPlaceholderText("Insert a field, then add a condition such as >= 10")
+        self.expression_input.textChanged.connect(self._invalidate_preview)
+        self.expression_input.returnPressed.connect(self.preview_expression)
+        layout.addWidget(self.expression_input)
+        self.preview_status = QLabel()
+        self.preview_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.preview_status.setWordWrap(True)
+        self.preview_status.setAccessibleName("Typed filter preview")
+        layout.addWidget(self.preview_status)
+        layout.addStretch()
+        actions = QHBoxLayout()
+        actions.addStretch()
+        self.preview_button = QPushButton("Preview rows")
+        self.preview_button.clicked.connect(self.preview_expression)
+        self.apply_button = QPushButton("Apply typed filter")
+        self.apply_button.clicked.connect(self.accept)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        for button in (cancel, self.preview_button, self.apply_button):
+            button.setAutoDefault(False)
+            actions.addWidget(button)
+        layout.addLayout(actions)
+        configure_dialog_button_roles(primary=self.apply_button, secondary=(cancel,))
+        self._invalidate_preview()
+        self.expression_input.setFocus()
+        apply_metroliza_theme(self)
+
+    def _invalidate_preview(self) -> None:
+        self.result_scope = None
+        self.result_preview = None
+        self.apply_button.setEnabled(False)
+        self.preview_button.setEnabled(bool(self.expression_input.text().strip()))
+        self.preview_status.setText("Preview the expression before applying it.")
+
+    def preview_expression(self) -> None:
+        from metroliza.ui.tabular_analytics_grouping_dialog import _run_csv_scope_query
+
+        self._invalidate_preview()
+        try:
+            scope = prepare_tabular_typed_filter(self._loaded, self.expression_input.text())
+            preview = _run_csv_scope_query(
+                self, lambda: scope.preview(cancel_check=QThread.currentThread().isInterruptionRequested),
+                "Previewing the typed row filter",
+            )
+        except (OSError, KeyError, RuntimeError, ValueError) as exc:
+            self.preview_status.setText(str(exc))
+            return
+        if preview is None:
+            self.preview_status.setText("Preview canceled.")
+            return
+        if scope.text != self.expression_input.text().strip():
+            return
+        self.result_scope, self.result_preview = scope, preview
+        sample = ", ".join(str(row_id) for row_id in preview.sample_row_ids)
+        self.preview_status.setText(f"{preview.matching_count} matching rows"
+                                    + (f" · source row IDs {sample}" if sample else ""))
+        self.apply_button.setEnabled(True)
+
+    def accept(self) -> None:
+        if self.result_scope is not None and self.result_scope.text == self.expression_input.text().strip():
+            super().accept()
+
+    def reject(self) -> None:
+        if not getattr(self, "_scope_query_running", False):
+            super().reject()
+
+    def closeEvent(self, event) -> None:
+        if getattr(self, "_scope_query_running", False):
+            event.ignore()
+        else:
+            super().closeEvent(event)

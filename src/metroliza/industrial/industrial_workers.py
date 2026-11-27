@@ -29,6 +29,7 @@ from metroliza.industrial.industrial_analytics_state import (
     ProductionMetricSelection,
     ReferenceCohortState,
 )
+from metroliza.tabular.tabular_typed_filter import TabularTypedFilterScope
 from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
@@ -379,6 +380,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
         tabular_filter_keys: tuple[tuple[str, ...], ...] | list[tuple[str, ...]] | None = None,
         tabular_column_filters: tuple[TabularColumnFilter, ...] | list[TabularColumnFilter] | None = None,
         tabular_filter_expression: str | None = None,
+        tabular_typed_filter: TabularTypedFilterScope | None = None,
         dashboard_detail_mode: str = "full",
         grouping_df=None,
         grouping_default_group_label: str | None = None,
@@ -409,6 +411,7 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
                 tabular_filter_keys=tabular_filter_keys or (),
                 tabular_column_filters=tabular_column_filters or (),
                 tabular_filter_expression=tabular_filter_expression or "",
+                tabular_typed_filter=tabular_typed_filter,
                 dashboard_detail_mode=dashboard_detail_mode,
                 grouping_df=grouping_df,
                 grouping_default_group_label=grouping_default_group_label,
@@ -508,6 +511,8 @@ class IndustrialAnalyticsThread(WorkerCancellationMixin, QThread):
             tabular_filter_keys=self.tabular_filter_keys,
             tabular_column_filters=self.tabular_column_filters,
             tabular_filter_expression=self.tabular_filter_expression,
+            **({"tabular_typed_filter": self.request.tabular_typed_filter}
+               if self.request.tabular_typed_filter is not None else {}),
             dashboard_detail_mode=self.dashboard_detail_mode,
             grouping_df=self.grouping_df,
             grouping_default_group_label=self.request.grouping_default_group_label,
