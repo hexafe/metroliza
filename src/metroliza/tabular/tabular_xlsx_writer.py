@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from tempfile import TemporaryDirectory
+
 import numpy as np
 
 from metroliza.exporting.xlsx_writer_policy import (
     XLSX_MAX_COLUMNS, XLSX_MAX_ROWS, XlsxWorksheetCapacityError,
+    xlsxwriter_workbook_options,
 )
 
 
@@ -19,6 +23,35 @@ def validate_tabular_sheet_capacity(dataframe, sheet_name: str) -> None:
             f"Excel allows up to {XLSX_MAX_ROWS - 1:,} data rows and {XLSX_MAX_COLUMNS:,} columns "
             "per sheet with a header. Reduce the selected rows or columns before exporting."
         )
+
+
+@contextmanager
+def tabular_workbook_writer(path):
+    """Own the output stream and the serializer scratch for a tabular workbook."""
+    from pandas import ExcelWriter
+
+    from metroliza.exporting.xlsx_parallel_package import _cleanup_step, cleanup_failed_workbook, discard_workbook
+
+    scratch = TemporaryDirectory(prefix="metroliza-tabular-xlsx-")
+    try:
+        with path.open("wb") as destination:
+            writer = ExcelWriter(
+                destination, engine="xlsxwriter",
+                engine_kwargs={"options": {**xlsxwriter_workbook_options(), "tmpdir": scratch.name}},
+            )
+            writer.book._metroliza_package_scratch = scratch.name
+            try:
+                yield writer
+                writer.close()
+            except BaseException as error:
+                cleanup_failed_workbook(writer.book, error)
+                discard_workbook(writer.book, error)
+                raise
+    except BaseException as error:
+        _cleanup_step(scratch.cleanup, error)
+        raise
+    else:
+        scratch.cleanup()
 
 
 def _column_kind(series):

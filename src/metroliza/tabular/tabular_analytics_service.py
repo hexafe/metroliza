@@ -34,7 +34,6 @@ from metroliza.shared.finite_numeric import (
     finite_numeric_source, parse_numeric_literal,
     sqlite_numeric_filter, sqlite_numeric_membership, sqlite_prefer_integer_source,
 )
-from metroliza.exporting.xlsx_writer_policy import pandas_xlsxwriter_engine_kwargs
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
@@ -4698,7 +4697,9 @@ def export_tabular_analytics_workbook(
 ) -> TabularAnalyticsWorkbookResult:
     """Write workbook output for CSV/Excel analytics, optionally one sheet per metric."""
 
-    from metroliza.tabular.tabular_xlsx_writer import validate_tabular_sheet_capacity, write_tabular_dataframe
+    from metroliza.tabular.tabular_xlsx_writer import (
+        tabular_workbook_writer, validate_tabular_sheet_capacity, write_tabular_dataframe,
+    )
     from metroliza.industrial.industrial_analytics_helpers import diagnostics_dataframe
     from metroliza.industrial.industrial_analytics_workbook import groupstats_result_dataframe
     from metroliza.industrial.industrial_analytics_workbook_charts import (
@@ -4721,11 +4722,7 @@ def export_tabular_analytics_workbook(
         if aggregation_result is not None
         else None
     )
-    with pd.ExcelWriter(
-        output_path,
-        engine="xlsxwriter",
-        engine_kwargs=pandas_xlsxwriter_engine_kwargs(),
-    ) as writer:
+    with tabular_workbook_writer(output_path) as writer:
         table_sheet = unique_sheet_name("Table Data", used_names)
         write_tabular_dataframe(safe_dataframe, writer, table_sheet)
         sheet_names.append(table_sheet)

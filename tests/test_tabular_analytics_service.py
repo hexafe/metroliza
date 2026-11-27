@@ -2128,6 +2128,44 @@ def test_tabular_workbook_refuses_oversized_tables_before_opening_output(tmp_pat
     assert list(tmp_path.iterdir()) == [output]
 
 
+def test_tabular_workbook_releases_writer_scratch_after_disk_failure(tmp_path, monkeypatch):
+    import errno
+    import tempfile
+
+    from xlsxwriter.exceptions import FileCreateError
+    from xlsxwriter.worksheet import Worksheet
+
+    from metroliza.industrial.industrial_analytics_workflow import _export_tabular_workbook_with_temp
+
+    output = tmp_path / "previous.xlsx"
+    output.write_bytes(b"previous workbook bytes")
+    scratch = tmp_path / "writer-scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    opened = []
+    handles = []
+
+    def fail_worksheet_write(worksheet):
+        opened.extend(path for path in scratch.rglob("*") if path.is_file())
+        handles.append(worksheet.fh)
+        raise OSError(errno.ENOSPC, "synthetic workbook writer exhaustion")
+
+    monkeypatch.setattr(Worksheet, "_write_sheet_data", fail_worksheet_write)
+    with pytest.raises(FileCreateError, match="synthetic workbook writer exhaustion"):
+        _export_tabular_workbook_with_temp(
+            output_workbook_file=str(output), dataframe=pd.DataFrame({"metric": [1, 2]}),
+            metric_candidates=(), aggregation_result=None, groupstats_result=None, diagnostics=(),
+            separate_parameter_sheets=False, chart_selection=ProductionChartSelection(),
+            group_fields=(), cancel_check=None,
+        )
+
+    assert opened, "the writer must have allocated its real scratch files before failing"
+    assert handles and all(handle.closed for handle in handles)
+    assert not list(scratch.iterdir())
+    assert output.read_bytes() == b"previous workbook bytes"
+    assert {path.name for path in tmp_path.iterdir()} == {"previous.xlsx", "writer-scratch"}
+
+
 def test_tabular_workbook_export_keeps_formula_like_source_values_literal(tmp_path) -> None:
     output_file = tmp_path / "literal_source_values.xlsx"
     dataframe = pd.DataFrame(
