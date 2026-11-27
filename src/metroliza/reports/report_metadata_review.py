@@ -6,7 +6,8 @@ from reports *before* anything is written to the database.  This module owns:
 * the per-report row state (``ReviewRow``) with fast-mode prefill, manual edits
   and explicit OCR choices protected from later automatic readings;
 * the immutable ``ReportMetadataOverride`` that carries the confirmed values to
-  the import (keyed by the import plan's occurrence id and source fingerprint);
+  the import with any deferred or rejected candidates (keyed by occurrence id
+  and source fingerprint);
 * ``apply_metadata_override`` which turns an override into the selected
   metadata and the candidate rows persisted by the repository, keeping the
   detected values as unselected candidates and recording provenance.
@@ -20,6 +21,8 @@ from datetime import datetime, timezone
 from metroliza.reports.report_metadata_models import (
     MetadataCandidate,
     MetadataSelectionResult,
+    MetadataWarning,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
     USER_SOURCE_TYPE,
 )
 from metroliza.reports.report_metadata_normalizers import (
@@ -77,6 +80,15 @@ _SAMPLE_KIND_BY_SOURCE = {
     "projected_from_stats_count": "stats_count",
     _FILENAME_SOURCE_TYPE: "filename_tail",
 }
+SAMPLE_NUMBER_COMMENT_WARNING_CODE = "sample_number_derived_from_comment"
+_SAMPLE_SOURCE_WARNINGS = {
+    "projected_from_stats_count": (
+        SAMPLE_NUMBER_PROJECTION_WARNING_CODE, "warning", "Sample number was projected from stats count.",
+    ),
+    "comment_derived": (
+        SAMPLE_NUMBER_COMMENT_WARNING_CODE, "info", "Sample number was derived from comment.",
+    ),
+}
 
 ROW_PENDING = "pending"
 ROW_READY = "ready"
@@ -87,6 +99,9 @@ ROW_UNSUPPORTED = "unsupported"
 OCR_NONE = "none"
 OCR_DONE = "done"
 OCR_FAILED = "failed"
+OCR_ACCEPTED = "accepted"
+OCR_DEFERRED = "deferred"
+OCR_REJECTED = "rejected"
 
 
 def normalize_review_value(field_name: str, text) -> tuple[str | None, str | None]:
@@ -152,6 +167,37 @@ class FieldOverride:
 
 
 @dataclass(frozen=True)
+class OcrSuggestionDecision:
+    """A backed OCR suggestion that the user deferred or rejected."""
+
+    decision: str
+    candidate: MetadataCandidate = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if self.decision not in (OCR_DEFERRED, OCR_REJECTED):
+            raise ValueError("Unsupported OCR suggestion decision.")
+        item = self.candidate
+        if (
+            not isinstance(item, MetadataCandidate) or item.field_name not in REVIEW_FIELDS
+            or not _backs_ocr_choice(item, item.field_name, item.normalized_value)
+        ):
+            raise ValueError("An OCR suggestion decision needs matching OCR evidence.")
+
+    def provenance(self) -> dict:
+        candidate = self.candidate
+        return {
+            "decision": self.decision,
+            "value": candidate.normalized_value,
+            "source_type": candidate.source_type,
+            "page_number": candidate.page_number,
+            "region_name": candidate.region_name,
+            "rule_id": candidate.rule_id,
+            "confidence": candidate.confidence,
+            "candidate_sha256": candidate.evidence_digest(),
+        }
+
+
+@dataclass(frozen=True)
 class ReportMetadataOverride:
     """Confirmed metadata for one reviewed report.
 
@@ -159,13 +205,15 @@ class ReportMetadataOverride:
     identity for the report; display names are never used as keys.
     ``ocr_candidates`` are the candidates seen by the review's OCR run; they are
     persisted as detected (unselected) candidates unless one of them backs an
-    ``ocr`` field override.
+    ``ocr`` field override. ``ocr_decisions`` record the last explicit deferral
+    or rejection for each field that keeps a confirmed value.
     """
 
     occurrence_id: str
     fingerprint: str
     fields: tuple[FieldOverride, ...] = ()
     ocr_candidates: tuple[MetadataCandidate, ...] = ()
+    ocr_decisions: tuple[OcrSuggestionDecision, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.occurrence_id or not self.fingerprint:
@@ -175,10 +223,25 @@ class ReportMetadataOverride:
         names = [item.field_name for item in self.fields]
         if len(names) != len(set(names)):
             raise ValueError("Metadata override contains a field more than once.")
+        self._validate_ocr_decisions()
+
+    def _validate_ocr_decisions(self) -> None:
+        if not isinstance(self.ocr_decisions, tuple):
+            raise ValueError("OCR suggestion decisions must be a tuple.")
+        chosen = {
+            item.field_name: item.value for item in self.fields
+            if item.origin == ORIGIN_USER or item.ocr_candidate is not None
+        }
+        for decision in self.ocr_decisions:
+            if not isinstance(decision, OcrSuggestionDecision):
+                raise ValueError("Invalid OCR suggestion decision.")
+            name = decision.candidate.field_name
+            if name not in chosen or chosen.pop(name) == decision.candidate.normalized_value:
+                raise ValueError("An OCR suggestion decision needs a distinct confirmed value for its field.")
 
     @property
     def is_empty(self) -> bool:
-        return not self.fields and not self.ocr_candidates
+        return not self.fields and not self.ocr_candidates and not self.ocr_decisions
 
 
 def _backs_ocr_choice(candidate: MetadataCandidate, field_name: str, value: str | None) -> bool:
@@ -190,6 +253,43 @@ def _backs_ocr_choice(candidate: MetadataCandidate, field_name: str, value: str 
         and candidate.normalized_value == value
         and candidate.source_type not in (_FILENAME_SOURCE_TYPE, USER_SOURCE_TYPE)
     )
+
+
+def accepted_ocr_fields(metadata_json: dict) -> frozenset[str]:
+    """Read the persisted OCR choices, including the original v1 review format."""
+
+    review = metadata_json.get("metadata_review")
+    if not isinstance(review, dict) or type(review.get("version")) is not int or review["version"] != 1:
+        return frozenset()
+    # Older review receipts did not distinguish explicitly chosen OCR from prefill.
+    fields = review.get("accepted_ocr_fields", review.get("ocr_fields"))
+    if not isinstance(fields, list):
+        return frozenset()
+    return frozenset(name for name in fields if type(name) is str and name in REVIEW_FIELDS)
+
+
+def sample_number_source_warnings(warnings, source):
+    """Align classification warnings with the stored sample source."""
+
+    expected = _SAMPLE_SOURCE_WARNINGS.get(source) if isinstance(source, str) else None
+    source_codes = (SAMPLE_NUMBER_PROJECTION_WARNING_CODE, SAMPLE_NUMBER_COMMENT_WARNING_CODE)
+    result = []
+    found = False
+    for warning in warnings:
+        code = warning.get("code") if isinstance(warning, dict) else getattr(warning, "code", None)
+        if code not in source_codes:
+            result.append(warning)
+        elif expected is not None and code == expected[0] and not found:
+            result.append(warning)
+            found = True
+    if expected is not None and not found:
+        code, severity, message = expected
+        result.append(MetadataWarning(code, "sample_number", severity, message))
+    return tuple(result)
+
+
+def reviewed_ocr_sample_kind(source: str) -> str:
+    return _SAMPLE_KIND_BY_SOURCE.get(source, "unknown")
 
 
 def _candidate_key(candidate: MetadataCandidate) -> tuple:
@@ -250,6 +350,16 @@ def _select_ocr_override_candidate(candidates: list[MetadataCandidate], item: Fi
     return OCR_REVIEW_SOURCE_TYPE
 
 
+def _record_ocr_decision_evidence(review, candidates, decisions: tuple[OcrSuggestionDecision, ...]) -> None:
+    if not decisions:
+        return
+    review["ocr_decisions"] = {item.candidate.field_name: item.provenance() for item in decisions}
+    for item in decisions:
+        unselected = replace(item.candidate, selected=False)
+        if unselected not in candidates:
+            candidates.append(unselected)
+
+
 def apply_metadata_override(
     selection: MetadataSelectionResult,
     override: ReportMetadataOverride,
@@ -277,6 +387,7 @@ def apply_metadata_override(
     metadata_json = dict(metadata.metadata_json or {})
     field_sources = dict(metadata_json.get("field_sources") or {})
     manual_overrides = dict(metadata_json.get("manual_overrides") or {})
+    warnings = metadata.warnings
     values: dict[str, object] = {}
     detected_values: dict[str, object] = {}
     edited_fields: list[str] = []
@@ -311,24 +422,32 @@ def apply_metadata_override(
         field_sources[name] = source_type
         if name == "sample_number":
             values["sample_number_kind"] = (
-                _SAMPLE_KIND_BY_SOURCE.get(source_type, "unknown")
+                reviewed_ocr_sample_kind(source_type)
                 if item.origin == ORIGIN_OCR and item.value is not None
                 else "unknown"
             )
+            metadata_json["sample_number_provenance"] = source_type
+            warnings = sample_number_source_warnings(warnings, source_type)
 
     metadata_json["field_sources"] = field_sources
     if manual_overrides:
         metadata_json["manual_overrides"] = manual_overrides
-    metadata_json["metadata_review"] = {
+    review = {
         "version": 1,
         "applied_at": stamp,
         "edited_fields": sorted(edited_fields),
         "ocr_fields": sorted(ocr_fields),
-        "ocr_run": bool(override.ocr_candidates) or any(item.ocr_candidate is not None for item in override.fields),
+        "accepted_ocr_fields": sorted(item.field_name for item in override.fields if item.ocr_candidate is not None),
+        "ocr_run": (
+            bool(override.ocr_candidates or override.ocr_decisions)
+            or any(item.ocr_candidate is not None for item in override.fields)
+        ),
         "detected_values": detected_values,
     }
+    _record_ocr_decision_evidence(review, candidates, override.ocr_decisions)
+    metadata_json["metadata_review"] = review
     return MetadataSelectionResult(
-        metadata=replace(metadata, metadata_json=metadata_json, **values),
+        metadata=replace(metadata, metadata_json=metadata_json, warnings=warnings, **values),
         candidates=tuple(candidates),
     )
 
@@ -350,6 +469,7 @@ class ReviewCell:
     user_value: str | None = None
     ocr_suggestion: str | None = None
     accepted_ocr: MetadataCandidate | None = field(default=None, repr=False)
+    ocr_decision: OcrSuggestionDecision | None = field(default=None, repr=False)
 
     @property
     def value(self) -> str | None:
@@ -366,6 +486,13 @@ class ReviewCell:
     @property
     def confidence(self) -> float | None:
         return 1.0 if self.user_set else self.auto_confidence
+
+    def has_ocr_decision(self, decision: str, candidate: MetadataCandidate) -> bool:
+        return (
+            self.ocr_decision is not None
+            and self.ocr_decision.decision == decision
+            and self.ocr_decision.candidate == candidate
+        )
 
 
 def selection_cell_values(
@@ -500,7 +627,8 @@ class ReviewRow:
             if value is None:
                 continue
             if cell.user_set or cell.accepted_ocr is not None:
-                if not native_header and value != cell.value and self._ocr_candidate(name, value) is not None:
+                candidate = self._ocr_candidate(name, value) if not native_header and value != cell.value else None
+                if candidate is not None and not cell.has_ocr_decision(OCR_REJECTED, candidate):
                     cell.ocr_suggestion = value
                 continue
             if source == _FILENAME_SOURCE_TYPE or source is None:
@@ -519,6 +647,8 @@ class ReviewRow:
     def mark_ocr_failed(self, note: str) -> None:
         self.ocr_state = OCR_FAILED
         self.ocr_note = note
+        for cell in self.cells.values():
+            cell.ocr_suggestion = None
 
     # -- user edits --------------------------------------------------------
 
@@ -531,10 +661,14 @@ class ReviewRow:
     def suggested_ocr_candidate(self, field_name: str) -> MetadataCandidate | None:
         """Return the candidate that can be acted on in the current review."""
 
-        if self.state != ROW_READY or field_name not in self.cells:
+        if self.state != ROW_READY or self.ocr_state != OCR_DONE or field_name not in self.cells:
             return None
         suggestion = self.cells[field_name].ocr_suggestion
         return self._ocr_candidate(field_name, suggestion) if suggestion is not None else None
+
+    def has_deferred_ocr_suggestion(self, field_name: str) -> bool:
+        candidate = self.suggested_ocr_candidate(field_name)
+        return candidate is not None and self.cells[field_name].has_ocr_decision(OCR_DEFERRED, candidate)
 
     def set_user_value(self, field_name: str, text) -> tuple[bool, str | None]:
         """Set a manual value. Returns ``(accepted, error)``."""
@@ -545,11 +679,15 @@ class ReviewRow:
         if error:
             return False, error
         cell = self.cells[field_name]
+        value_changed = value != cell.value
         if value == cell.auto_value:
             cell.user_set, cell.user_value = False, None
         else:
             cell.user_set, cell.user_value = True, value
-        if cell.ocr_suggestion == value:
+        keep_review = cell.user_set or cell.accepted_ocr is not None
+        if value_changed or not keep_review:
+            cell.ocr_decision = None
+        if cell.ocr_suggestion == value or not keep_review:
             cell.ocr_suggestion = None
         return True, None
 
@@ -561,6 +699,7 @@ class ReviewRow:
                 cell.user_set, cell.user_value = False, None
                 count += 1
             cell.ocr_suggestion = None
+            cell.ocr_decision = None
         return count
 
     def accept_ocr_suggestions(self, fields=None) -> tuple[str, ...]:
@@ -577,15 +716,31 @@ class ReviewRow:
             cell.auto_value, cell.auto_origin = candidate.normalized_value, ORIGIN_OCR
             cell.auto_source, cell.auto_confidence = candidate.source_type, candidate.confidence
             cell.user_set, cell.user_value, cell.ocr_suggestion = False, None, None
+            cell.ocr_decision = None
             accepted.append(name)
         return tuple(accepted)
 
     def dismiss_ocr_suggestion(self, field_name: str) -> bool:
-        """Keep the current value and dismiss this suggestion until a new read."""
+        """Keep the current value and reject this exact OCR reading."""
 
-        if self.suggested_ocr_candidate(field_name) is None:
+        return self._record_ocr_decision(field_name, OCR_REJECTED)
+
+    def defer_ocr_suggestion(self, field_name: str) -> bool:
+        """Keep the current value and leave the suggestion open for review."""
+
+        return self._record_ocr_decision(field_name, OCR_DEFERRED)
+
+    def _record_ocr_decision(self, field_name: str, decision: str) -> bool:
+        candidate = self.suggested_ocr_candidate(field_name)
+        if candidate is None:
             return False
-        self.cells[field_name].ocr_suggestion = None
+        cell = self.cells[field_name]
+        disposition = OcrSuggestionDecision(decision, candidate)
+        if cell.ocr_decision == disposition:
+            return False
+        cell.ocr_decision = disposition
+        if decision == OCR_REJECTED:
+            cell.ocr_suggestion = None
         return True
 
     # -- import hand-off ---------------------------------------------------
@@ -607,6 +762,9 @@ class ReviewRow:
             fingerprint=self.fingerprint,
             fields=tuple(fields),
             ocr_candidates=self.ocr_candidates if self.ocr_state == OCR_DONE else (),
+            ocr_decisions=tuple(
+                self.cells[name].ocr_decision for name in REVIEW_FIELDS if self.cells[name].ocr_decision is not None
+            ),
         )
         return None if override.is_empty else override
 
@@ -647,10 +805,14 @@ __all__ = [
     "FIELD_LABELS",
     "FieldOverride",
     "LOW_CONFIDENCE_THRESHOLD",
+    "OCR_ACCEPTED",
+    "OCR_DEFERRED",
+    "OCR_REJECTED",
     "OCR_REVIEW_SOURCE_TYPE",
     "ORIGIN_DETECTED",
     "ORIGIN_OCR",
     "ORIGIN_USER",
+    "OcrSuggestionDecision",
     "REVIEW_FIELDS",
     "ReportMetadataOverride",
     "ReviewCell",

@@ -28,7 +28,9 @@ from metroliza.reports.db import (
     quote_identifier,
     sqlite_file_identity,
 )
-from metroliza.reports.report_curation import DETAIL_ROW_LIMIT, load_stored_report_context, report_context_projections
+from metroliza.reports.report_curation import (
+    DETAIL_ROW_LIMIT, StoredOcrApproval, StoredOcrDecision, load_stored_report_context, report_context_projections,
+)
 from metroliza.reports.report_edit_service import (
     LEGACY_MEASUREMENT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_MEASUREMENT_FIELDS,
     LEGACY_REPORT_FIELD_COLUMNS as EDIT_SERVICE_LEGACY_REPORT_FIELDS,
@@ -57,6 +59,7 @@ from metroliza.ui.modify_db_records import (
 )
 from metroliza.reports.report_repository import ReportRepository, validate_manual_number
 from metroliza.reports.report_metadata_models import USER_SOURCE_TYPE
+from metroliza.reports.report_metadata_review import FIELD_LABELS, OCR_ACCEPTED
 from metroliza.reports.report_schema import ensure_report_schema
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -91,7 +94,7 @@ def _record_database_edit_options(payload):
                 "normalization_reference": bool(normalization.get("reference")),
                 "normalization_sample_number": bool(normalization.get("sample_number")),
                 "normalization_header": bool(normalization.get("header")),
-                "report_updates_present": bool(payload["report_updates"]),
+                "report_updates_present": bool(payload["report_updates"] or payload.get("stored_ocr_approval")),
                 "measurement_updates_present": bool(payload["measurement_updates"]),
             },
         )
@@ -106,6 +109,26 @@ def _record_database_edit_outcome(token, outcome: ContextOperationOutcome) -> No
             _bugreport_recorder.record_option_outcome(token, outcome)
     except Exception:
         return
+
+
+def _stored_ocr_decision_lines(decisions: tuple[StoredOcrDecision, ...]) -> list[str]:
+    if not decisions:
+        return []
+    lines = ["", "Stored OCR decisions"]
+    for decision in decisions:
+        provenance = [decision.source_type]
+        if decision.region_name:
+            provenance.append(decision.region_name)
+        if decision.page_number is not None:
+            provenance.append(f"page {decision.page_number}")
+        if decision.confidence is not None:
+            provenance.append(f"{round(decision.confidence * 100)}% confidence")
+        value_label = "Accepted value" if decision.decision == OCR_ACCEPTED else "Suggested value"
+        lines.append(
+            f"{FIELD_LABELS[decision.field_name]} · {decision.decision.capitalize()} · "
+            f"{value_label}: {decision.value} ({' / '.join(provenance)})"
+        )
+    return lines
 
 
 QItemSelection = getattr(QtCore, "QItemSelection", None)
@@ -635,7 +658,7 @@ class ModifyDB(QDialog):
             return
         try:
             context = load_stored_report_context(self.db_file, report_id)
-        except sqlite3.Error:
+        except (sqlite3.Error, ValueError):
             QMessageBox.warning(self, "Report details", "Could not read report details. Try again.")
             return
         if context is None:
@@ -651,11 +674,76 @@ class ModifyDB(QDialog):
         details.setAccessibleName("Stored report details")
         details.setPlainText(self._report_details_text(context))
         layout.addWidget(details)
+        self._add_stored_ocr_controls(dialog, layout, context.ocr_decisions)
         buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.StandardButton.Close, parent=dialog)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         dialog.open()
+
+    def _add_stored_ocr_controls(self, dialog, layout, decisions):
+        approvals = [item.approval for item in decisions if item.approval is not None]
+        if not approvals:
+            return
+        row = QHBoxLayout()
+        label = QtWidgets.QLabel("Deferred field", dialog)
+        choice = QtWidgets.QComboBox(dialog)
+        choice.setAccessibleName("Deferred OCR field")
+        label.setBuddy(choice)
+        for approval in approvals:
+            choice.addItem(FIELD_LABELS[approval.field_name], approval)
+        accept = QPushButton("Use OCR suggestion", dialog)
+        accept.setAutoDefault(False)
+        accept.clicked.connect(lambda: self._confirm_stored_ocr(dialog, choice.currentData()))
+        row.addWidget(label)
+        row.addWidget(choice, 1)
+        row.addWidget(accept)
+        layout.addLayout(row)
+
+    def _can_accept_stored_ocr(self, approval):
+        return (
+            isinstance(approval, StoredOcrApproval)
+            and approval.database.identity == getattr(self, "_edit_database_identity", None)
+            and approval.report_id == self._selected_report_id()
+            and not self._uses_legacy_schema()
+            and not getattr(self, "_save_in_progress", False) and getattr(self, "_edit_thread", None) is None
+            and not self.has_pending_changes()
+        )
+
+    def _confirm_stored_ocr(self, dialog, approval):
+        if not self._can_accept_stored_ocr(approval):
+            QMessageBox.warning(dialog, "Use OCR suggestion", "Finish pending edits or reopen the report before accepting OCR.")
+            return
+        field = FIELD_LABELS[approval.field_name]
+        prompt = QMessageBox(QMessageBox.Icon.Question, "Use OCR suggestion", "",
+                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, dialog)
+        prompt.setTextFormat(Qt.TextFormat.PlainText)
+        prompt.setDefaultButton(QMessageBox.StandardButton.No)
+        question = f"Replace {field} with the stored OCR suggestion?"
+        if len(approval.normalized_value) <= 120:
+            prompt.setText(f"{question}\n\n{approval.normalized_value}")
+        else:
+            prompt.setText(question)
+            prompt.setDetailedText(approval.normalized_value)
+        if prompt.exec() != QMessageBox.StandardButton.Yes or sip.isdeleted(dialog) or sip.isdeleted(self):
+            return
+        if not self._can_accept_stored_ocr(approval):
+            QMessageBox.warning(
+                dialog, "Use OCR suggestion", "The report changed. Reopen Report details and review the suggestion again.",
+            )
+            return
+        dialog.reject()
+        _record_database_edit_action(BugReportAction.WORKFLOW_DATABASE_EDIT_STARTED)
+        try:
+            completed, receipt = self._apply_edit_payload(dict(
+                storage_flavor=self._storage_flavor,
+                normalization_changes={"reference": (), "sample_number": (), "header": ()},
+                report_updates=(), measurement_updates=(), stored_ocr_approval=approval,
+            ))
+            if completed:
+                self._edit_succeeded(receipt)
+        except Exception as error:
+            self._report_save_error(error)
 
     @staticmethod
     def _report_details_text(context):
@@ -669,6 +757,7 @@ class ModifyDB(QDialog):
             ("parse_status", "Parse status"), ("measurement_count", "Measurements"), ("nok_count", "NOK measurements"),
         )
         lines = [f"{label}: {context.report[field]}" for field, label in names if context.report.get(field) is not None]
+        lines.extend(_stored_ocr_decision_lines(context.ocr_decisions))
         count = context.report.get("review_warning_count")
         if count is not None:
             lines.extend(("", f"Review warnings: {count}"))
