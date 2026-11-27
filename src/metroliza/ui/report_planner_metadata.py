@@ -117,7 +117,7 @@ def cell_style(row: ReviewRow | None, field_name: str) -> CellStyle:
     if is_missing(row, field_name):
         return CellStyle(KIND_MISSING, italic=True)
     if has_conflict(row, field_name):
-        return CellStyle(KIND_CONFLICT, bold=manual)
+        return CellStyle(KIND_CONFLICT, bold=manual, italic=row.has_deferred_ocr_suggestion(field_name))
     if manual:
         return CellStyle(KIND_MANUAL, bold=True)
     if is_low_confidence(row, field_name):
@@ -159,7 +159,11 @@ def accessible_text(row: ReviewRow | None, report_name: str, field_name: str) ->
         value = row.value(field_name) or "missing"
     text = f"{report_name}, {FIELD_LABELS[field_name]}: {value}"
     if row is not None and has_conflict(row, field_name):
-        text += f". OCR suggests {row.cells[field_name].ocr_suggestion}."
+        suggestion = row.cells[field_name].ocr_suggestion
+        if row.has_deferred_ocr_suggestion(field_name):
+            text += f". Deferred OCR suggestion: {suggestion}."
+        else:
+            text += f". OCR suggests {suggestion}."
     return text
 
 
@@ -211,10 +215,13 @@ def cell_tooltip(row: ReviewRow | None, report_name: str, field_name: str, *, st
         candidate = row.suggested_ocr_candidate(field_name)
         if candidate is not None:
             suggestion = candidate.normalized_value
-            lines.append(f"OCR suggests {suggestion}; your value is kept.")
+            if row.has_deferred_ocr_suggestion(field_name):
+                lines.append(f"Deferred OCR suggestion: {suggestion}. Your value is kept.")
+            else:
+                lines.append(f"OCR suggests {suggestion}; your value is kept.")
             lines.append(_ocr_candidate_source(row, field_name, suggestion, candidate=candidate))
             lines.append("Compare the suggested value with the report before accepting it.")
-            lines.append("Select the cell, then use Metadata to choose the suggestion or keep the current value.")
+            lines.append("Select the cell, then open Metadata to use the suggestion, keep the current value or review later.")
         if not _is_pending(row):
             lines.append("Double-click or press F2 to edit.")
     return "\n".join(line for line in lines if line)
@@ -288,7 +295,8 @@ def _field_detail_line(row: ReviewRow, name: str) -> str:
     if cell.user_set and cell.auto_value:
         parts.append(f"detected {cell.auto_value}")
     if has_conflict(row, name):
-        parts.append(f"OCR suggests {cell.ocr_suggestion}; your value is kept")
+        label = "deferred OCR suggestion" if row.has_deferred_ocr_suggestion(name) else "OCR suggests"
+        parts.append(f"{label} {cell.ocr_suggestion}; your value is kept")
     alternatives = _alternatives(row, name)
     if alternatives:
         parts.append("other candidates: " + ", ".join(alternatives))

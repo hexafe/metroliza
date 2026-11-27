@@ -29,7 +29,7 @@ from metroliza.shared.progress_status import (
     build_three_line_status,
     format_progress_duration,
 )
-from metroliza.reports.report_identity import ImportedReportBatch, build_report_identity_hash
+from metroliza.reports.report_identity import ImportedReportBatch
 from metroliza.reports.report_metadata_models import (
     CanonicalReportMetadata,
     USER_SOURCE_TYPE,
@@ -1413,7 +1413,7 @@ def persist_complete_metadata_enrichment(
         metadata_profile_version="1",
         parse_status="parsed_with_warnings" if merged_metadata.warnings else "parsed",
         metadata_confidence=merged_metadata.metadata_confidence,
-        identity_hash=build_report_identity_hash(merged_metadata),
+        recompute_identity_hash=True,
         raw_report_json=raw_report_json,
         approval=approval,
         expected_metadata_json=current_row.get("metadata_json"),

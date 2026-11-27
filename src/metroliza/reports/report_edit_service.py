@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from metroliza.reports.db import quote_identifier, run_transaction_with_retry, sqlite_file_identity
+from metroliza.reports.report_curation import StoredOcrApproval
 from metroliza.reports.report_edit_audit import (
     AUDIT_SAMPLE_LIMIT,
     ReportEditReceipt,
@@ -125,9 +126,14 @@ class ReportEditService:
         report_updates: Iterable[RecordUpdate] = (),
         measurement_updates: Iterable[RecordUpdate] = (),
         expected_edits: ReportEditExpectations | None = None,
+        stored_ocr_approval: StoredOcrApproval | None = None,
     ) -> None:
         """Apply the entire confirmed edit batch as one retryable transaction."""
 
+        if stored_ocr_approval is not None:
+            self._apply_stored_ocr(storage_flavor, normalization_changes, report_updates, measurement_updates,
+                                   expected_edits, stored_ocr_approval)
+            return
         self._apply_changes(storage_flavor, normalization_changes, report_updates, measurement_updates,
                             expected_edits=expected_edits)
 
@@ -139,20 +145,34 @@ class ReportEditService:
         report_updates: Iterable[RecordUpdate] = (),
         measurement_updates: Iterable[RecordUpdate] = (),
         expected_edits: ReportEditExpectations | None = None,
+        stored_ocr_approval: StoredOcrApproval | None = None,
     ) -> ReportEditReceipt | None:
         """Return local audit samples after commit, if the native transaction is observable."""
 
         if type(self) is not ReportEditService:
             options = {"expected_edits": expected_edits} if expected_edits is not None else {}
+            if stored_ocr_approval is not None:
+                options["stored_ocr_approval"] = stored_ocr_approval
             self.apply_changes(
                 storage_flavor=storage_flavor, normalization_changes=normalization_changes,
                 report_updates=report_updates, measurement_updates=measurement_updates, **options,
             )
             return None
+        if stored_ocr_approval is not None:
+            self._apply_stored_ocr(storage_flavor, normalization_changes, report_updates, measurement_updates,
+                                   expected_edits, stored_ocr_approval)
+            return None
         return self._apply_changes(
             storage_flavor, normalization_changes, report_updates, measurement_updates,
             observe=True, expected_edits=expected_edits,
         )
+
+    def _apply_stored_ocr(self, flavor, normalizations, reports, measurements, expected_edits, approval):
+        if (self._validate_storage_flavor(flavor) != "current" or any(normalizations.values())
+                or tuple(reports) or tuple(measurements)):
+            raise ValueError("Review and accept the stored OCR suggestion separately from other edits.")
+        self._check_database_identity(getattr(expected_edits, "database_identity", None))
+        self._repository_factory(self.database).accept_deferred_ocr(approval)
 
     def _apply_changes(self, storage_flavor, normalization_changes, report_updates,
                        measurement_updates, *, observe=False, expected_edits=None):
