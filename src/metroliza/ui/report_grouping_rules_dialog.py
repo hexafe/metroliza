@@ -19,14 +19,16 @@ _JSON_FILTER = "Grouping presets (*.json)"
 
 
 class ReportGroupingRulesDialog(QDialog):
-    def __init__(self, parent, database, filter_query, palette):
+    def __init__(self, parent, database, filter_query, palette, *, draft=None):
         super().__init__(parent)
         self.setWindowTitle("Report grouping rules")
         self._database = database
         self._filter_query = filter_query
         self._palette = tuple(palette)
         self._preview = None
+        self._preview_preset = None
         self.accepted_preview = None
+        self.kept_preset = None
 
         self.name_input = QLineEdit()
         self.name_input.setMaxLength(MAX_LABEL_CHARS * 2)
@@ -73,10 +75,14 @@ class ReportGroupingRulesDialog(QDialog):
         layout.addWidget(self.default_checkbox)
         layout.addLayout(self._row(
             self._button("Preview", self._preview_rules), self._button("Cancel", self.reject),
+            self._button("Keep draft", self._keep_draft),
             self.apply_button,
         ))
 
-        self._add_group()
+        if draft is None:
+            self._add_group()
+        else:
+            self._load_preset(draft)
         self.name_input.textChanged.connect(self._invalidate_preview)
         self.rules_table.itemChanged.connect(self._invalidate_preview)
         self.default_checkbox.toggled.connect(self._update_apply_button)
@@ -148,6 +154,7 @@ class ReportGroupingRulesDialog(QDialog):
 
     def _invalidate_preview(self):
         self._preview = None
+        self._preview_preset = None
         self.preview_output.clear()
         self.feedback.setText("Preview before using these rules. Applying rules replaces the current grouping.")
         self._update_apply_button()
@@ -178,6 +185,7 @@ class ReportGroupingRulesDialog(QDialog):
             lines.append(f"{label} · {count:,}{detail}")
         self.preview_output.setPlainText("\n".join(lines))
         self._preview = preview
+        self._preview_preset = preset
         if preview.overlap_count:
             self.feedback.setText("Edit the rules to resolve overlaps before using this grouping.")
         elif preview.unassigned_count:
@@ -196,6 +204,15 @@ class ReportGroupingRulesDialog(QDialog):
             self.feedback.setText(str(exc))
             return
         self.accepted_preview = self._preview
+        self.kept_preset = self._preview_preset
+        self.accept()
+
+    def _keep_draft(self):
+        try:
+            self.kept_preset = self._read_draft()
+        except ValueError as exc:
+            self.feedback.setText(str(exc))
+            return
         self.accept()
 
     def _open_preset(self):
@@ -211,6 +228,9 @@ class ReportGroupingRulesDialog(QDialog):
         except (OSError, ValueError) as exc:
             self.feedback.setText(f"Could not open grouping preset. {exc}")
             return
+        self._load_preset(preset)
+
+    def _load_preset(self, preset):
         self.name_input.setText(preset.name)
         self.rules_table.setRowCount(0)
         for rule in preset.rules:

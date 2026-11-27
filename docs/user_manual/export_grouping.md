@@ -35,8 +35,14 @@ or their grouping fields change before export, the export asks for a fresh previ
 **Save preset…** writes a JSON file with the ordered definitions, group IDs and styles.
 **Open preset…** opens those definitions as a draft and requires a fresh preview.
 The export selection and report membership are resolved afresh in the current database.
-Files with unsupported versions or fields show an error and leave the current draft
-available. Use **Save preset…** before closing the rule editor if you want to retain the rules.
+Files with unsupported versions or fields show an error and leave the current draft available.
+
+To keep the rule definition with the current Reports workspace, choose **Keep draft**
+or **Use rule grouping**. Close **Grouping**, then choose **File → Save workspace…**.
+When you open that workspace, reopen **Grouping → Grouping rules…** to edit the saved
+definition. Use **Preview** and then **Use rule grouping** to assign reports in the
+currently selected export scope. If the workspace asks you to locate a moved database,
+choose the original database or an unchanged copy.
 
 This workflow supports up to 12 groups and 2,000 reports per preview. Narrow the Export
 filters or simplify the rules if the preview exceeds its work budget. The Reports typed

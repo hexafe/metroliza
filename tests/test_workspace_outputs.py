@@ -14,6 +14,7 @@ from metroliza.app.analysis_history import (
     record_analysis, result_still_matches,
 )
 from metroliza.app.workspace_file import read_workspace, write_workspace
+from metroliza.reports.report_grouping_rules import ReportGroupRule, ReportGroupingPreset
 from metroliza.ui.workspace_context import WorkspaceSnapshot
 
 
@@ -26,6 +27,8 @@ def test_saved_workspace_matches_unchanged_copy_and_refuses_same_name_replacemen
     location = tmp_path / "report.metroliza-workspace"
     write_workspace(location, WorkspaceSnapshot(1, str(source), str(database)), "reports")
     saved = read_workspace(location)
+    assert json.loads(location.read_bytes())["version"] == 1
+    assert saved.report_grouping_draft is None
 
     moved_directory = shutil.copytree(source, tmp_path / "elsewhere")
     moved_database = tmp_path / "copy.sqlite"
@@ -38,6 +41,75 @@ def test_saved_workspace_matches_unchanged_copy_and_refuses_same_name_replacemen
     moved_database.write_bytes(b"DIFFERENT")
     assert not saved.source.matches(moved_directory)
     assert not saved.database.matches(moved_database)
+
+
+def _rule_draft():
+    return ReportGroupingPreset("Sample groups", (
+        ReportGroupRule("2" * 32, "First", "#aAbB99", 'Reference = "001"'),
+        ReportGroupRule("1" * 32, "Second", "#778899", 'Reference = "1"'),
+    ))
+
+
+def test_workspace_v2_embeds_only_the_versioned_ordered_rule_definition(tmp_path):
+    database = tmp_path / "source.sqlite"
+    database.write_bytes(b"SYNTHETIC DATABASE")
+    snapshot = WorkspaceSnapshot(1, None, str(database))
+    output = tmp_path / "grouping.metroliza-workspace"
+    draft = _rule_draft()
+    write_workspace(output, snapshot, "reports", report_grouping_draft=draft)
+
+    saved = read_workspace(output)
+    assert saved.report_grouping_draft == draft
+    assert saved.database.matches(database)
+    wire = json.loads(output.read_bytes())
+    assert wire["version"] == 2
+    assert set(wire["state"]) == {"page", "source", "database", "report_grouping_draft"}
+    embedded = wire["state"]["report_grouping_draft"]
+    assert embedded["version"] == 1
+    assert [item["id"] for item in embedded["groups"]] == ["2" * 32, "1" * 32]
+    assert set(embedded["groups"][0]) == {"id", "label", "color", "expression", "filter"}
+    assert embedded["groups"][0]["filter"]["expression"]["values"] == ["001"]
+    assert str(database) not in json.dumps(embedded)
+
+
+@pytest.mark.parametrize("change", ["future", "nested_future", "tampered_rule", "duplicate", "missing_database"])
+def test_workspace_v2_rejects_incompatible_or_ambiguous_drafts(tmp_path, change):
+    database = tmp_path / "source.sqlite"
+    database.write_bytes(b"SYNTHETIC DATABASE")
+    output = tmp_path / "grouping.metroliza-workspace"
+    write_workspace(output, WorkspaceSnapshot(1, None, str(database)), "reports", report_grouping_draft=_rule_draft())
+    payload = json.loads(output.read_bytes())
+    if change == "future":
+        payload["version"] = 3
+    elif change == "nested_future":
+        payload["state"]["report_grouping_draft"]["version"] = 99
+    elif change == "tampered_rule":
+        payload["state"]["report_grouping_draft"]["groups"][0]["expression"] = 'Reference = "1"'
+    elif change == "missing_database":
+        payload["state"]["database"] = None
+    raw = json.dumps(payload)
+    if change == "duplicate":
+        raw = raw.replace('"id":', '"id": "bad", "id":', 1)
+    output.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="supported Metroliza workspace|grouping draft is invalid"):
+        read_workspace(output)
+
+
+def test_workspace_size_limit_leaves_previous_file_intact(tmp_path, monkeypatch):
+    from metroliza.app import workspace_file
+
+    database = tmp_path / "source.sqlite"
+    database.write_bytes(b"SYNTHETIC DATABASE")
+    snapshot = WorkspaceSnapshot(1, None, str(database))
+    output = tmp_path / "session.metroliza-workspace"
+    write_workspace(output, snapshot, "reports")
+    previous = output.read_bytes()
+    monkeypatch.setattr(workspace_file, "_MAX_WORKSPACE_BYTES", len(previous))
+    with pytest.raises(ValueError, match="file limit"):
+        write_workspace(output, snapshot, "reports", report_grouping_draft=_rule_draft())
+    assert output.read_bytes() == previous
+    assert read_workspace(output).report_grouping_draft is None
 
 
 def test_history_keeps_real_settings_and_bundle_resources_and_keeps_source_private(tmp_path):

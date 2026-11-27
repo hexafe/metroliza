@@ -1125,15 +1125,18 @@ class DataGrouping(QDialog):
 
         dialog = ReportGroupingRulesDialog(
             self, self.db_file, parent.get_filter_query(), self.group_palette,
+            draft=parent.get_report_grouping_draft(),
         )
         try:
             if not dialog.exec():
                 return
             preview = dialog.accepted_preview
-            preview.source.require_current(parent.db_file, parent.get_filter_query())
-            parent.set_df_for_grouping(preview.assignments, rule_source=preview.source)
-            parent.set_grouping_applied(True)
-            self.hide()
+            if preview is not None:
+                preview.source.require_current(parent.db_file, parent.get_filter_query())
+                parent.set_df_for_grouping(preview.assignments, rule_source=preview.source)
+                parent.set_grouping_applied(True)
+                self.hide()
+            parent.keep_report_grouping_draft(dialog.kept_preset)
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Apply grouping rules", str(exc))
         finally:

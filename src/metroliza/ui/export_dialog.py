@@ -458,6 +458,7 @@ class ExportDialog(QDialog):
         self._typed_report_scope = None
         self.df_for_grouping = None
         self._grouping_rule_source = None
+        self._report_grouping_draft = None
 
         self.filter_window = None
         self.grouping_window = None
@@ -1664,6 +1665,7 @@ class ExportDialog(QDialog):
             self._typed_report_scope = None
             self.df_for_grouping = None
             self._grouping_rule_source = None
+            self._report_grouping_draft = None
             self._refresh_filter_state_summary()
             self.set_grouping_applied(False)
             self.use_whole_database()
@@ -1778,6 +1780,24 @@ class ExportDialog(QDialog):
             self._refresh_draft_request_summary()
         except Exception as e:
             self.log_and_exit(e)
+
+    def get_report_grouping_draft(self):
+        owner = self.parent()
+        read = getattr(owner, "get_report_grouping_draft", None)
+        if callable(read) and self.db_file == getattr(owner, "db_file", None):
+            return read(self.db_file)
+        return self._report_grouping_draft
+
+    def keep_report_grouping_draft(self, preset):
+        self._report_grouping_draft = preset
+        remember = getattr(self.parent(), "keep_report_grouping_draft", None)
+        if callable(remember):
+            remember(self.db_file, preset)
+
+    def restore_report_grouping_draft(self, preset):
+        self._report_grouping_draft = preset
+        if self._grouping_rule_source is not None:
+            self.clear_grouping()
 
     def get_filter_query(self):
         try:
