@@ -15,6 +15,13 @@ from metroliza.shared.diagnostic_wire import decode_export_failure
 from typing import Mapping
 
 
+XLSX_WORKSHEET_CAPACITY_MESSAGE = (
+    "The export exceeds the Excel worksheet limit of 1,048,576 rows "
+    "(including the header) or 16,384 columns. Narrow the report selection "
+    "or filters, or export the data in smaller batches."
+)
+
+
 class ExportRunStatus(str, Enum):
     COMPLETE = "complete"
     COMPLETE_WITH_OMISSIONS = "complete_with_omissions"
@@ -514,6 +521,8 @@ def _append_workbook_outcome(
         if status is ExportArtifactStatus.FAILED
         else ""
     )
+    if terminal_failure == XLSX_WORKSHEET_CAPACITY_MESSAGE:
+        message = XLSX_WORKSHEET_CAPACITY_MESSAGE
     artifacts.append(
         ExportArtifactResult(
             artifact_id="workbook",
@@ -865,7 +874,17 @@ def build_export_run_message(result: ExportRunResult) -> tuple[str, str, str]:
     lines = [opening]
     if result.failure_diagnostic is not None:
         try:
-            lines.extend(["", export_failure_message(result.failure_diagnostic)])
+            failure = result.failure_diagnostic
+            workbook_capacity_exceeded = any(
+                artifact.artifact_id == "workbook"
+                and artifact.public_message == XLSX_WORKSHEET_CAPACITY_MESSAGE
+                for artifact in result.artifacts
+            )
+            if workbook_capacity_exceeded:
+                export_failure_payload(failure)
+                lines.extend(["", f"Diagnostic ID: {failure.exception.correlation_id.hex}."])
+            else:
+                lines.extend(["", export_failure_message(failure)])
         except Exception:
             lines.extend(["", "Detailed failure capture is unavailable."])
 

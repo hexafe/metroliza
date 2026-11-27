@@ -14,8 +14,10 @@ from openpyxl import load_workbook
 from modules.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
 from metroliza.exporting.execution import ExportOutcomeKind, ExportStageOutcome
 from metroliza.exporting.output_publication import OutputConsent
+from metroliza.exporting.xlsx_writer_policy import XlsxWorksheetCapacityError
 from metroliza.exporting import xlsx_parallel_package as packaging
 from xlsxwriter.contenttypes import ContentTypes
+from xlsxwriter.worksheet import Worksheet
 
 
 class _WorkbookCloseNotifications:
@@ -159,6 +161,64 @@ class TestExcelExportBackend(unittest.TestCase):
 
             self.assertEqual(target_path.read_text(encoding='utf-8'), 'old workbook')
             self.assertFalse(Path(thread.writer_path).exists())
+
+
+@pytest.mark.parametrize(("bulk_enabled", "streamed"), [("0", False), ("1", False), ("1", True)])
+@pytest.mark.parametrize("overflow", ["rows", "columns"])
+def test_report_table_worksheet_capacity_preserves_complete_workbook(
+    monkeypatch, tmp_path, bulk_enabled, streamed, overflow,
+):
+    monkeypatch.setenv("METROLIZA_EXPORT_BULK_WRITE", bulk_enabled)
+    init_worksheet = Worksheet.__init__
+
+    def small_worksheet(worksheet):
+        init_worksheet(worksheet)
+        worksheet.xls_rowmax = 3
+        worksheet.xls_colmax = 2
+
+    monkeypatch.setattr(Worksheet, "__init__", small_worksheet)
+    target = tmp_path / "report.xlsx"
+    backend = ExcelExportBackend()
+
+    class ReportExport(_WorkbookCloseNotifications):
+        excel_file = str(target)
+
+        def __init__(self, rows, columns, *, replace_outputs=()):
+            self.rows = rows
+            self.columns = columns
+            self.replace_outputs = replace_outputs
+
+        def run_export_pipeline(self, writer):
+            if streamed:
+                count = backend.write_streamed_rows(
+                    writer, "MEASUREMENTS", self.columns, ([row] for row in self.rows),
+                )
+                assert count == len(self.rows)
+            else:
+                backend.write_dataframe(writer, (iter(self.rows), self.columns), "MEASUREMENTS")
+            return ExportStageOutcome.completed()
+
+    rows = [(1, 2), (3, 4)]
+    columns = ["A", "B"]
+    assert backend.run(ReportExport(rows, columns)) == ExportStageOutcome.completed()
+    workbook = load_workbook(target, read_only=True)
+    try:
+        assert list(workbook["MEASUREMENTS"].values) == [tuple(columns), *rows]
+    finally:
+        workbook.close()
+    complete_bytes = target.read_bytes()
+    paths_after_success = set(tmp_path.iterdir())
+
+    if overflow == "rows":
+        rows = [*rows, (5, 6)]
+    else:
+        columns = [*columns, "C"]
+        rows = [(*row, 0) for row in rows]
+
+    with pytest.raises(XlsxWorksheetCapacityError):
+        backend.run(ReportExport(rows, columns, replace_outputs=(OutputConsent.for_path(target),)))
+    assert target.read_bytes() == complete_bytes
+    assert set(tmp_path.iterdir()) == paths_after_success
 
 
 @pytest.mark.parametrize("bulk_enabled", ["0", "1"])

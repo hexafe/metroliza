@@ -19,6 +19,7 @@ from functools import lru_cache
 from io import BytesIO
 import os
 from pathlib import Path
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from copy import deepcopy
@@ -57,8 +58,10 @@ from metroliza.shared.output_verification import verify_published_output
 from metroliza.shared.safe_bugreport_context import OutputVerificationKind
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
+from metroliza.exporting.xlsx_writer_policy import XlsxWorksheetCapacityError
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
 from metroliza.exporting.export_outcomes import (
+    XLSX_WORKSHEET_CAPACITY_MESSAGE,
     ExportRunStatus,
     derive_export_run_result,
     export_failure_message,
@@ -152,16 +155,6 @@ from metroliza.exporting.export_grouping_utils import (
     keys_have_usable_values as _keys_have_usable_values,
     prepare_grouping_dataframe as _prepare_grouping_dataframe,
     resolve_group_merge_keys as _resolve_group_merge_keys,
-)
-from metroliza.analytics.group_analysis_service import (
-    LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
-    GroupAnalysisCancelled,
-    build_group_analysis_payload,
-)
-from metroliza.exporting.group_analysis_writer import (
-    write_group_analysis_diagnostics_sheet as _write_internal_group_analysis_diagnostics_sheet,
-    write_group_analysis_plots_sheet,
-    write_group_analysis_sheet,
 )
 from metroliza.charts.summary_plot_palette import (
     SUMMARY_PLOT_PALETTE,
@@ -278,11 +271,38 @@ from metroliza.exporting.backend_diagnostics import (
     build_backend_diagnostic_summary,
     format_backend_diagnostic_lines,
 )
-from metroliza.analytics.distribution_fit_service import fit_measurement_distribution
 
-_HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
-if _HAS_SEABORN:
-    import seaborn as sns
+_SEABORN_AVAILABLE = _HAS_SEABORN = importlib.util.find_spec('seaborn') is not None
+_export_module = sys.modules[__name__]
+_GROUP_ANALYSIS_WRITER_NAMES = {
+    '_write_internal_group_analysis_diagnostics_sheet': 'write_group_analysis_diagnostics_sheet',
+    'write_group_analysis_plots_sheet': 'write_group_analysis_plots_sheet',
+    'write_group_analysis_sheet': 'write_group_analysis_sheet',
+}
+
+
+def __getattr__(name):
+    """Resolve scientific dependencies at first use and keep existing module attributes."""
+    # Explicit imports keep these dependencies visible to the frozen build.
+    if name == 'sns' and _SEABORN_AVAILABLE:
+        import seaborn
+
+        value = seaborn
+    elif name == 'fit_measurement_distribution':
+        from metroliza.analytics.distribution_fit_service import fit_measurement_distribution
+
+        value = fit_measurement_distribution
+    elif name in {'LARGE_EXPORT_DISTRIBUTION_FIT_POLICY', 'GroupAnalysisCancelled', 'build_group_analysis_payload'}:
+        import metroliza.analytics.group_analysis_service as group_analysis_service
+
+        value = getattr(group_analysis_service, name)
+    elif name in _GROUP_ANALYSIS_WRITER_NAMES:
+        from metroliza.exporting import group_analysis_writer
+
+        value = getattr(group_analysis_writer, _GROUP_ANALYSIS_WRITER_NAMES[name])
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    return globals().setdefault(name, value)
 
 
 logger = get_operation_logger(logging.getLogger(__name__), "export_data")
@@ -2161,7 +2181,7 @@ def render_histogram_note_panel(
 def apply_summary_plot_theme():
     """Apply a consistent summary plotting theme."""
     if _HAS_SEABORN:
-        sns.set_theme(style='white', context='paper')
+        _export_module.sns.set_theme(style='white', context='paper')
     plt.rcParams.update({
         'font.size': 8,
         'axes.labelsize': 8,
@@ -2668,7 +2688,10 @@ def render_violin(
 
     if _HAS_SEABORN:
         positions = list(range(len(labels)))
-        sns.violinplot(data=values, inner=None, cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
+        _export_module.sns.violinplot(
+            data=values, inner=None, cut=0, linewidth=0.9,
+            color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax,
+        )
         ax.set_xticks(positions)
     else:
         positions = list(range(1, len(labels) + 1))
@@ -2769,7 +2792,7 @@ def render_histogram(ax, header_group, *, lsl=None, usl=None, group_column=None)
             ax.axvline(mean_value, color=color, linestyle='-.', linewidth=1.0, alpha=0.85)
         ax.legend(loc='upper left', frameon=True, fontsize=7.0, title='Group (n, mean)', title_fontsize=7.0)
     elif _HAS_SEABORN:
-        sns.histplot(
+        _export_module.sns.histplot(
             x=histogram_values,
             bins=bin_count,
             stat='probability',
@@ -3015,7 +3038,7 @@ def render_density_line(ax, x, p, *, color=None, alpha=1.0, linewidth=1.4, lines
             and np.all(x[1:] > x[:-1])
         )
     if _HAS_SEABORN and not direct_curve:
-        sns.lineplot(
+        _export_module.sns.lineplot(
             x=x,
             y=p,
             color=line_color,
@@ -5303,6 +5326,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            if type(e) is XlsxWorksheetCapacityError and self._check_canceled():
+                return
             self._observe_export_failure_stage(exception=e)
             if self.export_target == "html_dashboard":
                 failure_title = "HTML dashboard export failed."
@@ -5840,7 +5865,10 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         try:
             if plot_key == 'violin':
                 if _HAS_SEABORN:
-                    sns.violinplot(data=grouped_values, inner='quartile', cut=0, linewidth=0.9, color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax)
+                    _export_module.sns.violinplot(
+                        data=grouped_values, inner='quartile', cut=0, linewidth=0.9,
+                        color=SUMMARY_PLOT_PALETTE['distribution_base'], ax=ax,
+                    )
                     positions = list(range(len(group_labels)))
                     ax.set_xticks(positions)
                     ax.set_xticklabels(display_group_labels)
@@ -6130,20 +6158,21 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 )
             )
 
+        group_analysis_cancelled = _export_module.GroupAnalysisCancelled
         payload_start = time.perf_counter()
         try:
-            payload = build_group_analysis_payload(
+            payload = _export_module.build_group_analysis_payload(
                 grouped_export_df,
                 requested_scope=requested_scope,
                 analysis_level=mode,
                 alias_db_path=self.db_file,
                 default_group_label=default_group_label,
-                distribution_fit_policy=LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
+                distribution_fit_policy=_export_module.LARGE_EXPORT_DISTRIBUTION_FIT_POLICY,
                 progress_callback=emit_group_analysis_progress,
                 should_cancel=self._check_canceled,
                 include_chart_payloads=(mode == 'standard'),
             )
-        except GroupAnalysisCancelled:
+        except group_analysis_cancelled:
             self._check_canceled()
             return
         finally:
@@ -6206,12 +6235,12 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     mode=mode,
                     audience='dashboard',
                 )
-            write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
+            _export_module.write_group_analysis_sheet(group_worksheet, payload, plot_assets=plot_assets)
             if mode == 'standard':
                 plots_sheet_name = unique_sheet_name('Group Analysis Plots', used_sheet_names)
                 plots_worksheet = workbook.add_worksheet(plots_sheet_name)
                 self._record_exported_sheet_name(plots_sheet_name)
-                write_group_analysis_plots_sheet(plots_worksheet, payload, plot_assets=plot_assets)
+                _export_module.write_group_analysis_plots_sheet(plots_worksheet, payload, plot_assets=plot_assets)
 
         if _internal_group_analysis_diagnostics_enabled():
             diagnostics_sheet_name = unique_sheet_name('Diagnostics', used_sheet_names)
@@ -6220,7 +6249,9 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             # Internal/debug-only worksheet for payload verification. Normal exports
             # intentionally keep diagnostics folded into the user-facing Group Analysis
             # content instead of adding a separate worksheet.
-            _write_internal_group_analysis_diagnostics_sheet(diagnostics_worksheet, payload['diagnostics'])
+            _export_module._write_internal_group_analysis_diagnostics_sheet(
+                diagnostics_worksheet, payload['diagnostics'],
+            )
 
     def export_filtered_data(self, excel_writer):
         """Handle `export_filtered_data` for `ExportDataThread`.
@@ -6244,6 +6275,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
             if self.include_industrial_context:
                 self.export_industrial_context_data(export_df, excel_writer)
+        except XlsxWorksheetCapacityError:
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -6381,6 +6414,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     return
                 column_width = self.calculate_column_width(df[column])
                 worksheet.set_column(i, i, column_width)
+        except XlsxWorksheetCapacityError:
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -6561,7 +6596,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     distribution_fit_future = None
                     if should_precompute_distribution_fit:
                         distribution_fit_future = self._chart_executor.submit(
-                            fit_measurement_distribution,
+                            _export_module.fit_measurement_distribution,
                             sampling_context['histogram_payload']['measurements'],
                             lsl=LSL,
                             usl=USL,
@@ -7039,7 +7074,7 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                         native_histogram_capable = _native_extended_histogram_export_available()
                     distribution_fit_result = precomputed_distribution_fit
                     if distribution_fit_result is None:
-                        distribution_fit_result = fit_measurement_distribution(
+                        distribution_fit_result = _export_module.fit_measurement_distribution(
                             histogram_values,
                             lsl=LSL,
                             usl=USL,
@@ -7594,9 +7629,14 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         self._observe_export_failure_stage(exception=exception)
-        self._set_export_run_result(terminal_failure="Export failed")
+        workbook_capacity_exceeded = type(exception) is XlsxWorksheetCapacityError
+        self._set_export_run_result(terminal_failure=(
+            XLSX_WORKSHEET_CAPACITY_MESSAGE if workbook_capacity_exceeded else "Export failed"
+        ))
         try:
-            if self._export_failure is not None:
+            if workbook_capacity_exceeded:
+                message = XLSX_WORKSHEET_CAPACITY_MESSAGE
+            elif self._export_failure is not None:
                 message = export_failure_message(self._export_failure)
             else:
                 message = "Export failed. Detailed failure capture is unavailable."

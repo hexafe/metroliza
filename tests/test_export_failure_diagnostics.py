@@ -542,6 +542,64 @@ def test_column_width_failure_rethrows_through_real_caller_and_finishes_failed(m
         assert worker.calculate_column_width([]) == 12
 
 
+def test_report_capacity_failure_renders_actionable_completion_once(monkeypatch, tmp_path):
+    from xlsxwriter.worksheet import Worksheet
+
+    from metroliza.analytics.row_table import RowTable
+    from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
+    from metroliza.exporting.export_data_thread import ExportDataThread
+    from metroliza.exporting.export_dialog_service import build_export_completion_message
+    from metroliza.exporting.output_publication import OutputConsent
+
+    target = tmp_path / "export.xlsx"
+    target.write_bytes(b"previous complete workbook")
+    worker = ExportDataThread(ExportRequest(
+        AppPaths(str(tmp_path / "data.sqlite"), str(target)),
+        ExportOptions(),
+        replace_outputs=(OutputConsent.for_path(target),),
+    ))
+    init_worksheet = Worksheet.__init__
+
+    def small_worksheet(worksheet):
+        init_worksheet(worksheet)
+        worksheet.xls_rowmax = 2
+
+    monkeypatch.setattr(Worksheet, "__init__", small_worksheet)
+    monkeypatch.setattr(worker, "_prepare_export_snapshot", lambda: None)
+    monkeypatch.setattr(worker, "add_measurements_horizontal_sheet", lambda writer: None)
+    monkeypatch.setattr(
+        worker, "_build_export_filtered_dataframe",
+        lambda: RowTable(rows=[(PRIVATE,), (1,)], columns=("VALUE",)),
+    )
+
+    errors = []
+    completed = []
+    worker.error_occurred.connect(errors.append)
+    worker.completed.connect(lambda: completed.append(True))
+    worker.run()
+
+    assert len(errors) == 1
+    assert not completed
+    result = worker.export_run_result
+    assert result.status is ExportRunStatus.FAILED
+    level, _title, message = build_export_completion_message(
+        excel_file=str(target),
+        export_target="excel_xlsx",
+        completion_metadata=worker.completion_metadata,
+        run_result=result,
+        terminal_failure=errors[0],
+    )
+    assert level == "error"
+    assert "Narrow the report selection or filters" in errors[0]
+    assert errors[0] in message
+    assert result.failure_diagnostic.exception.correlation_id.hex in message
+    assert "Try exporting to a new local folder" not in message
+    assert PRIVATE not in message
+    assert target.read_bytes() == b"previous complete workbook"
+    assert not list(tmp_path.glob(".metroliza-workbook-*"))
+    assert not list(tmp_path.glob(".xlsx-package-*"))
+
+
 def test_before_attempt_diagnostic_failure_is_best_effort_and_not_forwarded(tmp_path):
     from metroliza.charts.export_html_dashboard import write_export_html_dashboard, resolve_html_dashboard_assets_dir
     from metroliza.exporting.output_publication import write_dashboard_safely
