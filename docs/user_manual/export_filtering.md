@@ -415,10 +415,15 @@ NOK restrictions. Choose **Apply Filters** to use that scope for the workbook.
 If the draft or database changes, preview again before applying or exporting.
 
 The typed catalog includes Reference (`Ref`), Dimension, Axis, Status,
-Measurement (`meas`) and Date. Reports presets and recipes keep their existing
-Magic format. Typed drafts cannot be saved as presets or recipes yet. Clear the
-typed filter before switching to grouping, HTML, Google Sheets, industrial
-context or the last-import scope.
+Measurement (`meas`) and Date. Choose **Saved filters… → Save typed filter draft as…**
+to keep a typed draft. **Load typed as draft** restores the conditions and
+requires a new preview against the current database before Apply. Typed presets
+store the expression and its stable field IDs separately from Magic presets.
+An unavailable typed preset shows the field or condition that needs attention
+and keeps the original entry. Review the current catalog and save a new draft
+after correcting it. Export recipes continue to use the existing Magic format.
+Clear the typed filter before switching to grouping, HTML, Google Sheets,
+industrial context or the last-import scope.
 
 Existing Magic filters, Reports presets and recipes retain their current
 semantics. The report alias `Ref` resolves to
@@ -429,5 +434,5 @@ measurement selection, report grouping, and export with fixed row IDs.
 [Report migration regression](../../tests/test_report_query_service.py)
 
 The typed workbook path binds the same query and parameters used by the preview
-and selects its rows into a temporary export snapshot. Grouping, other export
-targets, and saved-filter migration remain separate work.
+and selects its rows into a temporary export snapshot. Grouping and other export
+targets remain separate work.

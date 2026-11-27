@@ -973,42 +973,49 @@ class FilterDialog(QDialog):
 
         store = ReportFilterPresets()
         presets, unavailable = store.load()
+        typed_presets, typed_unavailable = store.load_typed() if self.typed_mode_button is not None else ([], [])
         menu = QtWidgets.QMenu(self)
-        save = menu.addAction("Save filter draft as…")
-        save.setEnabled(self.apply_button.isEnabled() and not self._typed_mode())
-        if self._typed_mode():
-            menu.addAction("Typed drafts cannot be saved as presets yet").setEnabled(False)
+        typed = self._typed_mode()
+        save = menu.addAction("Save typed filter draft as…" if typed else "Save filter draft as…")
+        save.setEnabled((not self._values_loading and not self._values_error and bool(self._filter_expression_text())
+                         and self._validate_date_range()) if typed else self.apply_button.isEnabled())
         save.triggered.connect(lambda: self._save_filter_draft(store))
         menu.addSeparator()
-        for name, state in presets:
-            label = name.replace("&", "&&")
-            action = menu.addAction(f"Load as draft: {label}")
-            action.setEnabled(not self._values_loading)
-            action.triggered.connect(lambda _checked, value=state: self._load_saved_filter(value))
-        if not presets and not unavailable:
+        self._add_saved_filter_actions(menu, presets, unavailable, typed=False)
+        self._add_saved_filter_actions(menu, typed_presets, typed_unavailable, typed=True)
+        if not any((presets, unavailable, typed_presets, typed_unavailable)):
             menu.addAction("No saved filters").setEnabled(False)
-        for name, detail in unavailable:
-            label = " ".join(name.split()).replace("&", "&&")
-            message = menu.addAction(f"Unavailable: {label}…")
-            message.triggered.connect(lambda _checked, reason=detail: self._show_unavailable_filter(reason))
         menu.exec(self.saved_filters_button.mapToGlobal(self.saved_filters_button.rect().bottomLeft()))
 
-    def _show_unavailable_filter(self, reason):
+    def _add_saved_filter_actions(self, menu, presets, unavailable, *, typed):
+        load_label = "Load typed as draft" if typed else "Load as draft"
+        unavailable_label = "Unavailable typed preset" if typed else "Unavailable"
+        for name, state in presets:
+            label = " ".join(name.split()).replace("&", "&&") if typed else name.replace("&", "&&")
+            action = menu.addAction(f"{load_label}: {label}")
+            action.setEnabled(not self._values_loading)
+            action.triggered.connect(lambda _checked, value=state: self._load_saved_filter(value, typed=typed))
+        for name, detail in unavailable:
+            label = " ".join(name.split()).replace("&", "&&")
+            message = menu.addAction(f"{unavailable_label}: {label}…")
+            message.triggered.connect(lambda _checked, reason=detail: self._show_unavailable_filter(reason))
+
+    def _show_unavailable_filter(self, reason, *, title="Saved filter unavailable"):
         message = QtWidgets.QMessageBox(self)
-        message.setWindowTitle("Saved filter unavailable")
+        message.setWindowTitle(title)
         message.setTextFormat(Qt.TextFormat.PlainText)
         message.setText(reason)
         message.exec()
 
     def _save_filter_draft(self, store):
-        if self._typed_mode():
-            return
+        typed = self._typed_mode()
         name, accepted = QtWidgets.QInputDialog.getText(self, "Save filter", "Filter name")
         if not accepted:
             return
         name = name.strip()
         try:
-            if store.contains_name(name):
+            exists = store.contains_name(name, typed=typed) if typed else store.contains_name(name)
+            if exists:
                 replace = QtWidgets.QMessageBox.question(
                     self, "Replace saved filter?", f"Replace the saved filter {name!r}?",
                     QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
@@ -1016,18 +1023,46 @@ class FilterDialog(QDialog):
                 )
                 if replace != QtWidgets.QMessageBox.StandardButton.Yes:
                     return
-            store.save(name, self._current_filter_state())
-        except (OSError, ValueError):
-            QtWidgets.QMessageBox.warning(self, "Save filter", "Could not save the filter. Check its name and conditions.")
+            state = self._current_filter_state()
+            if typed:
+                store.save_typed(name, state, replace=exists)
+            else:
+                store.save(name, state)
+        except (OSError, ValueError) as error:
+            if typed and isinstance(error, ValueError):
+                self._show_unavailable_filter(str(error), title="Could not save typed filter")
+            else:
+                QtWidgets.QMessageBox.warning(self, "Save filter", "Could not save the filter. Check its name and conditions.")
 
-    def _load_saved_filter(self, state):
+    def _load_saved_filter(self, state, *, typed=False):
+        if typed:
+            error = self._typed_preset_draft_error(state)
+            if error:
+                self._show_unavailable_filter(error)
+                return
+            self._stop_typed_preview()
+            self._typed_preview_scope = None
+            self._typed_preview_status = ""
         selections = tuple((name, getattr(state, name.removesuffix("_list") + "_values"))
                            for name in self._FILTER_LIST_ATTRS)
         date_from = state.date_from or "1970-01-01"
         date_to = state.date_to or QDate.currentDate().toString("yyyy-MM-dd")
         preset = "Custom" if (state.date_from or state.date_to) else "All dates"
         self._restore_draft_snapshot((selections, date_from, date_to, state.has_nok_only,
-                                      state.expression_text, preset, False))
+                                      state.expression_text, preset, typed))
+
+    def _typed_preset_draft_error(self, state):
+        if self.typed_mode_button is None:
+            return "This dialog cannot load a typed Reports draft."
+        for label, value, calendar in (
+            ("From", state.date_from, self.date_from_calendar),
+            ("To", state.date_to, self.date_to_calendar),
+        ):
+            if value is not None:
+                day = QDate.fromString(value, "yyyy-MM-dd")
+                if not day.isValid() or not calendar.minimumDate() <= day <= calendar.maximumDate():
+                    return f"The saved {label} date is outside the date control's range."
+        return ""
 
     def _reset_draft(self):
         if self.typed_mode_button is not None:
@@ -1351,8 +1386,7 @@ class FilterDialog(QDialog):
         if summary_label is None or not hasattr(summary_label, "setText"):
             return
         if self.typed_preview_button is not None:
-            if not self._typed_mode():
-                self.typed_mode_button.setEnabled(not self.parent().typed_report_filter_blocker())
+            self.typed_mode_button.setEnabled(self._typed_mode() or not self.parent().typed_report_filter_blocker())
             self.typed_preview_button.setEnabled(self._typed_mode() and not self._values_loading)
         if not self._validate_date_range():
             summary_label.setText("Invalid date range: From must be on or before To.")

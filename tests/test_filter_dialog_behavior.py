@@ -195,6 +195,198 @@ def test_replacing_saved_filter_requires_consent(monkeypatch, tmp_path, unavaila
         dialog.close()
 
 
+def test_typed_named_filter_roundtrips_separately_from_magic_after_restart(tmp_path):
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    state = FilterState(header_values=("Width",), expression_text='rEf IN ("001")')
+    legacy = FilterState(expression_text='Ref IN ("1")')
+    store.save("Daily", legacy)
+    store.save_typed("DAILY", state)
+    assert store.load() == ([("Daily", legacy)], [])
+    assert store.contains_name("daily") and store.contains_name("daily", typed=True)
+    settings = store._settings(typed=True)
+    saved = json.loads(settings.value(store._key("daily"), "", type=str))
+    assert saved.keys() == {"name", "version", "filter", "typed_expression"}
+    assert saved["typed_expression"]["expression"]["field"] == "reference"
+    assert saved["typed_expression"]["expression"]["values"] == ["001"]
+
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [sys.executable, "-c", (
+            "import sys\nfrom metroliza.ui.report_filter_presets import ReportFilterPresets\n"
+            "store = ReportFilterPresets(sys.argv[1])\nprint(store.load_typed()[0][0][1].expression_text)"
+        ), str(store.path)],
+        cwd=root, env={**os.environ, "PYTHONPATH": os.pathsep.join(map(str, (root / "src", root)))},
+        check=True, text=True, capture_output=True, timeout=15,
+    )
+    assert completed.stdout.strip() == state.expression_text
+    assert ReportFilterPresets(store.path).load_typed() == ([("DAILY", state)], [])
+
+
+@pytest.mark.parametrize(("corruption", "expected"), [
+    ("field", "retired_reference"), ("kind", "found text"), ("operator", "unsupported"),
+    ("field_alias", "OldAlias"), ("future", "Unsupported typed report preset version"),
+    ("future_expression", "Unsupported filter document version"),
+    ("mismatch", "conditions and expression text disagree"),
+    ("malformed", "could not be read"), ("oversized", "could not be read"),
+])
+def test_unavailable_typed_presets_are_diagnosed_without_rewriting(tmp_path, corruption, expected):
+    import json
+
+    from metroliza.shared.filter_state import FilterState
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+
+    store = ReportFilterPresets(tmp_path / "reports.ini")
+    state = FilterState(expression_text='Ref IN ("001")')
+    store.save_typed("Daily", state)
+    settings = store._settings(typed=True)
+    key = store._key("Daily")
+    payload = json.loads(settings.value(key, "", type=str))
+    condition = payload["typed_expression"]["expression"]
+    if corruption in {"field", "kind", "operator"}:
+        condition[corruption] = {"field": "retired_reference", "kind": "number", "operator": "unsupported"}[corruption]
+    if corruption == "field_alias":
+        payload["filter"]["expression_text"] = 'OldAlias IN ("001")'
+    if corruption == "future":
+        payload["version"] = 2
+    if corruption == "future_expression":
+        payload["typed_expression"]["version"] = 2
+    if corruption == "mismatch":
+        payload["filter"]["expression_text"] = 'Ref IN ("1")'
+    raw = {"malformed": "not JSON", "oversized": "x" * 131073}.get(corruption, json.dumps(payload))
+    settings.setValue(key, raw)
+    settings.sync()
+    before = store.path.read_bytes()
+    presets, unavailable = ReportFilterPresets(store.path).load_typed()
+    assert presets == [] and len(unavailable) == 1
+    assert expected in unavailable[0][1]
+    with pytest.raises(ValueError, match="Confirm replacement"):
+        store.save_typed("daily", state)
+    with pytest.raises(ValueError, match="Enter a typed report filter expression"):
+        store.save_typed("Daily", FilterState(), replace=True)
+    assert store.path.read_bytes() == before
+
+
+def test_typed_saved_filter_runs_fresh_preview_before_apply(monkeypatch, tmp_path):
+    from metroliza.reports.report_repository import ReportRepository
+    from metroliza.reports.report_schema import ensure_report_schema
+    from metroliza.ui.report_filter_presets import ReportFilterPresets
+    from tests.test_1089_acceptance_analytics import _persist_report
+    from tests.test_export_dialog_behavior import _build_dialog as build_export_dialog
+
+    database = tmp_path / "reports.sqlite"
+    ensure_report_schema(str(database))
+    repository = ReportRepository(str(database))
+    _persist_report(repository, tmp_path, number=1, reference="001")
+    _persist_report(repository, tmp_path, number=2, reference="1")
+    monkeypatch.setattr("metroliza.ui.report_filter_presets.local_metroliza_directory", lambda: tmp_path)
+    monkeypatch.setattr(filter_dialog.FilterDialog, "populate_list_widgets", lambda self: None)
+    monkeypatch.setattr(filter_dialog.FilterDialog, "_confirm_discard", lambda *_args, **_kwargs: True)
+    widgets = filter_dialog.QtWidgets
+    monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: (" Daily ", True))
+    monkeypatch.setattr(widgets.QMenu, "exec", lambda menu, _pos: menu.actions()[0].trigger())
+
+    owner = build_export_dialog(monkeypatch, tmp_path, db_file=str(database))
+    try:
+        owner.open_filter_window()
+        editor = owner.filter_window
+        editor.typed_mode_button.click()
+        editor.expression_input.setText('rEf IN ("001")')
+        assert not editor.apply_button.isEnabled()
+        editor._show_saved_filters()
+        store = ReportFilterPresets()
+        assert store.load_typed()[0][0][0] == "Daily"
+        saved_bytes = store.path.read_bytes()
+        monkeypatch.setattr(widgets.QInputDialog, "getText", lambda *_args: (" dAILY ", True))
+        monkeypatch.setattr(widgets.QMessageBox, "question", lambda *_args: widgets.QMessageBox.StandardButton.No)
+        editor.expression_input.setText('Ref = "1"')
+        editor._show_saved_filters()
+        assert store.path.read_bytes() == saved_bytes
+        assert owner._typed_report_scope is None
+    finally:
+        owner.close()
+
+    def load_restarted(menu, _position):
+        next(action for action in menu.actions() if action.text() == "Load typed as draft: Daily").trigger()
+
+    monkeypatch.setattr(widgets.QMenu, "exec", load_restarted)
+    results = []
+    monkeypatch.setattr(filter_dialog.FilterDialog, "_show_typed_preview", lambda self, result: results.append(result))
+    current_database = tmp_path / "current.sqlite"
+    ensure_report_schema(str(current_database))
+    current_repository = ReportRepository(str(current_database))
+    _persist_report(current_repository, tmp_path, number=1, reference="1")
+    _persist_report(current_repository, tmp_path, number=2, reference="001")
+    owner = build_export_dialog(monkeypatch, tmp_path, db_file=str(current_database))
+    owner.excel_file = tmp_path / "typed.xlsx"
+    try:
+        # The preset remains a typed draft on a currently unsupported target.
+        owner.generate_html_dashboard_checkbox.setChecked(True)
+        owner.open_filter_window()
+        editor = owner.filter_window
+        editor._show_saved_filters()
+        assert editor.typed_mode_button.isChecked() and editor.typed_mode_button.isEnabled()
+        assert not editor.typed_preview_button.isEnabled() and not editor.apply_button.isEnabled()
+        assert "Main plots" in editor.filter_summary_label.text()
+        owner.generate_html_dashboard_checkbox.setChecked(False)
+        editor._refresh_filter_summary()
+        assert editor._typed_mode() and editor._typed_preview_scope is None
+        assert not editor.apply_filters() and owner._typed_report_scope is None
+        editor.typed_preview_button.click()
+        for _ in range(200):
+            if results:
+                break
+            QTest.qWait(10)
+        assert results and [(row[0], row[1]) for row in results[0].rows] == [(2, "001")]
+
+        # Loading the identical preset again still invalidates the prior preview.
+        editor._show_saved_filters()
+        assert not editor.apply_filters()
+        editor.typed_preview_button.click()
+        for _ in range(200):
+            if len(results) == 2:
+                break
+            QTest.qWait(10)
+        assert len(results) == 2
+        assert editor.apply_filters()
+        assert owner._build_export_request().typed_report_scope is editor._typed_preview_scope
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("supports_typed", [False, True])
+def test_typed_preset_cannot_load_as_magic_or_clamp_a_date(monkeypatch, supports_typed):
+    from metroliza.shared.filter_state import FilterState
+
+    _app()
+    parent = QDialog()
+    if supports_typed:
+        parent.typed_report_filter_blocker = lambda: ""
+    dialog = _build_dialog(monkeypatch, parent=parent)
+    messages = []
+    monkeypatch.setattr(dialog, "_show_unavailable_filter", messages.append)
+    try:
+        dialog.date_from_calendar.setMinimumDate(QDate(2020, 1, 1))
+        original = dialog._draft_snapshot()
+        dialog._load_saved_filter(
+            FilterState(date_from="2010-01-01", date_to="2024-01-01", expression_text='Ref IN ("001")'),
+            typed=True,
+        )
+        assert dialog._draft_snapshot() == original
+        assert ("saved From date" if supports_typed else "cannot load a typed Reports draft") in messages[0]
+    finally:
+        dialog.close()
+        parent.close()
+
+
 def test_report_nok_and_measurement_nok_produce_different_preview_and_export(monkeypatch, tmp_path):
     from contextlib import closing
     import sqlite3
