@@ -45,7 +45,7 @@ def reference_adapters():
     data.loc[data.id == 1, "label"] = pd.NA
     with closing(sqlite3.connect(":memory:")) as connection:
         connection.execute('CREATE TABLE sample(id, "number source", "date source", "label ""source""")')
-        connection.executemany("INSERT INTO sample VALUES (?, ?, ?, ?)", ROWS)
+        connection.executemany("INSERT INTO sample VALUES (?, ?, ?, ?)", ROWS[::-1])
         yield PandasFilterAdapter(data, "id"), SqliteFilterAdapter(
             connection, "sample", row_id_column="id", columns=COLUMNS,
         )
