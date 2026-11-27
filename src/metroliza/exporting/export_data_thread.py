@@ -58,8 +58,10 @@ from metroliza.shared.output_verification import verify_published_output
 from metroliza.shared.safe_bugreport_context import OutputVerificationKind
 from metroliza.shared.excel_sheet_utils import unique_sheet_name
 from metroliza.exporting.export_backends import ExcelExportBackend, HtmlDashboardExportBackend
+from metroliza.exporting.xlsx_writer_policy import XlsxWorksheetCapacityError
 from metroliza.exporting.execution import ExportStageOutcome, normalize_export_outcome
 from metroliza.exporting.export_outcomes import (
+    XLSX_WORKSHEET_CAPACITY_MESSAGE,
     ExportRunStatus,
     derive_export_run_result,
     export_failure_message,
@@ -5324,6 +5326,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                 return
             self.log_and_exit(e)
         except Exception as e:
+            if type(e) is XlsxWorksheetCapacityError and self._check_canceled():
+                return
             self._observe_export_failure_stage(exception=e)
             if self.export_target == "html_dashboard":
                 failure_title = "HTML dashboard export failed."
@@ -6271,6 +6275,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
             self.write_data_to_excel(export_df, "MEASUREMENTS", excel_writer)
             if self.include_industrial_context:
                 self.export_industrial_context_data(export_df, excel_writer)
+        except XlsxWorksheetCapacityError:
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -6408,6 +6414,8 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
                     return
                 column_width = self.calculate_column_width(df[column])
                 worksheet.set_column(i, i, column_width)
+        except XlsxWorksheetCapacityError:
+            raise
         except Exception as e:
             self.log_and_exit(e)
             raise
@@ -7621,9 +7629,14 @@ class ExportDataThread(MonotonicProgressEmitterMixin, QThread):
         """
 
         self._observe_export_failure_stage(exception=exception)
-        self._set_export_run_result(terminal_failure="Export failed")
+        workbook_capacity_exceeded = type(exception) is XlsxWorksheetCapacityError
+        self._set_export_run_result(terminal_failure=(
+            XLSX_WORKSHEET_CAPACITY_MESSAGE if workbook_capacity_exceeded else "Export failed"
+        ))
         try:
-            if self._export_failure is not None:
+            if workbook_capacity_exceeded:
+                message = XLSX_WORKSHEET_CAPACITY_MESSAGE
+            elif self._export_failure is not None:
                 message = export_failure_message(self._export_failure)
             else:
                 message = "Export failed. Detailed failure capture is unavailable."

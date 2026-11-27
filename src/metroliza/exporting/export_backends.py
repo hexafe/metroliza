@@ -6,7 +6,9 @@ images without depending directly on a specific spreadsheet engine.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import islice
 import math
 import os
 from pathlib import Path
@@ -24,12 +26,14 @@ from metroliza.exporting.xlsx_bulk_sheet import (
     BulkPlanBuilder,
     BulkRowsWorksheet,
     LiteralSourceBulkWorksheet,
-    bulk_block_fits,
     enable_bulk_rows,
     plan_bulk_rows,
 )
 from metroliza.exporting.xlsx_writer_policy import (
     LiteralSourceWorksheet,
+    XLSX_MAX_COLUMNS,
+    XLSX_MAX_ROWS,
+    XlsxWorksheetCapacityError,
     write_untrusted_xlsx_cell,
     xlsxwriter_workbook_options,
 )
@@ -578,36 +582,46 @@ def _is_blank_cell(value: Any) -> bool:
     return False
 
 
-def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], list[tuple[Any, ...]]]:
+def _extract_table_columns_and_rows(table: Any) -> tuple[list[str], Iterable[tuple[Any, ...]]]:
     columns = [str(column) for column in getattr(table, "columns", ())]
     if hasattr(table, "iter_rows"):
-        return columns, [tuple(row) for row in table.iter_rows()]
+        return columns, map(tuple, table.iter_rows())
 
     if columns and hasattr(table, "itertuples"):
-        return columns, [tuple(row) for row in table.itertuples(index=False, name=None)]
+        return columns, map(tuple, table.itertuples(index=False, name=None))
 
     if columns and hasattr(table, "rows"):
-        return columns, [tuple(row) for row in table.rows]
+        return columns, map(tuple, table.rows)
 
     if isinstance(table, list) and table and isinstance(table[0], dict):
         columns = [str(column) for column in table[0].keys()]
-        rows = [tuple(row.get(column) for column in columns) for row in table]
+        rows = (tuple(row.get(column) for column in columns) for row in table)
         return columns, rows
 
     if isinstance(table, tuple) and len(table) == 2:
         rows, raw_columns = table
         columns = [str(column) for column in raw_columns]
-        return columns, [tuple(row) for row in rows]
+        return columns, map(tuple, rows)
 
-    return columns, []
+    return columns, ()
 
 
 def _bulk_sheet_available(writer: XlsxWorkbookWriter) -> bool:
     return getattr(writer.book, "worksheet_class", None) in (BulkRowsWorksheet, LiteralSourceBulkWorksheet)
 
 
+def _require_table_capacity(data_rows: int, columns: int, worksheet: Any = None) -> None:
+    max_rows = getattr(worksheet, "xls_rowmax", XLSX_MAX_ROWS)
+    max_columns = getattr(worksheet, "xls_colmax", XLSX_MAX_COLUMNS)
+    if data_rows >= max_rows or columns > max_columns:
+        raise XlsxWorksheetCapacityError()
+
+
 def _write_rows_cell_by_cell(worksheet: Any, rows: list[tuple[Any, ...]]) -> None:
+    max_columns = worksheet.xls_colmax
     for row_index, row in enumerate(rows, start=1):
+        if len(row) > max_columns:
+            raise XlsxWorksheetCapacityError()
         for column_index, value in enumerate(row):
             write_untrusted_xlsx_cell(
                 worksheet,
@@ -670,11 +684,16 @@ class ExcelExportBackend:
 
         Large row tables are written through the bulk worksheet path when it
         can reproduce the cell-by-cell output exactly; everything else uses
-        ``write_untrusted_xlsx_cell`` per cell.
+        ``write_untrusted_xlsx_cell`` per cell. Oversize tables raise
+        ``XlsxWorksheetCapacityError``.
         """
-        columns, rows = _extract_table_columns_and_rows(table)
-        plan = plan_bulk_rows(columns, rows) if _bulk_sheet_available(writer) else None
         worksheet = writer.book.add_worksheet(str(sheet_name))
+        columns, source_rows = _extract_table_columns_and_rows(table)
+        _require_table_capacity(0, len(columns), worksheet)
+        # Row zero belongs to the header. The last permitted read detects overflow.
+        rows = list(islice(source_rows, worksheet.xls_rowmax))
+        _require_table_capacity(len(rows), len(columns), worksheet)
+        plan = plan_bulk_rows(columns, rows) if _bulk_sheet_available(writer) else None
         writer.sheets[str(sheet_name)] = worksheet
 
         for column_index, column_name in enumerate(columns):
@@ -696,17 +715,21 @@ class ExcelExportBackend:
         Returns the number of data rows written, or ``None`` -- with nothing
         written -- when the rows cannot be reproduced exactly by the bulk path
         (the caller then falls back to `write_dataframe`).
+        Oversize tables raise ``XlsxWorksheetCapacityError``.
         """
         if not _bulk_sheet_available(writer):
             return None
+        _require_table_capacity(0, len(columns))
         builder = BulkPlanBuilder(columns)
         for chunk in row_chunks:
+            _require_table_capacity(builder.n_rows + len(chunk), len(columns))
             if not builder.add_rows(chunk):
                 return None
         plan = builder.build()
-        if plan is None or not bulk_block_fits(plan):
+        if plan is None:
             return None
         worksheet = writer.book.add_worksheet(str(sheet_name))
+        _require_table_capacity(plan.n_rows, len(columns), worksheet)
         writer.sheets[str(sheet_name)] = worksheet
         for column_index, column_name in enumerate(plan.column_names):
             write_untrusted_xlsx_cell(worksheet, 0, column_index, column_name)

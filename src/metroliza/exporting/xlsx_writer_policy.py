@@ -7,6 +7,17 @@ from typing import Any
 from xlsxwriter.worksheet import Worksheet
 
 
+XLSX_MAX_ROWS = 1_048_576
+XLSX_MAX_COLUMNS = 16_384
+
+
+class XlsxWorksheetCapacityError(ValueError):
+    """A report table would lose data at the Excel worksheet boundary."""
+
+    def __init__(self, message: str = "Excel worksheet capacity exceeded.") -> None:
+        super().__init__(message)
+
+
 class LiteralSourceWorksheet(Worksheet):
     """Honor the workbook's disabled formula conversion for array-like text."""
 
@@ -51,6 +62,9 @@ def write_untrusted_xlsx_cell(
 
 __all__ = [
     "LiteralSourceWorksheet",
+    "XLSX_MAX_COLUMNS",
+    "XLSX_MAX_ROWS",
+    "XlsxWorksheetCapacityError",
     "pandas_xlsxwriter_engine_kwargs",
     "write_untrusted_xlsx_cell",
     "xlsxwriter_workbook_options",
