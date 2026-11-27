@@ -263,6 +263,16 @@ If characteristic names need normalization, it is usually best to set up **Chara
 
 That helps the **Group Analysis worksheet** combine and label metrics using the common names you intended, while the raw stored report values remain unchanged.
 
+A match for the report's reference takes priority over a match for all references. Group Analysis
+uses the original name when neither scope has a match. Different original names can share one
+common name. Multiple rows in the same scope that produce the same common name also work as one match.
+
+If rules at the applicable scope give different common names, Group Analysis stops the export and
+keeps the last complete output. Open **Characteristic Name Matching**, select the row whose common
+name you want to keep, then choose **Resolve conflict** and confirm. All rows in that scope will
+use the selected name. Later edits apply to the whole scope. **Delete selected** is available for
+scopes with one saved row.
+
 ## Saving, closing and keyboard commands
 
 Successful add, edit, delete and CSV import operations save immediately to the database

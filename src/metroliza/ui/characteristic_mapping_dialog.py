@@ -38,7 +38,9 @@ from metroliza.reports.characteristic_alias_service import (
     CharacteristicAliasCsvSchemaError,
     CharacteristicAliasImportValidationError,
     CHARACTERISTIC_ALIAS_TABLE,
+    conflicting_alias_targets,
     delete_characteristic_alias,
+    effective_alias_scope,
     ensure_characteristic_alias_schema,
     export_characteristic_aliases_csv,
     fetch_all_characteristic_aliases,
@@ -46,6 +48,7 @@ from metroliza.reports.characteristic_alias_service import (
     preview_characteristic_aliases_csv,
     apply_characteristic_alias_import,
     normalize_scope_type,
+    repair_characteristic_alias_conflict,
     save_manual_characteristic_alias,
 )
 from metroliza.reports.characteristic_mapping_service import (
@@ -85,6 +88,7 @@ REMEDIATION_REPORT_HEADERS = ('row_number', 'field', 'code', 'category', 'messag
 SOURCE_TABLE_HEADERS = ['Report/export name', 'References', 'Reports', 'Rows']
 SOURCE_LOADING_TEXT = 'Loading report/export names...'
 SOURCE_LOAD_CANCELED_TEXT = 'Loading report/export names was canceled. Use Browse DB to load them again.'
+ALIAS_INFO_TEXT = 'Matches affect Group Analysis labels; raw parsed values stay unchanged.'
 # Upper bound for the GUI thread to wait for an interrupted loader; a loader that has not stopped by
 # then is detached (it keeps running to completion in the background and its result is dropped).
 SOURCE_LOAD_STOP_WAIT_MS = 2000
@@ -673,6 +677,8 @@ class CharacteristicMappingDialog(QDialog):
         self.db_file = db_file
         self._loaded_alias_database_path: str | None = None
         self._loaded_alias_database_identity: tuple[int, int] | None = None
+        self._loaded_alias_scope_rows = {}
+        self._conflicting_alias_scopes = set()
         self.database_change_allowed = None
         self.report_database_is_current = None
         self.metric_options: list[dict[str, object]] = []
@@ -728,7 +734,7 @@ class CharacteristicMappingDialog(QDialog):
             'warning',
         )
         self.collision_warning_label = status_chip(
-            'Matches affect Group Analysis labels; raw parsed values stay unchanged.',
+            ALIAS_INFO_TEXT,
             'info',
         )
 
@@ -876,13 +882,28 @@ class CharacteristicMappingDialog(QDialog):
         has_db = _has_selected_db_file(self.db_file)
         has_metric_selection = self._selected_metric_option() is not None
         has_selection = self._selected_mapping() is not None
+        key, row = self._selected_alias_storage()
+        conflicting = key in self._conflicting_alias_scopes
+        multiple = len(self._loaded_alias_scope_rows.get(key, ())) > 1
         options_ready = not self._source_loading
         self.add_button.setEnabled(has_db and options_ready)
         self.add_from_selected_button.setEnabled(has_db and options_ready and has_metric_selection)
         self.import_button.setEnabled(has_db and options_ready)
         self.export_button.setEnabled(has_db)
-        self.edit_button.setEnabled(has_db and options_ready and has_selection)
-        self.delete_button.setEnabled(has_db and options_ready and has_selection)
+        self.edit_button.setText('Resolve conflict' if conflicting else 'Edit selected')
+        can_select_target = not conflicting or (row[0] is not None and bool(str(row[2] or '').strip()))
+        self.edit_button.setEnabled(has_db and options_ready and has_selection and can_select_target)
+        self.delete_button.setEnabled(has_db and options_ready and has_selection and not multiple)
+
+    def _selected_alias_storage(self):
+        selected = self.alias_table.selectionModel().selectedRows()
+        if not selected or self.alias_table.isRowHidden(selected[0].row()):
+            return None, None
+        item = self.alias_table.item(selected[0].row(), 0)
+        row = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if not isinstance(row, tuple) or len(row) != 5:
+            return None, None
+        return effective_alias_scope(row[1], row[3], row[4]), row
 
     def _sync_warning_labels(self):
         has_db = bool(str(self.db_file or '').strip())
@@ -1106,12 +1127,26 @@ class CharacteristicMappingDialog(QDialog):
         except Exception as exc:
             self._invalidate_loaded_aliases()
             self.alias_table.setRowCount(0)
+            self._sync_alias_scope_warning()
             CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Load error', f'Could not load name matches: {exc}')
             return
 
         self._loaded_alias_database_path = loaded_path
         self._loaded_alias_database_identity = loaded_identity
+
+        identities = [tuple(row.get(name) for name in ('id', 'alias_name', 'canonical_name', 'scope_type', 'scope_value'))
+                      for row in alias_rows]
+        scopes = {}
+        for row in identities:
+            scopes.setdefault(effective_alias_scope(row[1], row[3], row[4]), []).append(row)
+        self._loaded_alias_scope_rows = {
+            key: tuple(sorted(rows, key=lambda row: row[0] or 0)) for key, rows in scopes.items()
+        }
+        self._conflicting_alias_scopes = {
+            key for key, rows in scopes.items()
+            if key[1] in ('global', 'reference') and conflicting_alias_targets(key[0], (row[2] for row in rows))
+        }
 
         self.alias_table.setRowCount(len(alias_rows))
         for row_index, row in enumerate(alias_rows):
@@ -1124,8 +1159,14 @@ class CharacteristicMappingDialog(QDialog):
             ]
             for column_index, value in enumerate(values):
                 self.alias_table.setItem(row_index, column_index, QTableWidgetItem(value))
+            identity = identities[row_index]
+            alias_item = self.alias_table.item(row_index, 0)
+            alias_item.setData(Qt.ItemDataRole.UserRole, identity)
+            if effective_alias_scope(identity[1], identity[3], identity[4]) in self._conflicting_alias_scopes:
+                alias_item.setToolTip('Conflicting common names for this scope. Select the name to keep and resolve the conflict.')
 
         self.empty_state_label.setVisible(len(alias_rows) == 0)
+        self._sync_alias_scope_warning()
         self._filter_alias_table()
         self._sync_warning_labels()
 
@@ -1148,7 +1189,7 @@ class CharacteristicMappingDialog(QDialog):
                 if alias_table_exists is None:
                     alias_rows = []
                 else:
-                    alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+                    alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection, include_identity=True)
                 if sqlite_file_identity(selected_path, include_empty=True) != selected_identity:
                     raise ValueError('The selected database changed while name matches were loading. Reload the list.')
             return str(selected_path), selected_identity, alias_rows
@@ -1157,7 +1198,7 @@ class CharacteristicMappingDialog(QDialog):
         loaded_path, loaded_identity = _alias_database_binding(self.db_file)
         if fetch_all_characteristic_aliases is _DEFAULT_ALIAS_FETCH:
             with sqlite_readonly_connection_scope(self.db_file) as connection:
-                alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection)
+                alias_rows = fetch_all_characteristic_aliases(self.db_file, connection=connection, include_identity=True)
         else:
             alias_rows = fetch_all_characteristic_aliases(self.db_file)
         if _alias_database_binding(self.db_file) != (loaded_path, loaded_identity):
@@ -1168,12 +1209,23 @@ class CharacteristicMappingDialog(QDialog):
         self._invalidate_loaded_aliases()
         self.alias_table.setRowCount(0)
         self.empty_state_label.setVisible(True)
+        self._sync_alias_scope_warning()
         self._sync_selection_actions()
         self._sync_warning_labels()
 
     def _invalidate_loaded_aliases(self):
         self._loaded_alias_database_path = None
         self._loaded_alias_database_identity = None
+        self._loaded_alias_scope_rows = {}
+        self._conflicting_alias_scopes = set()
+
+    def _sync_alias_scope_warning(self):
+        count = len(self._conflicting_alias_scopes)
+        self.collision_warning_label.setText(
+            f'{count} conflicting name match scope(s). Select the common name to keep, then choose Resolve conflict.'
+            if count else ALIAS_INFO_TEXT
+        )
+        set_status_variant(self.collision_warning_label, 'warning' if count else 'info')
 
     def _loaded_alias_database_matches_current(self):
         if self._loaded_alias_database_path is None or self._loaded_alias_database_identity is None:
@@ -1260,7 +1312,40 @@ class CharacteristicMappingDialog(QDialog):
     def edit_mapping(self):
         selected = self._selected_mapping()
         if selected is not None:
-            self._open_mapping_editor(selected, previous=selected)
+            key, row = self._selected_alias_storage()
+            if key in self._conflicting_alias_scopes:
+                self._resolve_alias_conflict(key, row)
+            else:
+                self._open_mapping_editor(selected, previous=selected)
+
+    def _resolve_alias_conflict(self, key, row):
+        if _alias_csv_busy(self) or self._source_loading or row[0] is None or not str(row[2] or '').strip():
+            return
+        expected = self._loaded_alias_scope_rows[key]
+        path, identity = self._loaded_alias_database_path, self._loaded_alias_database_identity
+        scope = escape(str(key[2])) if key[1] == 'reference' else ALL_REFERENCES_LABEL
+        text = (
+            f'Use {escape(row[2])} for {escape(row[1])} in this scope?\n\n'
+            f'Scope: {scope}\n{len(expected)} saved rows will use the selected common name.'
+        )
+        if QMessageBox.question(
+            self, 'Resolve name match conflict', text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        if _alias_csv_busy(self) or self._source_loading:
+            return
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_STARTED)
+        try:
+            repair_characteristic_alias_conflict(
+                self.db_file, key, expected, row[0], expected_database_path=path, expected_database_identity=identity,
+            )
+        except (OSError, sqlite3.Error, ValueError):
+            _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_FAILED)
+            QMessageBox.warning(self, 'Name match conflict', 'Could not resolve the conflict. Reload the name matches and try again.')
+            return
+        self.load_aliases()
+        _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EDIT_COMPLETED)
 
     def _open_mapping_editor(self, initial_values, previous=None):
         if _alias_csv_busy(self) or not CharacteristicMappingDialog._ensure_existing_database_for_write(self):
@@ -1300,6 +1385,10 @@ class CharacteristicMappingDialog(QDialog):
                     'The selected database changed after this list was loaded. Reload the name matches and review the rule again.',
                 )
                 self.load_aliases()
+            return
+        key, _row = self._selected_alias_storage()
+        if len(self._loaded_alias_scope_rows.get(key, ())) > 1:
+            QMessageBox.warning(self, 'Multiple name matches', 'This scope has more than one saved row. Delete is unavailable.')
             return
 
         loaded_database_path = self._loaded_alias_database_path

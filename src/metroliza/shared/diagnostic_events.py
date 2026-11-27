@@ -31,6 +31,13 @@ class DiagnosticEventValidationError(ValueError):
     """Raised when a diagnostic event does not match its closed schema."""
 
 
+class CharacteristicAliasConflictError(ValueError):
+    """An effective name match has different targets in the same scope."""
+
+    def __init__(self):
+        super().__init__("Conflicting name matches. Resolve the conflict in Characteristic Name Matching.")
+
+
 class DiagnosticEventCode(str, Enum):
     """Source-controlled event codes accepted by managed logging."""
 
@@ -447,6 +454,7 @@ class ExportFailureCode(str, Enum):
     TARGET_EXISTS = "output_target_exists"
     PATH_TOO_LONG = "output_path_too_long"
     OUTPUT_MISSING = "dashboard_output_missing"
+    CHARACTERISTIC_ALIAS_CONFLICT = "characteristic_alias_conflict"
 
 
 class ExportFailureBackend(str, Enum):
@@ -560,7 +568,9 @@ def build_export_failure_diagnostic(exception: BaseException, *, invocation_id: 
                   else ExceptionKind.UNKNOWN_EXCEPTION)
     os_codes = _causal_os_code_pair(exception)
     if code is ExportFailureCode.UNEXPECTED:
-        if shape.exception_kind is ExceptionKind.PERMISSION_ERROR:
+        if type(exception) is CharacteristicAliasConflictError:
+            code = ExportFailureCode.CHARACTERISTIC_ALIAS_CONFLICT
+        elif shape.exception_kind is ExceptionKind.PERMISSION_ERROR:
             code = ExportFailureCode.ACCESS_DENIED
         elif shape.exception_kind is ExceptionKind.FILE_EXISTS_ERROR:
             code = ExportFailureCode.TARGET_EXISTS

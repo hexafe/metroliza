@@ -1,4 +1,5 @@
 from contextlib import closing
+from dataclasses import replace
 import os
 import re
 import tempfile
@@ -25,9 +26,53 @@ from metroliza.charts.export_html_dashboard import (
     resolve_html_dashboard_path,
 )
 from metroliza.exporting.export_data_thread import ExportDataThread
+from metroliza.exporting.export_outcomes import ExportRunStatus, render_export_failure
+from metroliza.exporting.output_publication import OutputConsent
 import metroliza.exporting.export_data_thread as export_data_thread_module
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.shared.contracts import AppPaths, ExportOptions, ExportRequest
+from metroliza.shared.diagnostic_events import ExportFailureCode
+
+
+def test_effective_alias_conflict_preserves_complete_workbook_and_dashboard(tmp_path, qapplication_session, caplog):
+    database = str(tmp_path / 'reports.db')
+    grouping = _seed_grouped_measurements(database)
+    output = tmp_path / 'outputs'
+    output.mkdir()
+    workbook, html = output / 'complete.xlsx', output / 'complete.html'
+    request = ExportRequest(
+        paths=AppPaths(db_file=database, excel_file=str(workbook), html_dashboard_file=str(html)),
+        options=ExportOptions(generate_html_dashboard=True, group_analysis_level='light'),
+        grouping_df=grouping,
+    )
+    first = ExportDataThread(request)
+    first.run()
+    assert first.export_run_result.status in (ExportRunStatus.COMPLETE, ExportRunStatus.COMPLETE_WITH_OMISSIONS)
+    assert workbook.is_file() and html.is_file()
+    artifacts_before = {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()}
+    assert len(artifacts_before) > 2  # include at least one committed dashboard asset
+
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.executemany(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value) VALUES (?, ?, ?, ?)',
+            [('FEATURE_1 - X', target, 'reference', 'REF-1') for target in ('TARGET-A-SENTINEL', 'TARGET-B-SENTINEL')],
+        )
+    consents = tuple(OutputConsent.for_path(path) for path in (workbook, html))
+    for options in (request.options, replace(request.options, export_target='html_dashboard', backend_target='html')):
+        caplog.clear()
+        messages, completions = [], []
+        rejected = ExportDataThread(replace(request, options=options, replace_outputs=consents))
+        rejected.error_occurred.connect(messages.append)
+        rejected.completed.connect(lambda *_args: completions.append(True))
+        rejected.run()
+        assert rejected.export_run_result.status is ExportRunStatus.FAILED and not completions
+        assert len(messages) == 1 and 'Characteristic Name Matching' in messages[0]
+        diagnostic = rejected.completion_metadata['export_failure']
+        assert diagnostic.code is ExportFailureCode.CHARACTERISTIC_ALIAS_CONFLICT
+        safe_text = messages[0] + render_export_failure(diagnostic) + caplog.text
+        for value in ('TARGET-A-SENTINEL', 'TARGET-B-SENTINEL', 'FEATURE_1 - X', 'REF-1', str(tmp_path)):
+            assert value not in safe_text
+        assert {path.relative_to(output): path.read_bytes() for path in output.rglob('*') if path.is_file()} == artifacts_before
 
 
 def _xlsx_sheet_names(xlsx_path):

@@ -291,6 +291,10 @@ def export_failure_message(failure: ExportFailureDiagnostic) -> str:
         ExportFailureCode.TARGET_EXISTS: "The output already exists. Choose Save a copy or explicitly approve Replace.",
         ExportFailureCode.PATH_TOO_LONG: "An output name or path is too long. Choose a shorter local folder and output name.",
         ExportFailureCode.OUTPUT_MISSING: "The dashboard output could not be verified. Try a new local folder and review the diagnostic details.",
+        ExportFailureCode.CHARACTERISTIC_ALIAS_CONFLICT: (
+            "Group Analysis found conflicting name matches. Open Characteristic Name Matching, "
+            "resolve the conflicting rules, and export again."
+        ),
     }[failure.code]
     channel = "" if failure.recorder_connected else " Incident recording is unavailable; copy these details before closing."
     return (f"Failed stage: {failure.stage.value.replace('_', ' ')}. {reason} "

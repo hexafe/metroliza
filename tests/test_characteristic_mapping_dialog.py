@@ -1947,3 +1947,45 @@ def test_manual_alias_editor_keeps_conflict_inputs_and_filters_saved_rows(tmp_pa
         assert editor.result_payload["alias_name"] == "Width"
     finally:
         dialog.close()
+
+
+def test_mapping_dialog_resolves_exact_reviewed_scope_without_deleting_rows(tmp_path, qapplication_session, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    from PyQt6.QtTest import QTest
+
+    path = str(tmp_path / 'aliases.db')
+    ensure_characteristic_alias_schema(path)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        connection.executemany(
+            'INSERT INTO CHARACTERISTIC_ALIASES(alias_name, canonical_name, scope_type, scope_value) VALUES (?, ?, ?, ?)',
+            [('Raw', 'First', 'global', None), ('Raw', 'Second', 'global', None),
+             ('Raw', 'Reference override', 'reference', 'REF-1')],
+        )
+    dialog = CharacteristicMappingDialog(db_file=path)
+    questions = []
+    monkeypatch.setattr(QMessageBox, 'question', lambda _parent, _title, text, *_args:
+                        questions.append(text) or QMessageBox.StandardButton.Yes)
+    try:
+        limit = time.monotonic() + 5
+        while dialog.is_loading_source_options() and time.monotonic() < limit:
+            QTest.qWait(5)
+        assert not dialog.is_loading_source_options()
+        assert '1 conflicting' in dialog.collision_warning_label.text()
+        dialog.alias_table.selectRow(1)
+        assert dialog.alias_table.item(1, 1).text() == 'Second'
+        assert 'Conflicting' in dialog.alias_table.item(1, 0).toolTip()
+        assert dialog.edit_button.text() == 'Resolve conflict' and dialog.edit_button.isEnabled()
+        assert not dialog.delete_button.isEnabled()
+        dialog.edit_button.click()
+        assert len(questions) == 1 and 'Second' in questions[0] and '2 saved rows' in questions[0]
+        assert 'conflicting' not in dialog.collision_warning_label.text()
+        dialog.alias_table.selectRow(0)
+        assert dialog.edit_button.text() == 'Edit selected' and dialog.edit_button.isEnabled()
+        assert not dialog.delete_button.isEnabled()
+        with closing(sqlite3.connect(path)) as connection:
+            assert connection.execute('SELECT id, canonical_name FROM CHARACTERISTIC_ALIASES ORDER BY id').fetchall() == [
+                (1, 'Second'), (2, 'Second'), (3, 'Reference override'),
+            ]
+    finally:
+        dialog.close()
