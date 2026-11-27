@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 import math
 from statistics import fmean, pstdev
 from typing import Any
@@ -34,6 +36,22 @@ def _signal_key(signal: SignalDefinition | None) -> str | None:
     return signal.signal_key if signal is not None else None
 
 
+def _evidence_digest(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _baseline_window(baseline) -> dict[str, Any]:
+    return {
+        "kind": "stored_baseline",
+        "id": baseline.get("id"),
+        "version": baseline.get("baseline_version"),
+        "start": baseline.get("window_start"),
+        "end": baseline.get("window_end"),
+        "count": int(baseline["n"]),
+    }
+
+
 def _result(
     *,
     detector_key: str,
@@ -44,8 +62,18 @@ def _result(
     expected_value: float | None,
     threshold: dict[str, Any],
     explanation: str,
+    parameters: dict[str, Any],
+    window: dict[str, Any],
     extra_context: dict[str, Any] | None = None,
 ) -> DetectionResult:
+    configuration = {"detector": detector_key, "algorithm_version": 1, "parameters": parameters}
+    evidence = {
+        "schema_version": 1,
+        "source_profile_id": sample.source_profile_id,
+        "configuration": configuration,
+        "configuration_revision": _evidence_digest(configuration),
+        "window": window,
+    }
     return DetectionResult(
         detector_key=detector_key,
         sample_id=sample.id,
@@ -58,7 +86,7 @@ def _result(
         expected_value=expected_value,
         threshold=threshold,
         explanation=explanation,
-        context=extra_context or {},
+        context={**(extra_context or {}), "detector_evidence": evidence},
     )
 
 
@@ -84,6 +112,8 @@ class SpecLimitDetector:
             "lower_warning": signal.lower_warning,
             "upper_warning": signal.upper_warning,
         }
+        parameters = {**thresholds, "nominal": signal.nominal, "warning_severity": self.warning_severity}
+        window = {"kind": "trigger_sample"}
         if signal.lsl is not None and value < signal.lsl:
             return _result(
                 detector_key=self.detector_key,
@@ -94,6 +124,8 @@ class SpecLimitDetector:
                 expected_value=signal.nominal,
                 threshold=thresholds,
                 explanation=f"Observed value {value:g} is below LSL {signal.lsl:g}.",
+                parameters=parameters,
+                window=window,
             )
         if signal.usl is not None and value > signal.usl:
             return _result(
@@ -105,6 +137,8 @@ class SpecLimitDetector:
                 expected_value=signal.nominal,
                 threshold=thresholds,
                 explanation=f"Observed value {value:g} is above USL {signal.usl:g}.",
+                parameters=parameters,
+                window=window,
             )
         if signal.lower_warning is not None and value < signal.lower_warning:
             return _result(
@@ -116,6 +150,8 @@ class SpecLimitDetector:
                 expected_value=signal.nominal,
                 threshold=thresholds,
                 explanation=f"Observed value {value:g} is below warning limit {signal.lower_warning:g}.",
+                parameters=parameters,
+                window=window,
             )
         if signal.upper_warning is not None and value > signal.upper_warning:
             return _result(
@@ -127,6 +163,8 @@ class SpecLimitDetector:
                 expected_value=signal.nominal,
                 threshold=thresholds,
                 explanation=f"Observed value {value:g} is above warning limit {signal.upper_warning:g}.",
+                parameters=parameters,
+                window=window,
             )
         return None
 
@@ -179,6 +217,8 @@ class IQRDetector:
             expected_value=(q1_value + q3_value) / 2.0,
             threshold={"lower_fence": lower, "upper_fence": upper, "iqr": iqr_value, "n": n},
             explanation=f"Observed value {value:g} is outside IQR fence [{lower:g}, {upper:g}].",
+            parameters={"min_n": self.min_n, "fence_multiplier": self.fence_multiplier},
+            window={**_baseline_window(baseline), "q1": q1_value, "q3": q3_value},
         )
 
     def update_one(self, sample: IndustrialSample, context: DetectorContext) -> DetectorState:
@@ -219,6 +259,8 @@ class MadZScoreDetector:
             expected_value=median_value,
             threshold={"robust_z": self.threshold, "median": median_value, "mad": mad_value, "n": n},
             explanation=f"Observed value {value:g} has robust z-score {robust_z:.2f}.",
+            parameters={"min_n": self.min_n, "threshold": self.threshold, "scale": 0.6745},
+            window={**_baseline_window(baseline), "median": median_value, "mad": mad_value},
             extra_context={"robust_z": robust_z},
         )
 
@@ -263,6 +305,14 @@ class RollingZScoreDetector:
             expected_value=mean,
             threshold={"z": self.threshold, "mean": mean, "std": std, "n": len(finite_values)},
             explanation=f"Observed value {value:g} has rolling z-score {z_score:.2f}.",
+            parameters={"min_n": self.min_n, "threshold": self.threshold, "max_window": self.max_window},
+            window={
+                "kind": "prior_samples",
+                "count": len(finite_values),
+                "last_sample_id": context.state.last_sample_id,
+                "last_event_time": context.state.last_event_time,
+                "values_sha256": _evidence_digest(finite_values),
+            },
             extra_context={"z_score": z_score},
         )
 
@@ -308,6 +358,12 @@ class StaleSourceDetector:
             explanation=(
                 f"No new samples for {stale_seconds:.0f} seconds since {sample.event_time}."
             ),
+            parameters=threshold,
+            window={
+                "kind": "elapsed_since_last_sample",
+                "last_event_time": sample.event_time,
+                "evaluated_at": now_text,
+            },
             extra_context={
                 "source_level": True,
                 "last_sample_id": sample.id,

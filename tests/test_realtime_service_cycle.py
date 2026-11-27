@@ -127,6 +127,10 @@ def test_realtime_poll_cycle_creates_explainable_detector_events(tmp_path):
     assert result.detector_events_created == 1
     assert events[0].severity == "critical"
     assert "above USL" in events[0].explanation
+    evidence = events[0].context["detector_evidence"]
+    assert evidence["source_profile_id"] == profile.id
+    assert evidence["configuration"]["parameters"]["usl"] == config_signal.usl
+    assert evidence["window"] == {"kind": "trigger_sample"}
 
 
 def test_default_detector_runner_supplies_current_time_to_stale_source(monkeypatch):

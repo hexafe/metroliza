@@ -6,6 +6,7 @@ import csv
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
 from functools import partial
+from hashlib import sha256
 import math
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
@@ -29,6 +30,8 @@ from metroliza.industrial.realtime.timestamps import validate_source_timezone
 
 
 _BASELINE_DETECTORS = frozenset({"iqr", "mad_zscore"})
+_ROLLING_DETECTOR = "rolling_zscore"
+_MAX_ROLLING_SEGMENTS = 256
 _LEGACY_SEGMENT_FIELDS = ("reference", "part_number", "revision", "station", "line")
 
 
@@ -267,16 +270,15 @@ def run_detectors_for_samples(
 
 def replay_industrial_stream(request: ReplayRequest) -> ReplaySummary:
     request = _validated_replay_request(request)
-    _validate_replay_input_order(request)
     sample_repository = RealtimeSampleRepository(request.database)
     needs_baselines = bool(_BASELINE_DETECTORS.intersection(request.detectors))
-    with _replay_read_cursor(sample_repository, needed=request.dry_run or needs_baselines) as cursor:
+    with _replay_read_cursor(sample_repository) as cursor:
         return _replay_ordered_stream(request, sample_repository, cursor, needs_baselines=needs_baselines)
 
 
 @contextmanager
-def _replay_read_cursor(repository: RealtimeSampleRepository, *, needed: bool):
-    if needed and Path(repository.database).exists():
+def _replay_read_cursor(repository: RealtimeSampleRepository):
+    if Path(repository.database).exists():
         with repository.open_readonly() as connection, closing(connection.cursor()) as cursor:
             yield cursor
     else:
@@ -290,16 +292,10 @@ def _has_table(cursor, name: str) -> bool:
 
 
 def _stored_replay_signal(request, repository, cursor) -> SignalDefinition | None:
-    if cursor is not None:
-        if not _has_table(cursor, "industrial_signal_definitions"):
-            return None
-        return repository.read_signal_definition(
-            cursor, source_profile_id=request.source_profile_id, signal_key=request.signal_key,
-        )
-    if request.dry_run:
+    if cursor is None or not _has_table(cursor, "industrial_signal_definitions"):
         return None
-    return repository.get_signal_definition(
-        source_profile_id=request.source_profile_id, signal_key=request.signal_key,
+    return repository.read_signal_definition(
+        cursor, source_profile_id=request.source_profile_id, signal_key=request.signal_key,
     )
 
 
@@ -331,11 +327,15 @@ def _replay_ordered_stream(
     baseline_lookup = (
         _replay_baseline_lookup(cursor, existing_signal, request.metric_column) if needs_baselines else None
     )
-    statistical_signal = existing_signal if needs_baselines else None
+    needs_rolling = _ROLLING_DETECTOR in request.detectors
+    if needs_rolling and existing_signal is not None and existing_signal.metric_name != request.metric_column:
+        raise ValueError("Rolling replay requires the replay column to match the stored signal metric.")
+    segment_fields = _signal_attr(existing_signal, "segment_fields") or ()
     map_samples = rows_to_samples
-    if statistical_signal is not None:
-        _validate_segment_columns(request.input_file, statistical_signal.segment_fields)
-        map_samples = partial(rows_to_samples, segment_fields=statistical_signal.segment_fields)
+    if existing_signal is not None and (needs_baselines or needs_rolling):
+        _validate_segment_columns(request.input_file, segment_fields)
+        map_samples = partial(rows_to_samples, segment_fields=segment_fields)
+    _validate_replay_input(request, map_samples, rolling_fields=segment_fields if needs_rolling else ())
     signal_candidate = SignalDefinition(
         id=existing_signal.id if existing_signal is not None else None,
         source_profile_id=request.source_profile_id,
@@ -343,7 +343,7 @@ def _replay_ordered_stream(
         metric_name=request.metric_column,
         unit=_signal_attr(existing_signal, "unit"),
         nominal=_signal_attr(existing_signal, "nominal"),
-        segment_fields=_signal_attr(existing_signal, "segment_fields") or (),
+        segment_fields=segment_fields,
         enabled=existing_signal.enabled if existing_signal is not None else True,
         lsl=request.lsl if request.lsl is not None else _signal_attr(existing_signal, "lsl"),
         usl=request.usl if request.usl is not None else _signal_attr(existing_signal, "usl"),
@@ -431,18 +431,24 @@ def _validate_segment_columns(input_file: str, segment_fields: tuple[str, ...]) 
         raise ValueError(f"Replay CSV is missing configured segment columns: {', '.join(missing)}")
 
 
-def _validate_replay_input_order(request: ReplayRequest) -> None:
-    """Reject unordered replay input before any signal, sample, or event is persisted."""
+def _validate_replay_input(request: ReplayRequest, map_samples, *, rolling_fields: tuple[str, ...]) -> None:
+    """Check ordering and the statically visible rolling-state bound before writes."""
 
     last_event_time: str | None = None
+    rolling_segments: set[bytes] = set()
     rows = iter_csv_rows(request.input_file, limit=request.limit)
     for row_batch in _batched(rows, batch_size=request.batch_size):
-        for sample in rows_to_samples(row_batch, request, signal_id=-1):
+        for sample in map_samples(row_batch, request, signal_id=-1):
             if last_event_time is not None and sample.event_time < last_event_time:
                 raise ValueError(
                     "Replay input must be ordered by event time for bounded streaming detection."
                 )
             last_event_time = sample.event_time
+            if rolling_fields:
+                segment_key = _rolling_segment_key(sample, rolling_fields)
+                if segment_key is not None and segment_key not in rolling_segments:
+                    _require_rolling_capacity(len(rolling_segments))
+                    rolling_segments.add(segment_key)
     if request.now is not None and last_event_time is not None and request.now < last_event_time:
         raise ValueError(
             "Replay now must be at or after the final replay sample event time."
@@ -486,6 +492,28 @@ def _signal_attr(signal: SignalDefinition | None, name: str) -> Any:
     return getattr(signal, name) if signal is not None else None
 
 
+def _configured_segment(sample: IndustrialSample, fields: tuple[str, ...]) -> str | None:
+    segment = {field: sample.segment_key.get(field) for field in fields}
+    if any(value in (None, "") for value in segment.values()):
+        return None
+    return to_json(segment)
+
+
+def _rolling_segment_key(sample: IndustrialSample, fields: tuple[str, ...]) -> bytes | None:
+    if not fields:
+        return b""
+    segment_json = _configured_segment(sample, fields)
+    return sha256(segment_json.encode("utf-8")).digest() if segment_json is not None else None
+
+
+def _require_rolling_capacity(segment_count: int) -> None:
+    if segment_count >= _MAX_ROLLING_SEGMENTS:
+        raise ValueError(
+            f"Rolling replay supports up to {_MAX_ROLLING_SEGMENTS} segments. "
+            "Split the replay by configured segment and retry."
+        )
+
+
 class _ReplayDetectorSession:
     """Bounded detector state carried across streamed replay batches."""
 
@@ -512,7 +540,7 @@ class _ReplayDetectorSession:
         )
         self.now = now
         self.baseline_lookup = baseline_lookup
-        self.states: dict[str, DetectorState] = {}
+        self.rolling_states: dict[bytes, DetectorState] = {}
         self.last_event_time: str | None = None
         self.latest_sample: IndustrialSample | None = None
 
@@ -528,13 +556,25 @@ class _ReplayDetectorSession:
                 )
             baseline = self._baseline_for_sample(sample, baselines)
             for detector in self.detectors:
-                state = self.states.get(detector.detector_key, DetectorState())
+                rolling_key = None
+                state = DetectorState()
+                if detector.detector_key == _ROLLING_DETECTOR:
+                    if sample.metric_name != self.signal.metric_name:
+                        continue
+                    rolling_key = _rolling_segment_key(sample, self.signal.segment_fields)
+                    if rolling_key is None:
+                        continue
+                    if rolling_key in self.rolling_states:
+                        state = self.rolling_states[rolling_key]
+                    else:
+                        _require_rolling_capacity(len(self.rolling_states))
                 detector_baseline = baseline if detector.detector_key in _BASELINE_DETECTORS else {}
                 context = DetectorContext(signal=self.signal, state=state, baseline=detector_baseline)
                 result = detector.score_one(sample, context)
                 if result is not None:
                     events.append(_with_baseline_evidence(result, detector_baseline))
-                self.states[detector.detector_key] = detector.update_one(sample, context)
+                if rolling_key is not None:
+                    self.rolling_states[rolling_key] = detector.update_one(sample, context)
             self.last_event_time = sample.event_time
         if self.stale_detector is not None and ordered:
             # Preserve the source-health event's stored sample identity on replay.
@@ -546,10 +586,9 @@ class _ReplayDetectorSession:
             return {}
         # Earlier replays may have stored extra dimensions. Use only the
         # configured key and leave old samples with missing dimensions unscored.
-        segment = {field: sample.segment_key.get(field) for field in self.signal.segment_fields}
-        if any(value in (None, "") for value in segment.values()):
+        segment_json = _configured_segment(sample, self.signal.segment_fields)
+        if segment_json is None:
             return {}
-        segment_json = to_json(segment)
         if segment_json not in cache:
             cache[segment_json] = self.baseline_lookup(segment_json=segment_json) or {}
         return cache[segment_json]
@@ -564,8 +603,7 @@ class _ReplayDetectorSession:
             # Dry-run samples are intentionally not persisted, but the detector contract uses a
             # sample identity in its explainable result. The synthetic id never reaches storage.
             sample = replace(sample, id=-1)
-        state = self.states.get(self.stale_detector.detector_key, DetectorState())
-        context = DetectorContext(signal=self.signal, state=state, now=self.now)
+        context = DetectorContext(signal=self.signal, now=self.now)
         result = self.stale_detector.score_one(sample, context)
         return [result] if result is not None else []
 

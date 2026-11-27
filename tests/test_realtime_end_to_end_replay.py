@@ -1,5 +1,6 @@
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
@@ -95,6 +96,11 @@ def test_replay_uses_exact_stored_baseline_and_persists_explainable_events(tmp_p
         assert event.context["baseline_window_start"] == "2026-06-12T09:00:00.000000Z"
         assert event.context["baseline_window_end"] == "2026-06-12T10:00:00.000000Z"
         assert event.threshold["n"] == 40
+        evidence = event.context["detector_evidence"]
+        assert evidence["configuration"]["detector"] == event.detector_key
+        assert evidence["window"]["kind"] == "stored_baseline"
+        assert evidence["window"]["id"] == expected_id
+        assert evidence["window"]["version"] == "exact-segment-v1"
     repeat = replay_industrial_stream(request)
     assert repeat.samples_inserted == repeat.detector_events_created == 0
     assert repeat.samples_skipped == 36 and repeat.event_counts == expected_counts
@@ -357,6 +363,81 @@ def test_replay_keeps_csv_order_for_timestamp_ties(tmp_path, batch_size, existin
     assert replay_industrial_stream(request).detector_events_created == 0
 
 
+def _rolling_replay(tmp_path, *, batch_size=7):
+    database = tmp_path / "rolling-segments.sqlite"
+    profile = _source_profile(str(database))
+    signal = RealtimeSampleRepository(str(database)).upsert_signal_definition(SignalDefinition(
+        source_profile_id=profile.id, signal_key="cycle_time",
+        metric_name="cycle_time_s", segment_fields=("station",),
+    ))
+    csv_path = tmp_path / "rolling-segments.csv"
+    return database, csv_path, signal, ReplayRequest(
+        input_file=str(csv_path), database=str(database), source_profile_id=profile.id,
+        signal_key=signal.signal_key, metric_column=signal.metric_name, event_time_column="event_time",
+        record_key_column="record_id", detectors=("rolling_zscore",), batch_size=batch_size,
+    )
+
+
+@pytest.mark.parametrize("batch_size", [1, 7, 500])
+def test_rolling_replay_isolates_configured_segments_across_batches(tmp_path, batch_size):
+    database, csv_path, signal, request = _rolling_replay(tmp_path, batch_size=batch_size)
+    start = datetime(2026, 6, 12, 9, tzinfo=timezone.utc)
+    warmup = []
+    for index in range(60):
+        station = "A" if index % 2 == 0 else "B"
+        nominal = 100 if station == "A" else 200
+        value = nominal + (-1 if index % 4 < 2 else 1)
+        timestamp = (start + timedelta(seconds=index)).isoformat()
+        warmup.append(f"row-{index},{timestamp},{value},{station}")
+    csv_path.write_text("\n".join([
+        "record_id,event_time,cycle_time_s,station",
+        *warmup,
+        "missing-station,2026-06-12T09:01:00Z,1000,",
+        "station-B-outlier,2026-06-12T09:01:01Z,203.5,B",
+        "",
+    ]), encoding="utf-8")
+
+    expected = {"rolling_zscore/major": 1}
+    before = database.read_bytes()
+    preview = replay_industrial_stream(replace(request, dry_run=True))
+    assert preview.event_counts == expected and database.read_bytes() == before
+    persisted = replay_industrial_stream(request)
+    assert persisted.samples_inserted == 62 and persisted.event_counts == expected
+    event, = AnomalyEventRepository(str(database)).list_events()
+    assert event.observed_value == 203.5 and event.expected_value == 200
+    assert event.threshold["n"] == 30 and event.signal_id == signal.id
+    evidence = event.context["detector_evidence"]
+    assert evidence["source_profile_id"] == request.source_profile_id
+    assert evidence["configuration"] == {
+        "detector": "rolling_zscore", "algorithm_version": 1,
+        "parameters": {"min_n": 30, "threshold": 3.0, "max_window": 500},
+    }
+    assert evidence["window"]["kind"] == "prior_samples"
+    assert evidence["window"]["count"] == 30
+    assert evidence["window"]["last_event_time"] == "2026-06-12T09:00:59.000000Z"
+    history_end, = RealtimeSampleRepository(str(database)).list_samples_by_ids(
+        (evidence["window"]["last_sample_id"],),
+    )
+    assert history_end.source_record_key == "row-59" and history_end.segment_key == {"station": "B"}
+    assert len(evidence["window"]["values_sha256"]) == 64 and "values" not in evidence["window"]
+    assert replay_industrial_stream(request).detector_events_created == 0
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_rolling_replay_rejects_excess_segments_before_writes(tmp_path, dry_run):
+    database, csv_path, _signal, request = _rolling_replay(tmp_path)
+    csv_path.write_text(
+        "record_id,event_time,cycle_time_s,station\n"
+        + "".join(f"row-{index},2026-06-12T09:00:00Z,100,station-{index}\n" for index in range(257)),
+        encoding="utf-8",
+    )
+    before = database.read_bytes()
+    assert replay_industrial_stream(replace(request, dry_run=True, limit=256)).samples_processed == 256
+    with pytest.raises(ValueError, match="supports up to 256 segments"):
+        replay_industrial_stream(replace(request, dry_run=dry_run))
+    assert database.read_bytes() == before
+
+
 def test_equal_time_replay_keeps_the_existing_source_health_event(tmp_path):
     database = str(tmp_path / "stale-replay.sqlite")
     profile = _source_profile(database)
@@ -374,6 +455,12 @@ def test_equal_time_replay_keeps_the_existing_source_health_event(tmp_path):
     repository = AnomalyEventRepository(database)
     existing, = repository.list_events()
     assert existing.observed_value == 102
+    evidence = existing.context["detector_evidence"]
+    assert evidence["configuration"]["parameters"] == {"warning_seconds": 300.0, "major_seconds": 900.0}
+    assert evidence["window"] == {
+        "kind": "elapsed_since_last_sample", "last_event_time": "2026-06-12T09:00:00.000000Z",
+        "evaluated_at": "2026-06-12T09:30:00.000000Z",
+    }
 
     path.write_text(header + newer_id + older_id, encoding="utf-8")
     assert replay_industrial_stream(request).detector_events_created == 0
