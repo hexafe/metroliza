@@ -307,6 +307,32 @@ def test_native_windows_cache_publication_preserves_required_real_lifecycle() ->
     assert 'Run native Windows cache lifecycle tests' in policy
 
 
+def test_windows_filesystem_matrix_is_owner_dispatch_only() -> None:
+    import yaml
+
+    workflow = yaml.load(CI_WORKFLOW_PATH.read_text(encoding='utf-8'), Loader=yaml.BaseLoader)
+    inputs = workflow['on']['workflow_dispatch']['inputs']
+    assert inputs['run_windows_cache_filesystem_matrix']['default'] == '0'
+    job = workflow['jobs']['windows-cache-filesystem-matrix']
+    assert job['runs-on'] == 'windows-latest'
+    assert job['if'] == (
+        "github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_cache_filesystem_matrix == '1' && github.actor == github.repository_owner"
+    )
+    assert any('qualify_windows_cache_filesystems.ps1' in step.get('run', '') for step in job['steps'])
+    assert 'continue-on-error' not in job
+    assert job['concurrency']['cancel-in-progress'] == 'false'
+    script = Path('scripts/qualify_windows_cache_filesystems.ps1').read_text(encoding='utf-8')
+    assert "$save -eq 'published'" in script
+    assert "$collision -ne 'rejected_existing'" in script
+    assert "$save -ne 'refused_safely' -or $receipt.requested -eq 'NTFS'" in script
+    assert "$flushRefused = $save -eq 'refused_safely' -and $saveStage -eq 'flush'" in script
+    assert "foreach ($entry in @('main', '-wal', '-shm', '-journal'))" in script
+    assert "$check -ne 'rejected_existing' -and -not ($flushRefused -and $check -eq 'not_reached')" in script
+    assert "$collision -ne 'not_reached' -or $commit.stage -ne 'flush'" in script
+    assert "$commit.winerror -ne $receipt.unused_destination.winerror" in script
+
+
 def test_ci_workflow_keeps_coverage_visibility_contract() -> None:
     workflow = CI_WORKFLOW_PATH.read_text(encoding='utf-8')
 
@@ -716,7 +742,7 @@ def test_ci_workflow_pins_actions_and_uses_least_privilege_defaults() -> None:
         "cancel-in-progress: ${{ !(github.event_name == 'workflow_dispatch' && "
         "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || "
         "inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || "
-        "inputs.run_windows_nuitka_qualification == '1')) }}"
+        "inputs.run_windows_nuitka_qualification == '1' || inputs.run_windows_cache_filesystem_matrix == '1')) }}"
     ) in workflow
     assert workflow.count('uses: actions/checkout@') == workflow.count(
         'persist-credentials: false'
@@ -1052,12 +1078,14 @@ def test_windows_wrapper_discriminator_is_exclusively_manual_and_bounded() -> No
         "inputs.run_windows_portable_onefile == '1' && '-portable' || '' }}"
         "${{ github.event_name == 'workflow_dispatch' && "
         "inputs.run_windows_nuitka_qualification == '1' && '-nuitka' || '' }}"
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "inputs.run_windows_cache_filesystem_matrix == '1' && '-cache-filesystems' || '' }}"
     )  # Opted-in experiments get separate groups; ordinary CI keeps its key.
     assert workflow['concurrency']['cancel-in-progress'] == (
         "${{ !(github.event_name == 'workflow_dispatch' && "
         "(inputs.run_windows_wrapper_diagnostics == '1' || inputs.run_windows_diagnostic_qualification == '1' || "
         "inputs.run_windows_candidate_acceptance == '1' || inputs.run_windows_portable_onefile == '1' || "
-        "inputs.run_windows_nuitka_qualification == '1')) }}"
+        "inputs.run_windows_nuitka_qualification == '1' || inputs.run_windows_cache_filesystem_matrix == '1')) }}"
     )
     for step in job['steps']:
         assert 'actions/upload-artifact@' not in step.get('uses', '')
