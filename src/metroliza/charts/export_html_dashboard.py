@@ -2669,6 +2669,38 @@ def _humanize_field_label(value: str) -> str:
     return value.replace("_", " ").strip().title()
 
 
+def _group_analysis_copy_functions(labels):
+    labels = sorted({label for label in labels if label}, key=lambda label: (-len(label), label))
+    if not labels:
+        return clean_dashboard_copy, should_hide_dashboard_debug_text
+    alternatives = "|".join(map(re.escape, labels))
+    pattern = re.compile(r"(?<!\w)(?:" + alternatives + r")(?!\w)")
+
+    def protect(value):
+        text = str(value or "")
+        # The delimiter is absent from the original text and untouched by dashboard copy cleanup.
+        delimiter = f"\x00{len(text)}\x00"
+        while delimiter in text:
+            delimiter += "\x00"
+        matches = []
+
+        def hold(match):
+            matches.append(match.group())
+            return f"{delimiter}{len(matches) - 1}{delimiter}"
+
+        return pattern.sub(hold, text), delimiter, matches
+
+    def clean(value):
+        protected, delimiter, matches = protect(value)
+        parts = clean_dashboard_copy(protected).split(delimiter)
+        return "".join(matches[int(part)] if index % 2 else part for index, part in enumerate(parts))
+
+    def hide(value):
+        return should_hide_dashboard_debug_text(protect(value)[0])
+
+    return clean, hide
+
+
 def _normalize_group_analysis_manifest(
     payload: dict[str, Any] | None,
     plot_assets: dict[str, Any] | None,
@@ -2682,6 +2714,7 @@ def _normalize_group_analysis_manifest(
         return None
 
     descriptors = payload.get("group_descriptors")
+    clean_copy, hide_copy = _group_analysis_copy_functions(group.label for group in (descriptors or ()))
     group_definitions = (
         {"group_definitions": _normalize_rows_table(group_definition_rows(descriptors))}
         if descriptors else {}
@@ -2800,6 +2833,8 @@ def _normalize_group_analysis_manifest(
                     structured_insights=raw_metric.get("structured_insights"),
                     legacy_insights=raw_metric.get("insights"),
                     summary_rows=summary_rows,
+                    clean_copy=clean_copy,
+                    hide_copy=hide_copy,
                 ),
                 "descriptive_stats": _normalize_rows_table(
                     raw_metric.get("descriptive_stats"),
@@ -2852,7 +2887,7 @@ def _normalize_group_analysis_manifest(
         "status": str(payload.get("status") or ""),
         "analysis_level": _humanize_field_label(str(payload.get("analysis_level") or "")).lower(),
         "effective_scope": str(payload.get("effective_scope") or "").replace("_", " "),
-        "skip_reason_message": clean_dashboard_copy(skip_reason.get("message") or ""),
+        "skip_reason_message": clean_copy(skip_reason.get("message") or ""),
         "summary_rows": _normalize_summary_rows(
             [
                 ("Status", payload.get("status")),
@@ -2865,9 +2900,9 @@ def _normalize_group_analysis_manifest(
             ]
         ),
         "warning_messages": [
-            clean_dashboard_copy(item)
+            cleaned
             for item in (warning_summary.get("messages") or [])
-            if clean_dashboard_copy(item) and not should_hide_dashboard_debug_text(item)
+            if (cleaned := clean_copy(item)) and not hide_copy(item)
         ],
         "histogram_skip_summary": {
             "applies": bool(histogram_skip_summary.get("applies")),
@@ -4680,8 +4715,8 @@ def _render_chart_snapshot(chart: dict[str, Any], *, interactive_available: bool
     )
 
 
-def _render_chart_card(chart: dict[str, Any]) -> str:
-    chart_note = clean_dashboard_copy(chart.get("note"))
+def _render_chart_card(chart: dict[str, Any], *, clean_copy=clean_dashboard_copy) -> str:
+    chart_note = clean_copy(chart.get("note"))
     note_markup = (
         f'<p class="chart-note">{html.escape(chart_note)}</p>'
         if chart_note
@@ -4756,35 +4791,36 @@ def _render_detail_panel(title: str, content: str) -> str:
     return f'<section class="detail-panel"><h4>{html.escape(clean_dashboard_copy(title))}</h4>{content}</section>'
 
 
-def _render_detail_cards(rows: list[dict[str, str]]) -> str:
+def _render_detail_cards(rows: list[dict[str, str]], *, clean_copy=clean_dashboard_copy) -> str:
     if not rows:
         return ""
     cards = "".join(
         f'<div class="detail-card"><div class="detail-card-label">{html.escape(clean_dashboard_copy(row["label"]))}</div>'
-        f'<div class="detail-card-value">{html.escape(clean_dashboard_copy(row["value"]))}</div></div>'
+        f'<div class="detail-card-value">{html.escape(clean_copy(row["value"]))}</div></div>'
         for row in rows
     )
     return f'<div class="detail-cards">{cards}</div>'
 
 
-def _render_summary_table(rows: list[dict[str, str]]) -> str:
+def _render_summary_table(rows: list[dict[str, str]], *, clean_copy=clean_dashboard_copy) -> str:
     if not rows:
         return ""
     rows_markup = "".join(
         f"<tr><td>{html.escape(clean_dashboard_copy(row['label']))}</td>"
-        f"<td>{html.escape(clean_dashboard_copy(row['value']))}</td></tr>"
+        f"<td>{html.escape(clean_copy(row['value']))}</td></tr>"
         for row in rows
     )
     return f'<table class="detail-table">{rows_markup}</table>'
 
 
-def _render_text_list(items: list[str]) -> str:
+def _render_text_list(items: list[str], *, clean_copy=clean_dashboard_copy,
+                      hide_copy=should_hide_dashboard_debug_text) -> str:
     if not items:
         return ""
     rows = "".join(
         f"<li>{html.escape(cleaned)}</li>"
         for item in items
-        if (cleaned := clean_dashboard_copy(item)) and not should_hide_dashboard_debug_text(item)
+        if (cleaned := clean_copy(item)) and not hide_copy(item)
     )
     return f'<ul class="detail-list">{rows}</ul>' if rows else ""
 
@@ -4802,13 +4838,19 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     pills.append(f"Metrics: {len(metrics)}")
     pill_markup = "".join(f'<span class="pill">{html.escape(item)}</span>' for item in pills)
 
-    summary_table = _render_summary_table(group_analysis.get("summary_rows") or [])
     definitions = group_analysis.get("group_definitions")
+    clean_copy, hide_copy = _group_analysis_copy_functions(
+        row["Group"] for row in (definitions or {}).get("rows") or ()
+    )
+    summary_table = _render_summary_table(group_analysis.get("summary_rows") or [], clean_copy=clean_copy)
     definition_panel = _render_detail_panel(
         "Group definitions",
         _render_data_table(definitions, literal_columns=("Group", "Group ID", "Role", "Color")),
     ) if definitions else ""
-    warning_messages = _render_text_list([str(item) for item in (group_analysis.get("warning_messages") or []) if str(item).strip()])
+    warning_messages = _render_text_list(
+        [str(item) for item in (group_analysis.get("warning_messages") or []) if str(item).strip()],
+        clean_copy=clean_copy, hide_copy=hide_copy,
+    )
 
     histogram_skip = group_analysis.get("histogram_skip_summary") if isinstance(group_analysis.get("histogram_skip_summary"), dict) else {}
     histogram_block = ""
@@ -4835,7 +4877,8 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
         )
 
     metrics_markup = "".join(
-        _render_group_analysis_metric(metric, literal_group_labels=bool(definitions)) for metric in metrics
+        _render_group_analysis_metric(metric, literal_group_labels=bool(definitions), clean_copy=clean_copy)
+        for metric in metrics
     )
     details_row = ""
     if warning_messages or histogram_block:
@@ -4862,7 +4905,8 @@ def _render_group_analysis(group_analysis: dict[str, Any]) -> str:
     )
 
 
-def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_labels=False) -> str:
+def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_labels=False,
+                                  clean_copy=clean_dashboard_copy) -> str:
     summary_rows = metric.get("summary_rows") or []
     takeaways = metric.get("takeaways") or []
     descriptive_stats = metric.get("descriptive_stats") or {}
@@ -4879,9 +4923,9 @@ def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_label
 
     summary_panels = []
     if takeaways:
-        summary_panels.append(_render_detail_panel("Key takeaways", _render_detail_cards(takeaways)))
+        summary_panels.append(_render_detail_panel("Key takeaways", _render_detail_cards(takeaways, clean_copy=clean_copy)))
     if summary_rows:
-        summary_panels.append(_render_detail_panel("Metric summary", _render_summary_table(summary_rows)))
+        summary_panels.append(_render_detail_panel("Metric summary", _render_summary_table(summary_rows, clean_copy=clean_copy)))
     summary_grid_markup = (
         f'<div class="metric-summary-grid detail-grid">{"".join(summary_panels)}</div>'
         if summary_panels
@@ -4893,25 +4937,28 @@ def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_label
     if descriptive_stats.get("rows"):
         raw_table_sections.append(
             '<div class="subsection-title">Descriptive stats</div>'
-            + _render_data_table(descriptive_stats, literal_columns=group_columns)
+            + _render_data_table(descriptive_stats, literal_columns=group_columns, clean_copy=clean_copy)
         )
     if pairwise_rows.get("rows"):
         raw_table_sections.append(
             '<div class="subsection-title">Pairwise comparisons</div>'
-            + _render_data_table(pairwise_rows, literal_columns=group_columns)
+            + _render_data_table(pairwise_rows, literal_columns=group_columns, clean_copy=clean_copy)
         )
     if distribution_difference:
-        raw_table_sections.append('<div class="subsection-title">Distribution difference</div>' + _render_summary_table(distribution_difference))
+        raw_table_sections.append(
+            '<div class="subsection-title">Distribution difference</div>'
+            + _render_summary_table(distribution_difference, clean_copy=clean_copy)
+        )
     if distribution_pairwise_rows.get("rows"):
         raw_table_sections.append(
             '<div class="subsection-title">Distribution pairwise comparison</div>'
-            + _render_data_table(distribution_pairwise_rows, literal_columns=group_columns)
+            + _render_data_table(distribution_pairwise_rows, literal_columns=group_columns, clean_copy=clean_copy)
         )
 
     plot_markup = ""
     if plots:
         plot_markup = '<div class="subsection-title">Plots</div><div class="chart-grid">' + "".join(
-            _render_chart_card(chart) for chart in plots
+            _render_chart_card(chart, clean_copy=clean_copy) for chart in plots
         ) + "</div>"
 
     raw_tables_markup = ""
@@ -4934,7 +4981,8 @@ def _render_group_analysis_metric(metric: dict[str, Any], *, literal_group_label
     )
 
 
-def _render_data_table(table_meta: dict[str, Any], *, literal_columns: tuple[str, ...] = ()) -> str:
+def _render_data_table(table_meta: dict[str, Any], *, literal_columns: tuple[str, ...] = (),
+                       clean_copy=clean_dashboard_copy) -> str:
     columns = table_meta.get("columns") or []
     rows = table_meta.get("rows") or []
     if not columns or not rows:
@@ -4946,7 +4994,7 @@ def _render_data_table(table_meta: dict[str, Any], *, literal_columns: tuple[str
 
     def display_cell(row, key):
         value = row.get(key) or ''
-        return html.escape(str(value) if key in literal_columns else clean_dashboard_copy(value))
+        return html.escape(str(value) if key in literal_columns else clean_copy(value))
 
     row_markup = "".join(
         "<tr>" + "".join(

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import re
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 
 _REASON_LABELS = {
@@ -139,14 +139,16 @@ def dashboard_key_takeaway_rows(
     structured_insights: Any = None,
     legacy_insights: Any = None,
     summary_rows: Any = None,
+    clean_copy: Callable[[Any], str] = clean_dashboard_copy,
+    hide_copy: Callable[[Any], bool] = should_hide_dashboard_debug_text,
 ) -> list[dict[str, str]]:
     """Build labelled, plain-English takeaway rows for dashboard metric cards."""
 
     rows: list[dict[str, str]] = []
 
     def add(label: str, value: Any) -> None:
-        cleaned = clean_dashboard_copy(value)
-        if not cleaned or should_hide_dashboard_debug_text(cleaned):
+        cleaned = clean_copy(value)
+        if not cleaned or hide_copy(cleaned):
             return
         key = (label.casefold(), cleaned.casefold())
         existing = {(row["label"].casefold(), row["value"].casefold()) for row in rows}

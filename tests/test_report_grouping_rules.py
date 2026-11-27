@@ -12,6 +12,7 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QFileDialog, QPushButton
 import pytest
 
+from metroliza.charts.export_html_dashboard import _group_analysis_copy_functions
 from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
 from metroliza.exporting import export_data_thread
 from metroliza.exporting.export_data_thread import ExportDataThread
@@ -287,13 +288,13 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
 
     preset = rules.ReportGroupingPreset("Samples", (
         replace(_rule(1, "Zulu Plotly chart <sample>", 'Sample = "001"'), color="#AaBbCc"),
-        _rule(2, "Alpha", 'Sample = "1"'),
+        _rule(2, "{=1+1}", 'Sample = "1"'),
     ))
     restored = rules.load_grouping_preset(rules.dump_grouping_preset(preset))
     preview = rules.preview_grouping_preset(restored, rules.ReportGroupingSource.capture(database, None))
     descriptors = preview.source.group_descriptors
     expected_labels = [descriptor.label for descriptor in descriptors]
-    assert expected_labels == ["Zulu Plotly chart <sample>", "Alpha", "POPULATION"]
+    assert expected_labels == ["Zulu Plotly chart <sample>", "{=1+1}", "POPULATION"]
     assert tuple(descriptor.role for descriptor in descriptors) == ("rule", "rule", "population")
 
     output = tmp_path / f"analysis-{level}.xlsx"
@@ -341,6 +342,10 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
             (descriptor.label, descriptor.group_id, descriptor.role, descriptor.color) for descriptor in descriptors
         ]
         assert [row[0] for row in rows[description_row + 2:description_row + 5]] == expected_labels
+        sheet = workbook["Group Analysis"]
+        for row_number in (definitions_row + 4, description_row + 4):
+            label_cell = sheet.cell(row=row_number, column=1)
+            assert (label_cell.value, label_cell.data_type) == ("{=1+1}", "s")
         assert not any("Open plots sheet" in row for row in rows)
         if level == "standard":
             assert any("Plots are in the companion HTML dashboard." in str(cell) for row in rows for cell in row)
@@ -348,6 +353,12 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
         workbook.close()
 
     html = Path(worker.html_dashboard_file).read_text(encoding="utf-8")
+    group_analysis = html.split('<section id="group-analysis"', 1)[1]
+    assert "Zulu interactive chart &lt;sample&gt;" not in group_analysis
+    assert "POPULATION vs Zulu Plotly chart &lt;sample&gt;" in group_analysis
+    if level == "standard":
+        plot_notes = group_analysis.split('class="chart-note">')
+        assert sum("Zulu Plotly chart &lt;sample&gt;" in note.split("</p>", 1)[0] for note in plot_notes[1:]) == 2
     definitions = html.split("<h4>Group definitions</h4>", 1)[1].split("</table>", 1)[0]
     descriptions = html.split('<div class="subsection-title">Descriptive stats</div>', 1)[1].split("</table>", 1)[0]
     ordered = []
@@ -360,6 +371,22 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
     assert ordered == sorted(ordered)
     positions = [descriptions.index(f"<tr><td>{escape(label)}</td>") for label in expected_labels]
     assert positions == sorted(positions)
+
+
+def test_group_analysis_copy_keeps_exact_label_spans_and_still_cleans_other_text():
+    short_name = "Zulu Plotly chart"
+    long_name = "Zulu Plotly chart  <sample>"
+    note = f"Plotly charts compared {long_name} with {short_name}. The other group was eligible."
+    clean, hide = _group_analysis_copy_functions((short_name, long_name, "backend diagnostics"))
+    assert clean(note) == (
+        f"interactive charts compared {long_name} with {short_name}. The other group was Eligible."
+    )
+    assert not hide("Compare the backend diagnostics group with its control.")
+    assert hide("The chart_renderer: status field is internal.")
+
+    legacy_clean, legacy_hide = _group_analysis_copy_functions(())
+    assert "Zulu interactive chart <sample>" in legacy_clean(note)
+    assert legacy_hide("Compare the backend diagnostics group with its control.")
 
 
 @pytest.mark.parametrize("change", ["report", "same_stat", "view"])
