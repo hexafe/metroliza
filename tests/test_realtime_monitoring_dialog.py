@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 from contextlib import ExitStack
+from dataclasses import replace
 import json
 import gc
 import os
@@ -12,8 +13,8 @@ import pytest
 
 from PyQt6 import sip
 from PyQt6.QtCore import QCoreApplication, QEvent, QEventLoop, QObject, QThread, QTimer, Qt
-from PyQt6.QtTest import QSignalSpy
-from PyQt6.QtWidgets import QApplication, QMessageBox
+from PyQt6.QtTest import QSignalSpy, QTest
+from PyQt6.QtWidgets import QApplication, QDialog, QDialogButtonBox, QMessageBox, QPlainTextEdit
 
 from metroliza.ui.realtime_industrial_monitoring_dialog import (
     RealtimeIndustrialMonitoringDialog,
@@ -399,6 +400,258 @@ def test_realtime_event_review_refreshes_instead_of_overwriting_stale_decision(
         assert dialog.event_review_status_label.property("statusVariant") == "warning"
     finally:
         dialog.close()
+
+
+def _persist_frozen_review_events(db_path, monkeypatch):
+    from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
+    from metroliza.industrial.anomaly.contracts import DetectionResult
+    from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
+    from metroliza.industrial.realtime import realtime_service
+    from metroliza.industrial.realtime.sample_repository import RealtimeSampleRepository
+    from metroliza.industrial.realtime.stream_contracts import IndustrialSample
+    from tests.test_realtime_service_cycle import FakeAdapter, _config, _profile, config_signal_definition
+
+    profile = _profile(db_path)
+    config = replace(_config(profile.id, detectors=("spec_limits", "iqr", "rolling_zscore")), segment_fields=("station",))
+    samples = RealtimeSampleRepository(db_path)
+    signal = samples.upsert_signal_definition(config_signal_definition(profile.id))
+    baselines = BaselineRepository(db_path)
+    baseline = IndustrialBaseline(
+        signal_id=signal.id, segment_key={"station": "S1"}, baseline_version="saved-baseline-v3",
+        n=30, q1=9.0, q3=11.0, iqr=2.0, created_at="2026-06-13T09:00:00Z",
+        window_start="2026-06-13T08:00:00Z", window_end="2026-06-13T09:00:00Z",
+    )
+    baselines.insert_baseline(baseline)
+    samples.insert_samples([
+        IndustrialSample(
+            source_profile_id=profile.id, signal_id=signal.id, source_record_key=f"history-{index}",
+            event_time=f"2026-06-13T10:{index:02d}:00Z", metric_name="cycle_time_s",
+            value=9.0 if index % 2 else 11.0, segment_key={"station": "S1"},
+        ) for index in range(30)
+    ])
+
+    def interrupt(**_kwargs):
+        raise KeyboardInterrupt("synthetic batch committed")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(realtime_service, "_run_detector_consumer", interrupt)
+        with pytest.raises(KeyboardInterrupt, match="synthetic batch committed"):
+            realtime_service.run_polling_cycle(database=db_path, profile=profile, config=config, adapter=FakeAdapter([{
+                "event_id": "100", "record_id": "row-100", "process_timestamp": "2026-06-13T10:40:00Z",
+                "cycle_time_s": "20", "station": "S1",
+            }]))
+    samples.upsert_signal_definition(replace(signal, usl=100.0))
+    baselines.insert_baseline(replace(baseline, baseline_version="later-baseline", created_at="2026-06-13T10:41:00Z"))
+    realtime_service.run_polling_cycle(
+        database=db_path, profile=profile, config=replace(config, detectors=("mad_zscore",)), adapter=FakeAdapter(),
+    )
+    events = AnomalyEventRepository(db_path)
+    trigger = next(event for event in events.list_events() if event.detector_key == "spec_limits")
+    events.insert_events([DetectionResult(
+        detector_key="legacy_limits", sample_id=trigger.sample_id, signal_id=trigger.signal_id,
+        signal_key=signal.signal_key, event_time=trigger.event_time, severity="warning",
+        score=7.0, observed_value=20.0, expected_value=None, threshold={"usl": 13.0},
+        explanation="Archived <b>operator explanation</b>.", context={"raw_note": "PRIVATE_CONTEXT_VALUE"},
+    )])
+    return {event.detector_key: event for event in events.list_events()}
+
+
+def _read_event_details(qapp, dialog, event_id, *, keyboard=False):
+    table = dialog.event_review_table
+    row = next(index for index in range(table.rowCount()) if table.item(index, 7).text() == str(event_id))
+    table.selectRow(row)
+    text = []
+    errors = []
+
+    def collect():
+        details = qapp.activeModalWidget()
+        try:
+            assert isinstance(details, QDialog) and details.windowTitle() == "Event details"
+            view = details.findChild(QPlainTextEdit)
+            buttons = details.findChild(QDialogButtonBox)
+            assert view.isReadOnly()
+            details.resize(details.minimumSize())
+            details.layout().activate()
+            assert not view.geometry().intersects(buttons.geometry())
+            text.append(view.toPlainText())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            if isinstance(details, QDialog) and details is not dialog:
+                details.reject()
+
+    timer = QTimer(dialog)
+    timer.setSingleShot(True)
+    timer.timeout.connect(collect)
+    timer.start(0)
+    if keyboard:
+        table.setFocus()
+        QTest.keyClick(table, Qt.Key.Key_W, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    else:
+        dialog.event_details_button.click()
+    timer.stop()
+    timer.deleteLater()
+    if errors:
+        raise errors[0]
+    assert len(text) == 1
+    return text[0]
+
+
+def test_realtime_review_details_use_the_saved_frozen_decision_and_keep_old_explanations(qapp, tmp_path, monkeypatch):
+    from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+
+    db_path = str(tmp_path / "review-frozen.db")
+    events = _persist_frozen_review_events(db_path, monkeypatch)
+    assert set(events) == {"iqr", "rolling_zscore", "spec_limits", "legacy_limits"}
+    loads = []
+    lookup_ids = []
+    read = RealtimeDashboardService.read_open_anomaly_decision
+    load = RealtimeDashboardService.list_open_anomaly_events
+
+    def count_load(service, **kwargs):
+        loads.append(kwargs["limit"])
+        return load(service, **kwargs)
+
+    def count_read(service, event_id, *, expected_event):
+        lookup_ids.append(event_id)
+        assert expected_event.id == event_id
+        return read(service, event_id, expected_event=expected_event)
+
+    monkeypatch.setattr(RealtimeDashboardService, "list_open_anomaly_events", count_load)
+    monkeypatch.setattr(RealtimeDashboardService, "read_open_anomaly_decision", count_read)
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path, config_path=tmp_path / "unused.yaml")
+    try:
+        dialog.show()
+        dialog.activateWindow()
+        dialog.event_review_button.click()
+        qapp.processEvents()
+        assert not dialog.event_details_button.isEnabled()
+        before = tuple(loads)
+        before_bytes = Path(db_path).read_bytes()
+        limits = _read_event_details(qapp, dialog, events["spec_limits"].id, keyboard=True)
+        assert "Source: Assembly" in limits and "Signal: cycle_time (cycle_time_s)" in limits
+        assert "Observed: 20" in limits and "Upper specification limit (USL): 12" in limits
+        assert "Recorded detector: spec_limits" in limits and "Algorithm version: 1" in limits
+        assert "Decision window: Triggering sample" in limits
+
+        baseline = _read_event_details(qapp, dialog, events["iqr"].id)
+        assert "Baseline version: saved-baseline-v3" in baseline and "later-baseline" not in baseline
+        assert "Baseline start: 2026-06-13T08:00:00" in baseline and "Baseline end: 2026-06-13T09:00:00" in baseline
+        rolling = _read_event_details(qapp, dialog, events["rolling_zscore"].id)
+        evidence = events["rolling_zscore"].context["detector_evidence"]
+        stored = evidence["window"]
+        assert f"Configuration revision (SHA-256): {evidence['configuration_revision']}" in rolling
+        assert "Samples in window: 30" in rolling
+        assert f"Last sample ID: {stored['last_sample_id']}" in rolling
+        assert f"Last sample time: {stored['last_event_time']}" in rolling
+        assert f"History digest (SHA-256): {stored['values_sha256']}" in rolling
+        assert "segment_fields" not in rolling and '"parameters"' not in rolling
+
+        legacy = _read_event_details(qapp, dialog, events["legacy_limits"].id)
+        assert "Archived <b>operator explanation</b>." in legacy
+        assert "Upper specification limit (USL): 13" in legacy
+        assert "Versioned detector and window evidence is unavailable" in legacy
+        assert "Algorithm version:" not in legacy and "Configuration revision" not in legacy
+        assert "PRIVATE_CONTEXT_VALUE" not in legacy
+        assert lookup_ids == [events[name].id for name in ("spec_limits", "iqr", "rolling_zscore", "legacy_limits")]
+        assert tuple(loads) == before and Path(db_path).read_bytes() == before_bytes
+
+        event_id = events["legacy_limits"].id
+        RealtimeDashboardService(db_path).resolve_event(
+            event_id=event_id, resolved_by="other reviewer", comment="Reviewed", expected_status="open",
+        )
+        unexpected_details = []
+        monkeypatch.setattr(dialog, "_show_event_details_dialog", unexpected_details.append)
+        dialog.event_details_button.click()
+        assert not unexpected_details and not dialog.event_details_button.isEnabled()
+        assert "no longer open" in dialog.event_review_status_label.text()
+        assert tuple(loads) == before
+
+        table = dialog.event_review_table
+        row = next(index for index in range(table.rowCount()) if table.item(index, 5).text() == "rolling_zscore")
+        table.selectRow(row)
+        assert dialog.event_details_button.isEnabled()
+        replacement = tmp_path / "replacement.db"
+        replacement.write_bytes(Path(db_path).read_bytes())
+        replacement.replace(db_path)
+        read_before = tuple(lookup_ids)
+        dialog.event_details_button.click()
+        assert tuple(lookup_ids) == read_before
+        assert not unexpected_details and not dialog.event_details_button.isEnabled()
+        assert "replaced or removed" in dialog.event_review_status_label.text()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
+
+
+def test_realtime_review_details_require_refresh_after_sqlite_reuses_an_event_id(qapp, tmp_path, monkeypatch):
+    from metroliza.industrial.anomaly import event_repository
+    from metroliza.industrial.anomaly.contracts import DetectionResult
+    from metroliza.industrial.realtime.realtime_dashboard_service import RealtimeDashboardService
+    from metroliza.reports.db import SQLiteFileBinding, sqlite_connection_scope
+
+    db_path = str(tmp_path / "review-reused-id.db")
+    events = _persist_frozen_review_events(db_path, monkeypatch)
+    selected = events["legacy_limits"]
+    assert selected.id == max(event.id for event in events.values())
+    listed = []
+    load = RealtimeDashboardService.list_open_anomaly_events
+
+    def count_load(service, **kwargs):
+        listed.append(kwargs["limit"])
+        return load(service, **kwargs)
+
+    monkeypatch.setattr(RealtimeDashboardService, "list_open_anomaly_events", count_load)
+    dialog = RealtimeIndustrialMonitoringDialog(None, db_path, config_path=tmp_path / "unused.yaml")
+    try:
+        dialog.show()
+        dialog.event_review_button.click()
+        table = dialog.event_review_table
+        row = next(index for index in range(table.rowCount()) if table.item(index, 7).text() == str(selected.id))
+        table.selectRow(row)
+        assert dialog.event_details_button.isEnabled()
+        binding = SQLiteFileBinding.capture(db_path)
+
+        replacement_time = "2026-06-13T11:00:00Z"
+        assert replacement_time != selected.created_at
+        monkeypatch.setattr(event_repository, "utc_timestamp", lambda: replacement_time)
+        with sqlite_connection_scope(db_path) as connection, connection:
+            connection.execute("DELETE FROM industrial_anomaly_events WHERE id = ?", (selected.id,))
+        result = event_repository.AnomalyEventRepository(db_path).insert_events([DetectionResult(
+            detector_key=selected.detector_key, sample_id=selected.sample_id, signal_id=selected.signal_id,
+            signal_key="cycle_time", event_time=selected.event_time, severity="major", score=11.0,
+            observed_value=selected.observed_value, expected_value=None, threshold={"usl": 9.0},
+            explanation="New event after SQLite ID reuse.",
+            context={"detector_evidence": {
+                "schema_version": 1,
+                "configuration": {"detector": selected.detector_key, "algorithm_version": 2},
+                "window": {"kind": "trigger_sample"},
+            }},
+        )])
+        assert result.inserted == 1 and result.event_ids == (selected.id,)
+        binding.require(db_path)
+
+        before = tuple(listed)
+        before_bytes = Path(db_path).read_bytes()
+        unexpected_details = []
+        with monkeypatch.context() as capture:
+            capture.setattr(dialog, "_show_event_details_dialog", unexpected_details.append)
+            dialog.event_details_button.click()
+        assert unexpected_details == []
+        assert not dialog.event_details_button.isEnabled()
+        assert "Refresh events" in dialog.event_review_status_label.text()
+        assert tuple(listed) == before and Path(db_path).read_bytes() == before_bytes
+
+        dialog.refresh_events_button.click()
+        replacement = _read_event_details(qapp, dialog, selected.id)
+        assert "New event after SQLite ID reuse." in replacement
+        assert "Upper specification limit (USL): 9" in replacement
+        assert "Algorithm version: 2" in replacement
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(dialog, QEvent.Type.DeferredDelete)
 
 
 def test_realtime_monitoring_dialog_preserves_cleared_context_and_segment_fields(

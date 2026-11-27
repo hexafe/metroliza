@@ -109,9 +109,18 @@ live. After Stop the snapshot remains visible as stopped; a later poll error
 appears separately without making the previous snapshot current. Dashboard
 generation can still be finishing after polling stops.
 
+After monitoring resumes, a pending batch saved by this version uses its
+saved detector names, signal limits, partition fields and history boundaries.
+The installed Metroliza version supplies the detector algorithms. Changes to
+the settings apply to later batches. Older batches use the current settings
+when the monitor evaluates them.
+
 Open **Event Review (Ctrl+E)** to load up to 100 persisted open events. **Ctrl+S**
-refreshes that list. Select an event and enter both operator and review comment
-before **Acknowledge (Ctrl+Shift+A)**, **Resolve (Ctrl+Shift+E)**, or **Mark false
+refreshes that list. Select an event and choose **Details (Ctrl+Shift+W)** to read
+its recorded threshold, detector version and decision window. For older events,
+the explanation and any recorded thresholds remain available. Details reads the
+saved event from local storage. Enter both operator and review comment before
+**Acknowledge (Ctrl+Shift+A)**, **Resolve (Ctrl+Shift+E)**, or **Mark false
 positive (Ctrl+Shift+Q)**. These retain the existing recorded decisions and
 conflict checks. Shortcuts act inside this dialog; normal text editing and
 Ctrl+Alt/AltGr combinations remain available to editors.

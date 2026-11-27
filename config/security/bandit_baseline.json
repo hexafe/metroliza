@@ -553,7 +553,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "df193b45f92541765b9e726e847042ed6e021d31e8a5adc170365fda6a77e60c",
+      "fingerprint": "6f7e178a1e4d77368b99b47849c6407a58e2eb5cb1e4ff40cbf2a318e94bccdc",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -562,7 +562,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "13c6705b566947d0e7b4608544689a014f877048ad50b817685ea80356ba7fc8",
+      "fingerprint": "2501f72b1dc1c34a0b82746341a493cee2475bc6906f95592364255a0a5f61be",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -571,7 +571,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "0e79e8606b36b1ea53b8efbd95a4fb4038a5cc0bd20bdc5dccc0386098813c66",
+      "fingerprint": "d5a7296cbf84e81683b5fc76faf68ef16cabffceb4a86cfe3acbf762547f08a3",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -580,7 +580,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "37d1062144b5b5a3b9afec4f81cb15cf3d019aea0d01ac98d5b144f74b850ef0",
+      "fingerprint": "fdd9abcf66b014b7e25b33ce01d38037537644e5040d42a195d28d476c006cb6",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -589,7 +589,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "1dc1bea37a6523297cf3182408e969b651d380259fa03dfb1438df2dd5429cf3",
+      "fingerprint": "34bd8df9318e406f3f8fcf4674c9ff48c1745fe26d7b23e5cf9c0606572b6318",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -598,7 +598,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "18880a92c3cb44c67e5f1efbee3c9861ae03a78c37e5ce483a2915708bcc48eb",
+      "fingerprint": "2d47a01990d53b0284deec3c58cea39ec1cec0273f0dda22bf4a08af64e4f459",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/realtime_dashboard_service.py",
       "owner": "Security review",
@@ -607,7 +607,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f10dbe69cd78af10afc0a3b73771de2635ddd212ee003028f445b4cbed0b01c5",
+      "fingerprint": "81c5064040101094ce3f1c4c9b1a0493962b3143dd489b15c83af0df521c2290",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
@@ -634,11 +634,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6b7a0b4e196094d94adfe86fa0dcf6265783255bf2fa51b9c2183df41bac6457",
+      "fingerprint": "6e1bcc26181d652c9e4d0df87e31d646b108d41329f2140b1e129e162b606c69",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "list_samples_before._list: where uses the fixed signal_id and (event_time,id) boundary predicate, plus optional segment_key_json = ?. Signal ID, canonical boundary time, sample ID, JSON segment key and safe limit are bound separately.",
+      "rationale": "list_samples_before._list: where uses the fixed signal_id and (event_time,id) boundary predicate, plus optional id <= ? and segment_key_json = ? predicates. Signal ID, canonical boundary time, sample ID, saved sample ID ceiling, JSON segment key and safe limit are bound separately.",
       "expires_on": "2027-04-30"
     },
     {

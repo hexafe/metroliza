@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
 from metroliza.industrial.realtime.detector_consumer import RealtimeDetectorConsumer
@@ -348,6 +350,40 @@ def test_detector_consumer_quarantines_permanent_poison_and_continues(tmp_path):
     assert dead_letters[0].event_id == poison.event_ids[0]
     assert "Unsupported realtime detector" in dead_letters[0].error_summary
     assert dead_letters[0].payload["password"] == "<redacted>"
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "detectors", "message"),
+    [
+        ({"version": 9}, ("spec_limits",), "unsupported settings version"),
+        ({"version": 1}, (), "saved detector list"),
+        (
+            {"version": 1, "maximum_sample_id": 0, "maximum_baseline_id": 0, "signals": {}},
+            ("spec_limits",),
+            "sample boundary",
+        ),
+    ],
+)
+def test_consumer_never_reinterprets_malformed_frozen_batches(tmp_path, snapshot, detectors, message):
+    database = str(tmp_path / "frozen-poison.db")
+    profile, sample_result, _ = _seed_sample_batch(database)
+    stream = RealtimeEventStreamRepository(database)
+    poisoned = stream.append_sample_batch_committed(
+        source_profile_id=profile.id,
+        stream_key="cycle_time",
+        sample_ids=sample_result.sample_ids,
+        detectors=detectors,
+        idempotency_key="frozen-malformed",
+        payload={"detector_batch": snapshot},
+    )
+
+    result = RealtimeDetectorConsumer(database).process_once(config=_config(profile.id))
+
+    assert result.detector_events_created == 1  # The legacy batch still scores.
+    assert result.diagnostics["dead_letter_count"] == 1
+    dead_letter, = stream.list_dead_letters()
+    assert dead_letter.event_id == poisoned.event_ids[0]
+    assert message in dead_letter.error_summary
 
 
 def test_detector_consumer_quarantines_non_integral_boolean_and_overflow_ids(tmp_path):

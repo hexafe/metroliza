@@ -17,6 +17,7 @@ from metroliza.industrial.realtime.db_poller import (
     build_bounded_poll_query,
     safe_query_diagnostics,
 )
+from metroliza.industrial.realtime.detector_batch import DETECTOR_BATCH_KEY, capture_detector_batch
 from metroliza.industrial.realtime.event_stream_repository import RealtimeEventStreamRepository
 from metroliza.industrial.realtime.offset_store import (
     StreamOffsetConflictError,
@@ -486,6 +487,11 @@ def _commit_mapped_chunk(
         nonlocal stage
         stage = "persist_samples"
         batch_result = sample_repository.insert_samples(mapping.samples, _cursor=cursor)
+        stage = "capture_detector_batch"
+        detector_batch = (
+            {DETECTOR_BATCH_KEY: capture_detector_batch(cursor, signals.values())}
+            if batch_result.sample_ids else {}
+        )
         stage = "append_stream_event"
         stream_append_result = stream_repository.append_sample_batch_committed(
             source_profile_id=config.source_profile_id,
@@ -505,6 +511,7 @@ def _commit_mapped_chunk(
                 "cursor_tie_breaker_value": cursor_tie_breaker_value,
                 "event_time_watermark": watermark,
                 "lag_seconds": lag_seconds,
+                **detector_batch,
             },
             _cursor=cursor,
         )
@@ -618,6 +625,7 @@ def _load_detection_samples(
     sample_ids: tuple[int, ...],
     *,
     detectors: tuple[str, ...],
+    maximum_sample_id: int | None = None,
 ) -> list[IndustrialSample]:
     new_samples = _load_persisted_samples(sample_repository, signals, sample_ids)
     if not new_samples or not (_normalized_detector_set(detectors) & _HISTORY_DETECTORS):
@@ -642,6 +650,7 @@ def _load_detection_samples(
             before_sample_id=earliest.id,
             segment_key=segment_key,
             limit=_DETECTOR_HISTORY_LIMIT,
+            maximum_sample_id=maximum_sample_id,
         ):
             if sample.id is not None:
                 combined[int(sample.id)] = sample
@@ -658,6 +667,7 @@ def _score_detector_events(
     detectors: tuple[str, ...],
     diagnostics: dict[str, Any],
     baseline_repository: BaselineRepository | None = None,
+    maximum_baseline_id: int | None = None,
     detector_runner: DetectorRunner | None = None,
     score_sample_ids: tuple[int, ...] = (),
     strict: bool = False,
@@ -689,6 +699,7 @@ def _score_detector_events(
             baseline = baseline_repository.latest_baseline(
                 signal_id=signal_id,
                 segment_key=dict(segment_key_items),
+                maximum_id=maximum_baseline_id,
             ) or {}
         try:
             if detector_runner is not None:
