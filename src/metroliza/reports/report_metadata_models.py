@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import json
 
 
 USER_SOURCE_TYPE = "user_manual"
@@ -35,6 +37,15 @@ class MetadataCandidate:
     confidence: float
     evidence_text: str | None
     selected: bool = False
+
+    def evidence_digest(self) -> str:
+        """Identify the full OCR reading across the in-memory and SQLite representations."""
+        payload = (
+            self.field_name, self.raw_value, self.normalized_value, self.source_type,
+            self.source_detail, self.page_number, self.region_name, self.label_text,
+            self.rule_id, float(self.confidence) or 0.0, self.evidence_text,
+        )
+        return hashlib.sha256(json.dumps(payload, separators=(",", ":")).encode("ascii")).hexdigest()
 
     @classmethod
     def from_manual_edit(

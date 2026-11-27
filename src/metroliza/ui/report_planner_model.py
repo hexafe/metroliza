@@ -26,6 +26,9 @@ from metroliza.parsing.preflight import (
 )
 from metroliza.reports.report_metadata_review import (
     FIELD_LABELS,
+    OCR_ACCEPTED,
+    OCR_DEFERRED,
+    OCR_REJECTED,
     REVIEW_FIELDS,
     ROW_CHANGED,
     ROW_FAILED,
@@ -450,16 +453,20 @@ class ReportPlannerModel(QAbstractTableModel):
         self._row_changed(reading.occurrence_id)
         return changed
 
-    def resolve_ocr_suggestion(self, occurrence_id: str, field_name: str, *, accept: bool) -> bool:
+    def resolve_ocr_suggestion(self, occurrence_id: str, field_name: str, *, decision: str) -> bool:
         """Apply one explicit decision to the selected cell in the current review."""
 
         row = self._meta_rows.get(occurrence_id)
         if not self.valid or row is None:
             return False
-        resolved = (
-            bool(row.accept_ocr_suggestions((field_name,))) if accept
-            else row.dismiss_ocr_suggestion(field_name)
-        )
+        if decision == OCR_ACCEPTED:
+            resolved = bool(row.accept_ocr_suggestions((field_name,)))
+        elif decision == OCR_REJECTED:
+            resolved = row.dismiss_ocr_suggestion(field_name)
+        elif decision == OCR_DEFERRED:
+            resolved = row.defer_ocr_suggestion(field_name)
+        else:
+            return False
         if resolved:
             self._row_changed(occurrence_id)
         return resolved
@@ -507,8 +514,7 @@ class ReportPlannerModel(QAbstractTableModel):
                 self.last_copy_undo_skipped += 1
                 continue
             cell = row.cells[field_name]
-            # The copy may clear a conflicting OCR suggestion; restore it with the manual value.
-            cell.user_set, cell.user_value, cell.ocr_suggestion = manual_before
+            cell.user_set, cell.user_value, cell.ocr_suggestion, cell.ocr_decision = manual_before
             restored += 1
             self._row_changed(occurrence_id, notify=False)
         self.metadata_changed.emit()
@@ -525,6 +531,7 @@ class ReportPlannerModel(QAbstractTableModel):
                 row.cells[field_name].user_set,
                 row.cells[field_name].user_value,
                 row.cells[field_name].ocr_suggestion,
+                row.cells[field_name].ocr_decision,
             )
             for row in rows
         }

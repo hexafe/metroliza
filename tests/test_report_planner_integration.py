@@ -10,7 +10,7 @@ import zipfile
 
 import fitz
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QCoreApplication, QEvent, Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
@@ -218,20 +218,40 @@ def test_worker_start_failure_releases_busy_state_and_allows_retry(app, reviewed
 
 
 @pytest.mark.parametrize("terminal", ["missing", "failed", "cancelled"])
-def test_persistent_outcome_never_invents_success_without_result(reviewed, terminal):
+def test_persistent_outcome_never_invents_success_without_result(reviewed, monkeypatch, terminal):
     from types import SimpleNamespace
 
     dialog, _source, database = reviewed
     dialog.parse_thread = SimpleNamespace(last_parse_result=None)
     dialog.parse_error_message = "Synthetic worker failure" if terminal == "failed" else None
     dialog.parsing_canceled = terminal == "cancelled"
+    sender_lookups = []
+    monkeypatch.setattr(type(dialog), "sender", lambda _dialog: sender_lookups.append(True))
     dialog.on_parse_finished()
     dialog._on_parse_thread_stopped(dialog.parse_thread)
+    assert sender_lookups == []
     text = dialog.report_planner.outcome.toPlainText()
     assert "outcome unavailable" in text
     assert "successful" not in text
     assert "saved to" not in text
     assert not database.exists()
+
+
+def test_parse_completion_connection_retains_neither_owner_nor_worker():
+    from weakref import ref
+
+    class Endpoint:
+        pass
+
+    callbacks = []
+    owner, worker = Endpoint(), Endpoint()
+    worker.finished = Endpoint()
+    worker.finished.connect = lambda callback, _connection_type: callbacks.append(callback)
+    owner_ref, worker_ref = ref(owner), ref(worker)
+    ParsingDialog._connect_parse_completion(owner, worker)
+    del owner, worker
+    assert owner_ref() is None and worker_ref() is None
+    callbacks[0]()
 
 
 @pytest.mark.parametrize("termination", ["cancel", "error"])
@@ -304,6 +324,7 @@ def test_input_change_invalidates_review_and_selection(reviewed, monkeypatch, fi
     assert bool(dialog._metadata_carryover) is (field == "metadata")
 
 
+@pytest.mark.usefixtures("qapplication_session")
 def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, reports):
     source, database = reports
     nested = source / "nested"
@@ -314,9 +335,14 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         document.save(nested / fixture.name)
 
     dialog = ParsingDialog(directory=str(source), db_file=str(database))
+
+    def review_settled():
+        # The native reader can stop before Qt delivers its queued finished slot.
+        return dialog.pdf_workers_idle() and dialog.metadata_thread is None and not dialog._metadata_threads
+
     try:
         dialog.scan_button.click()
-        wait_until(app, dialog.pdf_workers_idle)
+        wait_until(app, review_settled)
         model = dialog.report_planner.model
         column = model.column_for_field("reference")
         corrections = {"report-0.pdf": "OUTSIDE-EDIT", "nested/report-0.pdf": "NESTED-EDIT"}
@@ -330,7 +356,7 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         dialog.metadata_mode_combo.setCurrentIndex(dialog.metadata_mode_combo.findData("complete"))
         assert not dialog.parse_button.isEnabled()
         dialog.scan_button.click()
-        wait_until(app, dialog.pdf_workers_idle)
+        wait_until(app, review_settled)
 
         assert model.metadata_row("report-0.pdf").value("reference") != "OUTSIDE-EDIT"
         assert model.metadata_row("nested/report-0.pdf").value("reference") == "NESTED-EDIT"
@@ -338,6 +364,11 @@ def test_metadata_mode_review_keeps_edits_for_exact_unchanged_occurrences(app, r
         assert dialog.parse_button.isEnabled()
     finally:
         dialog.close()
+        wait_until(app, review_settled)
+        app.processEvents()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        app.processEvents()
 
 
 def test_changed_selected_source_is_blocked_by_real_worker(app, reviewed):

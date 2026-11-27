@@ -368,8 +368,56 @@ preserve signed and unsigned integer precision in JSON readers. Saved filters
 bind by exact field ID. If a field is missing or renamed, the adapter can offer
 explicit remapping to a field of the same type with the needed operators.
 
-Both reference adapters apply these semantics. The SQLite adapter uses a
-connection-local evaluator, a qualified column map and bound condition values.
-This baseline can scan rows inside SQLite. Workflow adapters own source type
-mapping and indexed query planning. Existing Export filters, Reports presets
-and recipes continue to use the Magic rules above until their adapters migrate.
+### Adapter and preview contract
+
+Parse the expression or load its v1 document with a field catalog, then call
+`FilterAdapter.prepare(expression)` once for the source. Use `preview(sample_limit)`
+for the exact matching-row count and the first matching row IDs. Use
+`iter_row_ids()` on the same prepared filter for the complete selection. The
+sample defaults to 20 rows and accepts a limit from zero through 1,000. A limit
+of zero requests the count alone. Each source supplies unique, nonmissing row IDs
+of one type, either integers or text, returned in ascending order. Preview and
+final selection agree on unchanged data. The caller owns the source snapshot or
+read transaction if both operations must agree while the source can change.
+
+`PandasFilterAdapter` binds logical field IDs directly to DataFrame columns.
+`SqliteFilterAdapter` binds a trusted table or view, identity column and
+field-to-column map. It keeps the supplied connection open and uses its own
+cursor. An independent count subquery and the limited, ordered selection run
+in one SQLite statement so both read the same snapshot. A consumer that stops
+streaming row IDs early should close the iterator.
+
+Prepared filters report where the predicate ran. `in_memory` applies it to the
+in-memory source. `sqlite_scan` applies it inside SQLite with a connection-local
+function and bound condition values. An index on a source value cannot speed up
+that reference predicate. Reserve `sqlite_indexed` for a plan that uses an index
+to narrow candidate rows. Use `post_filter` when remaining conditions must run
+after reading candidates, and include a reason for the user. Preview must apply
+those remaining conditions before counting or sampling.
+
+Adapter tests can replay `FIELDS`, `ROWS`, `OPERATOR_CASES` and `GROUPED_CASE` from
+[the shared conformance fixture](../../tests/typed_filter_conformance.py). Load
+the rows through the adapter's source mapping with the same stable IDs. Pass the
+adapter, loaded expression and fixture's expected IDs to `assert_selected_rows`
+to check the count, ordered sample and final selection. CSV/Excel
+Summary [#939](https://github.com/hexafe/metroliza/issues/939) and the industrial
+cache [#940](https://github.com/hexafe/metroliza/issues/940) own the corresponding
+schema mappings, indexed plans and additional source-specific cases.
+
+### Reports compatibility and migration scope
+
+Existing Export filters, Reports presets and recipes still execute saved Magic
+text through the current report query builder. The report alias `Ref` resolves to
+`reference`. For `Ref IN ("001") AND Dimension = W*`, Magic infers a number and
+matches reference text `001` and `1` when the dimension also matches. A typed
+text field matches only `001`. The regression fixture exercises the saved state,
+measurement selection, report grouping, and export with fixed row IDs.
+[Report migration regression](../../tests/test_report_query_service.py)
+
+The Reports follow-up is to define the Reports catalog and legacy aliases, then
+carry a bound SQL scope through report selection, grouping and export. The
+current export request carries a SQL string and saved state carries Magic text.
+Keep that version readable with its existing semantics and make typed execution
+an explicit choice for new or converted filters. Verify unchanged legacy
+selection and preview/final equivalence for the typed path, including list and
+date restrictions, measurement versus report scope, and saved-preset reload.

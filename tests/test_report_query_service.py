@@ -1,12 +1,19 @@
 from contextlib import closing
-from dataclasses import replace
+from dataclasses import asdict, replace
 import sqlite3
 
 import pandas as pd
 import pytest
 
 from metroliza.reports import report_query_service as canonical_query
+from metroliza.shared.filter_state import FilterState, decode_filter_state
 from metroliza.shared.grouping_filter_core import MembershipFilterSpec, NumberFilterSpec
+from metroliza.shared.typed_filter import (
+    FilterField,
+    FilterValidationError,
+    SqliteFilterAdapter,
+    parse_typed_filter,
+)
 from tests.numeric_filter_cases import (
     ROUNDING_CASES, ROUNDING_VALUES,
     PRECISION_CASES, PRECISION_VALUES, PROBE_CASES, PROBE_VALUES, SOURCE_CASES,
@@ -25,6 +32,7 @@ from modules.report_query_service import (
     build_report_overview_query,
 )
 from tests.industrial_analytics_fixtures import seed_production_analytics_cache
+from tests.typed_filter_conformance import assert_selected_rows
 
 
 @pytest.mark.parametrize("spec, expected_ids", PROBE_CASES)
@@ -417,6 +425,45 @@ def test_measurement_expression_filters_duplicate_dimension_by_reference(tmp_pat
     assert rows[0][0] == "1"
     assert rows[0][2] == "REF1"
     assert rows[0][18] == "VAL1"
+
+
+def test_saved_report_magic_alias_and_numeric_text_selection_are_a_migration_boundary():
+    text = 'rEf IN ("001") AND Dimension = W*'
+    state = decode_filter_state(asdict(FilterState(expression_text=text)))
+    legacy_query = canonical_query.build_measurement_filter_query(**asdict(state))
+    fields = (
+        FilterField("reference", "text", "Reference", "report"),
+        FilterField("header", "text", "Dimension", "report"),
+    )
+    # The legacy report alias map cannot be inferred from physical column names.
+    with pytest.raises(FilterValidationError, match="rEf"):
+        parse_typed_filter(text, fields)
+    typed = parse_typed_filter(text.replace("rEf", "Reference"), fields)
+
+    records = (
+        ("10", "101", "001", "WIDTH"), ("20", "201", "1", "width"),
+        ("30", "301", "001", "HEIGHT"), ("40", "401", "1", "WIDTH"),
+    )
+    with closing(sqlite3.connect(":memory:")) as conn:
+        _create_measurement_export_table(conn)
+        placeholders = ", ".join("?" for _ in _MEASUREMENT_EXPORT_TEST_COLUMNS)
+        conn.executemany(
+            f"INSERT INTO vw_measurement_export VALUES ({placeholders})",
+            [_measurement_row(report_id=r, measurement_id=m, reference=ref, header=header)
+             for r, m, ref, header in records],
+        )
+        for query in (legacy_query, canonical_query.build_measurement_export_query(legacy_query)):
+            assert conn.execute(
+                f"SELECT measurement_id FROM ({query}) ORDER BY measurement_id",
+            ).fetchall() == [("101",), ("201",), ("401",)]
+        grouping = canonical_query.build_grouping_query(legacy_query)
+        assert conn.execute(
+            f"SELECT report_id FROM ({grouping}) ORDER BY report_id",
+        ).fetchall() == [("10",), ("20",), ("40",)]
+
+        adapter = SqliteFilterAdapter(conn, "vw_measurement_export", row_id_column="measurement_id",
+                                      columns={"reference": "reference", "header": "header"})
+        assert_selected_rows(adapter, typed, ["101"])
 
 
 def test_measurement_expression_supports_case_insensitive_fields_operators_and_shorthand(
