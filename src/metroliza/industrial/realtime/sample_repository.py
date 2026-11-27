@@ -385,8 +385,9 @@ class RealtimeSampleRepository:
         before_sample_id: int,
         segment_key: dict[str, Any] | None = None,
         limit: int = 500,
+        maximum_sample_id: int | None = None,
     ) -> list[IndustrialSample]:
-        """Load history strictly before an ``(event_time, id)`` boundary."""
+        """Load ordered history before the event boundary, optionally as of a saved batch."""
 
         self.ensure_schema()
         safe_limit = max(1, int(limit))
@@ -400,6 +401,9 @@ class RealtimeSampleRepository:
                 "AND (event_time < ? OR (event_time = ? AND id < ?))"
             )
             params: list[Any] = [int(signal_id), boundary_time, boundary_time, boundary_id]
+            if maximum_sample_id is not None:
+                where += " AND id <= ?"
+                params.append(maximum_sample_id)
             if segment_json is not None:
                 where += " AND segment_key_json = ?"
                 params.append(segment_json)

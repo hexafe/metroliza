@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository
+from metroliza.industrial.realtime.detector_batch import DETECTOR_BATCH_KEY, DetectorBatch
 from metroliza.industrial.anomaly.event_repository import AnomalyEventRepository
 from metroliza.industrial.industrial_data_repository import redact_sensitive_text
 from metroliza.industrial.realtime.event_stream import (
@@ -211,21 +212,24 @@ class RealtimeDetectorConsumer:
         try:
             _ensure_all_signals_loaded(signal_ids, signals)
             detectors = _detectors_from_payload(payload, config.detectors)
+            batch = DetectorBatch.from_payload(payload, signals, sample_ids)
         except (ValueError, UnsupportedRealtimeDetectorError) as exc:
             raise PermanentRealtimeEventError(str(exc)) from exc
 
         detection_samples = _load_detection_samples(
             self.sample_repository,
-            signals,
+            batch.signals,
             sample_ids,
             detectors=detectors,
+            maximum_sample_id=batch.maximum_sample_id,
         )
         score_diagnostics: dict[str, Any] = {}
         detector_events = _score_detector_events(
             detection_samples,
-            signals={signal.signal_key: signal for signal in signals},
+            signals={signal.signal_key: signal for signal in batch.signals},
             detectors=detectors,
             baseline_repository=self.baseline_repository,
+            maximum_baseline_id=batch.maximum_baseline_id,
             detector_runner=self.detector_runner,
             score_sample_ids=sample_ids,
             diagnostics=score_diagnostics,
@@ -319,6 +323,13 @@ def _detectors_from_payload(
     default_detectors: tuple[str, ...],
 ) -> tuple[str, ...]:
     raw_value = payload.get("detectors", payload.get("detector_keys"))
+    if DETECTOR_BATCH_KEY in payload:
+        if not isinstance(raw_value, list) or not raw_value or not all(isinstance(key, str) for key in raw_value):
+            raise ValueError("detector batch requires its saved detector list")
+        detectors = normalize_detector_keys(raw_value)
+        if not detectors:
+            raise ValueError("detector batch requires its saved detector list")
+        return detectors
     if raw_value in (None, ""):
         return default_detectors
     if isinstance(raw_value, str):

@@ -63,9 +63,13 @@ must have an alert from the configured specification rule.
 | Push or streaming updates | Could improve freshness. The producer and consumer would need stable event IDs, durable offsets and a convention for duplicate and reordered delivery. Defer this input mode until a source requires it and replay can verify its restart behavior. |
 
 The [SQLite event-stream design](../roadmaps/sqlite_realtime_event_stream.md) describes
-at-least-once handling and idempotence. #941 owns pinning signal and baseline settings
-at live batch commit. New alert evidence records what was used at scoring time. A
-consumer retry before scoring can still observe updated signal settings or baselines.
+at-least-once handling and idempotence. Each new live sample batch records the
+signal limits and partition fields used by acquisition, plus the upper row IDs
+of append-only samples and baselines visible in the commit. A restarted consumer
+checks the saved detector list with those settings and the history available to
+that batch. The legacy batch format uses the settings available at first
+consumption because it has no saved settings. Alert evidence records the
+effective parameters and window used by the detector.
 The [branch audit](../project/branch_audit.md#featurerealtime-industrial-ml-anomaly-historical)
 records the integrated historical source and preserves operator monitoring under #941.
 

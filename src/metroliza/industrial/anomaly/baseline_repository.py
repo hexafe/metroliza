@@ -98,13 +98,16 @@ class BaselineRepository:
 
         return run_transaction_with_retry(self.database, _insert, connection=self.connection)
 
-    def latest_baseline(self, *, signal_id: int, segment_key: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def latest_baseline(
+        self, *, signal_id: int, segment_key: dict[str, Any] | None = None, maximum_id: int | None = None,
+    ) -> dict[str, Any] | None:
         self.ensure_schema()
         segment_json = to_json(dict(segment_key or {}))
         return run_transaction_with_retry(
             self.database,
             lambda cursor: BaselineRepository.read_latest_baseline(
                 cursor, signal_id=signal_id, segment_json=segment_json,
+                maximum_id=_MAX_SQLITE_ROW_ID if maximum_id is None else maximum_id,
             ),
             connection=self.connection,
         )

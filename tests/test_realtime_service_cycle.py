@@ -1,4 +1,7 @@
+from dataclasses import replace
 from hashlib import sha256
+
+import pytest
 
 from metroliza.industrial.anomaly.baseline_repository import BaselineRepository, IndustrialBaseline
 from metroliza.industrial.industrial_data_repository import IndustrialDataRepository
@@ -261,6 +264,67 @@ def test_realtime_poll_cycle_loads_segment_baseline_for_iqr_detector(tmp_path):
     evidence = events[0].context["detector_evidence"]
     assert evidence["window"]["kind"] == "stored_baseline"
     assert evidence["window"]["id"] > 0 and evidence["window"]["count"] == 25
+
+
+def test_restarted_consumer_uses_settings_of_the_committed_batch(tmp_path, monkeypatch):
+    database = str(tmp_path / "frozen-batch.db")
+    profile = _profile(database)
+    config = _config(profile.id, detectors=("spec_limits", "iqr", "rolling_zscore"))
+    samples = RealtimeSampleRepository(database)
+    signal = samples.upsert_signal_definition(config_signal_definition(profile.id))
+    baselines = BaselineRepository(database)
+    baseline = IndustrialBaseline(
+        signal_id=signal.id, segment_key={"station": "S1"}, baseline_version="original",
+        n=30, q1=9.0, q3=11.0, iqr=2.0, created_at="2026-06-13T09:00:00Z",
+    )
+    original_baseline_id = baselines.insert_baseline(baseline)
+    samples.insert_samples([
+        IndustrialSample(
+            source_profile_id=profile.id, signal_id=signal.id,
+            source_record_key=f"history-{index}", event_time=f"2026-06-13T10:{index:02d}:00Z",
+            metric_name="cycle_time_s", value=9.0 if index % 2 else 11.0,
+            segment_key={"station": "S1"}, station="S1",
+        )
+        for index in range(30)
+    ])
+
+    def interrupt(**_kwargs):
+        raise KeyboardInterrupt("source batch committed")
+
+    with monkeypatch.context() as fault:
+        fault.setattr(realtime_service, "_run_detector_consumer", interrupt)
+        with pytest.raises(KeyboardInterrupt, match="source batch committed"):
+            run_polling_cycle(database=database, profile=profile, config=config, adapter=FakeAdapter([{
+                "event_id": "100", "record_id": "row-100", "process_timestamp": "2026-06-13T10:40:00Z",
+                "cycle_time_s": "20", "station": "S1",
+            }]))
+
+    assert AnomalyEventRepository(database).list_events() == []
+    samples.upsert_signal_definition(replace(signal, usl=100.0))
+    baselines.insert_baseline(replace(baseline, baseline_version="later", q3=30.0, iqr=21.0,
+                                      created_at="2026-06-13T10:41:00Z"))
+    samples.insert_samples([IndustrialSample(
+        source_profile_id=profile.id, signal_id=signal.id, source_record_key="late-other-stream",
+        event_time="2026-06-13T10:35:00Z", metric_name="cycle_time_s", value=70.0,
+        segment_key={"station": "S1"}, station="S1",
+    )])
+
+    after_restart = IndustrialDataRepository(database).list_source_profiles()[0]
+    recovered = run_polling_cycle(
+        database=database, profile=after_restart, config=replace(config, detectors=("mad_zscore",)),
+        adapter=FakeAdapter(),
+    )
+    alerts = {event.detector_key: event for event in AnomalyEventRepository(database).list_events()}
+    assert recovered.rows_fetched == 0
+    assert recovered.cursor_value == "100"
+    assert set(alerts) == {"spec_limits", "iqr", "rolling_zscore"}
+    assert alerts["spec_limits"].threshold["usl"] == 12.0
+    assert alerts["iqr"].context["detector_evidence"]["window"]["id"] == original_baseline_id
+    assert alerts["rolling_zscore"].context["detector_evidence"]["window"]["count"] == 30
+
+    no_duplicates = run_polling_cycle(database=database, profile=after_restart, config=config, adapter=FakeAdapter())
+    assert no_duplicates.detector_events_created == 0
+    assert len(AnomalyEventRepository(database).list_events()) == 3
 
 
 def test_realtime_poll_cycle_seeds_rolling_detector_from_persisted_history(tmp_path):

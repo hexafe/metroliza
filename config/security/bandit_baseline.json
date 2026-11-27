@@ -607,7 +607,7 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "f10dbe69cd78af10afc0a3b73771de2635ddd212ee003028f445b4cbed0b01c5",
+      "fingerprint": "81c5064040101094ce3f1c4c9b1a0493962b3143dd489b15c83af0df521c2290",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
@@ -634,11 +634,11 @@
     },
     {
       "repository": "metroliza",
-      "fingerprint": "6b7a0b4e196094d94adfe86fa0dcf6265783255bf2fa51b9c2183df41bac6457",
+      "fingerprint": "6e1bcc26181d652c9e4d0df87e31d646b108d41329f2140b1e129e162b606c69",
       "test_id": "B608",
       "path": "src/metroliza/industrial/realtime/sample_repository.py",
       "owner": "Security review",
-      "rationale": "list_samples_before._list: where uses the fixed signal_id and (event_time,id) boundary predicate, plus optional segment_key_json = ?. Signal ID, canonical boundary time, sample ID, JSON segment key and safe limit are bound separately.",
+      "rationale": "list_samples_before._list: where uses the fixed signal_id and (event_time,id) boundary predicate, plus optional id <= ? and segment_key_json = ? predicates. Signal ID, canonical boundary time, sample ID, saved sample ID ceiling, JSON segment key and safe limit are bound separately.",
       "expires_on": "2027-04-30"
     },
     {
