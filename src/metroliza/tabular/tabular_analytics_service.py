@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-import csv
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import math
@@ -44,6 +43,7 @@ from metroliza.tabular.column_types import ColumnIdentity, ColumnType, normalize
 from metroliza.tabular.csv_source_numbers import (
     CsvSourceNumbers,
     is_csv_identifier_header,
+    iter_csv_source_rows,
     sample_csv_sources,
     validate_csv_width,
 )
@@ -2266,11 +2266,7 @@ def _iter_tabular_source_rows(
     suffix = path.suffix.lower()
     if suffix == ".csv":
         delimiter = str(csv_config.get("delimiter") or ",")
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.reader(handle, delimiter=delimiter)
-            next(reader, None)
-            for row in reader:
-                yield tuple(row)
+        yield from (tuple(row) for row in iter_csv_source_rows(path, delimiter))
         return
     yield from _iter_excel_rows(path, sheet_name=sheet_name)
 

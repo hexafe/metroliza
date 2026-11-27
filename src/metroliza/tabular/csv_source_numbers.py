@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import csv
 from dataclasses import dataclass
 from itertools import islice
@@ -147,6 +148,20 @@ def _read_csv_source_sample(path: Path, delimiter: str, *, strict: bool) -> CsvS
     return CsvSourceSample(delimiter, header, rows)
 
 
+def iter_csv_source_rows(path: Path, delimiter: str) -> Iterator[list[str]]:
+    """Read the selected layout without joining malformed records."""
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter, strict=True)
+        try:
+            next(reader, None)
+            yield from reader
+        except csv.Error:
+            raise ValueError(
+                "Invalid CSV quoting or field length. Re-export with properly quoted fields "
+                "or load an Excel worksheet."
+            ) from None
+
+
 def _has_fully_quoted_header(path: Path, sample: CsvSourceSample) -> bool:
     expected = sample.delimiter.join('"' + field.replace('"', '""') + '"' for field in sample.header)
     try:
@@ -194,7 +209,9 @@ def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) ->
                 raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
             # Explicit quote boundaries in the actual header disambiguate a
             # falsely competitive shape produced by a permissive reader.
-            if not strict and rank[:2] >= best_rank[:2] and not _has_fully_quoted_header(path, best):
+            # A malformed quote can combine records and erase the rival's
+            # row-count evidence. Its multi-field header still shows a competing layout.
+            if not strict and len(sample.header) > 1 and not _has_fully_quoted_header(path, best):
                 raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
         if _could_be_comma_decimal_column(best, sample):
             raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)

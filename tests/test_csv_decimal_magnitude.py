@@ -159,8 +159,11 @@ def test_csv_numeric_looking_identifiers_preserve_all_original_text(tmp_path):
     "Length, mm\n10,2\n10,5\n",
     'Part;Note;Length, mm\nA;"1/2" pipe;10,2\nB;ok;10,5\n',
     'Part;Note;Length, mm\nA;"1/2" pipe;10,2\nB;ok;10,5\nC;ok;10\n',
+    'Part;Note;Length, mm\nA;"approx;10,2\nB;ok;10,5\n',
+    'Part;Note;Length, mm\nA;"approx;10,2\nB;ok;10,5\nC;"approx;10,7\n',
 ], ids=["two-table-dialects", "empty-trailing-fields", "table-or-scalar",
-        "malformed-quote-tied-shape", "malformed-quote-stronger-shape"])
+        "malformed-quote-tied-shape", "malformed-quote-stronger-shape",
+        "unclosed-quote", "quote-crosses-a-row"])
 @pytest.mark.parametrize("loader", ["sqlite", "legacy", "legacy-comma-hint"])
 def test_csv_refuses_competing_field_boundaries(tmp_path, content, loader):
     path = tmp_path / "private-name.csv"
@@ -173,6 +176,22 @@ def test_csv_refuses_competing_field_boundaries(tmp_path, content, loader):
             load_csv_with_fallbacks(path, preferred_config=preferred)
     assert "private-name" not in str(caught.value)
     assert "10,2" not in str(caught.value)
+
+
+@pytest.mark.parametrize("loader", ["sqlite", "legacy"])
+def test_late_malformed_quote_cannot_publish_partial_csv_analysis(tmp_path, monkeypatch, loader):
+    import metroliza.tabular.tabular_analytics_service as service
+
+    path = tmp_path / "measurements.csv"
+    path.write_text('Part;Length mm\n' + 'fixture;10,2\n' * 210 + '"open;10,2\nlater;10,5\n', encoding="utf-8")
+    monkeypatch.setattr(service.tempfile, "tempdir", str(tmp_path))
+    with pytest.raises(ValueError, match="Invalid CSV quoting") as caught:
+        if loader == "sqlite":
+            cleanup_tabular_load_result(load_tabular_analytics_file(path))
+        else:
+            load_csv_with_fallbacks(path)
+    assert str(path) not in str(caught.value) and "10,2" not in str(caught.value)
+    assert not list(tmp_path.glob("metroliza_csv_summary_*.sqlite*"))
 
 
 @pytest.mark.parametrize("content", [

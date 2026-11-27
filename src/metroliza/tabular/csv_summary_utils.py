@@ -8,6 +8,7 @@ from metroliza.tabular.csv_source_numbers import (
     CsvSourceSample,
     csv_value_looks_like_identifier,
     is_csv_identifier_header,
+    iter_csv_source_rows,
     sample_csv_sources,
     validate_csv_width,
 )
@@ -39,13 +40,10 @@ def load_csv_with_fallbacks(file_path, preferred_config=None):
     conventions, numeric_counts = sample.evidence(text_fields)
     numbers = CsvSourceNumbers(conventions, text_fields)
     width = len(sample.header)
-    with path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle, delimiter=sample.delimiter)
-        next(reader, None)
-        rows = []
-        for row in reader:
-            validate_csv_width(row, width)
-            rows.append(row[:width] + [None] * max(width - len(row), 0))
+    rows = []
+    for row in iter_csv_source_rows(path, sample.delimiter):
+        validate_csv_width(row, width)
+        rows.append(row[:width] + [None] * max(width - len(row), 0))
 
     df = pd.DataFrame(rows, columns=sample.header)
     for index in range(width):
