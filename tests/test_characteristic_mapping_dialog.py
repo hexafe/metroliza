@@ -2097,3 +2097,40 @@ def test_json_filter_refuses_a_csv_output_name_before_starting_the_worker(tmp_pa
         assert not target.exists()
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize('selected_filter', ['CSV files (*.csv)', 'All files (*)'])
+def test_alias_export_completes_the_csv_filename_and_checks_that_destination(
+    tmp_path, qapplication_session, monkeypatch, selected_filter,
+):
+    from metroliza.ui import characteristic_mapping_dialog as native
+
+    database = str(tmp_path / 'source.db')
+    ensure_characteristic_alias_schema(database)
+    upsert_characteristic_alias(database, 'DIA', 'Diameter', 'global')
+    entered = tmp_path / 'matches'
+    output = entered.with_suffix('.csv')
+    output.write_bytes(b'previous')
+    monkeypatch.setattr(native.QFileDialog, 'getSaveFileName', lambda *_args: (str(entered), selected_filter))
+    monkeypatch.setattr(QMessageBox, 'critical', lambda *_args: pytest.fail(str(_args[2])))
+    monkeypatch.setattr(QMessageBox, 'information', lambda *_args: None)
+    choices = iter((QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes))
+
+    def confirm(_parent, _title, message, *_args):
+        assert output.name in message
+        return next(choices)
+
+    monkeypatch.setattr(QMessageBox, 'question', confirm)
+    dialog = CharacteristicMappingDialog(db_file=database)
+    try:
+        _wait_impact(qapplication_session, lambda: not dialog.is_loading_source_options())
+        dialog.export_button.click()
+        assert dialog._alias_csv_thread is None
+        assert output.read_bytes() == b'previous'
+        dialog.export_button.click()
+        assert dialog._alias_csv_thread.filename == str(output)
+        _wait_impact(qapplication_session, lambda: dialog._alias_csv_thread is None)
+        assert b'DIA,Diameter,global' in output.read_bytes()
+        assert not entered.exists()
+    finally:
+        dialog.close()

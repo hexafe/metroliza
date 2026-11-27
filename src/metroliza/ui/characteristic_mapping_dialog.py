@@ -112,11 +112,10 @@ def _is_alias_json(filename):
 
 def _alias_output_filename(filename, selected_filter):
     extension = Path(filename).suffix.casefold()
-    if selected_filter == _JSON_ALIAS_FILTER:
-        if not extension:
-            return filename + '.json'
-        if extension != '.json':
-            raise ValueError("Use a .json filename to export Metroliza name matches.")
+    if not extension:
+        return filename + ('.json' if selected_filter == _JSON_ALIAS_FILTER else '.csv')
+    if selected_filter == _JSON_ALIAS_FILTER and extension != '.json':
+        raise ValueError("Use a .json filename to export Metroliza name matches.")
     if selected_filter == _CSV_ALIAS_FILTER and extension == '.json':
         raise ValueError("Use a .csv filename to export name matches as CSV.")
     return filename
@@ -128,10 +127,23 @@ def _preview_alias_file(db_file, filename):
 
 
 def _save_alias_json(db_file, filename, consents=()):
+    payload, count = build_characteristic_aliases_json(db_file)
+
+    def write(staged):
+        staged.write_bytes(payload)
+        return count
+
+    return _publish_alias_file(db_file, filename, write, consents)
+
+
+def _save_alias_csv(db_file, filename, producer, consents):
+    return _publish_alias_file(db_file, filename, lambda staged: producer(db_file, str(staged)), consents)
+
+
+def _publish_alias_file(db_file, filename, write, consents):
     from metroliza.exporting.output_publication import publish_output
 
     protect_alias_export_destination(db_file, filename)
-    payload, count = build_characteristic_aliases_json(db_file)
 
     def require_separate_destination():
         protect_alias_export_destination(db_file, filename)
@@ -141,11 +153,22 @@ def _save_alias_json(db_file, filename, consents=()):
     with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as stream:
         staged = Path(stream.name)
     try:
-        staged.write_bytes(payload)
+        count = write(staged)
         publish_output(staged, target, consents=consents, should_cancel=require_separate_destination)
     finally:
         staged.unlink(missing_ok=True)
     return count
+
+
+def _prepare_alias_export(parent, original_filename, selected_filter):
+    filename = _alias_output_filename(original_filename, selected_filter)
+    if not _is_alias_json(filename) and filename == original_filename:
+        return filename, None
+    from metroliza.ui.analysis_history_dialog import collect_output_consent
+
+    protect_alias_export_destination(parent.db_file, filename)
+    consents = collect_output_consent(parent, filename)
+    return (filename, consents) if consents is not None else None
 
 
 @contextmanager
@@ -244,7 +267,7 @@ class _AliasCsvThread(QThread):
         self.count, self.error, self.discard_result = None, None, False
         self.reviewed = threading.Event()
         self.choice = None
-        self.output_consents = ()
+        self.output_consents = None
         self._outcome_lock = threading.Lock()
         self._phase = 'preflight'
         self._result_confirmed = False
@@ -274,10 +297,13 @@ class _AliasCsvThread(QThread):
                 with self._outcome_lock:
                     self._phase = 'applying'
                 if _is_alias_json(self.filename):
-                    self.count = _save_alias_json(self.db_file, self.filename, self.output_consents)
+                    self.count = _save_alias_json(self.db_file, self.filename, self.output_consents or ())
                 else:
                     _DEFAULT_ALIAS_SCHEMA(self.db_file)
-                    self.count = self.producer(self.db_file, self.filename)
+                    if self.output_consents is None:
+                        self.count = self.producer(self.db_file, self.filename)
+                    else:
+                        self.count = _save_alias_csv(self.db_file, self.filename, self.producer, self.output_consents)
                 self._result_confirmed = True
         except Exception as exc:
             self.error = exc
@@ -1743,35 +1769,27 @@ class CharacteristicMappingDialog(QDialog):
         if not filename:
             return
         try:
-            filename = _alias_output_filename(filename, selected_filter)
-        except ValueError as exc:
+            chosen = _prepare_alias_export(self, filename, selected_filter)
+        except (OSError, RuntimeError, ValueError) as exc:
             QMessageBox.critical(self, 'Export error', str(exc))
             return
-        is_json = _is_alias_json(filename)
-        consents = ()
-        if is_json:
-            from metroliza.ui.analysis_history_dialog import collect_output_consent
-
-            try:
-                protect_alias_export_destination(self.db_file, filename)
-                consents = collect_output_consent(self, filename)
-            except (OSError, RuntimeError, ValueError) as exc:
-                QMessageBox.critical(self, 'Export error', str(exc))
-                return
-            if consents is None:
-                return
+        if chosen is None:
+            return
+        filename, consents = chosen
 
         _record_mapping_action(BugReportAction.WORKFLOW_MAPPING_EXPORT_STARTED)
 
         if type(filename) is str and _native_alias_csv(self):
-            options = {'output_consents': consents} if is_json else {}
+            options = {'output_consents': consents} if consents is not None else {}
             CharacteristicMappingDialog._start_alias_csv(self, 'export', filename, started_at, **options)
             return
 
         def produce():
-            if is_json:
-                return _save_alias_json(self.db_file, filename, consents)
+            if _is_alias_json(filename):
+                return _save_alias_json(self.db_file, filename, consents or ())
             ensure_characteristic_alias_schema(self.db_file)
+            if consents is not None:
+                return _save_alias_csv(self.db_file, filename, export_characteristic_aliases_csv, consents)
             return export_characteristic_aliases_csv(self.db_file, filename)
 
         CharacteristicMappingDialog._apply_alias_export(self, produce)
@@ -1788,7 +1806,7 @@ class CharacteristicMappingDialog(QDialog):
             CustomLogger(exc, reraise=False, logger_name=__name__)
             QMessageBox.critical(self, 'Export error', f'Could not export mappings: {exc}')
 
-    def _start_alias_csv(self, operation, filename, started_at, *, output_consents=()):
+    def _start_alias_csv(self, operation, filename, started_at, *, output_consents=None):
         thread, cleanup_registered = None, False
         try:
             thread = _AliasCsvThread(operation, self.db_file, filename)
