@@ -287,6 +287,10 @@ def sample_number_source_warnings(warnings, source):
     return tuple(result)
 
 
+def reviewed_ocr_sample_kind(source: str) -> str:
+    return _SAMPLE_KIND_BY_SOURCE.get(source, "unknown")
+
+
 def _candidate_key(candidate: MetadataCandidate) -> tuple:
     return (
         candidate.field_name,
@@ -417,7 +421,7 @@ def apply_metadata_override(
         field_sources[name] = source_type
         if name == "sample_number":
             values["sample_number_kind"] = (
-                _SAMPLE_KIND_BY_SOURCE.get(source_type, "unknown")
+                reviewed_ocr_sample_kind(source_type)
                 if item.origin == ORIGIN_OCR and item.value is not None
                 else "unknown"
             )

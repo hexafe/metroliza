@@ -12,10 +12,11 @@ import json
 import os
 from typing import Any, Callable, Iterable
 
-from metroliza.reports.db import run_transaction_with_retry, sqlite_readonly_connection_scope
+from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope, sqlite_readonly_connection_scope
 import math
 import re
 from metroliza.reports.import_persist_profile import measure_persist_stage, persist_stage
+from metroliza.reports.report_curation import StoredOcrApproval, read_deferred_ocr_approval, read_stored_ocr_receipt
 from metroliza.reports.report_identity import build_report_identity_hash
 from metroliza.reports.report_metadata_models import (
     CanonicalReportMetadata,
@@ -23,7 +24,10 @@ from metroliza.reports.report_metadata_models import (
     SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
     USER_SOURCE_TYPE,
 )
-from metroliza.reports.report_metadata_review import SAMPLE_NUMBER_COMMENT_WARNING_CODE, accepted_ocr_fields
+from metroliza.reports.report_metadata_review import (
+    OCR_ACCEPTED, SAMPLE_NUMBER_COMMENT_WARNING_CODE, accepted_ocr_fields,
+    reviewed_ocr_sample_kind, sample_number_source_warnings,
+)
 from metroliza.reports.report_schema import (
     is_report_schema_ready,
     is_report_schema_ready_cached,
@@ -1411,11 +1415,7 @@ class ReportRepository:
             report["sample_number_kind"] = "unknown"
             metadata_json["sample_number_provenance"] = source
             cursor.execute("UPDATE report_metadata SET sample_number_kind = 'unknown' WHERE report_id = ?", (int(report_id),))
-            cursor.execute(
-                "DELETE FROM report_metadata_warnings WHERE report_id = ? AND field_name = 'sample_number' "
-                "AND code IN (?, ?)",
-                (int(report_id), SAMPLE_NUMBER_PROJECTION_WARNING_CODE, SAMPLE_NUMBER_COMMENT_WARNING_CODE),
-            )
+            self._clear_sample_source_warnings(cursor, report_id)
         for field_name, value in updates.items():
             cursor.execute(REPORT_METADATA_FIELD_UPDATE_SQL[field_name], (value, int(report_id)))
         cursor.execute(
@@ -1426,6 +1426,176 @@ class ReportRepository:
         if candidate_values:
             self._update_manual_metadata_candidates(cursor, report_id, candidate_values, source=source, now=now)
         return metadata_json, updates
+
+    @staticmethod
+    def _clear_sample_source_warnings(cursor, report_id: int) -> None:
+        cursor.execute(
+            "DELETE FROM report_metadata_warnings WHERE report_id = ? AND field_name = 'sample_number' "
+            "AND code IN (?, ?)",
+            (int(report_id), SAMPLE_NUMBER_PROJECTION_WARNING_CODE, SAMPLE_NUMBER_COMMENT_WARNING_CODE),
+        )
+
+    def accept_deferred_ocr(self, approval: StoredOcrApproval) -> None:
+        """Promote the exact candidate approved in Report details within one guarded edit."""
+        if not isinstance(approval, StoredOcrApproval) or approval.database.identity is None or self.connection is not None:
+            raise ValueError("Accepting stored OCR requires an approved report in an existing database.")
+        binding = approval.database
+        binding.require(self.database)
+        database = str(binding.path)
+
+        def apply(cursor):
+            cursor.execute("BEGIN IMMEDIATE")
+            binding.require(self.database)
+            receipt = read_stored_ocr_receipt(cursor, approval.report_id)
+            if receipt is None:
+                raise ValueError("The stored OCR suggestion changed. Reopen Report details and review it again.")
+            metadata_json, records = receipt
+            current = read_deferred_ocr_approval(
+                cursor, binding, approval.report_id, approval.field_name, records.get(approval.field_name),
+            )
+            if current != approval:
+                raise ValueError("The stored OCR suggestion changed. Reopen Report details and review it again.")
+            self._persist_deferred_ocr_acceptance(cursor, current, metadata_json, records)
+            binding.require(self.database)
+
+        with sqlite_connection_scope(database, initialize_wal=False, existing_identity=binding.identity) as connection:
+            run_transaction_with_retry(database, apply, connection=connection)
+
+    def _persist_deferred_ocr_acceptance(self, cursor, approval, metadata_json: dict, records: dict) -> None:
+        report_id, name, value = approval.report_id, approval.field_name, approval.normalized_value
+        source, now = approval.source_type, utc_timestamp()
+        report = self._load_report_for_metadata_update(cursor, report_id)
+        report[name] = metadata_json[name] = value
+        field_sources = _json_object(metadata_json.get("field_sources"))
+        field_sources[name] = source
+        metadata_json["field_sources"] = field_sources
+        manual = _json_object(metadata_json.get("manual_overrides"))
+        manual.pop(name, None)
+        metadata_json["manual_overrides"] = manual
+
+        review = metadata_json["metadata_review"]
+        review["accepted_ocr_fields"] = sorted(accepted_ocr_fields(metadata_json) | {name})
+        prior_fields = review.get("ocr_fields")
+        prior_fields = {item for item in prior_fields if isinstance(item, str)} if isinstance(prior_fields, list) else set()
+        review["ocr_fields"] = sorted(prior_fields | {name})
+        records[name].update(decision=OCR_ACCEPTED, candidate_id=approval.candidate_id, accepted_at=now)
+
+        cursor.execute(REPORT_METADATA_FIELD_UPDATE_SQL[name], (value, report_id))
+        if name == "sample_number":
+            self._apply_reviewed_sample_source(cursor, report, metadata_json, report_id, source, now)
+        cursor.execute("UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?", (_to_json(metadata_json), report_id))
+        upsert_report_parse_state(cursor, report_id, metadata_json)
+        cursor.execute(
+            "UPDATE report_metadata_candidates SET is_selected = (id = ?) WHERE report_id = ? AND field_name = ? "
+            "AND is_selected <> (id = ?)", (approval.candidate_id, report_id, name, approval.candidate_id),
+        )
+        self._finalize_report_metadata_update(cursor, report_id, report, metadata_json, {name: value}, now)
+
+    def _apply_reviewed_sample_source(self, cursor, report, metadata_json, report_id, source, now):
+        report["sample_number_kind"] = reviewed_ocr_sample_kind(source)
+        metadata_json["sample_number_provenance"] = source
+        cursor.execute("UPDATE report_metadata SET sample_number_kind = ? WHERE report_id = ?",
+                       (report["sample_number_kind"], report_id))
+        self._clear_sample_source_warnings(cursor, report_id)
+        for warning in sample_number_source_warnings((), source):
+            cursor.execute(
+                "INSERT INTO report_metadata_warnings (report_id, code, field_name, severity, message, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (report_id, warning.code, warning.field_name, warning.severity, warning.message, now),
+            )
+
+    @staticmethod
+    def _load_report_for_metadata_update(cursor, report_id: int) -> dict[str, Any]:
+        cursor.execute(
+            """
+            SELECT
+                pr.id,
+                pr.parser_id,
+                pr.template_family,
+                pr.template_variant,
+                pr.metadata_confidence,
+                pr.page_count,
+                pr.identity_hash,
+                rm.report_id AS metadata_report_id,
+                rm.reference,
+                rm.reference_raw,
+                rm.report_date,
+                rm.report_time,
+                rm.part_name,
+                rm.revision,
+                rm.sample_number,
+                rm.sample_number_kind,
+                rm.stats_count_raw,
+                rm.stats_count_int,
+                rm.operator_name,
+                rm.comment,
+                rm.metadata_json
+            FROM parsed_reports pr
+            LEFT JOIN report_metadata rm ON rm.report_id = pr.id
+            WHERE pr.id = ?
+            """,
+            (int(report_id),),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise ValueError(f"Report {report_id} does not exist")
+
+        columns = [description[0] for description in cursor.description]
+        report = dict(zip(columns, row))
+        if report["metadata_report_id"] is None:
+            raise ValueError(f"Report {report_id} has no metadata row to update")
+        return report
+
+    def _finalize_report_metadata_update(self, cursor, report_id, report, metadata_json, updates, now):
+        identity_changed = bool(REPORT_IDENTITY_FIELDS.intersection(updates))
+        new_identity_hash = report["identity_hash"]
+        if identity_changed:
+            metadata = CanonicalReportMetadata(
+                parser_id=report["parser_id"],
+                template_family=report["template_family"],
+                template_variant=report["template_variant"],
+                metadata_confidence=report["metadata_confidence"] or 0.0,
+                reference=report.get("reference"),
+                reference_raw=report.get("reference_raw"),
+                report_date=report.get("report_date"),
+                report_time=report.get("report_time"),
+                part_name=report.get("part_name"),
+                revision=report.get("revision"),
+                sample_number=report.get("sample_number"),
+                sample_number_kind=report.get("sample_number_kind"),
+                stats_count_raw=report.get("stats_count_raw"),
+                stats_count_int=report.get("stats_count_int"),
+                operator_name=report.get("operator_name"),
+                comment=report.get("comment"),
+                page_count=report.get("page_count"),
+                metadata_json=metadata_json,
+                warnings=(),
+            )
+            new_identity_hash = build_report_identity_hash(metadata)
+            cursor.execute(
+                """
+                UPDATE parsed_reports
+                SET identity_hash = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_identity_hash, now, int(report_id)),
+            )
+            cursor.execute(
+                """
+                DELETE FROM report_metadata_warnings
+                WHERE report_id = ?
+                  AND code = ?
+                """,
+                (int(report_id), SEMANTIC_DUPLICATE_WARNING_CODE),
+            )
+        else:
+            cursor.execute(
+                "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
+                (now, int(report_id)),
+            )
+
+        if identity_changed and new_identity_hash:
+            self._persist_semantic_duplicate_warnings(cursor, int(report_id), new_identity_hash)
 
     def update_report_metadata_fields(
         self,
@@ -1453,44 +1623,7 @@ class ReportRepository:
         source_value = _manual_source(source)
 
         def _update(cursor) -> None:
-            cursor.execute(
-                """
-                SELECT
-                    pr.id,
-                    pr.parser_id,
-                    pr.template_family,
-                    pr.template_variant,
-                    pr.metadata_confidence,
-                    pr.page_count,
-                    pr.identity_hash,
-                    rm.report_id AS metadata_report_id,
-                    rm.reference,
-                    rm.reference_raw,
-                    rm.report_date,
-                    rm.report_time,
-                    rm.part_name,
-                    rm.revision,
-                    rm.sample_number,
-                    rm.sample_number_kind,
-                    rm.stats_count_raw,
-                    rm.stats_count_int,
-                    rm.operator_name,
-                    rm.comment,
-                    rm.metadata_json
-                FROM parsed_reports pr
-                LEFT JOIN report_metadata rm ON rm.report_id = pr.id
-                WHERE pr.id = ?
-                """,
-                (int(report_id),),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                raise ValueError(f"Report {report_id} does not exist")
-
-            columns = [description[0] for description in cursor.description]
-            report = dict(zip(columns, row))
-            if report["metadata_report_id"] is None:
-                raise ValueError(f"Report {report_id} has no metadata row to update")
+            report = self._load_report_for_metadata_update(cursor, report_id)
             applied = self._apply_report_metadata_updates(
                 cursor, report_id, report, normalized_fields, source=source_value, reason=reason, now=now,
             )
@@ -1498,55 +1631,7 @@ class ReportRepository:
                 return
             metadata_json, updates = applied
 
-            identity_changed = bool(REPORT_IDENTITY_FIELDS.intersection(updates))
-            new_identity_hash = report["identity_hash"]
-            if identity_changed:
-                metadata = CanonicalReportMetadata(
-                    parser_id=report["parser_id"],
-                    template_family=report["template_family"],
-                    template_variant=report["template_variant"],
-                    metadata_confidence=report["metadata_confidence"] or 0.0,
-                    reference=report.get("reference"),
-                    reference_raw=report.get("reference_raw"),
-                    report_date=report.get("report_date"),
-                    report_time=report.get("report_time"),
-                    part_name=report.get("part_name"),
-                    revision=report.get("revision"),
-                    sample_number=report.get("sample_number"),
-                    sample_number_kind=report.get("sample_number_kind"),
-                    stats_count_raw=report.get("stats_count_raw"),
-                    stats_count_int=report.get("stats_count_int"),
-                    operator_name=report.get("operator_name"),
-                    comment=report.get("comment"),
-                    page_count=report.get("page_count"),
-                    metadata_json=metadata_json,
-                    warnings=(),
-                )
-                new_identity_hash = build_report_identity_hash(metadata)
-                cursor.execute(
-                    """
-                    UPDATE parsed_reports
-                    SET identity_hash = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (new_identity_hash, now, int(report_id)),
-                )
-                cursor.execute(
-                    """
-                    DELETE FROM report_metadata_warnings
-                    WHERE report_id = ?
-                      AND code = ?
-                    """,
-                    (int(report_id), SEMANTIC_DUPLICATE_WARNING_CODE),
-                )
-            else:
-                cursor.execute(
-                    "UPDATE parsed_reports SET updated_at = ? WHERE id = ?",
-                    (now, int(report_id)),
-                )
-
-            if identity_changed and new_identity_hash:
-                self._persist_semantic_duplicate_warnings(cursor, int(report_id), new_identity_hash)
+            self._finalize_report_metadata_update(cursor, report_id, report, metadata_json, updates, now)
 
         run_transaction_with_retry(
             self.database, _update, connection=self.connection,

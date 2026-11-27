@@ -57,6 +57,9 @@ with their source details. Later metadata enrichment keeps reviewed values and r
 readings as alternatives. You can still correct the value before import or in **Modify Database**.
 After import, select a report in **Modify Database** and open **Report details** to read its saved
 deferred or rejected suggestions and their OCR sources.
+To accept a deferred suggestion, select its field, choose **Use OCR suggestion**, and confirm
+the value. Finish pending table edits first. If the saved suggestion changed, reopen **Report
+details** before deciding again.
 
 ## Progress, cancellation and outcomes
 

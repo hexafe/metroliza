@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -17,6 +18,7 @@ from metroliza.parsing.metadata_review import (
 )
 from metroliza.parsing.parse_reports_thread import ParseReportsThread
 from metroliza.parsing.preflight import ImportPlan, ParsePreflightService
+from metroliza.reports.report_curation import load_stored_report_context
 from metroliza.reports.report_metadata_normalizers import is_missing_reference
 from metroliza.reports.report_metadata_review import (
     CORE_FIELDS,
@@ -231,10 +233,10 @@ def test_parser_without_override_support_is_read_only(tmp_path):
 # --- manual edit, bulk apply -------------------------------------------------
 
 
-def _prefilled_rows(tmp_path, names):
+def _prefilled_rows(tmp_path, names, *, metadata_parsing_mode="light"):
     source = _source(tmp_path, names=names)
     database = tmp_path / "reports.sqlite3"
-    review = _review(source, database)
+    review = _review(source, database, metadata_parsing_mode)
     rows = _rows(review)
     reader = MetadataReviewReader(review)
     _read(reader, rows)
@@ -781,6 +783,85 @@ def test_complete_enrichment_preserves_manual_edit_after_snapshot(tmp_path, fake
     assert worker.last_enrichment_result.failed_files == 1
     assert edited == [_graph(database)]
     assert _single_report(database)[0]["reference"] == "NEW-MANUAL"
+
+
+def test_imported_deferred_sample_can_be_accepted_and_survives_real_enrichment(tmp_path, fake_ocr, monkeypatch):
+    from metroliza.parsing.metadata_enrichment_thread import (
+        discover_metadata_enrichment_work,
+        enrich_existing_report_metadata,
+    )
+
+    source, database, review, rows, reader = _prefilled_rows(tmp_path, (NAME,), metadata_parsing_mode="complete")
+
+    def canonical_identity():
+        with closing(sqlite3.connect(database)) as connection:
+            identity = connection.execute(
+                """SELECT pr.parser_id, pr.template_family, pr.template_variant, rm.reference, rm.report_date,
+                          rm.report_time, rm.part_name, rm.revision, rm.sample_number, pr.page_count
+                   FROM parsed_reports pr JOIN report_metadata rm ON rm.report_id = pr.id""",
+            ).fetchone()
+        payload = "\x1f".join("" if value is None else str(value).strip() for value in identity)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    row = next(iter(rows.values()))
+    row.set_user_value("sample_number", "19")
+    row.set_user_value("reference", "MANUAL-REF")
+    _read(reader, rows, mode=MODE_OCR)
+    assert row.defer_ocr_suggestion("sample_number") and not database.exists()
+    worker = ParseReportsThread(_plan(source, database, review, build_overrides(rows.values())))
+    worker.run()
+    assert worker.last_parse_result.imported_files == 1
+    before, _, parsed_before = _single_report(database)
+    assert before["sample_number"] == "19"
+    graph_before = _graph(database)
+    stored = load_stored_report_context(str(database), parsed_before["id"])
+    suggestion, = stored.ocr_decisions
+    assert suggestion.value == "12" and suggestion.approval is not None
+    repository = ReportRepository(str(database))
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute(
+            "CREATE TRIGGER reject_test_ocr BEFORE UPDATE OF identity_hash ON parsed_reports "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic OCR acceptance rollback'); END"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="synthetic OCR acceptance rollback"):
+        repository.accept_deferred_ocr(suggestion.approval)
+    assert _graph(database) == graph_before
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.execute("DROP TRIGGER reject_test_ocr")
+
+    repository.accept_deferred_ocr(suggestion.approval)
+    graph_chosen = _graph(database)
+    chosen, _, parsed_chosen = _single_report(database)
+    review_receipt = json.loads(chosen["metadata_json"])["metadata_review"]
+    assert review_receipt["accepted_ocr_fields"] == ["sample_number"]
+    assert review_receipt["ocr_decisions"]["sample_number"]["candidate_id"] == suggestion.approval.candidate_id
+    assert review_receipt["ocr_decisions"]["sample_number"]["decision"] == "accepted"
+    assert (chosen["sample_number"], chosen["sample_number_kind"]) == ("12", "stats_count")
+    assert parsed_chosen["identity_hash"] != parsed_before["identity_hash"]
+    assert parsed_chosen["identity_hash"] == canonical_identity()
+    assert graph_chosen["report_measurements"] == graph_before["report_measurements"]
+    with pytest.raises(ValueError, match="stored OCR suggestion changed"):
+        repository.accept_deferred_ocr(suggestion.approval)
+    assert _graph(database) == graph_chosen
+
+    latest_items = [dict(item, text="13") if item["text"] == "12" else item for item in FAKE_OCR_ITEMS]
+    monkeypatch.setattr(CMMReportParser, "_ocr_header_items_from_pixmap",
+                        classmethod(lambda _cls, _page, _bbox, _backend: (latest_items, None)))
+    work_item, = discover_metadata_enrichment_work(str(database))
+    assert enrich_existing_report_metadata(str(database), work_item)
+    after, candidates, parsed_after = _single_report(database)
+    graph_after = _graph(database)
+    assert (after["sample_number"], after["sample_number_kind"], after["reference"]) == ("12", "stats_count", "MANUAL-REF")
+    assert json.loads(after["metadata_json"])["metadata_review"] == review_receipt
+    assert parsed_after["identity_hash"] == canonical_identity()
+    assert graph_after["report_measurements"] == graph_chosen["report_measurements"]
+    assert any(item["field_name"] == "sample_number" and item["normalized_value"] == "13"
+               and not item["is_selected"] for item in candidates)
+    for graph in (graph_chosen, graph_after):
+        selected, = [item for item in graph["report_metadata_candidates"] if item[2] == "sample_number" and item[12]]
+        assert selected[0] == suggestion.approval.candidate_id
+        assert [item[2] for item in graph["report_metadata_warnings"] if item[3] == "sample_number"
+                and item[2].startswith("sample_number_")] == ["sample_number_projected_from_stats_count"]
 
 
 @pytest.mark.parametrize("legacy_review", [False, True])

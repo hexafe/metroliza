@@ -8,7 +8,7 @@ import threading
 
 import pytest
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtWidgets import QDialog, QPlainTextEdit
+from PyQt6.QtWidgets import QDialog, QMessageBox, QPlainTextEdit, QPushButton
 
 from metroliza.reports import characteristic_alias_service as aliases
 from metroliza.reports.db import run_transaction_with_retry
@@ -427,6 +427,162 @@ def test_stored_report_context_accepts_an_older_database_without_a_receipt_colum
     context = load_stored_report_context(str(path), 7)
     assert context.report == {"report_id": 7, "file_name": "legacy.pdf"}
     assert context.ocr_decisions == () and path.read_bytes() == before
+
+
+def _deferred_reference(tmp_path):
+    path, repository, report, other, _measurements = _database(tmp_path)
+    proposed = "OCR-" + "X" * 130 + "-TAIL"
+    repository.replace_metadata_candidates(report, (
+        MetadataCandidate("reference", "original OCR string", proposed, "header_exact", "ocr", 1,
+                          "page1_header_band_ocr", "DRAWING No", "ocr:reference", 0.91, "exact evidence"),
+    ))
+    repository.update_report_metadata_fields(report, {"reference": "KEEP-REF", "part_name": "KEEP-PART"})
+    with closing(sqlite3.connect(path)) as connection, connection:
+        metadata_json, = connection.execute("SELECT metadata_json FROM report_metadata WHERE report_id = ?",
+                                            (report,)).fetchone()
+        provenance = json.loads(metadata_json)
+        provenance["metadata_review"] = {
+            "version": 1, "ocr_fields": [], "accepted_ocr_fields": [], "edited_fields": ["reference", "part_name"],
+            "ocr_decisions": {
+                "reference": {"decision": "deferred", "value": proposed, "source_type": "header_exact",
+                              "page_number": 1, "region_name": "page1_header_band_ocr", "rule_id": "ocr:reference",
+                              "confidence": 0.91},
+            },
+        }
+        connection.execute("UPDATE report_metadata SET metadata_json = ? WHERE report_id = ?",
+                           (json.dumps(provenance), report))
+    return path, repository, report, other, proposed
+
+
+@pytest.mark.parametrize("change", [
+    "candidate", "canonical", "source", "receipt", "ambiguous", "missing", "overlarge-evidence", "other-database",
+])
+def test_accepting_stored_ocr_rejects_stale_or_ambiguous_evidence(tmp_path, change):
+    path, repository, report, _other, _proposed = _deferred_reference(tmp_path)
+    decision, = load_stored_report_context(path, report).ocr_decisions
+    approval = decision.approval
+    assert approval is not None
+    if change == "other-database":
+        new_path = tmp_path / "different.db"
+        with closing(sqlite3.connect(path)) as source, closing(sqlite3.connect(new_path)) as target:
+            source.backup(target)
+        new_path.replace(path)
+    else:
+        with closing(sqlite3.connect(path)) as connection, connection:
+            if change == "candidate":
+                connection.execute("UPDATE report_metadata_candidates SET evidence_text = 'changed' WHERE id = ?",
+                                   (approval.candidate_id,))
+            elif change == "canonical":
+                connection.execute("UPDATE report_metadata SET reference = 'CHANGED' WHERE report_id = ?", (report,))
+            elif change == "source":
+                connection.execute("UPDATE source_files SET sha256 = ? WHERE id = ("
+                                   "SELECT source_file_id FROM parsed_reports WHERE id = ?)", ("2" * 64, report))
+            elif change == "receipt":
+                connection.execute("UPDATE report_metadata SET metadata_json = '{}' WHERE report_id = ?", (report,))
+            elif change == "ambiguous":
+                connection.execute(
+                    "INSERT INTO report_metadata_candidates (report_id, field_name, normalized_value, source_type, "
+                    "page_number, region_name, rule_id, confidence, created_at) SELECT report_id, field_name, "
+                    "normalized_value, source_type, page_number, region_name, rule_id, confidence, created_at "
+                    "FROM report_metadata_candidates WHERE id = ?", (approval.candidate_id,),
+                )
+            elif change == "overlarge-evidence":
+                connection.execute("UPDATE report_metadata_candidates SET evidence_text = ? WHERE id = ?",
+                                   ("x" * 300_000, approval.candidate_id))
+            else:
+                connection.execute("DELETE FROM report_metadata_candidates WHERE id = ?", (approval.candidate_id,))
+    if change in {"ambiguous", "missing", "overlarge-evidence"}:
+        stored, = load_stored_report_context(path, report).ocr_decisions
+        assert stored.approval is None
+    before = _dump(path)
+    with pytest.raises((ValueError, sqlite3.OperationalError), match="changed|replaced|no longer"):
+        repository.accept_deferred_ocr(approval)
+    assert _dump(path) == before
+
+
+def test_stored_ocr_cannot_share_a_save_with_regular_edits(tmp_path):
+    path, _repository, report, other, _proposed = _deferred_reference(tmp_path)
+    decision, = load_stored_report_context(path, report).ocr_decisions
+    assert decision.approval is not None
+    before = _dump(path)
+    with pytest.raises(ValueError, match="separately from other edits"):
+        ReportEditService(path).apply_changes_with_receipt(
+            storage_flavor="current", normalization_changes={}, stored_ocr_approval=decision.approval,
+            report_updates=[(other, {"reference": "OTHER-CHANGE"})],
+        )
+    assert _dump(path) == before
+
+
+def test_accepting_deferred_ocr_from_report_details_preserves_exact_stored_candidate(
+    tmp_path, qapplication_session, monkeypatch,
+):
+    path, _repository, report, other, proposed = _deferred_reference(tmp_path)
+    before = _dump(path)
+    decision, = load_stored_report_context(path, report).ocr_decisions
+    approval = decision.approval
+    assert approval is not None and decision.value != proposed  # dialog summary is truncated
+    old_evidence = next(row for row in before["report_metadata_candidates"] if row[0] == approval.candidate_id)
+    dialog = ModifyDB(db_file=path, modal=False)
+    committed, confirmations = [], []
+    choices = iter((QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes))
+
+    def confirm(message_box):
+        confirmations.append((message_box.text(), message_box.detailedText()))
+        return next(choices)
+
+    monkeypatch.setattr(QMessageBox, "exec", confirm)
+    monkeypatch.setattr(QMessageBox, "information", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *_args: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *_args: None)
+    dialog.database_edited.connect(committed.append)
+    try:
+        dialog.ensure_record_tables_loaded()
+        model = dialog.report_records_table.model()
+        dialog.report_records_table.setCurrentIndex(model.index(0, 0))
+        assert model.index(0, 0).data(Qt.ItemDataRole.UserRole) == report
+        dialog.report_details_button.click()
+        details = next(window for window in dialog.findChildren(QDialog)
+                       if window.windowTitle() == f"Report details · #{report}")
+        accept = next(button for button in details.findChildren(QPushButton) if button.text() == "Use OCR suggestion")
+
+        dialog.reference_table.item(0, 1).setText("UNSAVED")
+        accept.click()
+        assert not confirmations and not committed and _dump(path) == before
+        assert dialog.has_pending_changes()
+        dialog.reference_table.item(0, 1).setText(dialog.reference_table.item(0, 1).data(Qt.ItemDataRole.UserRole))
+        assert not dialog.has_pending_changes()
+
+        accept.click()
+        assert len(confirmations) == 1 and not committed and _dump(path) == before
+        accept.click()
+        _wait_edit(dialog)
+        assert len(confirmations) == 2 and all(proposed in "\n".join(prompt) for prompt in confirmations)
+        assert committed == [path]
+        assert load_stored_report_context(path, report).ocr_decisions == ()
+        with closing(sqlite3.connect(path)) as connection:
+            value, part_name, metadata_json = connection.execute(
+                "SELECT reference, part_name, metadata_json FROM report_metadata WHERE report_id = ?", (report,),
+            ).fetchone()
+            assert (value, part_name) == (proposed, "KEEP-PART")
+            provenance = json.loads(metadata_json)
+            assert list(provenance["manual_overrides"]) == ["part_name"]
+            assert provenance["field_sources"]["reference"] == "header_exact"
+            assert provenance["metadata_review"]["accepted_ocr_fields"] == ["reference"]
+            assert connection.execute("SELECT reference_source FROM report_parse_state WHERE report_id = ?",
+                                      (report,)).fetchone() == ("header_exact",)
+        after = _dump(path)
+        selected = [row for row in after["report_metadata_candidates"] if row[1:3] == (report, "reference")]
+        assert {row[0] for row in selected} == {row[0] for row in before["report_metadata_candidates"]
+                                                 if row[1:3] == (report, "reference")}
+        chosen = next(row for row in selected if row[12])
+        assert chosen[0] == approval.candidate_id and chosen[:12] + chosen[13:] == old_evidence[:12] + old_evidence[13:]
+        assert before["report_measurements"] == after["report_measurements"]
+        assert [row for row in before["parsed_reports"] if row[0] == other] == [
+            row for row in after["parsed_reports"] if row[0] == other
+        ]
+    finally:
+        dialog._discard_confirmed = True
+        dialog.close()
 
 
 def test_external_record_update_keeps_pending_modify_db_draft(tmp_path, qapplication_session, monkeypatch):
