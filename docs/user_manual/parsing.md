@@ -43,6 +43,14 @@ are stable member-relative paths, rather than temporary extraction folders.
 - **Complete import - OCR during parsing** enables OCR fallback during import. It can take
   longer. Review itself still does not execute OCR.
 
+In the review table, **Read with OCR** can supply missing metadata. If OCR differs from a
+value you entered or accepted, the cell keeps that value and shows the suggestion in its
+tooltip and report details. Compare it with the report, select the cell, then open
+**Metadata** and choose **Use OCR suggestion** or **Keep current value**. Keeping the value
+dismisses this suggestion until another read offers a suggestion.
+An accepted value is carried into the import with its OCR source. You can still edit it
+in the table before importing.
+
 ## Progress, cancellation and outcomes
 
 The progress window shows the current stage and cooperative **Cancel** action while the main

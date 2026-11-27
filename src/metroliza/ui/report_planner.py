@@ -206,6 +206,14 @@ class ReportPlanner(QWidget):
         self.metadata_menu = QMenu(self)
         self.metadata_menu.setToolTipsVisible(True)
         self.metadata_menu.aboutToShow.connect(lambda: self._update_metadata_actions(include_copy_counts=True))
+        self.accept_ocr_action = self._add_menu_action(
+            "Use OCR suggestion", lambda: self._resolve_current_ocr_suggestion(accept=True),
+        )
+        self.accept_ocr_action.setToolTip("Use the OCR suggestion for the current cell after checking the report.")
+        self.keep_value_action = self._add_menu_action(
+            "Keep current value", lambda: self._resolve_current_ocr_suggestion(accept=False),
+        )
+        self.keep_value_action.setToolTip("Dismiss this cell's suggestion. Reading again can show another suggestion.")
         self.copy_to_checked = self._add_menu_action("Copy to checked", self.copy_current_value_to_checked)
         self.undo_copy_action = self._add_menu_action("Undo copy to checked", self.undo_copy)
         self.reset_to_detected = self._add_menu_action("Reset to detected", self.reset_current_row)
@@ -214,8 +222,7 @@ class ReportPlanner(QWidget):
         self.metadata_button = QPushButton("Metadata")
         self.metadata_button.setMenu(self.metadata_menu)
         self.metadata_button.setToolTip(
-            "Copy a value to the checked reports, reset a report to the detected values, "
-            "or stop the metadata read."
+            "Review OCR suggestions, copy metadata, reset edits, or stop the metadata read."
         )
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_metadata_menu)
@@ -399,6 +406,23 @@ class ReportPlanner(QWidget):
             return None, None
         return self.model.metadata_row(item.stable_occurrence_id), field_name
 
+    def _can_resolve_ocr_suggestion(self, row, field_name):
+        return (
+            not self._busy and self.model.valid and self._worker_mode is None
+            and self.table.state() != QAbstractItemView.State.EditingState
+            and row is not None and not self.table.isColumnHidden(self.model.column_for_field(field_name))
+            and row.suggested_ocr_candidate(field_name) is not None
+        )
+
+    def _resolve_current_ocr_suggestion(self, *, accept):
+        row, field_name = self.current_metadata_cell()
+        if not self._can_resolve_ocr_suggestion(row, field_name):
+            return
+        if self.model.resolve_ocr_suggestion(row.occurrence_id, field_name, accept=accept):
+            field = FIELD_LABELS[field_name]
+            message = f"Used the OCR suggestion for {field}." if accept else f"Kept the current value for {field}."
+            self.set_metadata_status(message, "success" if accept else "neutral")
+
     def copy_current_value_to_checked(self):
         row, field_name = self.current_metadata_cell()
         value = row.value(field_name) if row is not None else None
@@ -495,6 +519,9 @@ class ReportPlanner(QWidget):
         row, field_name = self.current_metadata_cell()
         usable = not self._busy and self.model.valid
         editable = row is not None and row.editable
+        can_resolve = self._can_resolve_ocr_suggestion(row, field_name)
+        self.accept_ocr_action.setEnabled(can_resolve)
+        self.keep_value_action.setEnabled(can_resolve)
         can_copy = usable and editable and self._worker_mode is None and bool(row.value(field_name))
         self.copy_to_checked.setEnabled(can_copy)
         self.undo_copy_action.setEnabled(usable and self._worker_mode is None and self.model.can_undo_copy)
