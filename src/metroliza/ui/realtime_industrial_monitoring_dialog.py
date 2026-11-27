@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -72,6 +73,7 @@ from metroliza.industrial.industrial_workers import (
     RealtimeMonitorPollThread,
 )
 from metroliza.reports.db import (
+    SQLiteFileBinding,
     selected_reports_worker_options,
     sqlite_readonly_connection_scope,
     sqlite_selected_reports_connection_scope,
@@ -79,7 +81,7 @@ from metroliza.reports.db import (
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.ui.industrial_source_profiles_dialog import IndustrialSourceProfilesDialog
 from metroliza.ui.shortcuts import bind_shortcut, visible_shortcut
-from metroliza.ui.realtime_monitor_presentation import observed_freshness
+from metroliza.ui.realtime_monitor_presentation import event_review_details, observed_freshness
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
     configure_dialog_button_roles,
@@ -258,6 +260,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
                 self.save_button,
                 self.apply_checked_button,
                 self.refresh_events_button,
+                self.event_details_button,
                 self.acknowledge_event_button,
                 self.resolve_event_button,
                 self.false_positive_event_button,
@@ -320,6 +323,7 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             ("Ctrl+Shift+R", self.poll_once_button, 0), ("Ctrl+Shift+F", self.open_dashboard_button, 0),
             ("Ctrl+Shift+D", self.edit_sources_button, 1), ("Ctrl+Shift+A", self.acknowledge_event_button, 2),
             ("Ctrl+Shift+E", self.resolve_event_button, 2), ("Ctrl+Shift+Q", self.false_positive_event_button, 2),
+            ("Ctrl+Shift+W", self.event_details_button, 2),
         )
         for sequence, button, tab in commands:
             action = QAction(self)
@@ -344,6 +348,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.addAction(close)
         visible_shortcut(self.close_button, "Ctrl+W / Esc")
         for first, second in ((self.source_list, self.cursor_column_edit),
+                              (self.event_review_table, self.event_details_button),
+                              (self.event_details_button, self.event_operator_edit),
                               (self.event_operator_edit, self.event_comment_edit),
                               (self.event_comment_edit, self.acknowledge_event_button)):
             self.setTabOrder(first, second)
@@ -673,12 +679,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         return panel
 
     def _build_event_review_page(self) -> QWidget:
+        self._review_events = {}
+        self._review_database = None
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
         intro = QLabel(
-            "Review persisted anomaly events. Every operator action requires an operator name "
+            "Review persisted anomaly events. Changing review status requires an operator name "
             "and a comment; Metroliza never automates hold, release, or scrap decisions."
         )
         intro.setWordWrap(True)
@@ -730,10 +738,14 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
 
         action_row = QGridLayout()
         self.refresh_events_button = QPushButton("Refresh events")
+        self.event_details_button = QPushButton("Details")
+        self.event_details_button.setAccessibleName("Selected event details")
+        self.event_details_button.setToolTip("Read the selected event's saved detector decision.")
         self.acknowledge_event_button = QPushButton("Acknowledge")
         self.resolve_event_button = QPushButton("Resolve")
         self.false_positive_event_button = QPushButton("Mark false positive")
         self.refresh_events_button.clicked.connect(self._reset_event_page)
+        self.event_details_button.clicked.connect(self._show_selected_event_details)
         self.acknowledge_event_button.clicked.connect(
             lambda: self._apply_selected_event_action("acknowledge")
         )
@@ -743,9 +755,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         self.false_positive_event_button.clicked.connect(
             lambda: self._apply_selected_event_action("false_positive")
         )
-        for index, button in enumerate((self.refresh_events_button, self.acknowledge_event_button,
-                                        self.resolve_event_button, self.false_positive_event_button)):
-            action_row.addWidget(button, index // 2, index % 2)
+        action_row.addWidget(self.refresh_events_button, 0, 0)
+        action_row.addWidget(self.event_details_button, 0, 1, 1, 2)
+        for index, button in enumerate((self.acknowledge_event_button, self.resolve_event_button,
+                                        self.false_positive_event_button)):
+            action_row.addWidget(button, 1, index)
         layout.addLayout(action_row)
         self.event_review_status_label = status_chip("Open events: not loaded", "neutral")
         layout.addWidget(self.event_review_status_label)
@@ -829,16 +843,21 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         if self._event_search_timer.isActive():
             self._event_page_starts = [None]
         self._event_search_timer.stop()
+        self._review_events = {}
+        self._review_database = None
         self._invalidate_event_selection()
         self._next_event_page = None
         self.event_older_button.setEnabled(False)
         self.event_newer_button.setEnabled(len(self._event_page_starts) > 1)
         try:
+            binding = self._database_source_binding or SQLiteFileBinding.capture(self.db_file)
+            binding.require(self.db_file)
             with self._database_component(RealtimeDashboardService) as service:
                 events = service.list_open_anomaly_events(
                     limit=_EVENT_PAGE_SIZE + 1, severity=self.event_severity_combo.currentData(),
                     signal_search=self.event_signal_search.text(), older_than=self._event_page_starts[-1],
                 )
+            binding.require(self.db_file)
         except Exception as exc:
             self.event_review_table.setRowCount(0)
             self.event_page_label.clear()
@@ -848,6 +867,8 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             return
 
         visible_events = events[:_EVENT_PAGE_SIZE]
+        self._review_events = {int(event.id): event for event in visible_events}
+        self._review_database = binding
         if len(events) > _EVENT_PAGE_SIZE:
             last = visible_events[-1]
             self._next_event_page = (last.event_time, last.id)
@@ -882,7 +903,11 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
         return int(value) if value is not None else None
 
     def _sync_event_action_buttons(self) -> None:
-        selected = self._selected_event_id() is not None
+        event_id = self._selected_event_id()
+        selected = event_id is not None
+        details = getattr(self, "event_details_button", None)
+        if details is not None:
+            details.setEnabled(event_id in self._review_events)
         for button_name in (
             "acknowledge_event_button",
             "resolve_event_button",
@@ -891,6 +916,54 @@ class RealtimeIndustrialMonitoringDialog(QDialog):
             button = getattr(self, button_name, None)
             if button is not None:
                 button.setEnabled(selected)
+
+    def _show_selected_event_details(self):
+        event_id = self._selected_event_id()
+        event = self._review_events.get(event_id)
+        binding = self._review_database
+        if event is None or binding is None:
+            return
+        database = self.db_file
+        try:
+            binding.require(database)
+            with sqlite_readonly_connection_scope(database, timeout_s=0.5) as connection:
+                binding.require(database)
+                evidence = RealtimeDashboardService(database, connection=connection).read_open_anomaly_decision(event_id)
+                binding.require(database)
+        except Exception as exc:
+            self._invalidate_event_selection()
+            self.event_review_status_label.setText(f"Could not read event details: {redact_sensitive_text(exc)}")
+            set_status_variant(self.event_review_status_label, "warning")
+            return
+        if self._selected_event_id() != event_id or self._review_database is not binding or self.db_file != database:
+            return
+        if evidence is None:
+            self._review_events.pop(event_id, None)
+            self._invalidate_event_selection()
+            self.event_review_status_label.setText("This event is no longer open. Refresh events to update the list.")
+            set_status_variant(self.event_review_status_label, "warning")
+            return
+        self._show_event_details_dialog(event_review_details(event, evidence))
+
+    def _show_event_details_dialog(self, text):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Event details")
+        apply_metroliza_theme(dialog)
+        configure_window_size(dialog, minimum=(400, 250), initial=(620, 440))
+        layout = QVBoxLayout(dialog)
+        contents = QPlainTextEdit()
+        contents.setReadOnly(True)
+        contents.setAccessibleName("Persisted anomaly event details")
+        contents.setPlainText(text)
+        layout.addWidget(contents, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        contents.setFocus()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _apply_selected_event_action(self, action: str) -> None:
         event_id = self._selected_event_id()

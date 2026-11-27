@@ -1,4 +1,5 @@
 from dataclasses import asdict
+import json
 
 from metroliza.industrial.realtime import realtime_dashboard_service as dashboard_service_module
 from metroliza.industrial.anomaly.contracts import DetectionResult
@@ -173,6 +174,38 @@ def _seed_dashboard_data(db_path):
         "temperature_sample_ids": temperature_samples.sample_ids,
         "event_ids": event_result.event_ids,
     }
+
+
+def test_selected_open_decision_caps_context_bytes_and_handles_absent_or_closed_rows(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "selected-event.db")
+    legacy_id, oversized_id, future_id = _seed_dashboard_data(db_path)["event_ids"]
+    oversized = json.dumps({"secret": "é" * (9 * 1024)}, ensure_ascii=False)
+    with sqlite_connection_scope(db_path) as connection, connection:
+        connection.execute("UPDATE industrial_anomaly_events SET context_json = ? WHERE id = ?", (oversized, oversized_id))
+        connection.execute(
+            "UPDATE industrial_anomaly_events SET context_json = ? WHERE id = ?",
+            ('{"detector_evidence":{"schema_version":9}}', future_id),
+        )
+
+    decoded = []
+    from_json = dashboard_service_module.from_json
+
+    def capture(raw, default):
+        decoded.append(raw)
+        return from_json(raw, default)
+
+    monkeypatch.setattr(dashboard_service_module, "from_json", capture)
+    service = RealtimeDashboardService(db_path)
+    before = (tmp_path / "selected-event.db").read_bytes()
+    assert service.read_open_anomaly_decision(oversized_id).algorithm_version is None
+    assert decoded == [None]
+    assert service.read_open_anomaly_decision(legacy_id).algorithm_version is None
+    assert service.read_open_anomaly_decision(future_id).algorithm_version is None
+    assert service.read_open_anomaly_decision(max(legacy_id, oversized_id, future_id) + 1) is None
+    assert (tmp_path / "selected-event.db").read_bytes() == before
+
+    service.resolve_event(event_id=legacy_id, resolved_by="tester", comment="Handled", expected_status="open")
+    assert service.read_open_anomaly_decision(legacy_id) is None
 
 
 def test_dashboard_counts_and_open_filters_project_operator_safe_payloads(tmp_path):

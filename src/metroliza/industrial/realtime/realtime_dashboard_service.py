@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import asdict, dataclass
+import re
 from typing import Any, Iterable
 
 from metroliza.industrial.anomaly.contracts import ANOMALY_SEVERITIES
@@ -13,10 +15,17 @@ from metroliza.industrial.anomaly.event_repository import (
 from metroliza.industrial.industrial_data_schema import ensure_industrial_data_schema
 from metroliza.industrial.realtime.sample_repository import from_json, utc_timestamp
 from metroliza.industrial.realtime.timestamps import canonical_utc_timestamp
-from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope
+from metroliza.reports.db import run_transaction_with_retry, sqlite_connection_scope, sqlite_readonly_connection_scope
 
 _SEVERITY_RANKS = {"info": 1, "warning": 2, "major": 3, "critical": 4}
 _SEVERITY_BY_RANK = {rank: severity for severity, rank in _SEVERITY_RANKS.items()}
+_MAX_EVENT_CONTEXT_BYTES = 16 * 1024
+_DECISION_WINDOW_FIELDS = {
+    "trigger_sample": (),
+    "stored_baseline": ("version", "start", "end", "count"),
+    "prior_samples": ("count", "last_sample_id", "last_event_time", "values_sha256"),
+    "elapsed_since_last_sample": ("last_event_time", "evaluated_at"),
+}
 
 
 @dataclass(frozen=True)
@@ -49,6 +58,17 @@ class DashboardAnomalyEvent:
     revision: str | None = None
     work_order: str | None = None
     batch_lot: str | None = None
+
+
+@dataclass(frozen=True)
+class OpenAnomalyDecisionEvidence:
+    """Only operator-facing fields from a selected open event's saved decision."""
+
+    algorithm: str | None = None
+    algorithm_version: int | None = None
+    configuration_revision: str | None = None
+    window_kind: str | None = None
+    window_fields: tuple[tuple[str, str | int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +193,15 @@ class RealtimeDashboardService:
             return [_dashboard_event_from_row(row) for row in cursor.fetchall()]
 
         return run_transaction_with_retry(self.database, _list, connection=self.connection)
+
+    def read_open_anomaly_decision(self, event_id: int) -> OpenAnomalyDecisionEvidence | None:
+        """Read one open event's bounded decision evidence without migrating or writing."""
+        if type(event_id) is not int or not 1 <= event_id <= 2**63 - 1:
+            raise ValueError("Select a valid open event.")
+        if self.connection is not None:
+            return _open_anomaly_decision(self.connection, event_id)
+        with sqlite_readonly_connection_scope(self.database, timeout_s=0.5) as connection:
+            return _open_anomaly_decision(connection, event_id)
 
     def anomaly_counts_by_severity(
         self,
@@ -1094,6 +1123,72 @@ def _dashboard_event_from_row(row) -> DashboardAnomalyEvent:
         work_order=row[24],
         batch_lot=row[25],
     )
+
+
+def _open_anomaly_decision(connection, event_id):
+    with closing(connection.execute(
+        """
+        SELECT detector_key,
+               CASE WHEN length(CAST(context_json AS BLOB)) <= ?
+                    THEN CAST(context_json AS BLOB) END
+        FROM industrial_anomaly_events
+        WHERE id = ? AND status = 'open'
+        """,
+        (_MAX_EVENT_CONTEXT_BYTES, event_id),
+    )) as cursor:
+        row = cursor.fetchone()
+    return _decode_anomaly_decision(*row) if row is not None else None
+
+
+def _decision_text(value):
+    if type(value) is str and 0 < len(value) <= 120 and value.isprintable():
+        return value
+    return None
+
+
+def _decision_digest(value):
+    return value if type(value) is str and re.fullmatch(r"[0-9a-fA-F]{64}", value) else None
+
+
+def _decode_anomaly_decision(detector_key, stored_context):
+    try:
+        parsed = from_json(stored_context, {})
+    except RecursionError:
+        parsed = {}
+    evidence = parsed.get("detector_evidence") if isinstance(parsed, dict) else None
+    if not isinstance(evidence, dict) or type(evidence.get("schema_version")) is not int or evidence["schema_version"] != 1:
+        return OpenAnomalyDecisionEvidence()
+    configuration = evidence.get("configuration")
+    if not isinstance(configuration, dict) or configuration.get("detector") != detector_key:
+        return OpenAnomalyDecisionEvidence()
+    version = configuration.get("algorithm_version")
+    algorithm = _decision_text(detector_key)
+    if algorithm is None or type(version) is not int or not 1 <= version <= 2**63 - 1:
+        return OpenAnomalyDecisionEvidence()
+    kind, fields = _decision_window(evidence.get("window"))
+    return OpenAnomalyDecisionEvidence(
+        algorithm, version, _decision_digest(evidence.get("configuration_revision")), kind, fields,
+    )
+
+
+def _decision_window(window):
+    if not isinstance(window, dict):
+        return None, ()
+    kind = _decision_text(window.get("kind"))
+    if kind not in _DECISION_WINDOW_FIELDS:
+        return None, ()
+    fields = []
+    for name in _DECISION_WINDOW_FIELDS[kind]:
+        value = window.get(name)
+        if name in {"count", "last_sample_id"}:
+            normalized = value if type(value) is int and 0 <= value <= 2**63 - 1 else None
+        elif name == "values_sha256":
+            normalized = _decision_digest(value)
+        else:
+            normalized = _decision_text(value)
+        if normalized is not None:
+            fields.append((name, normalized))
+    return kind, tuple(fields)
 
 
 def _timeline_point_from_row(row) -> SignalTimelinePoint:
