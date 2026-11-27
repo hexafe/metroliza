@@ -2471,6 +2471,7 @@
         "scripts/compare_export_outputs.py",
         "scripts/ocr_diagnostic_contract.py",
         "scripts/qualify_windows_launcher.py",
+        "scripts/qualify_windows_cache_filesystems.ps1",
         "scripts/release_only_google_conversion_smoke.py",
         "scripts/release_zip.py",
         "scripts/stage_release_notices.py",
