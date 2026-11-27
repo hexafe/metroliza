@@ -23,8 +23,9 @@ _IDENTIFIER_HEADERS = frozenset(
      "reference id", "row id", "serial", "serial number"}
 )
 _AMBIGUOUS_DELIMITER_MESSAGE = (
-    "Ambiguous CSV delimiter. Quote headers and values that contain the delimiter, "
-    "re-export with a delimiter that does not occur in the data, or load an Excel worksheet."
+    "Ambiguous CSV delimiter. Remove commas embedded in headings or remove spaces around "
+    "delimiters between columns. To keep the headings, quote every field on re-export "
+    "or load an Excel worksheet."
 )
 _AMBIGUOUS_NUMBER_MESSAGE = (
     "Ambiguous CSV number separators. Use one decimal convention per numeric column, "
@@ -138,31 +139,62 @@ class CsvSourceSample:
         return {"delimiter": self.delimiter, "decimal": decimal}
 
 
+def _read_csv_source_sample(path: Path, delimiter: str, *, strict: bool) -> CsvSourceSample:
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter, strict=strict)
+        header = tuple(next(reader, ()))
+        rows = [tuple(row) for row in islice(reader, _SAMPLE_ROWS)]
+    return CsvSourceSample(delimiter, header, rows)
+
+
+def _has_fully_quoted_header(path: Path, sample: CsvSourceSample) -> bool:
+    expected = sample.delimiter.join('"' + field.replace('"', '""') + '"' for field in sample.header)
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            return handle.read(len(expected)) == expected and handle.read(1) in ("", "\r", "\n")
+    except (OSError, UnicodeError):
+        return False
+
+
 def sample_csv_sources(path: Path, *, preferred_delimiter: str | None = None) -> list[CsvSourceSample]:
-    """Rank bounded samples by structural evidence before inspecting numeric cells."""
-    ranked: list[tuple[tuple[bool, int, int, bool], CsvSourceSample]] = []
+    """Rank strict CSV samples, with malformed interpretations used only as a veto."""
+    ranked: list[tuple[tuple[bool, int, int, bool], CsvSourceSample, bool]] = []
     for delimiter in _DELIMITERS:
+        strict = True
         try:
-            with path.open("r", encoding="utf-8-sig", newline="") as handle:
-                reader = csv.reader(handle, delimiter=delimiter, strict=True)
-                header = tuple(next(reader, ()))
-                rows = [tuple(row) for row in islice(reader, _SAMPLE_ROWS)]
+            try:
+                sample = _read_csv_source_sample(path, delimiter, strict=True)
+            except csv.Error:
+                strict = False
+                sample = _read_csv_source_sample(path, delimiter, strict=False)
         except (OSError, UnicodeError, csv.Error):
             continue
-        width = len(header)
-        complete_rows = sum(len(row) >= width and not _has_extra_csv_values(row, width) for row in rows if row)
+        width = len(sample.header)
+        complete_rows = sum(
+            len(row) >= width and not _has_extra_csv_values(row, width) for row in sample.rows if row
+        )
         rank = (width > 1, complete_rows, width, delimiter == preferred_delimiter)
-        ranked.append((rank, CsvSourceSample(delimiter, header, rows)))
+        ranked.append((rank, sample, strict))
     if not ranked:
         raise ValueError("Unable to read the CSV file. Check that it is a UTF-8 CSV.")
     ranked.sort(key=lambda item: item[0], reverse=True)
-    best_rank, best = ranked[0]
-    for rank, sample in ranked[1:]:
-        if best_rank[0] and rank[:2] == best_rank[:2] and sample.header != best.header:
-            raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
+    strict_samples = [(rank, sample) for rank, sample, strict in ranked if strict]
+    if not strict_samples:
+        raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
+    best_rank, best = strict_samples[0]
+    for rank, sample, strict in ranked:
+        if sample is best:
+            continue
+        if sample.header != best.header:
+            if strict and best_rank[0] and rank[:2] == best_rank[:2]:
+                raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
+            # Explicit quote boundaries in the actual header disambiguate a
+            # falsely competitive shape produced by a permissive reader.
+            if not strict and rank[:2] >= best_rank[:2] and not _has_fully_quoted_header(path, best):
+                raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
         if _could_be_comma_decimal_column(best, sample):
             raise ValueError(_AMBIGUOUS_DELIMITER_MESSAGE)
-    return [sample for _rank, sample in ranked]
+    return [sample for _rank, sample in strict_samples]
 
 
 def _could_be_comma_decimal_column(table: CsvSourceSample, scalar: CsvSourceSample) -> bool:

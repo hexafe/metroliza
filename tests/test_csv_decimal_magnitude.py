@@ -157,7 +157,10 @@ def test_csv_numeric_looking_identifiers_preserve_all_original_text(tmp_path):
     "Part;Length, mm\nA;10,2\nB;10,5\n",
     "Part;Length, mm\nA;10,2; \nB;10,5; \n",
     "Length, mm\n10,2\n10,5\n",
-], ids=["two-table-dialects", "empty-trailing-fields", "table-or-scalar"])
+    'Part;Note;Length, mm\nA;"1/2" pipe;10,2\nB;ok;10,5\n',
+    'Part;Note;Length, mm\nA;"1/2" pipe;10,2\nB;ok;10,5\nC;ok;10\n',
+], ids=["two-table-dialects", "empty-trailing-fields", "table-or-scalar",
+        "malformed-quote-tied-shape", "malformed-quote-stronger-shape"])
 @pytest.mark.parametrize("loader", ["sqlite", "legacy", "legacy-comma-hint"])
 def test_csv_refuses_competing_field_boundaries(tmp_path, content, loader):
     path = tmp_path / "private-name.csv"
@@ -218,7 +221,11 @@ def test_csv_padded_numbers_obey_the_same_convention_in_both_readers(tmp_path):
     '"Part";"Length, mm"\n"A";"10,2"\n"B";"10,5"\n',
     "Part;Length mm\nA;10.2; \nB;10.5;\n",
     "Length mm, Width mm\n10.2,4.1\n10.5,4.2\n",
-], ids=["quoted-single-column", "quoted-table", "empty-trailing-fields", "ordinary-two-columns"])
+    "Part;Length mm\nA;10,2\nB;10,5\n",
+    '"Part","Length, mm"\n"A","10.2"\n"B","10.5"\n',
+    '"Part";"Note";"Length, mm"\n"A";"1/2"" pipe";"10,2"\n"B";"ok";"10,5"\n',
+], ids=["quoted-single-column", "quoted-table", "empty-trailing-fields", "ordinary-two-columns",
+        "removed-embedded-comma", "quoted-comma-table", "properly-quoted-note"])
 def test_csv_unambiguous_repairs_and_standard_fields_still_load(tmp_path, content):
     path = tmp_path / "measurements.csv"
     path.write_text(content, encoding="utf-8")
@@ -268,5 +275,37 @@ def test_csv_tight_comma_header_keeps_two_integer_columns(tmp_path):
     try:
         assert legacy["Length"].tolist() == list(loaded.row_table["length"]) == [10, 11]
         assert legacy["Width"].tolist() == list(loaded.row_table["width"]) == [2, 3]
+    finally:
+        cleanup_tabular_load_result(loaded)
+
+
+def test_csv_partial_quoting_reports_recovery_that_resolves_the_layout(tmp_path):
+    path = tmp_path / "partially-quoted.csv"
+    path.write_text('Part;"Length, mm"\nA;"10,2"\nB;"10,5"\n', encoding="utf-8")
+    for load in (load_tabular_analytics_file, load_csv_with_fallbacks):
+        with pytest.raises(ValueError, match="Ambiguous CSV delimiter") as caught:
+            load(path)
+        message = str(caught.value).casefold()
+        assert "remove commas embedded in headings" in message
+        assert "remove spaces around delimiters between columns" in message
+        assert "quote every field" in message
+        assert "excel worksheet" in message
+
+
+def test_excel_worksheet_preserves_numbers_from_an_ambiguous_csv_layout(tmp_path):
+    from openpyxl import Workbook
+
+    path = tmp_path / "measurements.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Measurements"
+    worksheet.append(["Part", "Length, mm"])
+    worksheet.append(["A", 10.2])
+    worksheet.append(["B", 10.5])
+    workbook.save(path)
+    workbook.close()
+    loaded = load_tabular_analytics_file(path, sheet_name="Measurements")
+    try:
+        assert list(loaded.row_table["length_mm"]) == [10.2, 10.5]
     finally:
         cleanup_tabular_load_result(loaded)
