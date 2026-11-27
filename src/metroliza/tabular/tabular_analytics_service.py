@@ -34,6 +34,7 @@ from metroliza.shared.finite_numeric import (
     finite_numeric_source, parse_numeric_literal,
     sqlite_numeric_filter, sqlite_numeric_membership, sqlite_prefer_integer_source,
 )
+
 from metroliza.industrial.industrial_analytics_state import (
     ProductionChartSelection,
     ProductionMetricSelection,
