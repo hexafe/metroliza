@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from metroliza.reports.report_metadata_models import (
     MetadataCandidate,
     MetadataSelectionResult,
+    MetadataWarning,
+    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
     USER_SOURCE_TYPE,
 )
 from metroliza.reports.report_metadata_normalizers import (
@@ -76,6 +78,15 @@ _SAMPLE_KIND_BY_SOURCE = {
     "comment_derived": "derived_counter",
     "projected_from_stats_count": "stats_count",
     _FILENAME_SOURCE_TYPE: "filename_tail",
+}
+SAMPLE_NUMBER_COMMENT_WARNING_CODE = "sample_number_derived_from_comment"
+_SAMPLE_SOURCE_WARNINGS = {
+    "projected_from_stats_count": (
+        SAMPLE_NUMBER_PROJECTION_WARNING_CODE, "warning", "Sample number was projected from stats count.",
+    ),
+    "comment_derived": (
+        SAMPLE_NUMBER_COMMENT_WARNING_CODE, "info", "Sample number was derived from comment.",
+    ),
 }
 
 ROW_PENDING = "pending"
@@ -192,6 +203,39 @@ def _backs_ocr_choice(candidate: MetadataCandidate, field_name: str, value: str 
     )
 
 
+def accepted_ocr_fields(metadata_json: dict) -> frozenset[str]:
+    """Read the persisted OCR choices, including the original v1 review format."""
+
+    review = metadata_json.get("metadata_review")
+    if not isinstance(review, dict) or type(review.get("version")) is not int or review["version"] != 1:
+        return frozenset()
+    # Older review receipts did not distinguish explicitly chosen OCR from prefill.
+    fields = review.get("accepted_ocr_fields", review.get("ocr_fields"))
+    if not isinstance(fields, list):
+        return frozenset()
+    return frozenset(name for name in fields if type(name) is str and name in REVIEW_FIELDS)
+
+
+def sample_number_source_warnings(warnings, source):
+    """Align classification warnings with the stored sample source."""
+
+    expected = _SAMPLE_SOURCE_WARNINGS.get(source) if isinstance(source, str) else None
+    source_codes = (SAMPLE_NUMBER_PROJECTION_WARNING_CODE, SAMPLE_NUMBER_COMMENT_WARNING_CODE)
+    result = []
+    found = False
+    for warning in warnings:
+        code = warning.get("code") if isinstance(warning, dict) else getattr(warning, "code", None)
+        if code not in source_codes:
+            result.append(warning)
+        elif expected is not None and code == expected[0] and not found:
+            result.append(warning)
+            found = True
+    if expected is not None and not found:
+        code, severity, message = expected
+        result.append(MetadataWarning(code, "sample_number", severity, message))
+    return tuple(result)
+
+
 def _candidate_key(candidate: MetadataCandidate) -> tuple:
     return (
         candidate.field_name,
@@ -277,6 +321,7 @@ def apply_metadata_override(
     metadata_json = dict(metadata.metadata_json or {})
     field_sources = dict(metadata_json.get("field_sources") or {})
     manual_overrides = dict(metadata_json.get("manual_overrides") or {})
+    warnings = metadata.warnings
     values: dict[str, object] = {}
     detected_values: dict[str, object] = {}
     edited_fields: list[str] = []
@@ -315,6 +360,8 @@ def apply_metadata_override(
                 if item.origin == ORIGIN_OCR and item.value is not None
                 else "unknown"
             )
+            metadata_json["sample_number_provenance"] = source_type
+            warnings = sample_number_source_warnings(warnings, source_type)
 
     metadata_json["field_sources"] = field_sources
     if manual_overrides:
@@ -324,11 +371,12 @@ def apply_metadata_override(
         "applied_at": stamp,
         "edited_fields": sorted(edited_fields),
         "ocr_fields": sorted(ocr_fields),
+        "accepted_ocr_fields": sorted(item.field_name for item in override.fields if item.ocr_candidate is not None),
         "ocr_run": bool(override.ocr_candidates) or any(item.ocr_candidate is not None for item in override.fields),
         "detected_values": detected_values,
     }
     return MetadataSelectionResult(
-        metadata=replace(metadata, metadata_json=metadata_json, **values),
+        metadata=replace(metadata, metadata_json=metadata_json, warnings=warnings, **values),
         candidates=tuple(candidates),
     )
 
