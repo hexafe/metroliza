@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
@@ -1053,6 +1053,7 @@ class ReportRepository:
         parse_status: str | None = None,
         metadata_confidence: float | None = None,
         identity_hash: str | None | object = _UNSET,
+        recompute_identity_hash: bool = False,
         raw_report_json: Any = _UNSET,
         approval: ReportEnrichmentApproval | None = None,
         expected_metadata_json: str | None | object = _UNSET,
@@ -1066,6 +1067,8 @@ class ReportRepository:
         candidates and retains evidence for manual edits and accepted OCR fields.
         """
 
+        if recompute_identity_hash and identity_hash is not _UNSET:
+            raise ValueError("Specify an identity hash or ask to recompute it")
         if approval is not None:
             if not isinstance(approval, ReportEnrichmentApproval):
                 raise TypeError("Invalid enrichment approval")
@@ -1106,11 +1109,7 @@ class ReportRepository:
                     "UPDATE parsed_reports SET metadata_confidence = ? WHERE id = ?",
                     (float(metadata_confidence), int(report_id)),
                 )
-            if identity_hash is not _UNSET:
-                cursor.execute(
-                    "UPDATE parsed_reports SET identity_hash = ? WHERE id = ?",
-                    (identity_hash, int(report_id)),
-                )
+            self._update_enrichment_identity(cursor, report_id, metadata, identity_hash, recompute_identity_hash)
             if raw_report_json is not _UNSET:
                 cursor.execute(
                     "UPDATE parsed_reports SET raw_report_json = ? WHERE id = ?",
@@ -1122,6 +1121,25 @@ class ReportRepository:
                 approval.verify_live()
 
         run_transaction_with_retry(self.database, _replace, connection=self.connection)
+
+    @staticmethod
+    def _update_enrichment_identity(
+        cursor, report_id: int, metadata: Any, identity_hash, recompute: bool,
+    ) -> None:
+        if recompute:
+            # Format fields continue to describe the existing measurement parse.
+            parser_id, family, variant, pages = cursor.execute(
+                "SELECT parser_id, template_family, template_variant, page_count FROM parsed_reports WHERE id = ?",
+                (int(report_id),),
+            ).fetchone()
+            identity_hash = build_report_identity_hash(replace(
+                metadata, parser_id=parser_id, template_family=family, template_variant=variant, page_count=pages,
+            ))
+        if identity_hash is not _UNSET:
+            cursor.execute(
+                "UPDATE parsed_reports SET identity_hash = ? WHERE id = ?",
+                (identity_hash, int(report_id)),
+            )
 
     @staticmethod
     def _verify_enrichment_metadata_snapshot(cursor, report_id: int, expected) -> None:

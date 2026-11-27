@@ -951,6 +951,16 @@ def test_enrichment_protects_confirmed_ocr_value_and_original_selected_candidate
     assert "revision" not in new_provenance["metadata_enrichment"]["updated_fields"]
     for field_name in ("id", "measurement_count", "has_nok", "nok_count"):
         assert parsed_before[field_name] == parsed_after[field_name]
+    from hashlib import sha256
+
+    with closing(sqlite3.connect(database)) as connection:
+        stored_identity = connection.execute(
+            """SELECT pr.parser_id, pr.template_family, pr.template_variant, rm.reference, rm.report_date,
+                      rm.report_time, rm.part_name, rm.revision, rm.sample_number, pr.page_count
+               FROM parsed_reports pr JOIN report_metadata rm ON rm.report_id = pr.id""",
+        ).fetchone()
+    payload = "\x1f".join("" if value is None else str(value).strip() for value in stored_identity)
+    assert parsed_after["identity_hash"] == sha256(payload.encode()).hexdigest()
     assert parsed_after["identity_hash"] == stages["first_hash"]
     assert before["stats_count_int"] == refreshed["stats_count_int"] == 7
     assert stages["before"]["report_measurements"] == stages["second"]["report_measurements"]
