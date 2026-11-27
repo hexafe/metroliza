@@ -27,8 +27,10 @@ from modules.industrial_analytics_workflow import (
 )
 from modules.tabular_analytics_service import (
     TabularColumnFilter,
+    build_tabular_file_grouping_dataframe,
     cleanup_tabular_load_result,
     load_tabular_analytics_file,
+    load_tabular_analytics_files,
 )
 from metroliza.shared import safe_bugreport
 from metroliza.shared.output_verification import OutputVerificationError
@@ -375,6 +377,50 @@ def test_run_tabular_file_analytics_uses_loaded_snapshot_without_reloading(
 
     assert result.row_count == 3
     assert Path(result.html_dashboard_path).exists()
+
+
+def test_mixed_sources_export_origin_rows_and_reject_a_stale_workbook(tmp_path, monkeypatch):
+    csv_file = tmp_path / "batch.csv"
+    excel = tmp_path / "batch.xlsx"
+    columns = ["Time Stamp", "Length mm"]
+    pd.DataFrame([["2026-05-10 08:00", 10], ["2026-05-10 09:00", 11]], columns=columns).to_csv(csv_file, index=False)
+    with pd.ExcelWriter(excel) as writer:
+        pd.DataFrame([["2026-05-11 08:00", 12], ["2026-05-11 09:00", 13]], columns=columns).to_excel(
+            writer, sheet_name="Overview", index=False,
+        )
+        pd.DataFrame([["2026-05-11 08:00", 999]], columns=columns).to_excel(writer, sheet_name="Data", index=False)
+    dashboard, workbook = tmp_path / "mixed.html", tmp_path / "mixed.xlsx"
+    loaded = load_tabular_analytics_files((csv_file, excel))
+
+    def fail_reload(*args, **kwargs):
+        raise AssertionError("the mixed snapshot must be reused rather than reloading the first input")
+
+    monkeypatch.setattr(workflow_module, "load_tabular_analytics_file", fail_reload)
+    args = dict(
+        input_file=str(csv_file), tabular_load_result=loaded,
+        grouping_df=build_tabular_file_grouping_dataframe(source_snapshots=loaded.source_snapshots),
+        metric_selection=(ProductionMetricSelection("length_mm", display_label="Length mm"),),
+        chart_selection=ProductionChartSelection(time_series=True, groupstats=True),
+    )
+    try:
+        result = run_tabular_file_analytics(output_dashboard_file=str(dashboard),
+                                            output_workbook_file=str(workbook), **args)
+        assert result.row_count == 4 and result.groupstats_metric_count == 1
+        assert dashboard.is_file() and workbook.is_file()
+        assert "2 CSV/Excel files" in dashboard.read_text(encoding="utf-8")
+        table = pd.read_excel(workbook, sheet_name="Table Data")
+        assert table["source_file"].tolist() == ["batch.csv", "batch.csv", "batch.xlsx", "batch.xlsx"]
+        assert table["source_sheet"].fillna("").tolist() == ["", "", "Overview", "Overview"]
+        assert table["length_mm"].tolist() == [10, 11, 12, 13]
+        assert table["GROUP"].tolist() == ["batch", "batch", "batch 2", "batch 2"]
+
+        pd.DataFrame({"Length mm": [20, 21, 22]}).to_excel(excel, index=False)
+        stale_dashboard = tmp_path / "stale.html"
+        with pytest.raises(ValueError, match="Reload CSV/Excel data before export"):
+            run_tabular_file_analytics(output_dashboard_file=str(stale_dashboard), **args)
+        assert not stale_dashboard.exists()
+    finally:
+        cleanup_tabular_load_result(loaded)
 
 
 def test_run_tabular_file_analytics_interactivity_auto_samples_dashboard_frame(

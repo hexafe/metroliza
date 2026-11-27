@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
 
 import sys
@@ -1168,39 +1169,94 @@ def test_tabular_analytics_dialog_can_decline_multi_file_auto_groups(
         _dispose_dialog(dialog)
 
 
-def test_tabular_analytics_dialog_rejects_mixed_multi_file_without_group_prompt(
+def test_tabular_analytics_dialog_loads_mixed_files_using_first_sheet_and_auto_groups(
     tmp_path,
     monkeypatch,
+    qapplication_session,
 ) -> None:
-    _app()
     csv_file = tmp_path / "dataset.csv"
-    excel_file = tmp_path / "supplier.xlsx"
-    pd.DataFrame({"Length mm": [10.0, 10.2]}).to_csv(csv_file, index=False)
-    pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(excel_file, index=False)
-    warning_calls = []
+    excel_file = tmp_path / "dataset.xlsx"
+    pd.DataFrame({"TraceCode": ["A", "B"], "Length mm": [10.0, 10.2]}).to_csv(csv_file, index=False)
+    with pd.ExcelWriter(excel_file) as writer:
+        pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(writer, sheet_name="Overview", index=False)
+        pd.DataFrame({"Length mm": [99, 100]}).to_excel(writer, sheet_name="Data", index=False)
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
         lambda *_args, **_kwargs: ([str(csv_file), str(excel_file)], "All files (*)"),
     )
+    prompts = []
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QMessageBox.question",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid mixed multi-file selection must not prompt for file groups")
-        ),
+        lambda *_args, **_kwargs: prompts.append(_args[2]) or QMessageBox.StandardButton.Yes,
+    )
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    try:
+        dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+        assert dialog.input_files == (str(csv_file), str(excel_file))
+        assert dialog.source_label.text() == "2 CSV/Excel files: 4 rows"
+        assert dialog.input_file_field.text() == "2 CSV/Excel files: dataset.csv, dataset.xlsx"
+        assert "first sheet of each workbook" in prompts[0]
+        assert dialog.sheet_name_combo.currentText() == "First sheet of each workbook"
+        assert not dialog.sheet_name_combo.isEnabled() and dialog._selected_sheet_name() is None
+        assert dialog.tabular_load_result.source_snapshots[1].sheet_name == "Overview"
+        assert dialog.tabular_load_result.dataframe["length_mm"].tolist() == pytest.approx([10, 10.2, 10.4, 10.6])
+        assert dialog.grouping_applied and dialog.df_for_grouping["GROUP"].tolist() == [
+            "dataset", "dataset", "dataset 2", "dataset 2",
+        ]
+
+        old_store = Path(dialog.tabular_load_result.sqlite_store.path)
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [4], "GROUP": ["Old worksheet group"]}))
+        dialog.set_grouping_applied(True)
+        with pd.ExcelWriter(excel_file) as writer:
+            pd.DataFrame({"Length mm": [10.4, 10.6]}).to_excel(writer, sheet_name="Data", index=False)
+            pd.DataFrame({"Length mm": [99, 100]}).to_excel(writer, sheet_name="Overview", index=False)
+        dialog.handle_load_metrics_clicked()
+        _wait_for_tabular_load(dialog)
+        assert dialog.tabular_load_result.source_snapshots[1].sheet_name == "Data"
+        assert not old_store.exists()
+        assert dialog.df_for_grouping["GROUP"].tolist() == ["dataset", "dataset", "dataset 2", "dataset 2"]
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_tabular_analytics_dialog_rejects_unsupported_selection_without_discarding_loaded_data(
+    tmp_path, monkeypatch, qapplication_session,
+) -> None:
+    csv_file = tmp_path / "dataset.csv"
+    second = tmp_path / "another.csv"
+    unsupported = tmp_path / "readme.txt"
+    for path in (csv_file, second, unsupported):
+        path.write_text("Length mm\n10\n12\n", encoding="utf-8")
+    selections = iter(((csv_file, second), (csv_file, unsupported)))
+    prompts, warnings = [], []
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QFileDialog.getOpenFileNames",
+        lambda *_args, **_kwargs: (list(map(str, next(selections))), "All files (*)"),
+    )
+    monkeypatch.setattr(
+        "modules.industrial_analytics_dialog.QMessageBox.question",
+        lambda *_args, **_kwargs: prompts.append(_args[2]) or QMessageBox.StandardButton.Yes,
     )
     monkeypatch.setattr(
         "modules.industrial_analytics_dialog.QMessageBox.warning",
-        lambda *args, **_kwargs: warning_calls.append(args),
+        lambda *_args, **_kwargs: warnings.append(_args[2]),
     )
 
     dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
     try:
         dialog.select_input_file()
+        _wait_for_tabular_load(dialog)
+        loaded = dialog.tabular_load_result
+        previous_groups = dialog.df_for_grouping
+        dialog.select_input_file()
 
-        assert dialog.input_files == ()
-        assert dialog.input_file == ""
-        assert warning_calls
-        assert "Select only CSV files" in warning_calls[0][2]
+        assert dialog.input_files == (str(csv_file), str(second))
+        assert dialog.input_file == str(csv_file)
+        assert dialog.tabular_load_result is loaded and Path(loaded.sqlite_store.path).is_file()
+        assert dialog.df_for_grouping is previous_groups and dialog._auto_group_selected_files
+        assert len(prompts) == 1
+        assert warnings == ["Select only CSV (.csv) or Excel (.xlsx, .xls) files."]
     finally:
         _dispose_dialog(dialog)
 
@@ -1694,7 +1750,7 @@ def _finish_analytics(dialog) -> None:
     assert dialog.analytics_thread is None
 
 
-def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=()) -> None:
+def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing=(), before_choice=None) -> None:
     from PyQt6.QtCore import QTimer
 
     observed = []
@@ -1704,6 +1760,8 @@ def _choose_analytics_collision(dialog, choice, expected_copy, *, shown_existing
         if not isinstance(prompt, QMessageBox) or prompt.parentWidget() is not dialog:
             return
         observed.append((prompt.defaultButton().text(), prompt.text()))
+        if before_choice is not None:
+            before_choice()
         if choice == "default":
             prompt.defaultButton().click()
         elif choice == "cancel":
@@ -2686,5 +2744,219 @@ def test_csv_summary_f1_opens_its_own_manual(monkeypatch) -> None:
         assert opened == ["csv_summary"]
         menu_keys = [action.text() for action in dialog.help_menu.actions()]
         assert menu_keys[0] == "Export manual"  # menu order unchanged
+    finally:
+        _dispose_dialog(dialog)
+
+
+@pytest.mark.parametrize("group_before_filter", [True, False], ids=["group-first-workbook", "filter-first-html"])
+def test_csv_filters_groups_typed_preview_and_exports_the_same_rows(tmp_path, monkeypatch, group_before_filter):
+    import json
+
+    from PyQt6.QtCore import Qt, QTimer
+    from PyQt6.QtTest import QTest
+
+    from metroliza.shared.typed_filter import FilterPreview
+    from metroliza.ui import export_dialog, tabular_analytics_filter_dialog as filters
+
+    app = _app()
+    source = tmp_path / "readings.csv"
+    source.write_text(
+        "Part;Measured Date;Line;Station;Size mm;Size mm;Size!mm\n"
+        "A;2026-02-15;LineNorth;Bench A;10,2;2,5;90,1\n"
+        "B;2026-02-16;EXCLUDED_CATEGORY_123;Bench B;10,3;9,5;90,2\n"
+        "C;2026-02-17;LineSouth;Bench C;10,4;3,5;90,3\n",
+        encoding="utf-8",
+    )
+    messages, receipts, failures = [], [], []
+    monkeypatch.setattr(export_dialog, "show_export_result_message", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, text: messages.append(text))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+
+    def enter_typed_filter(typed):
+        preview_key = Qt.Key.Key_Return if group_before_filter else Qt.Key.Key_Enter
+        acceptances = []
+        typed.accepted.connect(lambda: acceptances.append(True))
+        assert not typed.apply_button.isEnabled()
+        for index in range(typed.field_combo.count()):
+            if "Size mm (occurrence 2)" in typed.field_combo.itemText(index):
+                typed.field_combo.setCurrentIndex(index)
+                break
+        else:
+            pytest.fail("Duplicate source occurrence missing from typed filter catalog")
+        rule = typed.field_combo.currentData() + " < 4"
+        typed.expression_input.setText(typed.field_combo.currentData() + ' = "invalid number"')
+        QTest.keyClick(typed.expression_input, preview_key)
+        assert typed.result_preview is None
+        assert not typed.apply_button.isEnabled()
+        assert not acceptances
+        typed.expression_input.setText(rule)
+        QTest.keyClick(typed.expression_input, preview_key)
+        assert typed.isVisible()
+        assert not acceptances
+        receipts.append(typed.result_preview)
+        assert typed.apply_button.isEnabled()
+        typed.expression_input.setText(rule + " and > 3")
+        assert not typed.apply_button.isEnabled()
+        typed.expression_input.setText(rule)
+        QTest.keyClick(typed.expression_input, preview_key)
+        assert typed.isVisible()
+        typed.apply_button.click()
+        assert acceptances == [True]
+
+    def drive_typed_filter():
+        typed = app.activeModalWidget()
+        try:
+            assert isinstance(typed, filters.TabularTypedFilterDialog)
+            enter_typed_filter(typed)
+        except BaseException as exc:
+            failures.append(exc)
+            if typed is not None:
+                typed.reject()
+
+    def open_typed_filter():
+        legacy = app.activeModalWidget()
+        try:
+            assert isinstance(legacy, filters.TabularAnalyticsFilterDialog)
+            assert legacy.typed_filter_button.isEnabled()
+            QTimer.singleShot(0, drive_typed_filter)
+            legacy.typed_filter_button.click()
+        except BaseException as exc:
+            failures.append(exc)
+            if legacy is not None:
+                legacy.reject()
+
+    def select_group(field):
+        index = dialog.group_field_combo.findData(field)
+        assert index > 0
+        dialog.group_field_combo.setCurrentIndex(index)
+        dialog.group_field_combo.activated.emit(index)
+
+    try:
+        dialog.input_file = str(source)
+        dashboard = tmp_path / "typed.html"
+        workbook = tmp_path / "typed.xlsx"
+        dialog.output_dashboard_file = str(dashboard)
+        dialog.output_workbook_file = str(workbook)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        dialog.workbook_checkbox.setChecked(group_before_filter)
+        dialog.time_series_checkbox.setChecked(True)
+        if group_before_filter:
+            select_group("line")
+        QTimer.singleShot(0, open_typed_filter)
+        dialog.filters_button.click()
+        assert not failures, failures
+        assert receipts == [FilterPreview(2, (1, 3))]
+        assert dialog._tabular_filtered_row_count() == 2
+        assert not dialog.save_recipe_button.isEnabled()
+        assert not dialog.edit_groups_button.isEnabled()
+        assert dialog.group_field_combo.isEnabled()
+        if not group_before_filter:
+            select_group("line")
+            assert dialog._tabular_filtered_row_count() == 2
+        assert dialog._build_analytics_request().aggregation_state.group_fields == ("line",)
+        assert not dialog.column_types_button.isEnabled()
+        assert dialog.start_button.isEnabled()
+        dialog.start_button.click()
+        _finish_analytics(dialog)
+        assert not messages
+        assert dashboard.is_file()
+        contents = dashboard.read_text(encoding="utf-8")
+        assert "Applied the typed CSV/Excel row filter." in contents
+        assert "all 2 rows rendered" in contents
+        assert all(category in contents for category in ("LineNorth", "LineSouth"))
+        assert "EXCLUDED_CATEGORY_123" not in contents
+        charts_payload = contents.split('<script id="production-dashboard-charts" type="application/json">', 1)[1]
+        charts = json.loads(charts_payload.split("</script>", 1)[0])
+        plot = next(chart["plotly_spec"] for chart in charts if chart["id"] == "time-series-size_mm_2")
+        assert {trace["name"]: (trace["x"], trace["y"]) for trace in plot["data"]} == {
+            "LineNorth": (["2026-02-15T00:00:00+00:00"], [2.5]),
+            "LineSouth": (["2026-02-17T00:00:00+00:00"], [3.5]),
+        }
+        if group_before_filter:
+            with pd.ExcelFile(workbook) as result:
+                table = pd.read_excel(result, sheet_name="Table Data")
+                assert table["source_row_number"].tolist() == [1, 3]
+                assert table["size_mm_2"].tolist() == [2.5, 3.5]
+                assert table["line"].tolist() == ["LineNorth", "LineSouth"]
+                aggregates = pd.read_excel(result, sheet_name="Aggregates")
+                assert set(aggregates["line"]) == {"LineNorth", "LineSouth"}
+            original = (dashboard.read_bytes(), workbook.read_bytes())
+            _choose_analytics_collision(
+                dialog, "replace", (), before_choice=lambda: select_group("station"),
+            )
+            assert dialog.analytics_thread is None
+            assert messages == ["Settings changed while choosing outputs. Review the scope and generate again."]
+            assert (dashboard.read_bytes(), workbook.read_bytes()) == original
+            select_group("line")
+        else:
+            assert not workbook.exists()
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert not dialog.start_button.isEnabled()
+        assert "new preview" in dialog.readiness_label.text()
+        dialog.clear_filter_button.click()
+        assert dialog.start_button.isEnabled()
+    finally:
+        _dispose_dialog(dialog)
+
+
+def test_mixed_inputs_offer_path_free_file_grouping_and_keep_manual_groups_exclusive(tmp_path):
+    from PyQt6.QtCore import QTimer
+
+    from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+
+    app = _app()
+    paths = []
+    for directory, rows in (("private-a", "A,1.5\nB,2.5\n"), ("private-b", "C,3.5\nD,4.5\n")):
+        folder = tmp_path / directory
+        folder.mkdir()
+        source = folder / "readings.csv"
+        source.write_text("Part,Reading\n" + rows, encoding="utf-8")
+        paths.append(str(source))
+    dialog = IndustrialAnalyticsDialog(source_kind=SOURCE_TABULAR_FILE)
+    observed = []
+
+    def inspect_filter_dialog():
+        modal = app.activeModalWidget()
+        if not isinstance(modal, TabularAnalyticsFilterDialog):
+            return
+        observed.append((modal.typed_filter_button.isEnabled(), modal.typed_filter_button.toolTip()))
+        modal.reject()
+
+    try:
+        dialog.input_file = paths[0]
+        dialog.input_files = tuple(paths)
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        combo = dialog.group_field_combo
+        index = combo.findData("source_file")
+        assert index > 0
+        assert combo.currentData() == ""
+        assert not dialog.grouping_applied
+        assert dialog.tabular_load_result.row_table["source_file"].tolist() == [
+            "readings.csv", "readings.csv", "readings (2).csv", "readings (2).csv",
+        ]
+
+        dialog.set_df_for_grouping(pd.DataFrame({"REPORT_ID": [1], "GROUP": ["Manually selected"]}))
+        dialog.set_grouping_applied(True)
+        dialog._sync_ui_state()
+        assert not combo.isEnabled()
+        QTimer.singleShot(0, inspect_filter_dialog)
+        dialog.filters_button.click()
+        assert observed and not observed[0][0] and "manual groups" in observed[0][1]
+        assert dialog.grouping_applied
+
+        dialog.clear_groups_button.click()
+        assert combo.isEnabled()
+        combo.setCurrentIndex(index)
+        combo.activated.emit(index)
+        assert not dialog.grouping_applied
+        assert dialog._build_analytics_request().aggregation_state.group_fields == ("source_file",)
+
+        dialog.load_metrics()
+        _wait_for_tabular_load(dialog)
+        assert combo.currentData() == "source_file"
+        assert not dialog.grouping_applied
     finally:
         _dispose_dialog(dialog)

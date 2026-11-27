@@ -56,6 +56,9 @@ except ImportError:  # pragma: no cover - compatibility for older forks without 
     _parse_grouping_filter_expression = None
 
 if TYPE_CHECKING:
+    from metroliza.shared.typed_filter import CompiledSqliteFilter
+    from metroliza.tabular.tabular_typed_filter import TabularTypedFilterScope
+
     from metroliza.industrial.industrial_analytics_service import (
         ProductionAggregationResult,
         ProductionGroupstatsResult,
@@ -78,6 +81,8 @@ _TIMESTAMP_HINTS = (
 _REFERENCE_HINTS = ("reference", "ref", "part", "part_number", "id", "serial")
 TABULAR_GROUP_COLUMN = "GROUP"
 TABULAR_DEFAULT_GROUP = "POPULATION"
+TABULAR_EXCEL_SUFFIXES = frozenset({".xlsx", ".xls"})
+TABULAR_INPUT_SUFFIXES = TABULAR_EXCEL_SUFFIXES | {".csv"}
 _INTERNAL_COLUMNS = frozenset(
     {
         "source_row_number",
@@ -197,6 +202,8 @@ class TabularSourceSnapshot:
     row_count: int
     csv_config: dict[str, Any] = field(default_factory=dict)
     file_identity: tuple[int, int, int] | None = None
+    sheet_name: str | None = None
+    display_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -291,24 +298,38 @@ class TabularSqliteStore:
         grouping_filter: Any = None,
         grouping_filter_expression: str | None = None,
         grouping_filter_aliases: Mapping[str, str] | None = None,
+        _typed_filter: CompiledSqliteFilter | None = None,
     ) -> QueryScope:
         """Return a reusable SQLite query scope for selected tabular rows."""
 
         select_columns = _normalized_tabular_required_columns(self.columns, columns)
-        where_sql, params = self._where_clause(
-            filter_columns=filter_columns,
-            selected_filter_keys=selected_filter_keys,
-            base_column_filters=base_column_filters,
-            column_filters=column_filters,
-            column_filter_match_mode=column_filter_match_mode,
-            grouping_filter=grouping_filter,
-            grouping_filter_expression=grouping_filter_expression,
-            grouping_filter_aliases=grouping_filter_aliases,
-        )
+        if _typed_filter is None:
+            where_sql, params = self._where_clause(
+                filter_columns=filter_columns,
+                selected_filter_keys=selected_filter_keys,
+                base_column_filters=base_column_filters,
+                column_filters=column_filters,
+                column_filter_match_mode=column_filter_match_mode,
+                grouping_filter=grouping_filter,
+                grouping_filter_expression=grouping_filter_expression,
+                grouping_filter_aliases=grouping_filter_aliases,
+            )
+        else:
+            if any((filter_columns, selected_filter_keys, base_column_filters, column_filters,
+                    grouping_filter is not None, grouping_filter_expression)):
+                raise ValueError("A typed filter scope cannot include legacy filters.")
+            validated = _validate_compiled_sqlite_filter(
+                TabularSqliteFilterExpression(clause=_typed_filter.sql, params=_typed_filter.parameters),
+                columns=(*self.columns, self.table_name), aliases={},
+                date_filter_columns=self.date_filter_columns, numeric_filter_columns=self.numeric_filter_columns,
+            )
+            where_sql, params = f" WHERE {validated.clause}", validated.params
         query = (
             f"SELECT {', '.join(self._select_column_expression(column) for column in select_columns)} "
             f"FROM {_quote_identifier(self.table_name)}{where_sql}"
         )
+        if _typed_filter is not None:
+            query += ' ORDER BY "source_row_number"'
         if limit is not None and int(limit) >= 0:
             query = f"{query} LIMIT {int(limit)}"
             row_count_sql = f"SELECT COUNT(*) FROM ({query}) AS limited_scope"
@@ -1642,22 +1663,20 @@ def load_tabular_analytics_files(
     cancel_check: TabularCancelCheck | None = None,
     column_types: Mapping[ColumnIdentity, str] | None = None,
 ) -> TabularAnalyticsLoadResult:
-    """Load one or more tabular analytics files.
-
-    Multiple inputs are intentionally CSV-only. Excel keeps the existing single-workbook
-    sheet selection behavior.
-    """
+    """Load CSV and Excel in selection order, using the first sheet of each workbook in a batch."""
 
     paths = tuple(Path(path) for path in input_files or ())
     _raise_if_tabular_load_cancelled(cancel_check)
     if not paths:
         raise ValueError("Select at least one CSV or Excel file.")
     for path in paths:
-        if not path.exists():
+        if not path.is_file():
             raise FileNotFoundError(str(path))
+        if path.suffix.lower() not in TABULAR_INPUT_SUFFIXES:
+            raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
 
-    if len(paths) > 1 and any(path.suffix.lower() != ".csv" for path in paths):
-        raise ValueError("Multiple-file loading supports CSV files only.")
+    if len(paths) > 1 and sheet_name is not None and any(path.suffix.lower() in TABULAR_EXCEL_SUFFIXES for path in paths):
+        raise ValueError("Choose a sheet only for a single Excel workbook. Batch loading uses each workbook's first sheet.")
 
     return _load_tabular_files_into_sqlite(
         paths,
@@ -1692,7 +1711,7 @@ def load_tabular_analytics_file(
     if not path.exists():
         raise FileNotFoundError(str(path))
     suffix = path.suffix.lower()
-    if suffix not in {".csv", ".xlsx", ".xls"}:
+    if suffix not in TABULAR_INPUT_SUFFIXES:
         raise ValueError("Unsupported analytics file type. Use CSV or Excel.")
     return _load_tabular_files_into_sqlite(
         (path,),
@@ -1782,28 +1801,24 @@ def _load_tabular_files_into_sqlite(
     date_filter_source_columns: set[str] = set()
     timestamp_field: str | None = None
     reference_field: str | None = None
-    resolved_sheet_name: str | None = None
-
-    for path in paths:
+    for path, display_name in zip(paths, tabular_source_display_names(paths), strict=True):
         sampling_started_at = time.perf_counter()
         _raise_if_tabular_load_cancelled(cancel_check)
         _emit_tabular_load_progress(
             progress_callback,
             stage="sampling",
             file=str(path),
-            file_name=path.name,
+            file_name=display_name,
             rows_loaded=0,
         )
         sampled = _sample_tabular_source(path, sheet_name=sheet_name)
-        if sampled["sheet_name"] is not None:
-            resolved_sheet_name = str(sampled["sheet_name"])
         header_identities = _header_identities(sampled["header"])
         for identity in header_identities:
             if identity in seen_header_identities:
                 continue
             seen_header_identities.add(identity)
             global_header_identities.append(identity)
-        sampled_specs.append({"path": path, "header_identities": header_identities, **sampled})
+        sampled_specs.append({"path": path, "display_name": display_name, "header_identities": header_identities, **sampled})
         _record_load_timing("sampling", sampling_started_at)
 
     identity_mapping = _reserve_internal_column_names(
@@ -1865,6 +1880,7 @@ def _load_tabular_files_into_sqlite(
         file_specs.append(
             {
                 "path": sampled_spec["path"],
+                "display_name": sampled_spec["display_name"],
                 "csv_config": csv_config,
                 "csv_numbers": csv_numbers,
                 "header": header,
@@ -1946,6 +1962,7 @@ def _load_tabular_files_into_sqlite(
             for file_index, spec in enumerate(file_specs, start=1):
                 _raise_if_tabular_load_cancelled(cancel_check)
                 path = spec["path"]
+                display_name = spec["display_name"]
                 csv_config = spec["csv_config"]
                 decimal = str(csv_config.get("decimal") or ".")
                 reserved = {
@@ -1961,7 +1978,7 @@ def _load_tabular_files_into_sqlite(
                     progress_callback,
                     stage="loading_file",
                     file=str(path),
-                    file_name=path.name,
+                    file_name=display_name,
                     file_index=file_index,
                     file_count=len(file_specs),
                     rows_loaded=row_number,
@@ -1991,7 +2008,7 @@ def _load_tabular_files_into_sqlite(
                         bad_timestamp_count += 1
                     row_data: dict[str, Any] = {
                         "source_row_number": row_number,
-                        "source_file": path.name,
+                        "source_file": display_name,
                         "process_datetime": _sqlite_datetime_text_value(parsed_timestamp),
                         "reference": _normalized_cell_text(
                             normalized_row.get(spec["reference_field"])
@@ -2033,7 +2050,7 @@ def _load_tabular_files_into_sqlite(
                             progress_callback,
                             stage="chunk_loaded",
                             file=str(path),
-                            file_name=path.name,
+                            file_name=display_name,
                             file_index=file_index,
                             file_count=len(file_specs),
                             chunk_rows=len(batch),
@@ -2049,7 +2066,7 @@ def _load_tabular_files_into_sqlite(
                         progress_callback,
                         stage="chunk_loaded",
                         file=str(path),
-                        file_name=path.name,
+                        file_name=display_name,
                         file_index=file_index,
                         file_count=len(file_specs),
                         chunk_rows=len(batch),
@@ -2069,6 +2086,8 @@ def _load_tabular_files_into_sqlite(
                         row_count=file_row_count,
                         csv_config=csv_config,
                         file_identity=(device, inode, changed_ns),
+                        sheet_name=spec["sheet_name"],
+                        display_name=display_name,
                     )
                 )
             _raise_if_tabular_load_cancelled(cancel_check)
@@ -2204,7 +2223,7 @@ def _load_tabular_files_into_sqlite(
             diagnostics=tuple(diagnostics),
             column_mapping=global_mapping,
             source_file=str(paths[0]),
-            sheet_name=resolved_sheet_name,
+            sheet_name=first_snapshot.sheet_name if first_snapshot is not None else None,
             timestamp_column=timestamp_field,
             reference_column=reference_field,
             csv_config=csv_config,
@@ -3038,18 +3057,42 @@ def build_tabular_grouping_dataframe(
     )
 
 
+def tabular_source_display_names(source_files: tuple[str | Path, ...] | list[str | Path]) -> tuple[str, ...]:
+    """Assign unique path-free labels while reserving every actual basename."""
+    names = tuple(Path(source).name or str(source) for source in source_files)
+    reserved = {name.casefold() for name in names}
+    used = set()
+    next_number = {}
+    labels = []
+    for name in names:
+        key = name.casefold()
+        label = name
+        if key in used:
+            path = Path(name)
+            number = next_number.get(key, 2)
+            while True:
+                label = f"{path.stem} ({number}){path.suffix}"
+                number += 1
+                if label.casefold() not in reserved and label.casefold() not in used:
+                    break
+            next_number[key] = number
+        labels.append(label)
+        used.add(label.casefold())
+    return tuple(labels)
+
+
 def tabular_file_group_labels(
     source_files: tuple[str | Path, ...] | list[str | Path],
     *,
     default_group: str = TABULAR_DEFAULT_GROUP,
 ) -> tuple[tuple[str, str], ...]:
-    """Return deterministic display group labels for CSV Summary source files."""
+    """Return unique source labels and deterministic stem-based group names."""
 
     labels: list[tuple[str, str]] = []
     used: set[str] = set()
-    for source_file in source_files or ():
+    sources = source_files or ()
+    for source_file, source_name in zip(sources, tabular_source_display_names(sources), strict=True):
         path = Path(source_file)
-        source_name = path.name or str(source_file)
         base_label = path.stem.strip() or source_name.strip() or "File"
         if base_label.casefold() == default_group.casefold():
             base_label = f"{default_group} file"
@@ -3268,8 +3311,31 @@ def materialize_tabular_dataframe(
     row_filter_expression: str | None = None,
     row_filter_aliases: Mapping[str, str] | None = None,
     required_columns: tuple[str, ...] | list[str] | None = None,
+    typed_scope: TabularTypedFilterScope | None = None,
+    cancel_check: TabularCancelCheck | None = None,
 ) -> TabularFilterResult:
     """Return rows for analytics, using SQLite pushdown when the load result has a store."""
+
+    if typed_scope is not None:
+        from metroliza.tabular.tabular_typed_filter import TYPED_FILTER_COMBINATION
+
+        if any((filter_columns, selected_filter_keys, column_filters, row_filter_expression)):
+            raise ValueError(TYPED_FILTER_COMBINATION)
+        typed_scope.require_loaded(loaded)
+        store = loaded.sqlite_store
+        query = typed_scope.query(required_columns)
+        with typed_scope.read_connection(loaded, cancel_check=cancel_check) as connection:
+            dataframe = read_sql_dataframe(store.path, query.sql, query.params, connection=connection)
+        dataframe = _restore_sqlite_dataframe(dataframe, metric_columns=store.metric_columns)
+        return TabularFilterResult(
+            dataframe=dataframe,
+            diagnostics=(ProductionAnalyticsDiagnostic(
+                severity="info", code="tabular_typed_filter_applied",
+                message="Applied the typed CSV/Excel row filter.",
+                context={"input_row_count": store.row_count, "output_row_count": len(dataframe.index)},
+            ),),
+            applied=True, input_row_count=store.row_count, output_row_count=len(dataframe.index),
+        )
 
     if loaded.sqlite_store is None:
         return apply_tabular_row_filter(

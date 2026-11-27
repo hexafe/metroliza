@@ -77,7 +77,12 @@ from metroliza.exporting.export_dialog_service import build_export_artifact_link
 from metroliza.shared.progress_status import build_three_line_status
 from metroliza.shared.safe_bugreport import BugReportAction, recorder as _bugreport_recorder
 from metroliza.shared.safe_bugreport_context import ContextOperationOutcome, OptionSnapshotKind
-from metroliza.ui.tabular_analytics_filter_dialog import TabularAnalyticsFilterDialog
+from metroliza.ui.tabular_analytics_filter_dialog import (
+    OPEN_TYPED_FILTER, TabularAnalyticsFilterDialog, TabularTypedFilterDialog,
+)
+from metroliza.tabular.tabular_typed_filter import (
+    STALE_TYPED_FILTER, TYPED_FILTER_COMBINATION, supports_tabular_typed_filter, tabular_file_group_rule_columns,
+)
 from metroliza.ui.tabular_analytics_grouping_dialog import TabularAnalyticsGroupingDialog, _run_csv_scope_query
 from metroliza.tabular.csv_summary_scope import canonical_filter_state, preview_filter_change
 from metroliza.tabular.column_types import column_conversion_examples
@@ -88,7 +93,9 @@ from metroliza.analytics.row_table import RowTable
 from metroliza.tabular.contracts import _GroupingSnapshotOwner, _ValidatedGroupingSnapshot
 from metroliza.tabular.tabular_analytics_service import (
     TABULAR_DEFAULT_GROUP,
+    TABULAR_EXCEL_SUFFIXES,
     TABULAR_GROUP_COLUMN,
+    TABULAR_INPUT_SUFFIXES,
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
     TabularSqliteStore,
@@ -99,6 +106,7 @@ from metroliza.tabular.tabular_analytics_service import (
     materialize_tabular_dataframe,
     tabular_file_group_labels,
     tabular_load_result_row_count,
+    tabular_source_display_names,
 )
 from metroliza.ui.ui_foundation import (
     apply_metroliza_theme,
@@ -813,6 +821,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_keys: tuple[tuple[str, ...], ...] = ()
         self.tabular_column_filters: tuple[TabularColumnFilter, ...] = ()
         self.tabular_filter_expression = ""
+        self._tabular_typed_filter = None
+        self._tabular_typed_count = 0
         self._tabular_row_count_cache: tuple[object, tuple, int] | None = None
         self.df_for_grouping = None
         self.grouping_applied = False
@@ -1536,7 +1546,9 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def _tabular_source_status_source_text(self, source_files: tuple[str, ...]) -> str:
         if len(source_files) > 1:
-            return self._count_phrase(len(source_files), "CSV file")
+            suffixes = {Path(path).suffix.lower() for path in source_files}
+            kind = "CSV" if suffixes == {".csv"} else "Excel" if suffixes <= TABULAR_EXCEL_SUFFIXES else "CSV/Excel"
+            return self._count_phrase(len(source_files), f"{kind} file")
         if source_files:
             return Path(source_files[0]).name
         if self.input_file:
@@ -1721,6 +1733,8 @@ class IndustrialAnalyticsDialog(QDialog):
         self.tabular_filter_keys = ()
         self.tabular_column_filters = ()
         self.tabular_filter_expression = ""
+        self._tabular_typed_filter = None
+        self._tabular_typed_count = 0
 
     def _set_tabular_load_result(self, loaded) -> None:
         current = self.tabular_load_result
@@ -1742,11 +1756,11 @@ class IndustrialAnalyticsDialog(QDialog):
             return ""
         if len(input_files) == 1:
             return input_files[0]
-        names = [Path(path).name for path in input_files]
+        names = tabular_source_display_names(input_files)
         preview = ", ".join(names[:3])
         if len(names) > 3:
             preview = f"{preview}, +{len(names) - 3} more"
-        return f"{len(names)} CSV files: {preview}"
+        return f"{self._tabular_source_status_source_text(input_files)}: {preview}"
 
     def _tabular_filter_state_key(self) -> tuple:
         return (
@@ -1831,6 +1845,9 @@ class IndustrialAnalyticsDialog(QDialog):
         loaded = self.tabular_load_result
         if loaded is None:
             return 0
+        typed = getattr(self, "_tabular_typed_filter", None)
+        if typed is not None:
+            return self._tabular_typed_count if typed.matches_loaded(loaded) else 0
         state = self._tabular_filter_state_key()
         revision = IndustrialAnalyticsDialog._tabular_scope_revision(self, include_filter=False)
         cached = self._tabular_row_count_cache
@@ -1858,7 +1875,12 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def clear_tabular_filter(self) -> None:
         if not self.is_production_source and self.tabular_load_result is not None:
-            self._apply_tabular_filter((), "")
+            if self._tabular_typed_filter is not None:
+                self._clear_tabular_filter()
+                self._sync_filter_summary()
+                self._sync_ui_state()
+            else:
+                self._apply_tabular_filter((), "")
 
     def clear_tabular_groups(self) -> None:
         if self.is_production_source:
@@ -1881,14 +1903,16 @@ class IndustrialAnalyticsDialog(QDialog):
     def _populate_tabular_sheet_options(self) -> None:
         self.sheet_name_combo.blockSignals(True)
         self.sheet_name_combo.clear()
-        if len(self._selected_input_files()) > 1:
-            self.sheet_name_combo.addItem("CSV files", "")
+        input_files = self._selected_input_files()
+        if len(input_files) > 1:
+            includes_excel = any(Path(path).suffix.lower() in TABULAR_EXCEL_SUFFIXES for path in input_files)
+            self.sheet_name_combo.addItem("First sheet of each workbook" if includes_excel else "CSV files", "")
             self.sheet_name_combo.setEnabled(False)
             self.sheet_name_combo.blockSignals(False)
             return
         path = Path(self.input_file) if self.input_file else None
         suffix = path.suffix.lower() if path is not None else ""
-        if suffix in {".xlsx", ".xls"}:
+        if suffix in TABULAR_EXCEL_SUFFIXES:
             try:
                 sheet_names = list_tabular_excel_sheets(path)
             except Exception:
@@ -1956,13 +1980,15 @@ class IndustrialAnalyticsDialog(QDialog):
         if not filenames or self._tabular_source_busy():
             return
         selected_files = tuple(str(Path(filename)) for filename in filenames)
-        self._auto_group_selected_files = False
-        if len(selected_files) > 1 and any(Path(filename).suffix.lower() != ".csv" for filename in selected_files):
+        if any(Path(filename).suffix.lower() not in TABULAR_INPUT_SUFFIXES for filename in selected_files):
             QMessageBox.warning(
                 self,
                 self.windowTitle(),
-                "Select only CSV files when loading multiple CSV Summary inputs.",
+                "Select only CSV (.csv) or Excel (.xlsx, .xls) files.",
             )
+            return
+        if any(not Path(filename).is_file() for filename in selected_files):
+            QMessageBox.warning(self, self.windowTitle(), "One or more selected files are unavailable. Choose the files again.")
             return
         self._auto_group_selected_files = self._confirm_auto_group_selected_files(selected_files)
         self.input_files = selected_files
@@ -1997,11 +2023,16 @@ class IndustrialAnalyticsDialog(QDialog):
         preview = ", ".join(group_names[:5])
         if len(group_names) > 5:
             preview = f"{preview}, +{len(group_names) - 5} more"
+        sheet_notice = (
+            "This selection uses the first sheet of each workbook.\n\n"
+            if any(Path(path).suffix.lower() in TABULAR_EXCEL_SUFFIXES for path in selected_files) else ""
+        )
         result = QMessageBox.question(
             self,
             self.windowTitle(),
             (
                 "Create groups from the selected file names?\n\n"
+                f"{sheet_notice}"
                 f"Groups: {preview}\n\n"
                 "Each loaded row will be assigned to the group for its source file. "
                 "No POPULATION group will be created unless you add or rename one later."
@@ -2061,6 +2092,12 @@ class IndustrialAnalyticsDialog(QDialog):
         ):
             QMessageBox.warning(self, self.windowTitle(), "Load CSV/Excel metrics before filtering rows.")
             return
+        if self._tabular_typed_filter is not None:
+            self._open_typed_tabular_filter()
+            return
+        typed_available = (
+            not self.is_preloaded_tabular_source and supports_tabular_typed_filter(self.tabular_load_result)
+        )
         dialog = TabularAnalyticsFilterDialog(
             self,
             dataframe=self.tabular_load_result.dataframe,
@@ -2070,12 +2107,45 @@ class IndustrialAnalyticsDialog(QDialog):
             column_filters=self.tabular_column_filters,
             filter_expression=self.tabular_filter_expression,
             sqlite_store=self.tabular_load_result.sqlite_store,
+            **({"typed_filter_blocker": self._typed_filter_blocker()} if typed_available else {}),
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        action = dialog.exec()
+        if action == OPEN_TYPED_FILTER:
+            self._open_typed_tabular_filter()
+        elif action == QDialog.DialogCode.Accepted:
+            self._apply_tabular_filter(dialog.get_column_filters(), dialog.get_filter_expression())
+
+    def _typed_filter_blocker(self) -> str:
+        if self._tabular_source_busy():
+            return "Wait for the current CSV/Excel operation before applying a typed expression."
+        if any(self._tabular_filter_state_key()) or self.grouping_applied:
+            return TYPED_FILTER_COMBINATION
+        return ""
+
+    def _open_typed_tabular_filter(self) -> None:
+        loaded = self.tabular_load_result
+        if self.is_preloaded_tabular_source or not supports_tabular_typed_filter(loaded):
             return
-        self._apply_tabular_filter(dialog.get_column_filters(), dialog.get_filter_expression())
+        blocker = self._typed_filter_blocker()
+        if blocker:
+            QMessageBox.warning(self, self.windowTitle(), blocker)
+            return
+        current = self._tabular_typed_filter
+        dialog = TabularTypedFilterDialog(self, loaded=loaded, expression=current.text if current else "")
+        if dialog.exec() != QDialog.DialogCode.Accepted or dialog.result_scope is None:
+            return
+        if self.tabular_load_result is not loaded or self._typed_filter_blocker():
+            QMessageBox.warning(self, self.windowTitle(), STALE_TYPED_FILTER)
+            return
+        self._tabular_typed_filter = dialog.result_scope
+        self._tabular_typed_count = dialog.result_preview.matching_count
+        _bugreport_recorder.record(BugReportAction.FILTER_APPLIED)
+        self._sync_filter_summary()
+        self._sync_ui_state()
 
     def _apply_tabular_filter(self, filters: tuple[TabularColumnFilter, ...], expression: str) -> None:
+        if self._tabular_typed_filter is not None:
+            return
         loaded = self.tabular_load_result
         previous_grouping = self.df_for_grouping
         try:
@@ -2200,8 +2270,11 @@ class IndustrialAnalyticsDialog(QDialog):
         selected = tuple(replace(metric, field_name=fields[metric.field_name]) for metric in choices.selected
                          if fields.get(metric.field_name) in candidates)
         limits = {fields[name]: limit for name, limit in choices.limits.items() if fields.get(name) in candidates}
-        group_field = fields.get(choices.group_field, "")
-        if group_field not in _tabular_load_columns(loaded) or group_field in candidates:
+        generated_field = (
+            "source_file" if choices.group_field == "source_file" and not self.is_preloaded_tabular_source else ""
+        )
+        group_field = fields.get(choices.group_field, generated_field)
+        if group_field not in self._tabular_group_rule_columns(loaded) or group_field in candidates:
             group_field = ""
         filters, lost_filters = compatible_filters(choices.filters, previous, loaded, fields)
         groups = (choices.grouping, ())
@@ -2243,7 +2316,10 @@ class IndustrialAnalyticsDialog(QDialog):
         previous = pending[0] if pending else self.tabular_load_result
         choices = None
         lost = ()
-        if isinstance(previous, TabularAnalyticsLoadResult) and same_tabular_source(previous, loaded):
+        if (
+            isinstance(previous, TabularAnalyticsLoadResult) and same_tabular_source(previous, loaded)
+            and self._tabular_worksheet_scope(previous) == self._tabular_worksheet_scope(loaded)
+        ):
             original = pending[1] if pending else self._tabular_choices()
             try:
                 result = self._reloaded_tabular_choices(previous, original, loaded)
@@ -2270,6 +2346,15 @@ class IndustrialAnalyticsDialog(QDialog):
         if populate_metrics:
             self._sync_ui_state()
 
+    @staticmethod
+    def _tabular_worksheet_scope(loaded):
+        return tuple(snapshot.sheet_name for snapshot in loaded.source_snapshots)
+
+    def _tabular_group_rule_columns(self, loaded) -> tuple[str, ...]:
+        if not self.is_preloaded_tabular_source and supports_tabular_typed_filter(loaded):
+            return tabular_file_group_rule_columns(loaded)
+        return _tabular_load_columns(loaded)
+
     def _replace_tabular_snapshot(self, loaded, choices, populate_metrics):
         self._tabular_reload_notice = ""
         self._set_tabular_load_result(loaded)
@@ -2279,7 +2364,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._reset_group_options(
             tuple(
                 (column.replace("_", " ").title(), column)
-                for column in _tabular_load_columns(loaded)
+                for column in self._tabular_group_rule_columns(loaded)
                 if column not in {metric.field_name for metric in self.metric_candidates}
             )
         )
@@ -2315,7 +2400,8 @@ class IndustrialAnalyticsDialog(QDialog):
 
     def open_column_types(self):
         loaded = self.tabular_load_result
-        if self._tabular_source_busy() or loaded is None or not loaded.source_column_identities:
+        if (self._tabular_source_busy() or self._tabular_typed_filter is not None
+                or loaded is None or not loaded.source_column_identities):
             return
         dialog = ColumnTypesDialog(self, loaded, self._column_type_overrides)
         if dialog.exec() == QDialog.DialogCode.Accepted and dialog.overrides != self._column_type_overrides:
@@ -2345,7 +2431,7 @@ class IndustrialAnalyticsDialog(QDialog):
         row_count = tabular_load_result_row_count(loaded)
         source_files = tuple(getattr(loaded, "source_files", ()) or self._selected_input_files())
         if len(source_files) > 1:
-            return f"{len(source_files)} CSV files: {row_count} rows"
+            return f"{self._tabular_source_status_source_text(source_files)}: {row_count} rows"
         if source_files:
             return f"{Path(source_files[0]).name}: {row_count} rows"
         if self.input_file:
@@ -2388,7 +2474,7 @@ class IndustrialAnalyticsDialog(QDialog):
         self._sync_ui_state()
 
     def open_grouping_dialog(self) -> None:
-        if self.is_production_source or self._tabular_reload_busy():
+        if self.is_production_source or self._tabular_reload_busy() or self._tabular_typed_filter is not None:
             return
         if self.tabular_load_result is None:
             self.load_metrics()
@@ -2592,6 +2678,11 @@ class IndustrialAnalyticsDialog(QDialog):
     def _tabular_filter_summary(self) -> tuple[str, str]:
         if self.tabular_load_result is None:
             return "No row filter", "neutral"
+        if self._tabular_typed_filter is not None:
+            if not self._tabular_typed_filter.matches_loaded(self.tabular_load_result):
+                return STALE_TYPED_FILTER, "warning"
+            count = self._tabular_typed_count
+            return f"Typed expression: {count} rows", "success" if count else "danger"
         if (
             not self.tabular_column_filters
             and not self.tabular_filter_expression
@@ -2744,7 +2835,7 @@ class IndustrialAnalyticsDialog(QDialog):
         return "Groupstats requires manual CSV/Excel groups."
 
     def _selected_sheet_name(self) -> str | None:
-        if self.is_production_source:
+        if self.is_production_source or len(self._selected_input_files()) != 1:
             return None
         data_value = self.sheet_name_combo.currentData()
         if data_value is not None:
@@ -2815,6 +2906,10 @@ class IndustrialAnalyticsDialog(QDialog):
         )
         candidate_count = len(self.metric_candidates)
         source_stable = not self._tabular_reload_busy()
+        typed = self._tabular_typed_filter
+        typed_stale = typed is not None and not typed.matches_loaded(self.tabular_load_result)
+        scope_notice = self._tabular_reload_notice or (STALE_TYPED_FILTER if typed_stale else "")
+        clear_typed = "Clear the typed filter first."
         filtered_row_count = None
         if not self.is_production_source and self.tabular_load_result is not None:
             filtered_row_count = self._tabular_filtered_row_count()
@@ -2822,21 +2917,25 @@ class IndustrialAnalyticsDialog(QDialog):
         self.edit_limits_button.setEnabled(bool(candidate_count and metrics) and source_stable)
         rule_active = not self.is_production_source and bool(self.group_field_combo.currentData())
         self.edit_groups_button.setEnabled(
-            bool(candidate_count and not self.is_production_source) and source_stable and not rule_active
+            bool(candidate_count and not self.is_production_source) and source_stable and not rule_active and typed is None
         )
-        self.edit_groups_button.setToolTip("Wybierz „Brak reguły”, aby ustawić grupy ręczne." if rule_active else "")
+        self.edit_groups_button.setToolTip(
+            clear_typed if typed is not None else "Wybierz „Brak reguły”, aby ustawić grupy ręczne." if rule_active else ""
+        )
         if not self.is_production_source:
             self.group_field_combo.setEnabled(source_stable and not self.grouping_applied
                                               and self.group_field_combo.count() > 1)
             self.group_field_combo.setToolTip(
                 "Usuń grupy ręczne, aby wybrać regułę." if self.grouping_applied
+                else "Group matching rows by the selected source column." if typed is not None
                 else "Podziel analizę według wartości kolumny. Receptura zapisze wybraną regułę."
             )
         self.clear_filter_button.setEnabled(
             bool(
                 not self.is_production_source
                 and (
-                    self.tabular_column_filters
+                    typed is not None
+                    or self.tabular_column_filters
                     or self.tabular_filter_expression
                     or (self.tabular_filter_columns and self.tabular_filter_keys)
                 )
@@ -2845,17 +2944,17 @@ class IndustrialAnalyticsDialog(QDialog):
         self.clear_groups_button.setEnabled(bool(not self.is_production_source and self.grouping_applied))
         self.load_metrics_button.setEnabled(source_ready)
         self.column_types_button.setVisible(not self.is_production_source and not self.is_preloaded_tabular_source)
-        self.column_types_button.setEnabled(bool(getattr(self.tabular_load_result, "source_column_identities", {}))
+        self.column_types_button.setEnabled(typed is None and bool(getattr(self.tabular_load_result, "source_column_identities", {}))
                                             and not self._tabular_source_busy())
         if not self.is_production_source:
             source_idle = not self._tabular_source_busy()
             self.browse_input_button.setEnabled(source_idle)
             self.load_metrics_button.setEnabled(source_ready and source_idle)
-            self.timestamp_column_combo.setEnabled(source_idle)
-            self.reference_column_combo.setEnabled(source_idle)
+            self.timestamp_column_combo.setEnabled(source_idle and typed is None)
+            self.reference_column_combo.setEnabled(source_idle and typed is None)
             self.sheet_name_combo.setEnabled(
-                source_idle and len(self._selected_input_files()) == 1
-                and Path(self.input_file).suffix.lower() in {".xlsx", ".xls"}
+                source_idle and typed is None and len(self._selected_input_files()) == 1
+                and Path(self.input_file).suffix.lower() in TABULAR_EXCEL_SUFFIXES
             )
         if self.is_production_source:
             self.load_metrics_button.setText("Reload metrics" if candidate_count else "Load metrics")
@@ -2900,7 +2999,7 @@ class IndustrialAnalyticsDialog(QDialog):
         ready = bool(
             source_stable
             and source_ready
-            and not self._tabular_reload_notice
+            and not scope_notice
             and metrics
             and self.output_dashboard_file
             and charts_ready
@@ -2908,7 +3007,7 @@ class IndustrialAnalyticsDialog(QDialog):
             and tabular_rows_ready
         )
         self.start_button.setEnabled(ready)
-        if source_stable and self._tabular_refresh_result:
+        if source_stable and self._tabular_refresh_result and not typed_stale:
             self.readiness_label.setText(self._tabular_refresh_result)
             set_status_variant(self.readiness_label, "warning" if self._tabular_refresh_lost else "info")
         elif ready:
@@ -2923,8 +3022,8 @@ class IndustrialAnalyticsDialog(QDialog):
         elif not source_ready:
             self.readiness_label.setText("Select a source before creating analytics.")
             set_status_variant(self.readiness_label, "warning")
-        elif self._tabular_reload_notice:
-            self.readiness_label.setText(self._tabular_reload_notice)
+        elif scope_notice:
+            self.readiness_label.setText(scope_notice)
             set_status_variant(self.readiness_label, "warning")
         elif not metrics:
             self.readiness_label.setText("Load metrics and select at least one parameter.")
@@ -2939,16 +3038,19 @@ class IndustrialAnalyticsDialog(QDialog):
         else:
             self.readiness_label.setText("Select output paths before creating analytics.")
             set_status_variant(self.readiness_label, "warning")
-        can_save_recipe = ready and self.analytics_thread is None
+        can_save_recipe = ready and self.analytics_thread is None and typed is None
         self.save_recipe_button.setEnabled(can_save_recipe)
         self.save_recipe_button.setToolTip(
-            "Save these analysis settings for reuse." if can_save_recipe else self.readiness_label.text()
+            clear_typed if typed is not None else (
+                "Save these analysis settings for reuse." if can_save_recipe else self.readiness_label.text()
+            )
         )
         self.start_button.setToolTip(self.readiness_label.text() + " Ctrl+S generates; Ctrl+Shift+S stops.")
         if self.analytics_thread is None:
             set_output_summary(self.request_summary_label, output_summary(
                 source=self.db_file if self.is_production_source else self.input_file,
-                scope=(self.filter_state.summary() if self.is_production_source else tabular_scope(
+                scope=(self.filter_state.summary() if self.is_production_source else
+                       "Typed row filter" if typed is not None else tabular_scope(
                     self.tabular_filter_expression, self.tabular_column_filters,
                     self.tabular_filter_columns, self.tabular_filter_keys)),
                 grouping=self.grouping_summary_label.text() + " " + ", ".join(getattr(self, "_grouping_summary_names", ())),
@@ -3100,6 +3202,8 @@ class IndustrialAnalyticsDialog(QDialog):
                 delattr(self, name)
 
     def _save_as_recipe(self):
+        if self._tabular_typed_filter is not None:
+            return
         from metroliza.ui.recipe_workspace import open_capture_editor
         try:
             request = self._build_analytics_request(require_runnable=True)
@@ -3153,6 +3257,7 @@ class IndustrialAnalyticsDialog(QDialog):
                 tabular_filter_keys=self.tabular_filter_keys,
                 tabular_column_filters=self.tabular_column_filters,
                 tabular_filter_expression=self.tabular_filter_expression,
+                _tabular_typed_filter=self._tabular_typed_filter,
                 grouping_df=(snapshot.assignments if snapshot is not None
                              else self.df_for_grouping if self.grouping_applied else None),
                 _grouping_snapshot=snapshot,
@@ -3187,6 +3292,8 @@ class IndustrialAnalyticsDialog(QDialog):
             tabular_filter_keys=request.tabular_filter_keys,
             tabular_column_filters=request.tabular_column_filters,
             tabular_filter_expression=request.tabular_filter_expression,
+            **({"tabular_typed_filter": request.tabular_typed_filter}
+               if request.tabular_typed_filter is not None else {}),
             dashboard_detail_mode=request.dashboard_detail_mode,
             grouping_df=(request.grouping_df if snapshot is not None
                          else self.df_for_grouping if self.grouping_applied else None),
@@ -3199,9 +3306,11 @@ class IndustrialAnalyticsDialog(QDialog):
         )
 
     def _tabular_publication_scope(self) -> tuple:
+        group_field = None if self.is_preloaded_tabular_source else self.group_field_combo.currentData()
         return (self._selected_input_files(), self.output_dashboard_file,
                 self.output_workbook_file if self.workbook_checkbox.isChecked() else "",
-                self._tabular_filter_state_key(), self._grouping_snapshot_owner.revision)
+                self._tabular_filter_state_key(), self._tabular_typed_filter,
+                self._grouping_snapshot_owner.revision, group_field)
 
     def _tabular_publication_sources(self, request) -> tuple[Path, ...]:
         loaded = request.tabular_load_result
@@ -3381,8 +3490,8 @@ class IndustrialAnalyticsDialog(QDialog):
             # Inspect only the existing source descriptor, without opening the
             # input. Neither the path nor its suffix enters diagnostic storage.
             loaded = request.tabular_load_result
-            source = getattr(loaded, "source_file", "") or request.input_file
-            suffix = Path(source).suffix.lower() if tabular_file else ""
+            sources = getattr(loaded, "source_files", ()) or (getattr(loaded, "source_file", "") or request.input_file,)
+            suffixes = {Path(source).suffix.lower() for source in sources} if tabular_file else set()
             return _bugreport_recorder.record_option_snapshot(
                 OptionSnapshotKind.INDUSTRIAL_ANALYSIS
                 if production_cache or industrial_cache
@@ -3398,6 +3507,7 @@ class IndustrialAnalyticsDialog(QDialog):
                     "chart_groupstats": bool(charts.groupstats),
                     "filters_applied": bool(
                         request.filter_state.is_applied
+                        or request.tabular_typed_filter is not None
                         or request.tabular_filter_expression
                         or request.tabular_column_filters
                         or (request.tabular_filter_columns and request.tabular_filter_keys)
@@ -3410,8 +3520,8 @@ class IndustrialAnalyticsDialog(QDialog):
                     "cohort_configured": bool(request.cohort_state.is_applied),
                     "source_production_cache": production_cache,
                     "source_industrial_cache": industrial_cache,
-                    "source_csv": suffix == ".csv",
-                    "source_xlsx": suffix == ".xlsx",
+                    "source_csv": ".csv" in suffixes,
+                    "source_xlsx": ".xlsx" in suffixes,
                 },
             )
         except Exception:
@@ -3447,7 +3557,9 @@ class IndustrialAnalyticsDialog(QDialog):
             if (type(a) is tuple and type(b) is tuple and len(a) <= 16 and len(b) <= 16
                     and type(x) is str and type(y) is str and len(x) <= 2048 and len(y) <= 2048
                     and all(len(f.selected_values) <= 64 for f in (*a, *b))):
-                _bugreport_recorder.record(BugReportAction.CHECK_FILTER_REQUEST_MATCH, enabled=a == b and x == y)
+                _bugreport_recorder.record(BugReportAction.CHECK_FILTER_REQUEST_MATCH,
+                    enabled=a == b and x == y and request.tabular_typed_filter is worker_request.tabular_typed_filter,
+                )
             a, b = request.grouping_df, worker_request.grouping_df
             if ((a is None or type(a) is tuple and len(a) <= 128)
                     and (b is None or type(b) is tuple and len(b) <= 128)):

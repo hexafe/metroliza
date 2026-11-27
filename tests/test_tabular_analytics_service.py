@@ -453,6 +453,104 @@ def test_multi_csv_preserves_override_identity_and_invalid_numbers(tmp_path):
         cleanup_tabular_load_result(result)
 
 
+def test_mixed_sources_preserve_origin_sheet_order_and_raw_header_occurrences(tmp_path):
+    from openpyxl import Workbook
+
+    def write_workbook(path, title, rows):
+        path.parent.mkdir(exist_ok=True)
+        workbook = Workbook()
+        first = workbook.active
+        first.title = title
+        for row in rows:
+            first.append(row)
+        later = workbook.create_sheet("Unused Data")
+        later.append(["Reading mm"])
+        later.append([9999])
+        workbook.save(path)
+        workbook.close()
+
+    csv_file = tmp_path / "batch.csv"
+    csv_file.write_text("Reading mm,Reading-mm,Reading mm\n1,11,001\n2,12,002\n", encoding="utf-8")
+    first = tmp_path / "first" / "batch.xlsx"
+    second = tmp_path / "second" / "batch.xlsx"
+    distractor = tmp_path / "batch (2).xlsx"
+    write_workbook(first, "Overview", [("Reading mm", "Reading-mm", "Reading mm"), (3, 13, "003")])
+    write_workbook(second, "Data", [("Reading-mm", "Reading mm", "Reading mm"), (14, 4, "004")])
+    write_workbook(distractor, "Inspection", [("Reading mm",), (5,)])
+    paths = (csv_file, first, second, distractor)
+    types = {("Reading mm", 2): "text", ("Reading-mm", 1): "number"}
+
+    result = load_tabular_analytics_files(paths, column_types=types)
+    try:
+        assert result.storage_mode == "sqlite" and result.row_count == 5 and result.sheet_name is None
+        assert result.column_types == types
+        assert result.source_files == tuple(map(str, paths))
+        assert [item.sheet_name for item in result.source_snapshots] == [None, "Overview", "Data", "Inspection"]
+        assert [item.display_name for item in result.source_snapshots] == [
+            "batch.csv", "batch.xlsx", "batch (3).xlsx", "batch (2).xlsx",
+        ]
+        frame = materialize_tabular_dataframe(result).dataframe
+        assert frame["source_file"].tolist() == [
+            "batch.csv", "batch.csv", "batch.xlsx", "batch (3).xlsx", "batch (2).xlsx",
+        ]
+        assert frame["source_sheet"].fillna("").tolist() == ["", "", "Overview", "Data", "Inspection"]
+        columns = result.source_column_identities
+        assert len({columns[("Reading mm", 1)], columns[("Reading mm", 2)], columns[("Reading-mm", 1)]}) == 3
+        assert frame[columns[("Reading mm", 1)]].tolist() == [1, 2, 3, 4, 5]
+        assert frame[columns[("Reading-mm", 1)]].dropna().tolist() == [11, 12, 13, 14]
+        assert frame[columns[("Reading mm", 2)]].dropna().tolist() == ["001", "002", "003", "004"]
+        for options in ({"source_snapshots": result.source_snapshots}, {"source_files": result.source_files}):
+            grouping = build_tabular_file_grouping_dataframe(frame, **options)
+            assert grouping["GROUP"].tolist() == ["batch", "batch", "batch 2", "batch 3", "batch (2)"]
+    finally:
+        cleanup_tabular_load_result(result)
+
+    with pytest.raises(ValueError, match="single Excel workbook"):
+        load_tabular_analytics_files(paths, sheet_name="Data")
+    single = load_tabular_analytics_files((second,), sheet_name="Unused Data", min_numeric_count=1)
+    try:
+        assert single.sheet_name == single.source_snapshots[0].sheet_name == "Unused Data"
+        assert single.dataframe["reading_mm"].tolist() == [9999]
+    finally:
+        cleanup_tabular_load_result(single)
+
+
+def test_multiple_excel_inputs_include_genuine_xls_and_xlsx(tmp_path):
+    legacy = tmp_path / "legacy.xls"
+    modern = tmp_path / "modern.xlsx"
+    legacy.write_bytes(base64.b64decode(_GENUINE_XLS_DATE_WORKBOOK))
+    pd.DataFrame({"Metric": [5, 6]}).to_excel(modern, sheet_name="Inspection", index=False)
+
+    result = load_tabular_analytics_files((legacy, modern), min_numeric_count=1)
+    try:
+        assert result.sheet_name is None
+        assert [(item.name, item.sheet_name, item.row_count) for item in result.source_snapshots] == [
+            ("legacy.xls", "Data", 1), ("modern.xlsx", "Inspection", 2),
+        ]
+        assert result.dataframe["source_sheet"].tolist() == ["Data", "Inspection", "Inspection"]
+    finally:
+        cleanup_tabular_load_result(result)
+
+
+def test_mixed_source_cancellation_cleans_the_incomplete_store(tmp_path, monkeypatch):
+    csv_file = tmp_path / "line.csv"
+    csv_file.write_text("Metric\n1\n2\n", encoding="utf-8")
+    excel_file = tmp_path / "line.xlsx"
+    pd.DataFrame({"Metric": [3, 4]}).to_excel(excel_file, index=False)
+    monkeypatch.setattr(canonical_tabular_service.tempfile, "tempdir", str(tmp_path))
+    progress = []
+
+    def cancel_second_file():
+        return any(event["stage"] == "loading_file" and event["file_index"] == 2 for event in progress)
+
+    with pytest.raises(TabularLoadCancelled):
+        load_tabular_analytics_files((csv_file, excel_file), progress_callback=progress.append,
+                                    cancel_check=cancel_second_file)
+    assert any(event["stage"] == "chunk_loaded" and event["rows_loaded"] == 2 for event in progress)
+    assert cancel_second_file()
+    assert not list(tmp_path.glob("metroliza_csv_summary_*.sqlite*"))
+
+
 def test_multi_csv_sqlite_uses_global_header_mapping_for_sanitized_collisions(tmp_path) -> None:
     first_file = tmp_path / "line_a.csv"
     second_file = tmp_path / "line_b.csv"

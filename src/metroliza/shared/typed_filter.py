@@ -13,7 +13,7 @@ import sqlite3
 from typing import Any, Generator, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
-from metroliza.shared.finite_numeric import finite_numeric_source
+from metroliza.shared.finite_numeric import finite_numeric_source, sqlite_prefer_integer_source
 from metroliza.shared.grouping_filter_core import (
     DataFrameFilterSpec,
     FilterExpressionGroup,
@@ -352,15 +352,17 @@ def load_typed_filter(
 
 def compile_typed_filter_sqlite(
     expression: DataFrameFilterSpec | None, columns: Mapping[str, str], *, table_alias: str,
+    numeric_shadows: Mapping[str, str] | None = None,
 ) -> CompiledSqliteFilter:
-    """Compile against an adapter's trusted map of field IDs to SQLite columns."""
+    """Compile against trusted SQLite columns and optional already-normalized numeric shadows."""
 
     if not _valid_identifier(table_alias):
         raise ValueError("Expected a valid SQLite source alias.")
     if expression is not None:
         _check_tree_budget(expression, _FilterBudget())
     params = []
-    sql = _compile_node(expression, columns, _quote(table_alias), params) if expression is not None else "1"
+    sql = (_compile_node(expression, columns, _quote(table_alias), params, numeric_shadows or {})
+           if expression is not None else "1")
     return CompiledSqliteFilter(sql, tuple(params))
 
 
@@ -562,10 +564,12 @@ def _quote(identifier):
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def _compile_node(node, columns, source, params):
+def _compile_node(node, columns, source, params, numeric_shadows):
     if isinstance(node, FilterExpressionGroup):
         separator = {"and": " AND ", "or": " OR "}[node.operator]
-        return "(" + separator.join(_compile_node(child, columns, source, params) for child in node.children) + ")"
+        return "(" + separator.join(
+            _compile_node(child, columns, source, params, numeric_shadows) for child in node.children
+        ) + ")"
     leaf = _encode(node)
     column = columns.get(node.column)
     if not _valid_identifier(column):
@@ -573,4 +577,10 @@ def _compile_node(node, columns, source, params):
     params.append(json.dumps(leaf, ensure_ascii=True, allow_nan=False))
     # Qualification also makes a nonexistent column fail, even with SQLite's
     # double-quoted string compatibility enabled.
-    return f"{_SQLITE_FUNCTION}({source}.{_quote(column)}, ?)"
+    value = f"{source}.{_quote(column)}"
+    if node.kind == "number" and node.column in numeric_shadows:
+        shadow = numeric_shadows[node.column]
+        if not _valid_identifier(shadow):
+            raise FilterValidationError("missing_column", "No valid SQLite numeric shadow.", field=node.column)
+        value = sqlite_prefer_integer_source(value, f"{source}.{_quote(shadow)}")
+    return f"{_SQLITE_FUNCTION}({value}, ?)"

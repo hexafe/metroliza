@@ -28,6 +28,10 @@ from metroliza.tabular.tabular_analytics_service import (
     TabularAnalyticsLoadResult,
     TabularColumnFilter,
 )
+from metroliza.tabular.tabular_typed_filter import (
+    TYPED_FILTER_COMBINATION, TabularTypedFilterScope, tabular_file_group_rule_columns,
+)
+
 
 
 @dataclass(frozen=True)
@@ -60,6 +64,12 @@ class IndustrialAnalyticsRequest:
     _grouping_owner: _GroupingSnapshotOwner | None = field(default=None, repr=False, compare=False, kw_only=True)
     dashboard_visual_settings: dict[str, Any] | None = None
     dashboard_interactivity_options: DashboardInteractivityOptions | dict[str, Any] | None = None
+    _tabular_typed_filter: TabularTypedFilterScope | None = field(default=None, repr=False, kw_only=True)
+
+    @property
+    def tabular_typed_filter(self) -> TabularTypedFilterScope | None:
+        """Expose the prepared filter separately from public positional fields."""
+        return self._tabular_typed_filter
 
 
 _ANALYTICS_SOURCE_KINDS = {"production_cache", "tabular_file"}
@@ -113,7 +123,7 @@ def validate_industrial_analytics_request(
         output_workbook_file=output_workbook_file,
         metric_selection=_normalize_metric_selection(request.metric_selection),
         filter_state=_normalize_filter_state(request.filter_state),
-        aggregation_state=_normalize_aggregation_state(request.aggregation_state),
+        aggregation_state=(aggregation := _normalize_aggregation_state(request.aggregation_state)),
         cohort_state=_normalize_cohort_state(request.cohort_state),
         chart_selection=_normalize_chart_selection(request.chart_selection),
         separate_parameter_sheets=bool(request.separate_parameter_sheets),
@@ -138,6 +148,7 @@ def validate_industrial_analytics_request(
             request.tabular_filter_expression,
             field_name="tabular filter expression",
         ),
+        _tabular_typed_filter=_normalize_tabular_typed_filter(request, source_kind, aggregation),
         grouping_df=(grouping := _normalize_request_grouping(request))[0],
         grouping_default_group_label=normalize_default_group_label(
             request.grouping_default_group_label,
@@ -153,6 +164,26 @@ def validate_industrial_analytics_request(
             request.dashboard_interactivity_options
         ),
     )
+
+
+def _normalize_tabular_typed_filter(request, source_kind, aggregation):
+    scope = request.tabular_typed_filter
+    if scope is None:
+        return None
+    if type(scope) is not TabularTypedFilterScope or source_kind != "tabular_file":
+        raise ValueError("Typed expressions require a loaded CSV or Excel file.")
+    if request.grouping_df is not None or any((
+        request.tabular_filter_columns, request.tabular_filter_keys, request.tabular_column_filters,
+        request.tabular_filter_expression,
+    )):
+        raise ValueError(TYPED_FILTER_COMBINATION)
+    loaded = request.tabular_load_result
+    scope.require_loaded(loaded)
+    fields = aggregation.group_fields
+    if fields and (len(fields) != 1 or fields[0] not in tabular_file_group_rule_columns(loaded)
+                   or fields[0] in loaded.sqlite_store.metric_columns):
+        raise ValueError("Select one source column from the grouping dropdown for a typed expression.")
+    return scope
 
 
 def _normalize_request_grouping(
