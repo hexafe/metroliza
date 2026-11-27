@@ -39,8 +39,8 @@ The main dialog contains:
   - **Add manually**
   - **Edit selected**
   - **Delete selected**
-  - **Import CSV**
-  - **Export CSV**
+  - **Import matches**
+  - **Export matches**
   - **Close**
 
 The report/export names table shows names already found in the selected database, with counts for references, reports, and measurement rows. Select a row there when you want to avoid typing the original name manually.
@@ -131,12 +131,12 @@ Reference-specific matches are the safer choice when a short report name is reus
 
 1. Select a row in the saved matches table.
 2. Click **Delete selected**.
-3. If you may need to recover the rule, choose **Export CSV** and save a copy before continuing.
+3. If you may need to recover the rule, choose **Export matches** and save a copy before continuing.
 4. Confirm deletion after checking the alias, common name, and scope.
 
 Deleting a match stops Metroliza from using that replacement rule in future work.
 Confirmed deletions also keep the previous rule in the local database for recovery.
-The database retains the latest 100 deleted rules. Import the saved CSV to restore
+The database retains the latest 100 deleted rules. Import the saved JSON or CSV file to restore
 a rule after checking its scope.
 
 ## Troubleshooting
@@ -145,7 +145,7 @@ a rule after checking its scope.
 
 Disabled buttons usually mean a required selection is missing.
 
-- **Add manually**, **Import CSV**, and **Export CSV** need a selected database.
+- **Add manually**, **Import matches**, and **Export matches** need a selected database.
 - **Add from selected** needs a selected database and a selected row in **Report/export names in this database**.
 - **Edit selected** and **Delete selected** need a selected row in **Saved name matches**.
 

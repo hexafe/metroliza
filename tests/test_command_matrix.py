@@ -275,7 +275,7 @@ def test_mapping_parent_export_and_modal_child_save_share_ctrl_s_without_double_
     dialog = factory('mapping')
     exports, failures = [], []
     monkeypatch.setattr(mapping.QFileDialog, 'getSaveFileName', lambda *_args: exports.append(True) or ('', ''))
-    assert 'Export CSV' in plain_text(dialog.export_button.text()) and 'Ctrl+S' in dialog.export_button.text()
+    assert 'Export matches' in plain_text(dialog.export_button.text()) and 'Ctrl+S' in dialog.export_button.text()
     press(qapplication_session, dialog.export_button, 'Ctrl+S')
     assert exports == [True]
 
