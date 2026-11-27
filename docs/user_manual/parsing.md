@@ -48,8 +48,9 @@ value you entered or accepted, the cell keeps that value and shows the suggestio
 tooltip and report details. Compare it with the report, select the cell, then open
 **Metadata** and choose **Use OCR suggestion** or **Keep current value**. Keeping the value
 dismisses this suggestion until another read offers a suggestion.
-An accepted value is carried into the import with its OCR source. You can still edit it
-in the table before importing.
+Import saves an accepted value with its OCR source. Later metadata enrichment keeps that
+value and records different readings as alternatives. You can still correct the value
+before import or in **Modify Database**.
 
 ## Progress, cancellation and outcomes
 

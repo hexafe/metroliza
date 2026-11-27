@@ -32,9 +32,9 @@ from metroliza.shared.progress_status import (
 from metroliza.reports.report_identity import ImportedReportBatch, build_report_identity_hash
 from metroliza.reports.report_metadata_models import (
     CanonicalReportMetadata,
-    SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
     USER_SOURCE_TYPE,
 )
+from metroliza.reports.report_metadata_review import accepted_ocr_fields, sample_number_source_warnings
 from metroliza.reports.report_repository import (
     ReportEnrichmentApproval,
     ReportImportDisposition,
@@ -1184,8 +1184,35 @@ def _should_use_enriched_metadata_field(field_name, current_value, enriched_valu
     return field_name in _OCR_ONLY_METADATA_FIELDS
 
 
+def _retain_metadata_review_provenance(current, merged, protected_fields):
+    if "metadata_review" in current:
+        merged["metadata_review"] = current["metadata_review"]
+    else:
+        merged.pop("metadata_review", None)
+
+    if not protected_fields:
+        return
+    for key in ("field_sources", "field_corrections"):
+        before = _json_object(current.get(key))
+        after = _json_object(merged.get(key))
+        for name in sorted(protected_fields):
+            if name in before:
+                after[name] = before[name]
+            else:
+                after.pop(name, None)
+        if after or key in merged:
+            merged[key] = after
+
+    if "sample_number" in protected_fields:
+        source = merged["field_sources"].get("sample_number")
+        if source is None:
+            merged.pop("sample_number_provenance", None)
+        else:
+            merged["sample_number_provenance"] = source
+
+
 def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
-    """Merge complete metadata into an existing light row without replacing stable light fields."""
+    """Merge complete metadata into a light row while retaining reviewed decisions."""
 
     current_row = current_row or {}
     current_metadata_json = _json_object(current_row.get("metadata_json"))
@@ -1194,10 +1221,17 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
     merged_map = dict(enriched_map)
     updated_fields = []
     preserved_fields = []
+    reviewed = accepted_ocr_fields(current_metadata_json)
+    protected = reviewed | {dependent for name in reviewed for dependent in _FIELD_DEPENDENCIES.get(name, ())}
 
     for field_name in _METADATA_VALUE_FIELDS:
         current_value = current_row.get(field_name)
         enriched_value = enriched_map.get(field_name)
+        if field_name in protected:
+            merged_map[field_name] = current_value
+            if current_value != enriched_value:
+                preserved_fields.append(field_name)
+            continue
         if _should_use_enriched_metadata_field(field_name, current_value, enriched_value, current_metadata_json):
             if current_value != enriched_value:
                 updated_fields.append(field_name)
@@ -1230,6 +1264,7 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
             if source is not None:
                 field_sources[field_name] = source
     merged_metadata_json["field_sources"] = field_sources
+    _retain_metadata_review_provenance(current_metadata_json, merged_metadata_json, protected)
     merged_metadata_json["metadata_enrichment"] = {
         "mode": "complete",
         "merge_policy": "preserve_existing_nonempty_light_fields_except_ocr_only",
@@ -1237,14 +1272,13 @@ def merge_enriched_metadata_for_persistence(current_row, enriched_metadata):
         "updated_fields": sorted(set(updated_fields)),
     }
     warnings = tuple(_metadata_value(enriched_metadata, "warnings") or ())
-    sample_source = field_sources.get("sample_number")
-    if sample_source in ("manual", USER_SOURCE_TYPE, "metadata_review"):
+    sample_source = merged_metadata_json["field_sources"].get("sample_number")
+    manual_sample = sample_source in ("manual", USER_SOURCE_TYPE, "metadata_review")
+    if manual_sample:
         merged_map["sample_number_kind"] = "unknown"
         merged_metadata_json["sample_number_provenance"] = sample_source
-        warnings = tuple(
-            warning for warning in warnings
-            if _metadata_value(warning, "code") != SAMPLE_NUMBER_PROJECTION_WARNING_CODE
-        )
+    if manual_sample or "sample_number" in protected:
+        warnings = sample_number_source_warnings(warnings, sample_source)
 
     merged_metadata = CanonicalReportMetadata(
         parser_id=_metadata_value(enriched_metadata, "parser_id"),

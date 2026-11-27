@@ -23,6 +23,7 @@ from metroliza.reports.report_metadata_models import (
     SAMPLE_NUMBER_PROJECTION_WARNING_CODE,
     USER_SOURCE_TYPE,
 )
+from metroliza.reports.report_metadata_review import SAMPLE_NUMBER_COMMENT_WARNING_CODE, accepted_ocr_fields
 from metroliza.reports.report_schema import (
     is_report_schema_ready,
     is_report_schema_ready_cached,
@@ -1058,7 +1059,7 @@ class ReportRepository:
         An already-active borrowed transaction is rejected without committing or
         rolling back its caller's work. Unguarded callers retain legacy behavior.
         The complete OCR workflow binds its metadata snapshot before replacing
-        candidates and retains existing evidence for manually overridden fields.
+        candidates and retains evidence for manual edits and accepted OCR fields.
         """
 
         if approval is not None:
@@ -1083,7 +1084,7 @@ class ReportRepository:
             )
             self._replace_enrichment_candidates(
                 cursor, report_id, metadata, candidate_values, now,
-                preserve_manual_history=expected_metadata_json is not _UNSET,
+                expected_metadata_json=expected_metadata_json,
             )
             self._replace_metadata_warnings(cursor, report_id, warning_values)
 
@@ -1129,19 +1130,23 @@ class ReportRepository:
             raise ValueError("Report metadata changed before enrichment could be applied")
 
     def _replace_enrichment_candidates(
-        self, cursor, report_id: int, metadata, candidates, now: str, *, preserve_manual_history: bool,
+        self, cursor, report_id: int, metadata, candidates, now: str, *, expected_metadata_json,
     ) -> None:
-        manual = _manual_enrichment_candidates(metadata) if preserve_manual_history else {}
-        if not manual:
+        if expected_metadata_json is _UNSET:
+            self._replace_metadata_candidates(cursor, report_id, candidates)
+            return
+        manual = _manual_enrichment_candidates(metadata)
+        reviewed = accepted_ocr_fields(_json_object(expected_metadata_json)) - manual.keys()
+        if not manual and not reviewed:
             self._replace_metadata_candidates(cursor, report_id, candidates)
             return
 
         retained_fields = {}
         metadata_json = _json_object(_get_value(metadata, "metadata_json"))
+        sources = _json_object(metadata_json.get("field_sources"))
         if "stats_count_int" in manual and "stats_count_raw" not in manual:
             # Retain raw evidence even when fresh OCR agrees with the canonical value.
             # Selection still requires a candidate for the merged value and its recorded source.
-            sources = _json_object(metadata_json.get("field_sources"))
             raw_value = _get_value(metadata, "stats_count_raw")
             raw_source = sources.get("stats_count_raw")
             retained_fields["stats_count_raw"] = (raw_value, raw_source) if raw_value and raw_source else None
@@ -1150,8 +1155,9 @@ class ReportRepository:
             for name, candidate in manual.items()
         }
         selections.update(retained_fields)
+        selections.update({name: (_get_value(metadata, name), sources.get(name)) for name in reviewed})
         selected_fields, known_evidence = self._retain_enrichment_candidate_history(
-            cursor, report_id, selections,
+            cursor, report_id, selections, reviewed,
         )
         rows = []
         for candidate in candidates:
@@ -1173,7 +1179,7 @@ class ReportRepository:
         self._insert_metadata_candidate_rows(cursor, rows)
 
     @staticmethod
-    def _retain_enrichment_candidate_history(cursor, report_id: int, selections):
+    def _retain_enrichment_candidate_history(cursor, report_id: int, selections, reviewed):
         previous = cursor.execute(
             """
             SELECT id, is_selected, field_name, raw_value, normalized_value, source_type,
@@ -1192,7 +1198,10 @@ class ReportRepository:
                 replaced_fields.add(name)
                 continue
             evidence_seen.add(tuple(evidence))
-            selected = name not in selected_fields and (normalized, source) == selections[name]
+            selected = (
+                name not in selected_fields and (normalized, source) == selections[name]
+                and (name not in reviewed or was_selected)
+            )
             if selected:
                 selected_fields.add(name)
             if was_selected != selected:
@@ -1403,8 +1412,9 @@ class ReportRepository:
             metadata_json["sample_number_provenance"] = source
             cursor.execute("UPDATE report_metadata SET sample_number_kind = 'unknown' WHERE report_id = ?", (int(report_id),))
             cursor.execute(
-                "DELETE FROM report_metadata_warnings WHERE report_id = ? AND field_name = 'sample_number' AND code = ?",
-                (int(report_id), SAMPLE_NUMBER_PROJECTION_WARNING_CODE),
+                "DELETE FROM report_metadata_warnings WHERE report_id = ? AND field_name = 'sample_number' "
+                "AND code IN (?, ?)",
+                (int(report_id), SAMPLE_NUMBER_PROJECTION_WARNING_CODE, SAMPLE_NUMBER_COMMENT_WARNING_CODE),
             )
         for field_name, value in updates.items():
             cursor.execute(REPORT_METADATA_FIELD_UPDATE_SQL[field_name], (value, int(report_id)))
