@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import math
 import re
-from typing import Any, Iterable, Literal, Mapping, Protocol
+from typing import Any, Callable, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
 from metroliza.shared.finite_numeric import finite_numeric_source, parse_numeric_literal
@@ -570,18 +570,29 @@ def parse_filter_expression(
     *,
     dayfirst: bool = False,
     aliases: FilterAliases | None = None,
+    condition_factory: Callable[[str, str, tuple[str, ...]], DataFrameFilterSpec] | None = None,
+    token_preflight: Callable[[tuple[_FilterToken, ...]], None] | None = None,
 ) -> ParsedFilterExpression:
-    """Parse ``Column >= value AND (Other = value OR Third != x*)`` expressions."""
+    """Parse ``Column >= value AND (Other = value OR Third != x*)`` expressions.
+
+    A condition factory can bind the parsed field, operator and operands to an
+    explicit schema. The default builds the legacy value-inferred specs.
+    Token preflight can enforce caller-specific limits before parsing.
+    """
 
     text = str(expression or "").strip()
     if not text:
         return ParsedFilterExpression(specs=(), match_mode="and")
 
+    tokens = _tokenize_filter_expression(text)
+    if token_preflight is not None:
+        token_preflight(tokens)
     parser = _FilterExpressionParser(
-        _tokenize_filter_expression(text),
+        tokens,
         columns,
         dayfirst=dayfirst,
         aliases=aliases,
+        condition_factory=condition_factory,
     )
     expression_spec = parser.parse()
     specs, match_mode = _flatten_filter_expression(expression_spec)
@@ -673,12 +684,14 @@ class _FilterExpressionParser:
         *,
         dayfirst: bool,
         aliases: FilterAliases | None,
+        condition_factory: Callable[[str, str, tuple[str, ...]], DataFrameFilterSpec] | None,
     ) -> None:
         self._tokens = tokens
         self._index = 0
         self._columns = tuple(columns)
         self._dayfirst = dayfirst
         self._aliases = aliases
+        self._condition_factory = condition_factory
 
     def parse(self) -> DataFrameFilterSpec:
         if not self._tokens:
@@ -733,13 +746,10 @@ class _FilterExpressionParser:
             field = _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or "")
             if membership_operator is None:
                 raise ValueError(f"Missing operator for grouping filter field: {field}")
-            return _parse_membership_condition(
+            return self._make_membership_condition(
                 field,
                 membership_operator,
                 self._parse_membership_values(field),
-                self._columns,
-                dayfirst=self._dayfirst,
-                aliases=self._aliases,
             )
 
         value_tokens: list[_FilterToken] = []
@@ -751,14 +761,35 @@ class _FilterExpressionParser:
             field = _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or "")
             raise ValueError(f"Missing value for grouping filter field: {field}")
 
+        field = _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or "")
+        return self._make_comparison_condition(field, operator_token.value, value_tokens)
+
+    def _make_comparison_condition(
+        self, field: str, operator: str, tokens: list[_FilterToken],
+    ) -> DataFrameFilterSpec:
+        value = self._condition_value(tokens)
+        if self._condition_factory is not None:
+            return self._condition_factory(field, operator, (value,))
         return _parse_filter_condition(
-            _tokens_to_filter_text(field_tokens) if field_tokens else str(default_field or ""),
-            operator_token.value,
-            _tokens_to_filter_text(value_tokens),
+            field, operator, value, self._columns, dayfirst=self._dayfirst, aliases=self._aliases,
+        )
+
+    def _make_membership_condition(
+        self, field: str, operator: str, values: tuple[str, ...],
+    ) -> DataFrameFilterSpec:
+        if self._condition_factory is not None:
+            return self._condition_factory(field, operator, values)
+        return _parse_membership_condition(
+            field, operator, values,
             self._columns,
             dayfirst=self._dayfirst,
             aliases=self._aliases,
         )
+
+    def _condition_value(self, tokens: list[_FilterToken]) -> str:
+        if self._condition_factory is not None and len(tokens) == 1 and tokens[0].kind == "VALUE":
+            return tokens[0].value
+        return _tokens_to_filter_text(tokens)
 
     def _is_membership_operator_start(self) -> bool:
         token = self._peek()
@@ -811,8 +842,8 @@ class _FilterExpressionParser:
                 if token.kind in {"AND", "OR", "LPAREN", "OP"}:
                     raise ValueError(f"Invalid grouping filter IN value near: {token.value}")
                 value_tokens.append(self._advance())
-            value = _tokens_to_filter_text(value_tokens)
-            if not value:
+            value = self._condition_value(value_tokens)
+            if not value and not (self._condition_factory is not None and value_tokens):
                 raise ValueError(f"IN filter for grouping filter field {field} contains an empty value.")
             values.append(value)
             if self._match("COMMA") is not None:

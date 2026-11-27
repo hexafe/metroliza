@@ -187,10 +187,9 @@ def reports_observation(*, packaged=True, dpr=1.0):
         for report in sorted(oracle['expected']['reports'].values(), key=lambda item: item['name']):
             name = report['name']
             state = 'failed' if case == 'B' and name == 'REF006_0006.pdf' else (
-                'unknown' if case == 'C' and name != 'REF001_0001.pdf' else 'saved')
+                'cancelled' if case == 'C' and name != 'REF001_0001.pdf' else 'saved')
             rows.append(dict(name=name, occurrence_id=name, state=state, readonly=True, attention=state != 'saved'))
-            if state != 'unknown':
-                receipts[name] = state
+            receipts[name] = state
             if state == 'saved':
                 digests[name] = report['measurements_sha256']
         context = dict.fromkeys(('same_owner', 'same_result', 'approval_invalidated', 'worker_running_at_cancel',
@@ -222,7 +221,8 @@ def test_independent_reports_schema_accepts_only_declared_complete_facts():
 
 
 @pytest.mark.parametrize('defect', ['missing', 'extra', 'not_assessed', 'bool_count', 'wrong_count', 'identity',
-    'receipt', 'digest', 'saved_database', 'cancel', 'readonly', 'summary', 'source_lane', 'wrong_dpr', 'failure'])
+    'receipt', 'digest', 'saved_database', 'cancel', 'cancel_unknown', 'readonly', 'summary',
+    'source_lane', 'wrong_dpr', 'failure'])
 def test_literal_reports_facts_reject_mutation_despite_passed_string(defect):
     value = reports_observation()
     evidence = value['evidence']
@@ -246,6 +246,9 @@ def test_literal_reports_facts_reject_mutation_despite_passed_string(defect):
         evidence['B']['database_counts']['report_measurements'] = 1728
     elif defect == 'cancel':
         evidence['C']['context']['cancel_clicked'] = False
+    elif defect == 'cancel_unknown':
+        evidence['C']['row_facts'][1]['state'] = 'unknown'
+        del evidence['C']['receipt_states']['REF002_0002.pdf']
     elif defect == 'readonly':
         evidence['A']['row_facts'][0]['readonly'] = False
     elif defect == 'summary':

@@ -28,7 +28,7 @@ from metroliza.parsing import report_parser_factory
 from metroliza.parsing.cmm_report_parser import CMMReportParser, MAX_REVIEWED_OCR_HEADER_BYTES, ReviewedCmmHeaderOcr
 from metroliza.parsing.parser_plugin_contracts import infer_source_format
 from metroliza.parsing.source_inspection import SourceInspectionContext, source_stat_signature
-from metroliza.reports.db import sqlite_readonly_connection_scope
+from metroliza.reports.db import SQLiteFileBinding, sqlite_readonly_connection_scope
 from metroliza.reports.report_metadata_review import ReportMetadataOverride
 from metroliza.reports.report_metadata_profiles import DEFAULT_CMM_PDF_HEADER_BOX_PROFILE
 from metroliza.shared.parse_contracts import ParseRequest, validate_parse_request
@@ -588,6 +588,7 @@ class ImportPlan:
     metadata_overrides: tuple[ReportMetadataOverride, ...] = ()
     reviewed_ocr: tuple[ReviewedReportOcr, ...] = field(default=(), repr=False)
     existing_database_identity: tuple[int, int] | None = field(default=None, repr=False)
+    resume_database: SQLiteFileBinding | None = field(default=None, repr=False)
 
     @classmethod
     def from_preflight(
@@ -767,6 +768,7 @@ def _validate_import_plan_context(plan: ImportPlan) -> None:
         raise ValueError("run_background_metadata_enrichment must be a boolean.")
     if plan.existing_database_identity is not None:
         _validate_existing_database_import(plan)
+    _validate_resume_database(plan)
     if not isinstance(plan.selected_reports, tuple):
         raise ValueError("Import plan selected_reports must be an immutable tuple.")
     if not preflight.matches_request(
@@ -783,6 +785,21 @@ def _validate_existing_database_import(plan: ImportPlan) -> None:
             or any(type(value) is not int or value < 0 for value in identity)
             or plan.run_background_metadata_enrichment):
         raise ValueError("Invalid existing database import approval.")
+
+
+def _validate_resume_database(plan: ImportPlan) -> None:
+    binding = plan.resume_database
+    if binding is None:
+        return
+    if (
+        type(binding) is not SQLiteFileBinding
+        or binding.path != Path(plan.database_path).resolve()
+        or (
+            plan.existing_database_identity is not None
+            and binding.identity != plan.existing_database_identity
+        )
+    ):
+        raise ValueError("The resume destination does not match the reviewed database.")
 
 
 def _validate_selected_reports(plan: ImportPlan) -> None:
