@@ -14,6 +14,8 @@ import pytest
 from metroliza.exporting.contracts import AppPaths, ExportOptions, ExportRequest
 from metroliza.exporting.export_data_thread import ExportDataThread
 from metroliza.reports import report_grouping_rules as rules
+from metroliza.reports.db import sqlite_file_identity
+from metroliza.reports.report_identity import ImportedReportBatch
 from metroliza.reports.report_query_service import build_measurement_filter_query
 from metroliza.reports.report_repository import ReportRepository
 from metroliza.reports.report_schema import ensure_report_schema
@@ -198,6 +200,20 @@ def test_report_grouping_rules_save_reopen_and_export_real_outputs(database, sel
         ]
         export.grouping_window.use_grouping()
         assert export._build_export_request().grouping_rule_source is preview.source
+
+        identity = sqlite_file_identity(database)
+        assert identity is not None
+        batch = ImportedReportBatch(database.resolve(), identity, ((3, "b" * 64),))
+        export.set_import_batch(batch, select=True)
+        batch_request = export._build_export_request()
+        assert batch_request.approved_report_ids == (3,)
+        assert batch_request.existing_database_identity == identity
+        assert batch_request.grouping_df is None and batch_request.grouping_rule_source is None
+        assert not export.group_button.isEnabled()
+        assert export.select_group_label.text() == "Whole database only"
+        export.use_whole_database()
+        assert export._build_export_request().grouping_rule_source is preview.source
+        assert export._build_export_request().grouping_df == preview.assignments
 
         worker = ExportDataThread(request)
         original_join = worker._apply_group_assignments

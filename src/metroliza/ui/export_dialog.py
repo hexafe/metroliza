@@ -1889,6 +1889,9 @@ class ExportDialog(QDialog):
             mode = _STALE_IMPORT
         if mode == _STALE_IMPORT:
             raise ValueError("The last import selection expired. Choose the report scope again.")
+        whole_database = mode == _WHOLE_DATABASE
+        grouping_df = self.df_for_grouping if whole_database else None
+        rule_source = getattr(self, "_grouping_rule_source", None) if whole_database else None
         typed = getattr(self, "_typed_report_scope", None)
         if typed is not None:
             blocker = self.typed_report_filter_blocker()
@@ -1918,13 +1921,12 @@ class ExportDialog(QDialog):
                 else False
             ),
             filter_query=self.filter_query if batch is None and typed is None else None,
-            grouping_df=self.df_for_grouping if batch is None else None,
+            grouping_df=grouping_df,
             group_analysis_level=self._selected_group_analysis_level(),
             group_analysis_scope=self._selected_group_analysis_scope(),
             dashboard_visual_settings=getattr(self, "dashboard_visual_settings", None),
         )
         request = replace(request, application_version=VERSION_LABEL)
-        rule_source = getattr(self, "_grouping_rule_source", None) if batch is None else None
         if typed is not None or rule_source is not None:
             from metroliza.exporting.contracts import validate_export_request
 
