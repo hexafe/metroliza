@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import dataclass, replace
 from datetime import date
 from fnmatch import fnmatchcase
@@ -9,21 +10,25 @@ from functools import lru_cache
 import json
 import operator as comparison
 import sqlite3
-from typing import Any, Iterable, Literal, Mapping
+from typing import Any, Generator, Iterable, Literal, Mapping, Protocol
 
 from metroliza.shared.datetime_parsing import parse_datetime_literal
 from metroliza.shared.finite_numeric import finite_numeric_source
 from metroliza.shared.grouping_filter_core import (
     DataFrameFilterSpec,
     FilterExpressionGroup,
+    build_filter_mask,
     parse_filter_expression,
 )
 from metroliza.shared.lazy_modules import LazyPandas
 
 
 FILTER_VERSION = 1
+MAX_FILTER_PREVIEW_ROWS = 1000
 FilterKind = Literal["text", "number", "date"]
 FilterValue = str | int | float
+FilterRowId = int | str
+FilterExecutionMode = Literal["in_memory", "sqlite_scan", "sqlite_indexed", "post_filter"]
 pd = LazyPandas()
 
 _COMPARISONS = {
@@ -123,6 +128,135 @@ class CompiledSqliteFilter:
     parameters: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class FilterExecution:
+    """Where the predicate is evaluated and, for post-filtering, why."""
+
+    mode: FilterExecutionMode
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.mode == "post_filter" and not self.reason.strip():
+            raise ValueError("Explain why the filter requires post-filtering.")
+
+
+@dataclass(frozen=True)
+class FilterPreview:
+    matching_count: int
+    sample_row_ids: tuple[FilterRowId, ...]
+
+
+class PreparedFilter(Protocol):
+    """Preview reports an exact count and up to MAX_FILTER_PREVIEW_ROWS ordered row IDs."""
+
+    @property
+    def execution(self) -> FilterExecution: ...
+
+    def preview(self, sample_limit: int = 20) -> FilterPreview: ...
+
+    def iter_row_ids(self) -> Generator[FilterRowId, None, None]: ...
+
+
+class FilterAdapter(Protocol):
+    """Bind a validated expression to stable, unique IDs of a single type, sorted ascending."""
+
+    def prepare(self, expression: DataFrameFilterSpec | None) -> PreparedFilter: ...
+
+
+@dataclass(frozen=True)
+class PandasFilterAdapter:
+    """Reference source using field IDs as columns and an explicit identity column."""
+
+    frame: Any
+    row_id_column: str
+
+    def prepare(self, expression: DataFrameFilterSpec | None) -> PreparedFilter:
+        if expression is not None:
+            _check_tree_budget(expression, _FilterBudget())
+        return _PandasSelection(self.frame, self.row_id_column, expression)
+
+
+@dataclass(frozen=True)
+class _PandasSelection:
+    frame: Any
+    row_id_column: str
+    expression: DataFrameFilterSpec | None
+    execution = FilterExecution("in_memory")
+
+    def _selected_ids(self):
+        specs = () if self.expression is None else (self.expression,)
+        mask = build_filter_mask(self.frame, specs)
+        return self.frame.loc[mask, self.row_id_column]
+
+    def preview(self, sample_limit: int = 20) -> FilterPreview:
+        _check_sample_limit(sample_limit)
+        ids = self._selected_ids()
+        sample = tuple(ids.sort_values().iloc[:sample_limit].tolist()) if sample_limit else ()
+        return FilterPreview(len(ids), sample)
+
+    def iter_row_ids(self) -> Generator[FilterRowId, None, None]:
+        yield from self._selected_ids().sort_values().tolist()
+
+
+class SqliteFilterAdapter:
+    """Reference source over a trusted table or view in a caller-owned connection."""
+
+    def __init__(
+        self, connection: sqlite3.Connection, table: str, *, row_id_column: str,
+        columns: Mapping[str, str],
+    ) -> None:
+        if not _valid_identifier(table) or not _valid_identifier(row_id_column):
+            raise ValueError("Expected valid SQLite source and identity column names.")
+        self._connection = connection
+        self._table = _quote(table)
+        self._row_id = "source." + _quote(row_id_column)
+        self._columns = dict(columns)
+        install_typed_filter_sqlite(connection)
+
+    def prepare(self, expression: DataFrameFilterSpec | None) -> PreparedFilter:
+        compiled = compile_typed_filter_sqlite(expression, self._columns, table_alias="source")
+        scope = f"FROM {self._table} AS source WHERE {compiled.sql}"
+        return _SqliteSelection(self._connection, self._row_id, scope, compiled.parameters)
+
+
+@dataclass(frozen=True)
+class _SqliteSelection:
+    connection: sqlite3.Connection
+    row_id_sql: str
+    scope: str
+    parameters: tuple[str, ...]
+    execution = FilterExecution("sqlite_scan")
+
+    def preview(self, sample_limit: int = 20) -> FilterPreview:
+        _check_sample_limit(sample_limit)
+        count_sql = "SELECT COUNT(*) " + self.scope
+        with closing(self.connection.cursor()) as cursor:
+            cursor.row_factory = None
+            if sample_limit == 0:
+                return FilterPreview(cursor.execute(count_sql, self.parameters).fetchone()[0], ())
+            # The independent count and limited, ordered scan share one snapshot.
+            preview_sql = self._select_ids(count_sql=count_sql) + " LIMIT ?"
+            parameters = (*self.parameters, *self.parameters, sample_limit)
+            rows = cursor.execute(preview_sql, parameters).fetchall()
+        return FilterPreview(rows[0][1] if rows else 0, tuple(row[0] for row in rows))
+
+    def iter_row_ids(self) -> Generator[FilterRowId, None, None]:
+        sql = self._select_ids()
+        with closing(self.connection.cursor()) as cursor:
+            cursor.row_factory = None
+            yield from (row[0] for row in cursor.execute(sql, self.parameters))
+
+    def _select_ids(self, *, count_sql: str | None = None) -> str:
+        columns = f"{self.row_id_sql}, ({count_sql})" if count_sql is not None else self.row_id_sql
+        order = f"ORDER BY {self.row_id_sql} COLLATE BINARY"
+        return " ".join(("SELECT", columns, self.scope, order))
+
+
+def _check_sample_limit(sample_limit: int) -> None:
+    if type(sample_limit) is not int or not 0 <= sample_limit <= MAX_FILTER_PREVIEW_ROWS:
+        raise ValueError(f"Use an integer sample limit from zero to {MAX_FILTER_PREVIEW_ROWS}.")
+
+
 @dataclass
 class _FilterBudget:
     nodes: int = 0
@@ -164,6 +298,8 @@ def _check_tree_budget(node: DataFrameFilterSpec, budget: _FilterBudget, depth: 
             _check_tree_budget(child, budget, depth + 1)
     elif isinstance(node, FilterCondition):
         budget.add_operands(len(node.values))
+    else:
+        raise TypeError(f"Expected a typed filter, got {type(node).__name__}")
 
 
 def parse_typed_filter(
