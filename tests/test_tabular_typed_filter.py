@@ -1,6 +1,7 @@
 """Selected source rows are identical in the typed reference and tabular export scope."""
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +10,7 @@ import pytest
 from metroliza.industrial.contracts import IndustrialAnalyticsRequest, validate_industrial_analytics_request
 from metroliza.industrial.industrial_analytics_state import ProductionAggregationState
 from metroliza.industrial.industrial_analytics_workflow import run_tabular_file_analytics
+from metroliza.recipes.contracts import ParameterKey
 from metroliza.recipes.tabular_adapter import capture
 from metroliza.shared.typed_filter import FilterPreview, PandasFilterAdapter
 from metroliza.tabular.tabular_analytics_service import (
@@ -113,7 +115,8 @@ def test_typed_filter_source_staleness_and_mixed_request_are_rejected(measuremen
     with pytest.raises(ValueError, match="Clear the typed filter before saving a recipe"):
         capture(request)
     legacy = capture(replace(request, _tabular_typed_filter=None))
-    assert "tabular_typed_filter" not in repr(legacy.binding)
+    saved_request = json.loads(legacy.binding.value(ParameterKey.ANALYTICS_REQUEST))["request"]
+    assert set(saved_request) == set(IndustrialAnalyticsRequest.__match_args__) - {"tabular_load_result"}
     with pytest.raises(ValueError, match="needs a new preview"):
         materialize_tabular_dataframe(replace(loaded), typed_scope=scope)
     path.write_text(path.read_text() + "99;2026-02-21;001\n", encoding="utf-8")

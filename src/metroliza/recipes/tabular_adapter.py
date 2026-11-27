@@ -39,7 +39,7 @@ _TYPES = {cls.__name__: cls for cls in (
     TabularColumnFilter, GroupingAssignment, DashboardInteractivityOptions,
 )}
 _RUNTIME_FIELDS = frozenset({
-    "tabular_load_result", "tabular_typed_filter", "_grouping_snapshot", "_grouping_owner",
+    "tabular_load_result", "_tabular_typed_filter", "_grouping_snapshot", "_grouping_owner",
 })
 
 
