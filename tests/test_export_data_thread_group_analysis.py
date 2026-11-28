@@ -1078,6 +1078,10 @@ class TestExportDataThreadGroupAnalysis(unittest.TestCase):
             self.assertIn('Descriptive stats', html_text)
             self.assertNotIn('Group definitions', html_text)
             self.assertIn('Pairwise comparisons', html_text)
+            pairwise_table = html_text.split('Pairwise comparisons</div>', 1)[1].split('</table>', 1)[0]
+            self.assertIn('<th>Group A</th><th>Group B</th><th>Delta mean</th>', pairwise_table)
+            for heading in ('Group A ID', 'Group B ID', 'N A', 'N B'):
+                self.assertNotIn(f'<th>{heading}</th>', pairwise_table)
             self.assertIn('plotly-chart', html_text)
             self.assertIn('data-plotly-spec-dark=', html_text)
             self.assertIn(f'{generations[0].name}/plotly-2.27.0.min.js', html_text)

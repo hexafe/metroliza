@@ -1,10 +1,12 @@
 from contextlib import closing
 from dataclasses import replace
 from html import escape
+from itertools import combinations
 import json
 import os
 from pathlib import Path
 import sqlite3
+from xml.etree import ElementTree
 
 from openpyxl import load_workbook
 from PyQt6.QtCore import Qt
@@ -278,13 +280,24 @@ def test_report_grouping_rules_save_reopen_and_export_real_outputs(database, sel
 
 
 @pytest.mark.parametrize("level", ["light", "standard"])
-def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, tmp_path, monkeypatch):
+def test_rule_group_analysis_shares_definitions_and_pairwise_evidence_in_xlsx_and_html(
+    level, tmp_path, monkeypatch,
+):
     database = tmp_path / "one-reference.sqlite"
     ensure_report_schema(str(database))
     repository = ReportRepository(str(database))
-    for number, sample in enumerate(("001", "1", "other") * 3, start=1):
+    samples = ("001", "1", "other") * 3 + ("1", "1", "001", "001")
+    for number, sample in enumerate(samples, start=1):
         _persist_report(repository, tmp_path, number=number, reference="001", sample_number=sample,
                         header="Width", meas=9.9 + number / 100)
+    with closing(sqlite3.connect(database)) as connection, connection:
+        connection.executemany(
+            "UPDATE report_metadata SET report_date = ? WHERE report_id = ?",
+            [(f"2024-01-{number:02d}", number) for number in range(10, 14)],
+        )
+        # Older databases can contain missing and non-finite measurements in otherwise selected reports.
+        connection.executemany("UPDATE report_measurements SET meas = ? WHERE report_id = ?",
+                               [(None, 12), (float("inf"), 13)])
 
     preset = rules.ReportGroupingPreset("Samples", (
         replace(_rule(1, "Zulu Plotly chart <sample>", 'Sample = "001"'), color="#AaBbCc"),
@@ -296,13 +309,19 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
     expected_labels = [descriptor.label for descriptor in descriptors]
     assert expected_labels == ["Zulu Plotly chart <sample>", "{=1+1}", "POPULATION"]
     assert tuple(descriptor.role for descriptor in descriptors) == ("rule", "rule", "population")
+    assert preview.counts == ((expected_labels[0], 5), (expected_labels[1], 5))
+    expected_groups = {
+        label: (descriptor.group_id, count)
+        for label, descriptor, count in zip(expected_labels, descriptors, (3, 5, 3), strict=True)
+    }
 
     output = tmp_path / f"analysis-{level}.xlsx"
-    worker = ExportDataThread(ExportRequest(
+    request = ExportRequest(
         AppPaths(str(database), str(output)),
         ExportOptions(group_analysis_level=level, generate_html_dashboard=True, chart_worker_count=1),
         grouping_df=preview.assignments, grouping_rule_source=preview.source,
-    ))
+    )
+    worker = ExportDataThread(request)
     original_analysis = export_data_thread.build_group_analysis_payload
     built = []
     plot_audiences = []
@@ -328,10 +347,20 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
     assert plot_audiences == ["dashboard"]
     metric, = payload["metric_rows"]
     assert [(row["group"], row["group_id"], row["n"]) for row in metric["descriptive_stats"]] == [
-        (descriptor.label, descriptor.group_id, 3) for descriptor in descriptors
+        (label, group_id, count) for label, (group_id, count) in expected_groups.items()
     ]
+    pairs = {(row["group_a"], row["group_b"]): row for row in metric["pairwise_rows"]}
+    assert len(pairs) == len(metric["pairwise_rows"]) == 3
+    assert {frozenset(pair) for pair in pairs} == {
+        frozenset(pair) for pair in combinations(expected_labels, 2)
+    }
+    for (group_a, group_b), pair in pairs.items():
+        assert (pair["group_a_id"], pair["n_a"]) == expected_groups[group_a]
+        assert (pair["group_b_id"], pair["n_b"]) == expected_groups[group_b]
+        assert "LOW N" in pair["flags"]
+        assert pair["test_used"]
 
-    workbook = load_workbook(output, read_only=True)
+    workbook = load_workbook(output)
     try:
         assert "Group Analysis Plots" not in workbook.sheetnames
         rows = list(workbook["Group Analysis"].values)
@@ -346,6 +375,32 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
         for row_number in (definitions_row + 4, description_row + 4):
             label_cell = sheet.cell(row=row_number, column=1)
             assert (label_cell.value, label_cell.data_type) == ("{=1+1}", "s")
+        pairwise_row = next(index for index, row in enumerate(rows) if row[0] == "Pairwise comparisons")
+        assert rows[pairwise_row + 1][:2] == ("Group A", "Group B")
+        assert rows[pairwise_row + 1][7] == "Test"
+        assert rows[pairwise_row + 1][12] == "Action"
+        assert sheet.max_column == 15
+        for pair_index, (group_a, group_b) in enumerate(pairs):
+            comparison = pairwise_row + 3 + 2 * pair_index
+            label_cells = sheet[comparison][:2]
+            assert tuple((cell.value, cell.data_type) for cell in label_cells) == (
+                (group_a, "s"), (group_b, "s"),
+            )
+            assert sheet.cell(comparison, 8).value == pairs[group_a, group_b]["test_used"]
+            assert "LOW N" in sheet.cell(comparison, 7).value
+            evidence = sheet[comparison + 1]
+            for label_index, value_index, header, value, excel_type in (
+                (0, 1, "Group A ID", expected_groups[group_a][0], "s"),
+                (5, 6, "N A", expected_groups[group_a][1], "n"),
+                (8, 9, "Group B ID", expected_groups[group_b][0], "s"),
+                (13, 14, "N B", expected_groups[group_b][1], "n"),
+            ):
+                assert evidence[label_index].value == header
+                value_cell = evidence[value_index]
+                assert (value_cell.value, value_cell.data_type, value_cell.hyperlink) == (value, excel_type, None)
+        comparison_rows = [pairwise_row + 3 + 2 * offset for offset in range(len(pairs))]
+        assert any(str(rule.sqref) == " ".join(f"C{number}" for number in comparison_rows)
+                   for rule in sheet.conditional_formatting)
         assert not any("Open plots sheet" in row for row in rows)
         if level == "standard":
             assert any("Plots are in the companion HTML dashboard." in str(cell) for row in rows for cell in row)
@@ -355,7 +410,7 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
     html = Path(worker.html_dashboard_file).read_text(encoding="utf-8")
     group_analysis = html.split('<section id="group-analysis"', 1)[1]
     assert "Zulu interactive chart &lt;sample&gt;" not in group_analysis
-    assert "POPULATION vs Zulu Plotly chart &lt;sample&gt;" in group_analysis
+    assert f"{escape(expected_labels[0])} vs " in group_analysis
     if level == "standard":
         plot_notes = group_analysis.split('class="chart-note">')
         assert sum("Zulu Plotly chart &lt;sample&gt;" in note.split("</p>", 1)[0] for note in plot_notes[1:]) == 2
@@ -371,6 +426,35 @@ def test_rule_group_analysis_shares_ordered_definitions_in_xlsx_and_html(level, 
     assert ordered == sorted(ordered)
     positions = [descriptions.index(f"<tr><td>{escape(label)}</td>") for label in expected_labels]
     assert positions == sorted(positions)
+    pairwise_html = html.split('<div class="subsection-title">Pairwise comparisons</div>', 1)[1]
+    table_markup = pairwise_html[pairwise_html.index("<table"):pairwise_html.index("</table>") + len("</table>")]
+    table = ElementTree.fromstring(table_markup)
+    headers = [cell.text for cell in table.findall("thead/tr/th")]
+    pairwise_html_rows = [dict(zip(headers, [cell.text for cell in row], strict=True))
+                          for row in table.findall("tbody/tr")]
+    assert [(row["Group A"], row["Group B"]) for row in pairwise_html_rows] == list(pairs)
+    for row in pairwise_html_rows:
+        a_id, n_a = expected_groups[row["Group A"]]
+        b_id, n_b = expected_groups[row["Group B"]]
+        assert (row["Group A ID"], row["N A"]) == (a_id, str(n_a))
+        assert (row["Group B ID"], row["N B"]) == (b_id, str(n_b))
+        assert "LOW N" in row["Flags"]
+        assert row["Test Used"] == pairs[row["Group A"], row["Group B"]]["test_used"]
+
+    if level == "light":
+        standalone_html = tmp_path / "standalone.html"
+        unused_workbook = tmp_path / "standalone.xlsx"
+        standalone_request = replace(
+            request,
+            paths=AppPaths(str(database), str(unused_workbook), html_dashboard_file=str(standalone_html)),
+            options=replace(request.options, export_target="html_dashboard", backend_target="html"),
+        )
+        standalone = ExportDataThread(standalone_request)
+        standalone.error_occurred.connect(failures.append)
+        standalone.run()
+        assert failures == []
+        assert not unused_workbook.exists()
+        assert table_markup in standalone_html.read_text(encoding="utf-8")
 
 
 def test_group_analysis_copy_keeps_exact_label_spans_and_still_cleans_other_text():

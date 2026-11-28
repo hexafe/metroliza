@@ -982,6 +982,8 @@ def _build_pairwise_rows_from_source_rows(
     for row in raw_rows:
         group_a = row.get('group_a')
         group_b = row.get('group_b')
+        n_a = counts_by_group.get(group_a)
+        n_b = counts_by_group.get(group_b)
         delta_mean = _round_display_value(row.get('delta_mean'), precision=3)
         if delta_mean is None and group_a in means and group_b in means:
             delta_mean = _round_display_value(means[group_a] - means[group_b], precision=3)
@@ -989,7 +991,7 @@ def _build_pairwise_rows_from_source_rows(
         adj_p = row.get('adjusted_p_value')
         significant = bool(row.get('significant'))
         flags = []
-        if int(counts_by_group.get(group_a, 0)) < 5 or int(counts_by_group.get(group_b, 0)) < 5:
+        if (n_a or 0) < 5 or (n_b or 0) < 5:
             flags.append(_FLAG_LOW_N)
         flags.extend(metric_flags)
         flags_text = _join_flags(flags)
@@ -1006,6 +1008,8 @@ def _build_pairwise_rows_from_source_rows(
             {
                 'group_a': group_a,
                 'group_b': group_b,
+                'n_a': n_a,
+                'n_b': n_b,
                 'delta_mean': delta_mean,
                 'adjusted_p_value': rounded_adj_p,
                 'effect_size': rounded_effect_size,
@@ -1755,6 +1759,15 @@ def _identify_descriptive_groups(rows, group_index):
         raise ValueError("A descriptive group is missing from the selected grouping definitions.") from exc
 
 
+def _identify_pairwise_groups(rows, group_index):
+    try:
+        for row in rows:
+            row['group_a_id'] = group_index[row['group_a']][1]
+            row['group_b_id'] = group_index[row['group_b']][1]
+    except KeyError as exc:
+        raise ValueError("A pairwise group is missing from the selected grouping definitions.") from exc
+
+
 def _assemble_metric_payload(
     *,
     metric_partition,
@@ -1878,6 +1891,7 @@ def _assemble_metric_payload(
     metric_payload['insights'] = engine_insights or build_metric_insights(metric_payload)
     if group_index:
         _identify_descriptive_groups(descriptive_stats, group_index)
+        _identify_pairwise_groups(pairwise_rows, group_index)
     return metric_payload
 
 
